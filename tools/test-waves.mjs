@@ -38,6 +38,9 @@
  *                               away: how many of them does a survivor who stands still, and one who runs,
  *                               actually receive during the night? By design (anti-ESP) — but it is the risk of
  *                               a player concluding "the wave never came", so the number is printed.
+ *   6. THE WEATHER (LUZ-05)     the same server in fog and in a storm: walkers that see the survivor down a clear
+ *                               street see nothing in the thickest fog (and the screen's fog covers them alike),
+ *                               and a shot fired right after a thunderclap turns nobody the same shot turned before.
  *
  * The living survivors are immortal on purpose (the admin's god mode, and fed every tick): a survivor killed
  * by the wave would turn case 1 into case 2. The only deaths are the ones a case scripts, and they go through
@@ -1538,6 +1541,144 @@ for (const [which, type] of [
 		`${which}: three do within the open's time for three + 12 s, and one stays in reach at least half as much`,
 		inside.third <= open.third + 12 && inside.pressed >= open.pressed * 0.5,
 		`${f(inside.third)} vs ${f(open.third)}; ${(inside.pressed * 100).toFixed(0)}% vs ${(open.pressed * 100).toFixed(0)}% of the time`,
+	);
+}
+
+// ================================================================ 6: the weather on the server (LUZ-05)
+
+section(
+	"6) the weather on the server (LUZ-05): the real ServerSimulation's horde in fog and in a storm -- the eyes and " +
+		"the ears the survivor's screen and speakers promise",
+);
+
+{
+	const W = require(join(SRC, "shared/sim/weather.ts"));
+	const Brain = require(join(SRC, "shared/sim/ai/zombieBrain.ts"));
+	const { createZombie } = require(join(SRC, "shared/game/entities.ts"));
+	const K = W.Weather;
+	// the longest plain street of the town: the survivor on its centre line, the walkers along it
+	const town = generateTown(DESIGN.TOWN_SEED);
+	const road = [...town.roads]
+		.filter(r => !r.avenue)
+		.sort((a, b) => Math.max(b.w, b.h) - Math.max(a.w, a.h) || a.x - b.x || a.y - b.y)[0];
+	const along = road.vertical ? [0, 1] : [1, 0];
+	const spot = { x: road.x + road.w / 2, y: road.y + road.h / 2 };
+
+	/**
+	 * A server on world day `day` at `hour` of weather `kind`, one immortal survivor held on the street, and walkers held
+	 * at `dist` u along it (both ways, four lanes each), facing the survivor (`facing`) or away from it. The horde is
+	 * only these walkers: everything the spawner adds is taken out each tick. Returns what they became after `seconds`
+	 * -- and, with `shotAtHour`, a pistol's shot from the survivor's spot at that hour of the clock (the moment it is fired).
+	 */
+	function street({ kind, day, hour, dist, facing, seconds, shotAtHour }) {
+		const host = newHost(`weather-${kind}-${dist}`, {
+			seed: 606,
+			clock: () => new WorldClock({ day, dayTime: hour, rollWeather: () => kind }),
+		});
+		const sp = enter(host, "wx");
+		host.immortal.add(sp.slot);
+		sp.spawnShieldUntil = 0;
+		const horde = host.sim.horde;
+		const mine = [];
+		for (const sign of [-1, 1]) {
+			for (const lane of [-60, -20, 20, 60]) {
+				const x = spot.x + along[0] * sign * dist + along[1] * lane;
+				const y = spot.y + along[1] * sign * dist + along[0] * lane;
+				const z = createZombie(1, x, y, day, false);
+				z.detect = false;
+				const toward = Math.atan2(spot.y - y, spot.x - x);
+				mine.push({ z, x, y, angle: facing ? toward : toward + Math.PI });
+			}
+		}
+		const hold = () => {
+			sp.state.x = spot.x;
+			sp.state.y = spot.y;
+			for (let k = horde.zombies.length - 1; k >= 0; k--) {
+				if (!mine.some(m => m.z === horde.zombies[k])) horde.zombies.splice(k, 1);
+			}
+			for (const m of mine) {
+				if (!horde.zombies.includes(m.z)) horde.zombies.push(m.z);
+				m.z.x = m.x;
+				m.z.y = m.y;
+				m.z.angle = m.angle;
+			}
+		};
+		host.beforeStep = hold;
+		if (shotAtHour !== undefined) host.sim.clock.setClock(shotAtHour);
+		hold();
+		const clock = host.sim.clock;
+		const state = { fog: clock.fog, mask: clock.thunderMask, dark: clock.darkAlpha };
+		if (shotAtHour !== undefined) Brain.emitSound(horde.refs, spot.x, spot.y, 800, true);
+		for (let i = 0; i < Math.round(seconds / TICK_DT); i++) tick(host);
+		const aware = mine.filter(m => (m.z.aware ?? 0) >= 1).length;
+		return { aware, of: mine.length, ...state };
+	}
+
+	// ---- the eyes: 380 u down a clear street by day is well inside 520 u; in the thickest fog it is past 260 u
+	const clearDay = street({ kind: K.Clear, day: 9, hour: 6.2, dist: 380, facing: true, seconds: 1.5 });
+	const foggy = street({ kind: K.DawnFog, day: 9, hour: 6.2, dist: 380, facing: true, seconds: 1.5 });
+	const close = street({ kind: K.DawnFog, day: 9, hour: 6.2, dist: 200, facing: true, seconds: 1.5 });
+	info(
+		`walkers looking at the survivor from 380 u: ${clearDay.aware}/${clearDay.of} noticed on a clear morning, ` +
+			`${foggy.aware}/${foggy.of} in the dawn fog (density ${foggy.fog.toFixed(2)}); from 200 u in the fog ${close.aware}/${close.of}`,
+	);
+	check(
+		"on a clear morning the horde down the street sees the survivor (380 u, inside the day's 520 u)",
+		clearDay.aware >= 6,
+		`${clearDay.aware}/${clearDay.of}`,
+	);
+	check(
+		"in the thickest fog the same walkers see nothing (380 u is past the fog's 260 u) -- and the survivor's screen fogs them alike",
+		foggy.fog > 0.99 &&
+			foggy.aware === 0 &&
+			W.fogScreenAt(foggy.fog, 380) > 0.2 &&
+			W.fogScreenAt(foggy.fog, 260) < 0.05,
+		`${foggy.aware}/${foggy.of}; on screen ${Math.round(W.fogScreenAt(foggy.fog, 380) * 100)} % fog at 380 u, ` +
+			`${Math.round(W.fogScreenAt(foggy.fog, 260) * 100)} % at 260 u`,
+	);
+	check(
+		"...but the fog is not blindness: at 200 u they see the survivor",
+		close.aware >= 6,
+		`${close.aware}/${close.of}`,
+	);
+
+	// ---- the ears: a pistol's shot from the survivor, 400 u from walkers facing away, in a storm by day
+	const day = 11;
+	const strike = W.strikesOfDay(day).find(s => s.hour > 8 && s.hour < 16);
+	const speed = CLOCK.clockSpeed(strike.hour);
+	const onset = strike.hour + strike.delay * speed;
+	const before = street({
+		kind: K.Storm,
+		day,
+		hour: 8,
+		dist: 400,
+		facing: false,
+		seconds: 3,
+		shotAtHour: onset - 1.2 * speed,
+	});
+	const after = street({
+		kind: K.Storm,
+		day,
+		hour: 8,
+		dist: 400,
+		facing: false,
+		seconds: 3,
+		shotAtHour: onset + 0.4 * speed,
+	});
+	info(
+		`a strike at ${strike.hour.toFixed(3)} h, its thunder ${strike.delay.toFixed(2)} s later: a shot 1.2 s before the ` +
+			`clap reaches ${(800 * 0.6 * before.mask).toFixed(0)} u (${before.aware}/${before.of} walkers turn), 0.4 s after it ` +
+			`${(800 * 0.6 * after.mask).toFixed(0)} u (${after.aware}/${after.of})`,
+	);
+	check(
+		"in the rain of a storm, a shot is heard 480 u away (the rain's 60 %): the walkers at 400 u turn to it",
+		before.mask === 1 && before.aware >= 6,
+		`${before.aware}/${before.of}`,
+	);
+	check(
+		"...fired right after the thunder it carries 40 % of that (192 u): nobody turns -- the storm's window",
+		after.mask === W.THUNDER_HEARING && after.aware === 0,
+		`${after.aware}/${after.of}`,
 	);
 }
 

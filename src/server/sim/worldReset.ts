@@ -24,7 +24,9 @@
  *      host lets it go on under the daybreak rule. Once it has succeeded the reset is COMMITTED (review of
  *      de4ba1e, N2): the host names the new town at once (`onSwitched`), and each step below is contained on its
  *      own — one that throws is logged and skipped, the others still run, the clients are always told, and if
- *      the lives fail the fallen still get theirs (`LifeKeeper.settleFallen`);
+ *      the lives fail the fallen still get theirs (`LifeKeeper.settleFallen`). Right after the naming, the bodies the
+ *      combat-log guard still holds in the old streets leave them the way their players did (`onCommitted`): a Home
+ *      is a kept body in the lobby, a quit a departure -- so step 5 treats them as it treats everybody away;
  *   4. the old town's last events go out (`Replicator.closeTown`), so none of them can arrive after the news;
  *   5. the LIVES (`LifeKeeper.restartWorld`): every survivor who fell with the old world and whose loaded save is
  *      here starts a new life in the new one — life day 1, the starter kit; level, skills, coins, packs and
@@ -117,6 +119,13 @@ export interface EndWorldOptions {
 	 * attribute) there and then (review of de4ba1e, N2).
 	 */
 	onSwitched?: (town: { seed: number; mapHash: number; world: WorldData }) => void;
+	/**
+	 * Called right after `onSwitched`, BEFORE the fallen are counted: the bodies still standing in the old town whose
+	 * players already left it -- the combat-log guard's (server/net/mpHost.ts `linger`) -- leave it now, the way their
+	 * players did (review of 6e6dfa0, MEDIUM). One who went Home is then a kept body like any other in the lobby, and one
+	 * who left the server a departure: neither carries an old life into the new town.
+	 */
+	onCommitted?: () => void;
 }
 
 /** what `endWorld` did, for the host (its log line and attributes) and the record keeper */
@@ -211,7 +220,7 @@ export function endWorld(
 	if (restart) ended.days = lasted(parts.sim.clock.day);
 	// everything that can fail comes first, and changes nothing until it has all succeeded (step 3): a throw from
 	// here out leaves the old world exactly as it was
-	parts.sim.restartWorld(world);
+	parts.sim.restartWorld(world, seed);
 	// COMMITTED: the simulation runs the new town. From here on nothing is built, only handed out, and no step may
 	// abandon the rest (review of de4ba1e, N2) — a reset stopped half-way left the host naming the old town, the
 	// clients never told, the fallen down and rule 6 disarmed. Each step is contained on its own; the host is told
@@ -223,6 +232,7 @@ export function endWorld(
 		return ok;
 	};
 	contain("host", () => options.onSwitched?.({ seed, mapHash, world }));
+	contain("departures", () => options.onCommitted?.());
 	contain("closeTown", () => parts.replicator?.closeTown());
 	let fallen = new Array<number>();
 	contain("fallenOf", () => {

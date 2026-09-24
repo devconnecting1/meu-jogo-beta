@@ -87,6 +87,16 @@
  *                              untouched by the owner's; a Rebirth while the new town is being made is refused with
  *                              no coin taken; the cooldown, the bucket, malformed payloads of any shape counted.
  *
+ * The owner's question of 2026-09-24 ("the first player dies or leaves: does the server die?"):
+ *
+ *  22. NOBODY IS THE HOST      everybody leaving standing leaves the same world going on; everybody dying and then
+ *                              leaving inside the window ends it at the last departure (leaving is declining, MP-22 --
+ *                              it used to close the window as if the world were merely empty, and the lost world went
+ *                              on for the next player); the first leaving standing with only a dead one left opens it.
+ *  23. A RESTART IN THE GUARD  (review of 6e6dfa0) MP-26's restart commits while the combat-log guard holds a body: it
+ *                              leaves the old town as its player did -- a quit owed the new life, a Home given it --
+ *                              instead of standing on into the day-1 town with its day-12 life.
+ *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs, plus the small fake Roblox below (the
  * same one tools/test-body.mjs uses).
  */
@@ -112,7 +122,10 @@ function check(ok, what, detail) {
 	return ok;
 }
 const info = msg => console.log(`        ${msg}`);
+/** PZ_RESET_ONLY=19 runs only the sections whose title starts with it (a quicker loop while working on one) */
+const ONLY = process.env.PZ_RESET_ONLY;
 function section(title, fn) {
+	if (ONLY !== undefined && !title.startsWith(ONLY)) return;
 	console.log(`\n${title}`);
 	try {
 		fn();
@@ -2828,6 +2841,418 @@ section(
 			JSON.stringify(noted),
 		);
 		studio.shutdown();
+	},
+);
+
+// ================================================================ 22: nobody is the server's (the owner's question)
+
+/*
+ * "Suppose the server's main player (the first one to join) and then others join. That main player dies or leaves: does
+ * the server die/stop working?" (the owner, 2026-09-24). Nothing on the server belongs to whoever came first -- the town,
+ * the clock, the horde, the waves and the world's end are the SERVER's (tools/test-body.mjs 34 has the rest). Here, the
+ * world's life when EVERYBODY goes, by MP-22's rule: it ends when nobody is left alive, never because it is empty.
+ *
+ *   d1  everybody leaves standing, then somebody joins: the SAME world goes on (seed, day, the clock kept running), no
+ *       wipe: an empty world is not a lost one. (On Roblox an empty server closes a moment later, and the next player
+ *       gets a new server -- a new process, whose first town is DESIGN.TOWN_SEED on day 1: the "fresh world".)
+ *   d2  everybody dies, then everybody leaves inside the 30 s window: leaving the server is declining (MP-22), so the
+ *       world is lost -- and it ends only with somebody connected to see the next one (review of 577c729, L1): with a
+ *       player in the lobby, at the last departure; with nobody left on the server it stays lost, and ends the moment the
+ *       next player's save loads, before they can enter it. The dead who come back within the 5 min are owed the new
+ *       life. Before 1cb2bd1: the last dead walking out closed the window as if the world were merely empty, and a
+ *       newcomer entered the LOST world on its old day, with its dead coming back dead into it.
+ *   d3  the dead leave while somebody still stands, then that one leaves standing: the world was never lost, it goes on.
+ *   d4  the first player leaves standing while the only other one is dead: nobody alive is left in the world, so the
+ *       window opens and the world ends (the one who left is no survivor of it any more) -- the same as if the first had
+ *       died: nobody is the host.
+ *   d5  (L2) a dead survivor who left while somebody still stood is only a departure: when the last one falls later,
+ *       the world's fallen are the ones who fell with it -- the one who walked away earlier is not counted, nor owed.
+ *   d6  (L3) the last one standing dies and leaves in the same heartbeat: the fall is decided at the departure, so the
+ *       world ends (with somebody in the lobby) instead of looking merely empty and going on lost.
+ *   d7  the combat-log guard (§7.2 F4): the last one standing quits mid-bite while a dead one waits in the street. The
+ *       body stays in the fight LINGER_S, standing -- the world is not lost while it does -- and the window opens only
+ *       when it leaves; killed in the guard, it is one of the fallen (it died with nobody else alive).
+ */
+section("22) nobody is the host: the world ends when nobody is left alive, never because the first player left", () => {
+	// d1: everybody leaves standing
+	{
+		const s = bootServer();
+		const wipes = s.wipes();
+		const a = s.join(newUser(), "first");
+		const b = s.join(newUser(), "second");
+		s.immortal.add(a);
+		s.immortal.add(b);
+		s.enter(a);
+		s.enter(b);
+		s.sim.clock.setClock(12, 4);
+		const seed = s.host.seed;
+		const kept = { x: s.body(a).state.x, y: s.body(a).state.y };
+		const zombies = s.sim.horde.zombies.length;
+		s.quit(a);
+		s.quit(b);
+		const t0 = s.sim.clock.dayTime;
+		s.run(40, 0.25);
+		const frozen = s.sim.horde.zombies.length;
+		const c = s.join(newUser(), "later");
+		const spC = s.enter(c);
+		s.immortal.add(c);
+		s.run(12, 0.25);
+		const near =
+			spC === undefined
+				? 0
+				: s.sim.horde.zombies.filter(z => Math.hypot(z.x - spC.state.x, z.y - spC.state.y) <= 1600).length;
+		check(
+			wipes.length === 0 && s.host.seed === seed && s.sim.clock.day === 4,
+			"(d1) everybody left standing: no wipe, the same town and day go on",
+			`wipes ${wipes.length}, seed ${s.host.seed === seed ? "same" : "new"}, day ${s.sim.clock.day}`,
+		);
+		check(
+			s.sim.clock.dayTime > t0,
+			"(d1) …and the clock kept running while it was empty (§4.6)",
+			`${f1(t0)} h -> ${f1(s.sim.clock.dayTime)} h`,
+		);
+		check(
+			frozen === zombies,
+			"(d1) …while the horde stood still, costing nothing (nobody to hunt or to see it)",
+			`${zombies} -> ${frozen} zombies`,
+		);
+		check(
+			spC !== undefined && !spC.state.dead && near > 0,
+			"(d1) …the newcomer walks in standing, and the horde gathers around THEM",
+			`dead ${spC?.state.dead}, ${near} zombie(s) within 1600 u after 12 s`,
+		);
+		const a2 = s.join(a.UserId, "first");
+		const back = s.enter(a2);
+		check(
+			back !== undefined && Math.hypot(back.state.x - kept.x, back.state.y - kept.y) < 1,
+			"(d1) …and the first player, back within the 5 min, gets their kept body where they left it",
+			back !== undefined ? `${f1(Math.hypot(back.state.x - kept.x, back.state.y - kept.y))} u off` : "no body",
+		);
+	}
+	// d2: everybody dies, then everybody leaves inside the window -- with a player in the lobby, then with nobody
+	{
+		const s = bootServer();
+		const wipes = s.wipes();
+		const lobby = s.join(newUser(), "lobby");
+		const a = s.join(newUser(), "first");
+		const b = s.join(newUser(), "second");
+		s.enter(a);
+		s.enter(b);
+		s.sim.clock.setClock(12, 4);
+		const seed = s.host.seed;
+		s.kill(a);
+		s.kill(b);
+		check(s.host.lives.wipeWindowOpen(), "(d2) both dead: the 30 s window is open (the case being tested)");
+		s.quit(a);
+		s.run(1);
+		check(
+			wipes.length === 0 && s.host.lives.wipeWindowOpen(),
+			"(d2) the first walks out: one still waits, the window stays open",
+			`wipes ${wipes.length}`,
+		);
+		s.quit(b);
+		s.run(1);
+		check(
+			wipes.length === 1 && wipes[0].reason === "declined" && s.host.seed !== seed && s.sim.clock.day === 1,
+			"(d2) the last of the dead walks out, a player in the lobby: everybody declined, the world ends at once (MP-22)",
+			`wipes ${wipes.length} (${wipes[0]?.reason}), seed ${s.host.seed === seed ? "same" : "new"}, day ${s.sim.clock.day}`,
+		);
+		check(
+			wipes[0] !== undefined && wipes[0].dead.includes(a.UserId) && wipes[0].dead.includes(b.UserId),
+			"(d2) …and both are counted among its fallen",
+			JSON.stringify(wipes[0]?.dead),
+		);
+		const spL = s.enter(lobby);
+		check(
+			spL !== undefined && !spL.state.dead && s.sim.clock.day === 1,
+			"(d2) the player from the lobby walks into the NEW town, standing, on day 1",
+			`dead ${spL?.state.dead}, day ${s.sim.clock.day}`,
+		);
+		const a2 = s.join(a.UserId, "first");
+		s.run(0.5);
+		const back = s.enter(a2);
+		const save = s.save(a2);
+		check(
+			back !== undefined && !back.state.dead && save?.day === 1 && save?.runOver === false,
+			"(d2) the first player, back within the 5 min, gets the new life the world owed them (standing, life day 1)",
+			`dead ${back?.state.dead}, life day ${save?.day}, runOver ${save?.runOver}`,
+		);
+	}
+	{
+		const s = bootServer();
+		const wipes = s.wipes();
+		const a = s.join(newUser(), "first");
+		const b = s.join(newUser(), "second");
+		s.enter(a);
+		s.enter(b);
+		s.sim.clock.setClock(12, 4);
+		const seed = s.host.seed;
+		s.kill(a);
+		s.kill(b);
+		s.quit(a);
+		s.quit(b);
+		s.run(40, 0.25);
+		check(
+			wipes.length === 0 && s.host.seed === seed && s.sim.clock.day === 4,
+			"(d2) the last of the dead walks out and nobody is left on the server: the lost world waits, no town is built " +
+				"for nobody (L1)",
+			`wipes ${wipes.length}, seed ${s.host.seed === seed ? "same" : "new"}, day ${s.sim.clock.day}`,
+		);
+		const c = s.join(newUser(), "newcomer");
+		s.run(0.1);
+		check(
+			wipes.length === 1 && wipes[0].reason === "declined" && s.host.seed !== seed && s.sim.clock.day === 1,
+			"(d2) …the next player's save loads: the world ends at once, before they can enter it",
+			`wipes ${wipes.length} (${wipes[0]?.reason}), seed ${s.host.seed === seed ? "same" : "new"}, day ${s.sim.clock.day}`,
+		);
+		const spC = s.enter(c);
+		check(
+			spC !== undefined && !spC.state.dead && s.sim.clock.day === 1,
+			"(d2) …and the newcomer walks into the NEW town, standing, on day 1",
+			`dead ${spC?.state.dead}, day ${s.sim.clock.day}`,
+		);
+		const b2 = s.join(b.UserId, "second");
+		s.run(0.5);
+		const back = s.enter(b2);
+		check(
+			back !== undefined && !back.state.dead && s.save(b2)?.day === 1,
+			"(d2) …and the second, back within the 5 min, gets the new life the world owed them",
+			`dead ${back?.state.dead}, life day ${s.save(b2)?.day}`,
+		);
+	}
+	// d3: the dead leave while somebody stands, then that one leaves standing
+	{
+		const s = bootServer();
+		const wipes = s.wipes();
+		const a = s.join(newUser(), "first");
+		const b = s.join(newUser(), "second");
+		s.immortal.add(b);
+		s.enter(a);
+		s.enter(b);
+		s.sim.clock.setClock(12, 4);
+		const seed = s.host.seed;
+		s.kill(a);
+		s.quit(a);
+		s.run(1);
+		s.quit(b);
+		s.run(40, 0.25);
+		check(
+			wipes.length === 0 && s.host.seed === seed && s.sim.clock.day === 4,
+			"(d3) the first died and left while the second stood; then the second left standing: the world was never lost",
+			`wipes ${wipes.length}, seed ${s.host.seed === seed ? "same" : "new"}, day ${s.sim.clock.day}`,
+		);
+	}
+	// d4: the first leaves standing while the only other one is dead
+	{
+		const s = bootServer();
+		const wipes = s.wipes();
+		const a = s.join(newUser(), "first");
+		const b = s.join(newUser(), "second");
+		s.immortal.add(a);
+		s.enter(a);
+		s.enter(b);
+		s.sim.clock.setClock(12, 4);
+		s.kill(b);
+		s.run(2);
+		check(!s.host.lives.wipeWindowOpen(), "(d4) one dead, the first standing: no window (somebody is alive)");
+		s.quit(a);
+		s.run(1);
+		check(
+			s.host.lives.wipeWindowOpen() && wipes.length === 0,
+			"(d4) the first leaves the server: nobody alive is left in the world, so the window opens (nobody is the host)",
+			`open ${s.host.lives.wipeWindowOpen()}, wipes ${wipes.length}`,
+		);
+		s.run(31, 0.25);
+		const spB = s.body(b);
+		check(
+			wipes.length === 1 && wipes[0].reason === "timeout" && spB !== undefined && !spB.state.dead,
+			"(d4) …and 30 s later the world ends as MP-22 says, the one left in it standing again in the new town",
+			`wipes ${wipes.length} (${wipes[0]?.reason}), dead ${spB?.state.dead}, day ${s.sim.clock.day}`,
+		);
+	}
+	// d5 (L2): a death that walked away while somebody stood is not one of the fallen of a later fall
+	{
+		const s = bootServer();
+		const wipes = s.wipes();
+		const a = s.join(newUser(), "gone early");
+		const b = s.join(newUser(), "last");
+		s.enter(a);
+		s.enter(b);
+		s.sim.clock.setClock(12, 4);
+		s.kill(a);
+		s.run(0.5);
+		s.quit(a);
+		s.run(2);
+		check(!s.host.lives.wipeWindowOpen(), "(d5) the first died and left while the second stood: no window");
+		s.kill(b);
+		check(s.host.lives.wipeWindowOpen(), "(d5) then the last one falls: the window opens (the case being tested)");
+		s.run(31, 0.25);
+		check(
+			wipes.length === 1 && wipes[0].dead.length === 1 && wipes[0].dead[0] === b.UserId,
+			"(d5) the world ends with ONE fallen: the one who walked away while somebody still stood is only a departure",
+			JSON.stringify(wipes[0]?.dead.map(id => (id === a.UserId ? "gone early" : id === b.UserId ? "last" : id))),
+		);
+	}
+	// d6 (L3): the last one standing dies and walks out in the same heartbeat, with a player in the lobby
+	{
+		const s = bootServer();
+		const wipes = s.wipes();
+		const lobby = s.join(newUser(), "lobby");
+		const a = s.join(newUser(), "last");
+		s.enter(a);
+		s.sim.clock.setClock(12, 4);
+		const seed = s.host.seed;
+		// the fatal blow lands and the player leaves before any tick processed it: leaving counts it as a death (§7.2)
+		const sp = s.body(a);
+		sp.state.godMode = false;
+		s.sim.combat.damageActor(sp.slot, sp.state, sp.save, sp.state.hpMax * 10, true);
+		s.quit(a);
+		s.run(1);
+		check(
+			wipes.length === 1 && wipes[0].dead.includes(a.UserId) && s.host.seed !== seed && s.sim.clock.day === 1,
+			"(d6) died and left in one heartbeat: the fall is decided at the departure, and the world ends (L3)",
+			`wipes ${wipes.length}, dead ${JSON.stringify(wipes[0]?.dead)}, seed ${s.host.seed === seed ? "same" : "new"}, ` +
+				`day ${s.sim.clock.day}`,
+		);
+		const spL = s.enter(lobby);
+		check(
+			spL !== undefined && !spL.state.dead && s.sim.clock.day === 1,
+			"(d6) …and the one in the lobby walks into the new town",
+			`dead ${spL?.state.dead}, day ${s.sim.clock.day}`,
+		);
+	}
+	// d7: the combat-log guard and rule 6
+	for (const dies of [false, true]) {
+		const s = bootServer();
+		const { createZombie } = require(join(SRC, "shared/game/entities.ts"));
+		const { LINGER_S } = require(join(SRC, "server/net/mpHost.ts"));
+		const wipes = s.wipes();
+		const a = s.join(newUser(), "dead, waiting");
+		const b = s.join(newUser(), "last standing");
+		s.enter(a);
+		const spB = s.enter(b);
+		s.sim.clock.setClock(12, 4);
+		s.kill(a);
+		spB.state.hpMax = 300;
+		spB.state.hp = dies ? 4 : 300;
+		spB.state.godMode = false;
+		for (let i = 0; i < 3; i++) {
+			const z = createZombie(1, spB.state.x + 34 * Math.cos(i * 2), spB.state.y + 34 * Math.sin(i * 2), 5);
+			z.detect = true;
+			s.sim.horde.zombies.push(z);
+		}
+		s.run(0.2);
+		s.quit(b);
+		s.run(0.5);
+		const during = s.host.lives.wipeWindowOpen();
+		const lingering = s.host.lingering(b.UserId);
+		s.run(LINGER_S);
+		const after = s.host.lives.wipeWindowOpen() || wipes.length > 0;
+		const tag = dies ? "(d7, killed in the guard)" : "(d7, alive through the guard)";
+		if (!dies) {
+			check(
+				lingering && !during && after,
+				`${tag} the last one standing quits mid-bite: the body holds the world while it stays in the fight, ` +
+					"and the window opens when it goes",
+				`lingering ${lingering}, window during ${during}, after ${after}`,
+			);
+		} else {
+			s.run(31, 0.25);
+			check(
+				spB.state.dead &&
+					wipes.length === 1 &&
+					wipes[0].dead.includes(b.UserId) &&
+					wipes[0].dead.includes(a.UserId),
+				`${tag} …and killed in the guard, it is one of the world's fallen (it died with nobody else alive)`,
+				`dead ${spB.state.dead}, wipes ${wipes.length}, fallen ${JSON.stringify(wipes[0]?.dead)}`,
+			);
+		}
+	}
+});
+
+// ================================================================ 23: a restart while the guard holds a body
+
+/*
+ * The review of 6e6dfa0, MEDIUM: MP-26's Restart town committed while the combat-log guard still held a body in the old
+ * streets. The body stood on into the day-1 town with its old life (a day-12 life), because it was in the world with no
+ * session behind it: neither reborn nor owed. Now every guarded body leaves the old town at the commit, the way its
+ * player did, BEFORE the fallen are counted: a quit is a departure owed the new life (granted when the save is back on
+ * this server), a Home a kept body that is given it at once.
+ */
+section(
+	"23) a restart while the guard holds a body: it leaves the old town as its player did, and gets the new life",
+	() => {
+		const { createZombie } = require(join(SRC, "shared/game/entities.ts"));
+		const LINGER_S = 5;
+		for (const how of ["quit", "home"]) {
+			const s = bootServer();
+			const keeper = s.join(newUser(), "keeper");
+			s.enter(keeper);
+			s.host.playerOf(keeper).state.godMode = true;
+			const uid = newUser();
+			const p = s.join(uid, "leaver");
+			const save = s.save(p);
+			save.day = 12;
+			save.lifeNights = 11;
+			const sp = s.enter(p);
+			sp.state.hpMax = 400;
+			sp.state.hp = 400;
+			sp.state.godMode = false;
+			s.sim.horde.zombies.length = 0;
+			for (let i = 0; i < 2; i++) {
+				const z = createZombie(1, sp.state.x + 34 * Math.cos(i * 3), sp.state.y + 34 * Math.sin(i * 3), 5);
+				z.detect = true;
+				s.sim.horde.zombies.push(z);
+			}
+			s.run(0.4);
+			if (how === "quit") s.quit(p);
+			else s.exit(p);
+			const lingering = s.host.lingering(uid);
+			const started = s.host.restartTown(keeper.UserId);
+			s.run(0.2);
+			const stillHeld = s.host.lingering(uid);
+			const inTown = s.sim.players().some(x => x.userId === uid);
+			s.sim.horde.zombies.length = 0;
+			s.run(LINGER_S + 1);
+			const tag = how === "quit" ? "(quit mid-bite)" : "(Home mid-bite)";
+			if (how === "quit") {
+				// read now: the load below grants the debt and clears it
+				const owed = s.host.lives.records.get(uid)?.newLifeOwed === true;
+				const p2 = s.join(uid, "leaver");
+				const back = s.save(p2);
+				const body = s.enter(p2);
+				check(
+					lingering &&
+						started === "started" &&
+						!stillHeld &&
+						!inTown &&
+						owed &&
+						back?.day === 1 &&
+						body !== undefined &&
+						!body.state.dead,
+					`${tag} the restart takes the guarded body out of the old town as a departure: owed the new life, and back on ` +
+						"this server it is day 1 in the day-1 town",
+					`held at the quit ${lingering}, after the commit ${stillHeld}, in the new town ${inTown}, owed ${owed}; back: ` +
+						`life day ${back?.day}, town day ${s.sim.clock.day}`,
+				);
+			} else {
+				const body = s.enter(p);
+				check(
+					lingering &&
+						started === "started" &&
+						!stillHeld &&
+						!inTown &&
+						save.day === 1 &&
+						save.lifeNights === 0 &&
+						body !== undefined &&
+						!body.state.dead,
+					`${tag} the restart takes the guarded body out as a kept body in the lobby, and gives it the new life at once: ` +
+						"day 1 on the next entry",
+					`held at Home ${lingering}, after the commit ${stillHeld}, in the new town ${inTown}; life day ${save.day}, ` +
+						`town day ${s.sim.clock.day}`,
+				);
+			}
+		}
 	},
 );
 

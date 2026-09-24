@@ -2,7 +2,7 @@
 // banks: design/audio/manifest.json, asset ids: design/audio/assets.json (npm run cloud -- upload-audio)
 // a bank without an id plays nothing of ours: every event on it keeps its library take (DESIGN_RULES SND-01)
 
-export type AudioBank = "ui" | "items" | "weapons" | "impacts" | "cues";
+export type AudioBank = "ui" | "items" | "weapons" | "impacts" | "cues" | "weather";
 
 /** "rbxassetid://...", or "" until the bank is uploaded (or while the upload is not this bank's WAV) */
 export const AUDIO_BANK_IDS: Record<AudioBank, string> = {
@@ -11,6 +11,7 @@ export const AUDIO_BANK_IDS: Record<AudioBank, string> = {
 	weapons: "rbxassetid://136697726232995",
 	impacts: "rbxassetid://84507833973337",
 	cues: "rbxassetid://114553192552247",
+	weather: "",
 };
 
 /** one take: a window of its bank, in seconds */
@@ -307,5 +308,16 @@ export const SYNTH_SOUNDS: Record<string, SynthSound> = {
 		pitchMax: 1,
 		loopStart: 19.4,
 		loopEnd: 21.275,
+	},
+	thunder: {
+		bank: "weather",
+		takes: [
+			{ startAt: 0.19, maxPlay: 3.746 },
+			{ startAt: 4.15, maxPlay: 4.087 },
+			{ startAt: 8.45, maxPlay: 4.058 },
+		],
+		volume: 0.5,
+		pitchMin: 0.92,
+		pitchMax: 1.05,
 	},
 };

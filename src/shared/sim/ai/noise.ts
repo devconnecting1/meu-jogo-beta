@@ -14,7 +14,9 @@ import { WeaponKind } from "shared/data/kinds";
  *   MEDIUM  running — the survivor's normal gait; a zombie pounding on glass or a barricade.
  *   LOW     walking (a hurt, starving or slowed survivor drags their feet quieter), a blow landing on a body, a door.
  * That is the tactical trade-off the owner asked for: a blade is quiet and keeps a fight local, a gun ends it
- * faster and brings the street. The rain masks everything to RAIN_HEARING (shared/sim/ai/perception.ts).
+ * faster and brings the street. The rain masks everything to RAIN_HEARING (shared/sim/ai/perception.ts), and a
+ * storm's thunderclap to THUNDER_HEARING more for a few seconds (shared/sim/weather.ts): the storm's tactical window
+ * -- fire right after the thunder and the street hears less. Fog never masks a sound.
  *
  * THE TABLE (u; ×0.6 in the rain; every ring says only where it came from). One place for every source, so a new one
  * is weighed against the rest (DESIGN_RULES IA-02 prints the same table):

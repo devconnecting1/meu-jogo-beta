@@ -735,6 +735,7 @@ function everyTool(t) {
 		{ op: "dawn" },
 		{ op: "wave" },
 		{ op: "rain", on: true },
+		{ op: "weather", weather: 2 },
 		{ op: "heal", userId: t.bob.UserId },
 		{ op: "god", on: true },
 		{ op: "noclip", on: true },
@@ -764,6 +765,7 @@ function worldPrint(t) {
 		day: c.day,
 		hour: c.dayTime.toFixed(3),
 		rain: c.isRaining,
+		weather: c.weather,
 		items: t.s.sim.world.items.length,
 		solids: t.s.sim.world.solids.length,
 		bodies,
@@ -889,6 +891,9 @@ section("2) malformed world tools are refused with a reason, and change nothing"
 		[{ op: "clock", hour: -0.1 }, "hour"],
 		[{ op: "clock", hour: "12" }, "hour"],
 		[{ op: "rain", on: "true" }, "invalid options"],
+		[{ op: "weather", weather: 5 }, "weather"],
+		[{ op: "weather", weather: 1.5 }, "weather"],
+		[{ op: "weather", weather: "fog" }, "weather"],
 		[{ op: "god", on: 1 }, "invalid options"],
 		[{ op: "noclip" }, "invalid options"],
 		[{ op: "heal", userId: 0 }, "invalid player"],
@@ -1099,18 +1104,96 @@ section(
 // ================================================================ 5: clock
 
 section("5) the clock tools move the SERVER's clock for everybody, pay no skipped day, and assist every run", () => {
+	// ---- the sky (LUZ-05; M2 and L1 of the weather's review): any of the five weathers for everybody at once; it
+	// assists every run when it eases the night against the day's own roll, and changes at most every few seconds
+	const WX = require(join(SRC, "shared/sim/weather.ts"));
+	const COOL = WO.ADMIN_WORLD_LIMITS.WEATHER_COOLDOWN_S;
+	{
+		const t = town();
+		const c = t.s.sim.clock;
+		let res = t.tool(t.admin, { op: "weather", weather: 0 });
+		verify(
+			"a clear sky over the day's clear roll: done, and it assists nobody",
+			res.ok && c.dayRoll === 0 && c.weather === 0 && t.pays(t.admin) && t.pays(t.bob),
+			res.message,
+		);
+		res = t.tool(t.admin, { op: "rain", on: true });
+		verify(
+			`...the sky again at once: refused, it changes at most every ${COOL} s (a strobe of darkness on every screen)`,
+			!res.ok && /at most every/.test(res.error) && c.isRaining === false,
+			res.error,
+		);
+		t.s.run(COOL + 0.1);
+		res = t.tool(t.admin, { op: "rain", on: true });
+		verify(
+			"rain over a clear roll: the server's clock rains, and EVERY run is assisted (the horde sees and hears less, §9.3)",
+			res.ok && c.isRaining === true && !t.pays(t.admin) && !t.pays(t.bob) && res.data?.assisted === true,
+			res.message,
+		);
+		t.s.run(COOL + 0.1);
+		res = t.tool(t.admin, { op: "weather", weather: 4 });
+		verify(
+			"weather fog: the server's clock has the day's fog",
+			res.ok && c.weather === 4 && !c.isRaining,
+			res.message,
+		);
+		// a run that comes in while that sky still eases the night is helped by it too (the final review's LOW)
+		const carl = t.s.join(newUser(), "Carl");
+		t.s.enter(carl);
+		t.s.run(0.2);
+		const carlAssisted = !t.s.sim.paysRewards(t.s.body(carl));
+		t.s.run(COOL + 0.1);
+		res = t.tool(t.admin, { op: "weather", weather: 0 });
+		const dana = t.s.join(newUser(), "Dana");
+		t.s.enter(dana);
+		t.s.run(0.2);
+		verify(
+			"a run admitted while the admin's sky eases the night is assisted; once the day's own sky is back, one is not",
+			carlAssisted && res.ok && t.s.sim.paysRewards(t.s.body(dana)),
+			`Carl ${carlAssisted ? "assisted" : "paid"}; Dana ${t.s.sim.paysRewards(t.s.body(dana)) ? "paid" : "assisted"}`,
+		);
+	}
+	{
+		const t = town();
+		const c = t.s.sim.clock;
+		// a day that rolled rain, the clock set there by hand (a set into another day brings its own sky: L2)
+		let rainy = 5;
+		while (rainy < 400 && WX.weatherOfDay(c.weatherSeed, rainy) !== WX.Weather.Rain) rainy += 1;
+		c.setClock(12, rainy);
+		let res = t.tool(t.admin, { op: "weather", weather: 0 });
+		verify(
+			"a clear sky over a day that rolled rain: done, and it assists nobody (the night only gets harder)",
+			c.dayRoll === WX.Weather.Rain && res.ok && c.weather === 0 && t.pays(t.admin) && t.pays(t.bob),
+			`day ${rainy}: ${res.message}`,
+		);
+		t.s.run(COOL + 0.1);
+		res = t.tool(t.admin, { op: "weather", weather: 4 });
+		verify(
+			"fog over the rain's roll: nobody either (the fog takes the horde's eyes only, the rain took eyes and ears)",
+			res.ok && c.weather === 4 && t.pays(t.admin) && t.pays(t.bob),
+			res.message,
+		);
+		t.s.run(COOL + 0.1);
+		res = t.tool(t.admin, { op: "weather", weather: 2 });
+		verify(
+			"a storm over the rain's roll: it rains, and every run is assisted (the thunder's deaf windows on top)",
+			res.ok && c.weather === 2 && c.isRaining === true && !t.pays(t.admin) && !t.pays(t.bob),
+			res.message,
+		);
+		const lines = t.audit().filter(e => e.action === "world:weather");
+		verify(
+			"...and its audit line says what the day rolled and whose runs it assisted",
+			lines.some(e => /rolled Rain/.test(e.details) && /assisted/.test(e.details)),
+			J(lines.map(e => e.details)),
+		);
+	}
 	let t = town();
 	const c = t.s.sim.clock;
 	const World = t.s.env.services.ReplicatedStorage.FindFirstChild("Net").FindFirstChild("World");
 	const bobSave = t.s.save(t.bob);
 	const bobBefore = { day: bobSave.day, money: bobSave.money };
 	World.sent.length = 0;
-	let res = t.tool(t.admin, { op: "rain", on: true });
-	verify("rain on: the server's clock rains", res.ok && c.isRaining === true, res.message);
-	verify("...and rain assists nobody", t.pays(t.admin) && t.pays(t.bob));
-	res = t.tool(t.admin, { op: "rain", on: false });
-	verify("rain off", res.ok && c.isRaining === false);
-	res = t.tool(t.admin, { op: "clock", hour: 13.5 });
+	let res = t.tool(t.admin, { op: "clock", hour: 13.5 });
 	verify(
 		"clock 13:30: the server's clock is at 13:30",
 		res.ok && Math.abs(c.dayTime - 13.5) < 1e-6,
@@ -1132,6 +1215,17 @@ section("5) the clock tools move the SERVER's clock for everybody, pay no skippe
 		"...and every run in the world is assisted (a skip back across midnight would pay a day twice)",
 		!t.pays(t.admin) && !t.pays(t.bob),
 	);
+	// the hands move at most every HANDS_COOLDOWN_S (LUZ-05: a burst of skips through a storm night)
+	const HANDS = WO.ADMIN_WORLD_LIMITS.HANDS_COOLDOWN_S;
+	const beforeSkip = c.dayTime;
+	res = t.tool(t.admin, { op: "night" });
+	verify(
+		`...a skip right after it: refused, the clock moves at most every ${HANDS} s`,
+		!res.ok && /at most every/.test(res.error) && c.dayTime === beforeSkip,
+		res.error,
+	);
+	const hands = () => t.s.run(HANDS + 0.05);
+	hands();
 	res = t.tool(t.admin, { op: "night" });
 	verify(
 		"night from 13:30: 18:59, and the night's horde promised",
@@ -1143,6 +1237,7 @@ section("5) the clock tools move the SERVER's clock for everybody, pay no skippe
 	verify("night at night: refused", !res.ok && /already night/.test(res.error), res.error);
 	const day = c.day;
 	t.tool(t.admin, { op: "clock", hour: 23 });
+	hands();
 	res = t.tool(t.admin, { op: "dawn" });
 	verify(
 		"dawn from 23:00: 06:59 of the NEXT day",
@@ -1158,13 +1253,16 @@ section("5) the clock tools move the SERVER's clock for everybody, pay no skippe
 	res = t.tool(t.admin, { op: "dawn" });
 	verify("dawn by day: refused", !res.ok && /already day/.test(res.error), res.error);
 	t.tool(t.admin, { op: "clock", hour: 12 });
+	hands();
 	res = t.tool(t.admin, { op: "wave" });
 	verify(
 		"wave at noon: wave 1 at 18:59",
 		res.ok && Math.abs(c.dayTime - 18.99) < 1e-6 && res.message === "Wave 1 incoming",
 		res.message,
 	);
+	hands();
 	t.tool(t.admin, { op: "clock", hour: 20 });
+	hands();
 	res = t.tool(t.admin, { op: "wave" });
 	verify(
 		"wave at 20:00: wave 2 at 21:59",
@@ -1172,26 +1270,35 @@ section("5) the clock tools move the SERVER's clock for everybody, pay no skippe
 		res.message,
 	);
 	const d2 = c.day;
+	hands();
 	t.tool(t.admin, { op: "clock", hour: 23 });
+	hands();
 	res = t.tool(t.admin, { op: "wave" });
 	verify(
 		"wave at 23:00: wave 3 at 00:59 of the next day",
 		res.ok && c.day === d2 + 1 && Math.abs(c.dayTime - 0.99) < 1e-6,
 		`${res.message} ${c.day} ${c.dayTime}`,
 	);
+	hands();
 	t.tool(t.admin, { op: "clock", hour: 3 });
+	hands();
 	c.waveQueues[2] = 0;
+	const t3 = c.dayTime;
 	res = t.tool(t.admin, { op: "wave" });
 	verify(
 		"wave at 03:00: wave 3 refilled, the hands stay",
-		res.ok && Math.abs(c.dayTime - 3) < 1e-6 && c.waveQueues[2] > 0 && res.message === "Wave 3 refilled",
+		res.ok && Math.abs(c.dayTime - t3) < 1e-6 && c.waveQueues[2] > 0 && res.message === "Wave 3 refilled",
 		`${res.message} ${c.dayTime}`,
 	);
 	// a slider dragged: three DIFFERENT sets are three lines (a line keeps what it says: L3 of the review)
 	const clockLines = () => t.audit().filter(e => e.action === "world:clock");
 	const c0 = clockLines().length;
+	// ...at the panel's own cadence (a set every 0.5 s: client/admin/serverWorld.ts CLOCK_SEND_S)
+	hands();
 	t.tool(t.admin, { op: "clock", hour: 10 });
+	hands();
 	t.tool(t.admin, { op: "clock", hour: 10.5 });
+	hands();
 	t.tool(t.admin, { op: "clock", hour: 11 });
 	verify(
 		"three different clock sets in a row: three audit lines, each with its own value",
@@ -1520,8 +1627,9 @@ section("10) items and structures through the server world: announced to the cli
 		!res.ok && /blocked/.test(res.error),
 		res.error,
 	);
-	const house = t.s.sim.world.solids.find(s => s.kind === "building");
-	res = t.tool(t.admin, { op: "spawnStructure", structure: "lamp", x: house.x + house.w / 2, y: house.y + 4 });
+	// a spot the walls block, in whatever town this server drew (MP-26: the first building's top edge may be a door)
+	const wallSpot = insideBuilding(t.s.sim.world);
+	res = t.tool(t.admin, { op: "spawnStructure", structure: "lamp", x: wallSpot.x, y: wallSpot.y });
 	verify("on a building's wall: refused", !res.ok, res.error);
 });
 
@@ -2425,6 +2533,7 @@ section(
 		const total = h.population.scales().reduce((s, k) => s + k, 0);
 		const { getDayPopulation } = require(join(SRC, "shared/data/spawns.ts"));
 		t.tool(t.admin, { op: "clock", hour: 20 });
+		t.s.run(WO.ADMIN_WORLD_LIMITS.HANDS_COOLDOWN_S + 0.05);
 		c.waveQueues[1] = 0;
 		c.specialWaveQueues[1] = 0;
 		let res = t.tool(t.admin, { op: "wave" });

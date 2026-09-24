@@ -19,6 +19,7 @@ import { Renderer } from "shared/engine/renderer";
 import { GameContext } from "shared/game/context";
 import { bloodArtLive } from "./bloodView";
 import { survivorArtLive, zombieArtLive } from "./charArt";
+import { puddleArtLive } from "./weatherView";
 
 /**
  * [ZIndex, sprites, how many of them are rounded (UICorner), how many outlined (UIStroke), how many draw an image
@@ -78,6 +79,25 @@ export const SURVIVORS_ART: ReadonlyArray<PoolLayer> = [
 	[Z.player + 1, 4, 0, 0, 4],
 ];
 
+/**
+ * The weather (LUZ-05, client/view/weatherView.ts), which a fight can happen in: a storm's streaks at 1080p, and the
+ * puddles of a wet street in view (at most 7 in any 1080p view of a town) with their two drops each. Reserved apart
+ * from the fight (`reserveWeatherPool`), so the fight's profile stays the fight's (tools/test-pool.mjs §5, §16).
+ */
+const RAIN: PoolLayer = [Z.rain, 96, 0, 0];
+/** the puddles' pixel art: the puddle's texture and its two rings, images all */
+export const WEATHER_ART: ReadonlyArray<PoolLayer> = [RAIN, [Z.wet, 24, 0, 0, 24]];
+/**
+ * The flat puddles (their textures not uploaded yet): water, its small pool, the sheen -- rounded -- and two texel
+ * dots each; rounded all, since a rounded one lands on whichever slot its puddle's turn gives it.
+ */
+export const WEATHER_FLAT: ReadonlyArray<PoolLayer> = [RAIN, [Z.wet, 36, 36, 0]];
+
+/** the weather's layers as the puddles are drawn: pixel art when their textures are live, flat before that */
+export function weatherPool(puddleArt: boolean): ReadonlyArray<PoolLayer> {
+	return puddleArt ? WEATHER_ART : WEATHER_FLAT;
+}
+
 /** sprites (each with its modifiers) created per frame while warming: a 1080p fight in ~15 frames of the lobby */
 export const WARM_PER_FRAME = 32;
 
@@ -114,6 +134,14 @@ export function reserveFightPool(
 	add(survivorArt ? SURVIVORS_ART : SURVIVORS_FLAT);
 }
 
+/** the weather's sprites on a `viewW` x `viewH` screen: the 1080p counts, down to half on a small screen */
+export function reserveWeatherPool(r: Renderer, viewW: number, viewH: number, puddleArt: boolean): void {
+	const k = math.clamp((viewW * viewH) / REF_AREA, 0.5, 1);
+	for (const [z, n, corners, strokes, images] of weatherPool(puddleArt)) {
+		r.reserve(z, math.ceil(n * k), math.ceil(corners * k), math.ceil(strokes * k), math.ceil((images ?? 0) * k));
+	}
+}
+
 /** the phases in which the world renderer draws nothing: the boot logo is left alone, a run draws the world */
 function idle(ctx: GameContext): boolean {
 	const p = ctx.phase;
@@ -133,6 +161,8 @@ export function warmFightPool(ctx: GameContext): RBXScriptConnection {
 		if (!reserved) {
 			reserved = true;
 			reserveFightPool(ctx.renderer, ctx.viewW, ctx.viewH, zombieArtLive(), survivorArtLive(), bloodArtLive());
+			// a storm's first frame must not build its streaks and puddles either (LUZ-05)
+			reserveWeatherPool(ctx.renderer, ctx.viewW, ctx.viewH, puddleArtLive());
 		}
 		if (ctx.renderer.warm(WARM_PER_FRAME) === 0) conn.Disconnect();
 	});

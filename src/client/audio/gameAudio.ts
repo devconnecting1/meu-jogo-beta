@@ -34,6 +34,7 @@ import type { SoundName } from "shared/data/sounds";
 import { useSoundOf } from "shared/data/usables";
 import { currentWeapon } from "shared/game/player";
 import { CLOCK_ANNOUNCEMENTS } from "shared/sim/clock";
+import { thunderBetween } from "shared/sim/weather";
 import { rideSpeed } from "shared/sim/rideKey";
 import { engineRuns } from "shared/sim/vehicle";
 import type { GameRefs } from "../systems/types";
@@ -84,6 +85,8 @@ export const HURT_GAP = 0.35;
  * edge of the interest range leaves and re-enters the snapshot, and every re-entry was a new roar.
  */
 export const BOSS_ROAR_REPEAT = 12;
+/** a clock that moved more than this in one frame (game hours) jumped: its thunderclaps are not played */
+export const THUNDER_JUMP_H = 0.05;
 /** a clock stinger is not played again within this many seconds (an announcement repeated by a reconnect) */
 const STINGER_REPEAT = 20;
 /** what each kind of pickup sounds like (client/systems/pickups.ts lastPickupKind) */
@@ -198,6 +201,9 @@ export class GameAudio {
 	private flameHeld = 0;
 	private riders = new Map<number, Rider>();
 	private lastFrame = -1;
+	/** the world day and hour this ear last listened at: a thunderclap whose onset the clock passed is heard (LUZ-05) */
+	private thunderDay = -1;
+	private thunderHour = 0;
 
 	// ------------------------------------------------------------ run lifecycle
 
@@ -220,6 +226,7 @@ export class GameAudio {
 		this.flameHeld = 0;
 		this.riders.clear();
 		this.lastFrame = -1;
+		this.thunderDay = -1;
 		this.snapshot(refs);
 	}
 
@@ -251,6 +258,7 @@ export class GameAudio {
 		this.bossSounds(refs);
 		this.worldSounds(refs);
 		this.ambientGrowl(refs, dt);
+		this.thunder(refs);
 	}
 
 	/**
@@ -320,6 +328,24 @@ export class GameAudio {
 	}
 
 	// ------------------------------------------------------------ internals
+
+	/**
+	 * A storm's thunder (LUZ-05): the clock passed the onset of a clap -- the strike's flash plus its delay, from the
+	 * same pure schedule the server masks the horde's ears with (shared/sim/weather.ts `thunderBetween`) -- so it is
+	 * heard as the ears go deaf, level by how close it fell. The sky's sound: flat, never spatial. A clock that jumped
+	 * (an admin, a new town) plays nothing for the hours it flew over.
+	 */
+	private thunder(refs: GameRefs): void {
+		const dn = refs.daynight;
+		const day = dn.day;
+		const hour = dn.dayTime;
+		if (day === this.thunderDay && hour > this.thunderHour && hour - this.thunderHour < THUNDER_JUMP_H) {
+			const power = thunderBetween(dn.weather, day, this.thunderHour, hour);
+			if (power > 0) audio.play("thunder", { scale: power });
+		}
+		this.thunderDay = day;
+		this.thunderHour = hour;
+	}
 
 	private snapshot(refs: GameRefs): void {
 		const p = refs.player;

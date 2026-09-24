@@ -79,6 +79,15 @@ export type WorldArtName =
 	| "crack0"
 	| "crack1"
 	| "manhole"
+	| "puddle0"
+	| "puddle0V"
+	| "puddle1"
+	| "puddle1V"
+	| "puddle2"
+	| "puddle2V"
+	| "puddle3"
+	| "puddle3V"
+	| "puddleDrop"
 	| "drain"
 	| "dispenser"
 	| "acUnit"
@@ -292,6 +301,24 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	crack1: { id: "rbxassetid://79739241366295", w: 24, h: 8 },
 	/** sprite: manhole cover */
 	manhole: { id: "rbxassetid://96964095561833", w: 8, h: 8 },
+	/** sprite: rain puddle in a gutter: long, stepped edge (sky streaks, lit rim, wet halo) */
+	puddle0: { id: "", w: 38, h: 11 },
+	/** sprite: rain puddle in a gutter: long, stepped edge, on a vertical road */
+	puddle0V: { id: "", w: 11, h: 38 },
+	/** sprite: rain puddle in a gutter, a small pool past its end (sky streaks, lit rim, wet halo) */
+	puddle1: { id: "", w: 30, h: 10 },
+	/** sprite: rain puddle in a gutter, a small pool past its end, on a vertical road */
+	puddle1V: { id: "", w: 10, h: 30 },
+	/** sprite: rain puddle in a lane: a dip in the asphalt (sky streaks, lit rim, wet halo) */
+	puddle2: { id: "", w: 22, h: 14 },
+	/** sprite: rain puddle in a lane: a dip in the asphalt, on a vertical road */
+	puddle2V: { id: "", w: 14, h: 22 },
+	/** sprite: rain puddle in a lane, a small pool before it (sky streaks, lit rim, wet halo) */
+	puddle3: { id: "", w: 32, h: 15 },
+	/** sprite: rain puddle in a lane, a small pool before it, on a vertical road */
+	puddle3V: { id: "", w: 15, h: 32 },
+	/** sprite: a drop's ring on a puddle (4 texels) */
+	puddleDrop: { id: "", w: 3, h: 3 },
 	/** sprite: storm drain */
 	drain: { id: "rbxassetid://96075237212369", w: 8, h: 4 },
 	/** sprite: fuel dispenser, upright: the station sign's white cabinet, dark display, red stripe, hose and nozzle */
@@ -529,6 +556,15 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"crack0",
 	"crack1",
 	"manhole",
+	"puddle0",
+	"puddle0V",
+	"puddle1",
+	"puddle1V",
+	"puddle2",
+	"puddle2V",
+	"puddle3",
+	"puddle3V",
+	"puddleDrop",
 	"drain",
 	"dispenser",
 	"acUnit",

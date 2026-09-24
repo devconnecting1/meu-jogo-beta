@@ -68,6 +68,11 @@ export const LANG_TABLE: Array<string> = [
 	"Wave 1",
 	"Wave 2",
 	"Wave 3",
+	// the day's weather changing (LUZ-05, shared/sim/weather.ts `weatherAnnouncement`): what it is and what it does
+	"Rain: zombies see and hear less",
+	"Thunderstorm: each thunderclap hides your noise",
+	"Fog at dawn: you and the zombies see less",
+	"Fog: you and the zombies see less",
 	"You killed it",
 	"Dagger",
 	"Wooden stick",
