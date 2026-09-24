@@ -4,6 +4,7 @@
  */
 import { CRAFT_RECIPES, CraftRecipe } from "shared/data/crafts";
 import type { ZombieState } from "shared/game/entities";
+import type { Opening } from "shared/game/interiors";
 import { PLAYER_RADIUS, ZOMBIE_RADIUS } from "shared/game/physics";
 import type { PlayerState } from "shared/game/player";
 import { querySolids, Solid, SolidKind, WorldData } from "shared/game/world";
@@ -160,6 +161,67 @@ export function ghostRectSticky(
 		h = def.w;
 	}
 	return { x: stickyAxis(cx - w / 2, prevX), y: stickyAxis(cy - h / 2, prevY), w, h };
+}
+
+/** how close the ghost's centre must come to a doorway or a window to drop into it */
+export const OPENING_SNAP = 88;
+
+/** the openings a barricade or a door can fill: a building's doorways and windows, never an interior opening */
+function fortifiable(o: Opening): boolean {
+	return o.kind === "door" || o.kind === "window";
+}
+
+/** a barricade or a door: the pieces that fortify an opening (EDI-13) */
+export function fortifies(def: PlaceableDef): boolean {
+	return def.kind === "barricade" || def.kind === "iron_barricade" || def.kind === "door" || def.kind === "iron_door";
+}
+
+/**
+ * Fortifying a building (docs/DESIGN_RULES.md EDI-13): a barricade or a door whose ghost comes near a doorway or
+ * a window of a building fills that opening exactly -- its gap, wall thick -- instead of landing on the 128-unit
+ * grid, where it could never fit between two walls. The placed piece keeps its own hit points, so the horde
+ * breaks in at the usual rate (it paths to it as a SOFT cell and hits it: shared/sim/ai/zombieBrain.ts).
+ * Only the building's doorways and windows (`fortifiable`): an interior opening can be an open-plan side 300 u
+ * wide, and one 700 HP barricade must not seal a whole room off (review of ea5cf71). Everything else, and a ghost
+ * with no such opening near, keeps the grid rect. Pure: the client's ghost and the server's placement
+ * (server/sim/build.ts `ghost` and `place`) run this same function on the same world.
+ */
+export function snapToOpening(world: WorldData, def: PlaceableDef, r: PlaceRect): PlaceRect {
+	if (!fortifies(def)) return r;
+	const cx = r.x + r.w / 2;
+	const cy = r.y + r.h / 2;
+	let best: PlaceRect | undefined;
+	let bestD = OPENING_SNAP;
+	for (const s of querySolids(world, cx - OPENING_SNAP, cy - OPENING_SNAP, cx + OPENING_SNAP, cy + OPENING_SNAP)) {
+		const openings = s.openings;
+		if (s.kind !== "building" || openings === undefined) continue;
+		for (const o of openings) {
+			if (!fortifiable(o)) continue;
+			const d = math.max(math.abs(o.x + o.w / 2 - cx), math.abs(o.y + o.h / 2 - cy));
+			if (d < bestD) {
+				bestD = d;
+				best = { x: o.x, y: o.y, w: o.w, h: o.h };
+			}
+		}
+	}
+	return best ?? r;
+}
+
+/**
+ * The doorway or window whose gap starts at (x, y), if any (within the wire's half unit). A construction snapped
+ * into one travels in its `SolidAdd` as a placeable, a position and a rotation -- not a size -- so the client's
+ * mirror of the world rebuilds its rect with this (client/net/worldMirror.ts; docs/MULTIPLAYER.md §4.5).
+ */
+export function openingAt(world: WorldData, x: number, y: number): PlaceRect | undefined {
+	for (const s of querySolids(world, x - 1, y - 1, x + 1, y + 1)) {
+		const openings = s.openings;
+		if (s.kind !== "building" || openings === undefined) continue;
+		for (const o of openings) {
+			if (!fortifiable(o)) continue;
+			if (math.abs(o.x - x) < 0.5 && math.abs(o.y - y) < 0.5) return { x: o.x, y: o.y, w: o.w, h: o.h };
+		}
+	}
+	return undefined;
 }
 
 /** inside the world, on no (non-passable) solid, and on no survivor's or live zombie's body */

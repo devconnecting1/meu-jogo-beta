@@ -1301,6 +1301,246 @@ if (HARD_DAY > 0) {
 	measureNight("run", HARD_DAY, true);
 }
 
+// ================================================================ 5: no safe spot inside a building (EDI-11)
+
+section(
+	"5) no safe spot: the night's horde reaches a survivor hiding in the deepest room of the largest building, " +
+		"as it reaches one in the open (EDI-10, EDI-11)",
+);
+
+const PH = require(join(SRC, "shared/game/physics.ts"));
+const { buildingAt: buildingAtW } = require(join(SRC, "shared/game/world.ts"));
+const { zombieRadius } = require(join(SRC, "shared/game/entities.ts"));
+
+/**
+ * The hiding spot: in the town's largest building, the place a survivor (radius 18) can stand that is the longest
+ * walk for a walker (radius 16) from anywhere outside -- a Dijkstra on an 8 u grid over the building and 200 u
+ * round it, through doorways and (at their slowness, 1 / VAULT_SLOW) through windows. And the open spot to
+ * compare with: out of the main door, on the street in front of the same building.
+ */
+function hidingSpots(type) {
+	const town = generateTown(DESIGN.TOWN_SEED);
+	let b;
+	for (const s of town.solids) {
+		if (s.kind !== "building" || s.rooms === undefined) continue;
+		if (type !== undefined && s.buildingType !== type) continue;
+		if (b === undefined || s.w * s.h > b.w * b.h || (s.w * s.h === b.w * b.h && s.id < b.id)) b = s;
+	}
+	const C = 8;
+	const M = 200;
+	const x0 = b.x - M;
+	const y0 = b.y - M;
+	const cols = Math.ceil((b.w + 2 * M) / C);
+	const rows = Math.ceil((b.h + 2 * M) / C);
+	const n = cols * rows;
+	const at = k => [x0 + (k % cols) * C + C / 2, y0 + Math.floor(k / cols) * C + C / 2];
+	const walk = new Uint8Array(n);
+	const stand = new Uint8Array(n);
+	const inside = new Uint8Array(n);
+	const slow = new Float64Array(n);
+	for (let k = 0; k < n; k++) {
+		const [x, y] = at(k);
+		walk[k] = PH.circleBlocked(town, x, y, PH.ZOMBIE_RADIUS) === undefined ? 1 : 0;
+		stand[k] = PH.circleBlocked(town, x, y, PH.PLAYER_RADIUS) === undefined ? 1 : 0;
+		inside[k] = buildingAtW(town, x, y) === b ? 1 : 0;
+		slow[k] = 1 / PH.vaultFactor(town, x, y);
+	}
+	const dist = new Float64Array(n).fill(Infinity);
+	const heap = [];
+	const push = (k, d) => {
+		heap.push([d, k]);
+		let i = heap.length - 1;
+		while (i > 0) {
+			const p = (i - 1) >> 1;
+			if (heap[p][0] <= heap[i][0]) break;
+			[heap[p], heap[i]] = [heap[i], heap[p]];
+			i = p;
+		}
+	};
+	const pop = () => {
+		const top = heap[0];
+		const last = heap.pop();
+		if (heap.length > 0) {
+			heap[0] = last;
+			let i = 0;
+			for (;;) {
+				const l = 2 * i + 1;
+				const r = l + 1;
+				let m = i;
+				if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
+				if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
+				if (m === i) break;
+				[heap[m], heap[i]] = [heap[i], heap[m]];
+				i = m;
+			}
+		}
+		return top;
+	};
+	for (let k = 0; k < n; k++) {
+		if (walk[k] && !inside[k]) {
+			dist[k] = 0;
+			push(k, 0);
+		}
+	}
+	while (heap.length > 0) {
+		const [d, k] = pop();
+		if (d > dist[k]) continue;
+		const i = k % cols;
+		const j = (k - i) / cols;
+		for (let dj = -1; dj <= 1; dj++) {
+			for (let di = -1; di <= 1; di++) {
+				if (di === 0 && dj === 0) continue;
+				const ni = i + di;
+				const nj = j + dj;
+				if (ni < 0 || nj < 0 || ni >= cols || nj >= rows) continue;
+				const nk = nj * cols + ni;
+				if (!walk[nk]) continue;
+				if (di !== 0 && dj !== 0 && (!walk[j * cols + ni] || !walk[nj * cols + i])) continue;
+				const step = (di !== 0 && dj !== 0 ? Math.SQRT2 : 1) * C * Math.max(slow[k], slow[nk]);
+				if (d + step < dist[nk]) {
+					dist[nk] = d + step;
+					push(nk, d + step);
+				}
+			}
+		}
+	}
+	let deep = -1;
+	for (let k = 0; k < n; k++) {
+		if (!inside[k] || !stand[k] || !(dist[k] < Infinity)) continue;
+		if (deep < 0 || dist[k] > dist[deep]) deep = k;
+	}
+	const [hx, hy] = at(deep);
+	const room = (b.rooms ?? []).find(q => hx >= q.x && hx <= q.x + q.w && hy >= q.y && hy <= q.y + q.h);
+	// the open spot: 300 u out of the main door, on the street side, the nearest free point
+	const nrm = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] }[b.doorSide];
+	let open;
+	for (let r = 0; r < 200 && open === undefined; r += 8) {
+		for (let a = 0; a < 16 && open === undefined; a++) {
+			const x = b.doorX + nrm[0] * 300 + Math.cos((a / 16) * Math.PI * 2) * r;
+			const y = b.doorY + nrm[1] * 300 + Math.sin((a / 16) * Math.PI * 2) * r;
+			if (PH.circleBlocked(town, x, y, PH.PLAYER_RADIUS + 12) === undefined) open = { x, y };
+		}
+	}
+	return { b, hide: { x: hx, y: hy }, room: room?.kind ?? "?", walk: dist[deep], open };
+}
+
+/**
+ * One night from 18:30 of day 1 with an immortal survivor held at (x, y), no input, for 90 s from the first wave
+ * zombie's birth: when zombies -- the night's waves and whatever walked the town before -- first come within
+ * biting reach of the survivor (a walker bites from its contact distance plus BITE_KEEP), how many distinct ones
+ * have, and the share of that time a zombie stands in reach. Also the average tick cost of the run.
+ */
+function hordeReach(label, spot) {
+	const host = newHost(label, {
+		seed: 77,
+		clock: () => new WorldClock({ day: 1, dayTime: 18.5, rollRain: () => false }),
+	});
+	const sp = enter(host, label);
+	host.immortal.add(sp.slot);
+	sp.spawnShieldUntil = 0;
+	host.beforeStep = () => {
+		sp.state.x = spot.x;
+		sp.state.y = spot.y;
+	};
+	// the shims give Map a Luau-style size(): a plain object and a counter keep this independent of them
+	const reached = new Map();
+	let count = 0;
+	let firstWave;
+	let ticks = 0;
+	let ms = 0;
+	let window = 0;
+	let pressed = 0;
+	const span = Math.ceil(90 / TICK_DT);
+	for (let guard = 0; guard < 400000; guard++) {
+		const t0 = process.hrtime.bigint();
+		tick(host);
+		ms += Number(process.hrtime.bigint() - t0) / 1e6;
+		ticks++;
+		if (firstWave === undefined) {
+			const w = host.births.find(b => b.wave);
+			if (w === undefined) continue;
+			firstWave = w.tick;
+			// the horde from outside only: whatever walked up to the spot before nightfall (an ambient walker that
+			// happened to be born next to it) is taken out -- the server turns a vanished zombie into a silent
+			// despawn -- so both runs start from the same empty ground round the survivor
+			const zs = host.sim.horde.zombies;
+			for (let i = zs.length - 1; i >= 0; i--) if (!zs[i].wave) zs.splice(i, 1);
+			continue;
+		}
+		let inReach = 0;
+		for (const z of host.sim.horde.zombies) {
+			if (z.hp <= 0) continue;
+			const bite = PH.PLAYER_RADIUS + zombieRadius(z) + 16;
+			if (Math.hypot(z.x - spot.x, z.y - spot.y) > bite) continue;
+			inReach++;
+			if (!reached.has(z)) {
+				reached.set(z, host.sim.tick);
+				count++;
+			}
+		}
+		if (count > 0) {
+			window++;
+			if (inReach > 0) pressed++;
+		}
+		if (host.sim.tick - firstWave > span) break;
+	}
+	const since = [...reached.values()].map(t => (t - firstWave) * TICK_DT).sort((a, b) => a - b);
+	return {
+		first: since.length > 0 ? since[0] : Infinity,
+		third: since.length >= 3 ? since[2] : Infinity,
+		count,
+		pressed: window > 0 ? pressed / window : 0,
+		msPerTick: ms / ticks,
+	};
+}
+
+/**
+ * The largest building (a supermarket or a big house: open floors) and the school (classrooms off a corridor, the
+ * most walls between the street and its deepest room), each against the open street in front of it.
+ */
+for (const [which, type] of [
+	["the largest building", undefined],
+	["the school", 3],
+]) {
+	const spots = hidingSpots(type);
+	const b = spots.b;
+	info(
+		`${which}: ${b.tags} #${b.id} (${b.w} x ${b.h}, ${b.openings.filter(o => o.kind === "door").length} doors, ` +
+			`${b.openings.filter(o => o.kind === "window").length} windows); its deepest spot: the ${spots.room} at ` +
+			`(${spots.hide.x.toFixed(0)}, ${spots.hide.y.toFixed(0)}), ${spots.walk.toFixed(0)} u of walking from ` +
+			`outside for a walker (${(spots.walk / 90).toFixed(1)} s at 90 u/s)`,
+	);
+	const inside = hordeReach("hide", spots.hide);
+	const open = hordeReach("open", spots.open);
+	const f = v => (Number.isFinite(v) ? `${v.toFixed(1)} s` : "never");
+	for (const [label, r] of [
+		["  hidden inside", inside],
+		["  in the open  ", open],
+	]) {
+		info(
+			`${label}: a zombie in biting reach ${f(r.first)} after the first wave birth, three ${f(r.third)}; ` +
+				`${r.count} zombies reached the body in 90 s; a zombie in reach ${(r.pressed * 100).toFixed(0)}% of the ` +
+				`time since the first; ${r.msPerTick.toFixed(3)} ms a tick`,
+		);
+	}
+	/*
+	 * The bound: hiding may cost the horde the walk in from the building's edge -- tools/validate-world.mjs caps the
+	 * worst room at REACH_BOUND_S = 12 s for a walker -- and never more. And the horde must keep up the pressure in
+	 * there (several ways in, not one queue): three zombies within the open's time for three plus the same 12 s,
+	 * and one in reach at least half as much of the time as in the open.
+	 */
+	check(
+		`${which}, hidden in its deepest room: a zombie reaches the survivor within the open's time + 12 s`,
+		inside.first <= open.first + 12,
+		`${f(inside.first)} vs ${f(open.first)} in the open`,
+	);
+	check(
+		`${which}: three do within the open's time for three + 12 s, and one stays in reach at least half as much`,
+		inside.third <= open.third + 12 && inside.pressed >= open.pressed * 0.5,
+		`${f(inside.third)} vs ${f(open.third)}; ${(inside.pressed * 100).toFixed(0)}% vs ${(open.pressed * 100).toFixed(0)}% of the time`,
+	);
+}
+
 // ---------------------------------------------------------------- verdict
 
 console.log(`\n${((Date.now() - started) / 1000).toFixed(1)} s`);

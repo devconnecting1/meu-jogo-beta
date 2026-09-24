@@ -679,6 +679,7 @@ function randZombie(netId, withExtra = rbool(), mid = rbool()) {
 		type: rint(1, CFG.ZOMBIE_TYPE_MAX),
 		big: rbool(),
 		mid,
+		aware: rint(0, P.ZOMBIE_AWARE_MAX),
 	};
 	if (withExtra) z.extra = rint(0, 255);
 	return z;
@@ -798,6 +799,7 @@ function compareSnapshot(sent, got) {
 		eq("zombie type", b.type, a.type);
 		eq("zombie big", b.big, a.big);
 		eq("zombie mid ring", b.mid, a.mid);
+		eq("zombie awareness (protocol decision 17)", b.aware, a.aware);
 		eq("zombie extra", b.extra, a.extra);
 	}
 }
@@ -1013,8 +1015,31 @@ test("Snap: malformed parts are refused", () => {
 	type6[metaAt] = CFG.ZOMBIE_TYPE_MAX + 1;
 	eq("zombie type above the data", P.decodeSnapshotPart(bufOf(type6)), undefined);
 	const reserved = zb.slice();
-	reserved[metaAt] = 32 | 1;
-	eq("reserved meta bit", P.decodeSnapshotPart(bufOf(reserved)), undefined);
+	reserved[metaAt] = 128 | 1;
+	eq("reserved meta bit (7)", P.decodeSnapshotPart(bufOf(reserved)), undefined);
+	// bits 5-6 are the awareness (decision 17): every value of them is a state, none is rejected
+	for (let a = 0; a <= P.ZOMBIE_AWARE_MAX; a++) {
+		const aware = zb.slice();
+		aware[metaAt] = 1 + a * 32;
+		const d = P.decodeSnapshotPart(bufOf(aware));
+		eq(`awareness ${a} in meta bits 5-6`, d?.zombies[0]?.aware, a);
+		eq(`...with the type still read from bits 0-2`, d?.zombies[0]?.type, 1);
+	}
+	// the encoder never writes a state it does not have: out of range is clamped, not wrapped into bit 7
+	for (const bad of [-1, 4, 9, 0.5, Number.NaN]) {
+		const enc = P.encodeSnapshot({
+			tick: 1,
+			players: [],
+			zombies: [{ ...randZombie(5, false, false), aware: bad }],
+			bosses: [],
+		});
+		const d = P.decodeSnapshotPart(enc.parts[0]);
+		const got = d?.zombies[0]?.aware;
+		ok(
+			d !== undefined && got >= 0 && got <= P.ZOMBIE_AWARE_MAX,
+			`awareness ${bad} must be clamped into 0..${P.ZOMBIE_AWARE_MAX}, got ${got}`,
+		);
+	}
 	const netId0 = zb.slice();
 	netId0[metaAt - 8] = 0;
 	netId0[metaAt - 7] = 0;

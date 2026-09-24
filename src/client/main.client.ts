@@ -23,7 +23,7 @@ import { getCtx, setPhase } from "./bootstrap";
 import { GameLoop } from "./gameLoop";
 import { audio, gameAudio, playFootstep, startUiAudio } from "./audio";
 import { onFootstep } from "./view/footsteps";
-import { preloadWorldArt } from "./view/worldArt";
+import * as Boot from "./boot";
 import {
 	netActive,
 	netEnterWorld,
@@ -363,7 +363,7 @@ function lobbyStatus(): LobbyStatus {
 function menuScreen(phase: GamePhase): void {
 	clearScreen();
 	setPhase(phase);
-	Flyover.pinFlyover(ctx.uiLayer, netTownSeed());
+	Flyover.pinFlyover(ctx.backdropLayer, netTownSeed());
 }
 
 /** `back` is where the shop's Back button goes: the lobby by default, or the suspended run when opened from the menu. */
@@ -466,6 +466,7 @@ function goLobby(page: LobbyPage = "menu"): void {
 	);
 	lobbyNav.handle = handle;
 	lobbyNav.page = page;
+	Boot.warmLobby(handle);
 	cleanup = (): void => {
 		if (lobbyNav.handle === handle) lobbyNav.handle = undefined;
 		handle.close();
@@ -801,6 +802,8 @@ function mountRun(enterWorld = true): void {
 		if (ctx.phase === "dead" && !deathShown) openDeath();
 		updateDawnWait(dt);
 	});
+	// idle time: the Bag is built out of sight, so the first B press mid-fight builds nothing (client/boot/warmup.ts)
+	Boot.warmRun(pack, () => heartbeat !== undefined);
 }
 
 /** a fresh map for the current save (new game, or a run that was not kept in memory) */
@@ -1165,14 +1168,14 @@ function begin(): void {
 }
 
 // audio (src/client/audio): the mixer boots with the client, reads the Settings sliders straight from the
-// save (so it follows a LoadAck that swaps `ctx.save`) and hooks the interface by watching the ScreenGui.
+// save (so it follows a LoadAck that swaps `ctx.save`) and hooks the interface by watching the HUD and menu layers.
 audio.start();
 audio.bindSettings(() => ctx.save.settings);
 startUiAudio(ctx);
 // the walk cycle only reports the moment a foot lands; until something listens, nothing is heard
 onFootstep(playFootstep);
-// the town's textures (client/view/worldArt.ts): fetched up front; if none can be, the town is drawn flat
-preloadWorldArt();
+// one ordered preload (client/boot/preloadPlan.ts): the skin and the lobby's town, the signs and characters, the sounds
+Boot.startPreload(ids => audio.preloadSounds(ids));
 
 // save patches / announcements for everyone; the admin panel only when the server marks this player as admin
 admin = startAdmin({

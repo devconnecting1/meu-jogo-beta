@@ -538,6 +538,19 @@ function planks(size, base, seed) {
 	return t;
 }
 
+/** carpet: a soft loop pile, a faint diagonal weave, no seams (it must tile invisibly) */
+function carpet(size, base, seed) {
+	const t = new Tex(size, size, true);
+	const r = rng(seed);
+	for (let y = 0; y < size; y++) {
+		for (let x = 0; x < size; x++) {
+			const weave = (x + y) % 4 === 0 ? -5 : (x - y + size) % 4 === 2 ? 3 : 0;
+			t.set(x, y, add(base, weave + (r() - 0.5) * 7));
+		}
+	}
+	return t;
+}
+
 /** square floor tiles with grout; `checker` alternates two tones (hospital / pharmacy) */
 function floorTiles(size, tile, base, seed, checker) {
 	const t = new Tex(size, size, true);
@@ -1533,6 +1546,10 @@ function build() {
 		const m = machines.MACHINE_SPRITES[key];
 		add_(m.texture, "sprite", machineSprite(m, machines.MACHINE_ART), m.shows);
 	}
+	// interiors (shared/game/interiors.ts): the floors the old three did not cover
+	add_("floorCarpet", "tile", carpet(16, C.floorCarpet, 47), "bedroom / office carpet: a low loop pile");
+	add_("floorKitchen", "tile", floorTiles(16, 8, C.floorKitchen, 45, true), "kitchen floor: checker tiles");
+	add_("floorBath", "tile", floorTiles(16, 4, C.floorBath, 46, false), "bathroom / cold room: small tiles");
 	// the survivors (arms baked per grip), their weapons, the horde and the pets (ART-08..ART-11)
 	for (const t of characterArt(Tex)) add_(t.name, t.kind, t.tex, t.description, { character: true });
 	// the item icons (DESIGN_RULES UI-11): not the town, but uploaded with it

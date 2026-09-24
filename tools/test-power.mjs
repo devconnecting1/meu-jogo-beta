@@ -764,6 +764,8 @@ section("D2. no power, no shot; each shot costs 2 and standing armed 1 a second"
 	f.player(0, 2000, 2400);
 	const turret = f.place(ID.turret, 2000, 2000, 0);
 	const z = f.zombie(2032 + 200, 2032, 1e6);
+	// held still, as in D3: since the awareness AI (IA-03) an idle zombie at noon wanders off, out of TURRET_RANGE
+	z.stunned = 1e6;
 	f.run(3);
 	check(turret.powered !== true && z.hp === 1e6, "no battery box: the turret is dark and does not fire");
 	const box = f.place(ID.battery, 2150, 2000);

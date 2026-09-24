@@ -40,7 +40,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { installUiShims } from "./ui-shim.mjs";
-import { layout, paintList, rectOf, shown, textPx, textWidth } from "./ui-layout.mjs";
+import { layoutGame, paintList, rectOf, shown, textPx, textWidth } from "./ui-layout.mjs";
 
 const ui = installUiShims({ seed: 1, viewport: [1120, 630] });
 const { SRC, require, flush, service, measure, setViewport, setClock } = ui;
@@ -1259,7 +1259,6 @@ const SCREENS = [
 	[1365, 567, 58, "1365x567 (barra 58 px)", 160],
 	[844, 390, 36, "844x390 (celular, barra 36 px)"],
 ];
-const gui = boot.getCtx().root.Parent;
 for (const [w, h, bar, label, buttons] of SCREENS) {
 	setViewport(w, h, bar, buttons);
 	for (const touch of [false, true]) {
@@ -1272,7 +1271,7 @@ for (const [w, h, bar, label, buttons] of SCREENS) {
 		b.toggle();
 		setClock(9000 + w + (touch ? 1 : 0));
 		hud.update(hudState);
-		layout(ui, gui, { w, h });
+		layoutGame(ui, boot.getCtx());
 		const tag = `${label}${touch ? " toque" : ""}`;
 		const panel = rectOf(b.panel);
 		check(
@@ -1365,7 +1364,7 @@ for (const [w, h, bar, label, buttons] of SCREENS) {
 	}
 	// the Records window over the lobby
 	const recW = rectOf(deep(recRoot, "Window"));
-	layout(ui, gui, { w, h });
+	layoutGame(ui, boot.getCtx());
 	const recWin = rectOf(deep(recRoot, "Window"));
 	void recW;
 	// a UI-07 window is centred on the FULL screen and only keeps clear of the Roblox BUTTONS (UI-02), not the bar
@@ -1468,7 +1467,7 @@ hud.unmount();
 					sec.onPlayers?.();
 					sec.update?.();
 				}
-				layout(ui, gui, { w, h });
+				layoutGame(ui, boot.getCtx());
 				const tag = `admin ${label}, ${name}${tabs !== undefined ? ` > aba ${t}` : ""}`;
 				if (name === "Players" && t === 0) {
 					const g2 = deep(c2, "Players");
@@ -1497,7 +1496,7 @@ hud.unmount();
 		PLAYERS.openKickDialog(P3, rows[1]);
 		PLAYERS.openBanDialog(P3, "20", "Marta (20)");
 		flush();
-		layout(ui, gui, { w, h });
+		layoutGame(ui, boot.getCtx());
 		for (const dname of ["KickDialog", "BanDialog"]) {
 			const d = deep(dl, dname);
 			const tp = textProblems(d);

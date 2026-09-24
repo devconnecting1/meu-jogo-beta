@@ -112,6 +112,11 @@ export interface LobbyHandle {
 	refresh(status: LobbyStatus): void;
 	show(page: LobbyPage): void;
 	page(): LobbyPage;
+	/**
+	 * Lobby idle time (client/boot/warmup.ts): builds the Survivor page out of sight, so START only shows it. Answers
+	 * true when it built it now (false: already built, or the lobby is closed).
+	 */
+	prebuild(): boolean;
 	close(): void;
 }
 
@@ -595,14 +600,15 @@ export function showLobby(
 	initial: LobbyStatus,
 	open: LobbyPage = "menu",
 ): LobbyHandle {
-	// see-through: the town behind the menus is pinned at the back of the UI layer, and it stays there when the lobby
-	// hands over to Settings, the Wardrobe, the Shop... (townFlyover.ts pinFlyover); only the run releases it
+	// see-through: the town behind the menus is pinned in the backdrop layer (the world's ScreenGui, under the menus'),
+	// and it stays there when the lobby hands over to Settings, the Wardrobe, the Shop... (townFlyover.ts pinFlyover);
+	// only the run releases it
 	const screen = makeScreen(ctx.uiLayer, "Lobby", { transparency: 1 });
 	const { root, body } = screen;
 	let status = initial;
 	let current: LobbyPage = "menu";
 	let closed = false;
-	let flyover: TownFlyover = pinFlyover(ctx.uiLayer, status.seed);
+	let flyover: TownFlyover = pinFlyover(ctx.backdropLayer, status.seed);
 
 	let survivor: SurvivorScreen | undefined;
 	const survivorState = () => {
@@ -638,7 +644,7 @@ export function showLobby(
 	handle = {
 		refresh(update: LobbyStatus): void {
 			if (closed) return;
-			if (update.seed !== status.seed) flyover = pinFlyover(ctx.uiLayer, update.seed);
+			if (update.seed !== status.seed) flyover = pinFlyover(ctx.backdropLayer, update.seed);
 			status = update;
 			flyover.setDayTime(hourNow());
 			menu.refresh(status);
@@ -667,6 +673,13 @@ export function showLobby(
 		},
 		page(): LobbyPage {
 			return current;
+		},
+		prebuild(): boolean {
+			if (closed || survivor !== undefined) return false;
+			const s = buildSurvivor();
+			s.refresh(survivorState());
+			setVisible(s.frame, false);
+			return true;
 		},
 		close(): void {
 			if (closed) return;

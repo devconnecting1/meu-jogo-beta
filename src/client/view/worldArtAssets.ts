@@ -111,6 +111,9 @@ export type WorldArtName =
 	| "machineBeacon"
 	| "machineBeaconDish"
 	| "machineCooker"
+	| "floorCarpet"
+	| "floorKitchen"
+	| "floorBath"
 	| "survivorsA"
 	| "survivorsAFill"
 	| "survivorsARim"
@@ -316,6 +319,12 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	machineBeaconDish: { id: "", w: 6, h: 7 },
 	/** sprite: the cooker: a steel top with two plates and the knobs */
 	machineCooker: { id: "", w: 14, h: 12 },
+	/** tile: bedroom / office carpet: a low loop pile */
+	floorCarpet: { id: "", w: 16, h: 16 },
+	/** tile: kitchen floor: checker tiles */
+	floorKitchen: { id: "", w: 16, h: 16 },
+	/** tile: bathroom / cold room: small tiles */
+	floorBath: { id: "", w: 16, h: 16 },
 	/** sheet: survivors, plain and Santa: 4 grips x 3 strides, 5 swings, 3 crawls, whole body and arms in one cell (ART-09) */
 	survivorsA: { id: "", w: 640, h: 800 },
 	/** mask: survivorsA: white silhouettes of the same cells (tint: hit flash, poison) */
@@ -441,6 +450,9 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"machineBeacon",
 	"machineBeaconDish",
 	"machineCooker",
+	"floorCarpet",
+	"floorKitchen",
+	"floorBath",
 	"survivorsA",
 	"survivorsAFill",
 	"survivorsARim",

@@ -30,6 +30,9 @@
  *      save, and a client report can no longer move any of those fields.
  *   f. TICK COST (§3.2). 150 zombies and 6 survivors, measured per tick. In Node this is a comparison and a
  *      regression guard, never the verdict — Luau on a Roblox server is slower.
+ *  ia. THE AWARENESS (IA-03 / IA-05, protocol decision 17). The state the server decided for each zombie (idle,
+ *      suspicious, searching, chasing) reaches every screen in 2 bits of the record, and a screen only ever draws a
+ *      state the server really had for that zombie within the interpolation window; the record stays 9 bytes.
  *
  * Pure Node (>= 18) + the project's TypeScript, with the Luau shims of tools/test-sim.mjs and the STRICT
  * `buffer` of tools/test-net.mjs (an out-of-range write throws instead of silently corrupting a neighbour).
@@ -1641,6 +1644,70 @@ section(
 		JSON.stringify(lampSet),
 	);
 	check(lamp.powered === true, "and on the server it lights (fed by the box 130 u away)");
+}
+
+// ================================================================ the zombies' awareness (IA-03 / IA-05)
+
+section("(ia) every client draws the awareness state the SERVER decided (2 bits of the record, protocol decision 17)");
+{
+	const server = newWorldServer();
+	const cx = world.width / 2;
+	const cy = world.height / 2;
+	addSurvivor(server, 0, cx, cy);
+	addSurvivor(server, 1, cx + 40, cy);
+	seedHorde(server, 40, cx, cy, 700);
+	const horde = server.sim.horde;
+	// what each zombie was, tick by tick: the client draws a sample up to its interpolation delay old
+	const history = new Map();
+	const RECENT = 30;
+	const seenAware = new Set();
+	let compared = 0;
+	let wrong = 0;
+	let disagree = 0;
+	for (let t = 0; t < 60 * 8; t++) {
+		// the second survivor fires a gun now and then: noise, so the horde goes through every state
+		if (t % 90 === 45)
+			server.sim.horde.refs.sounds.push({ x: cx + 40, y: cy, r: 0, rMax: 800, shot: true, id: 9000 + t });
+		tickServer(server);
+		for (const z of horde.zombies) {
+			const id = horde.netIdOf(z);
+			let h = history.get(id);
+			if (h === undefined) {
+				h = [];
+				history.set(id, h);
+			}
+			h.push(z.aware ?? 0);
+			if (h.length > RECENT) h.shift();
+			seenAware.add(z.aware ?? 0);
+		}
+		const drawn = drawClients(server);
+		if (t < 60) continue;
+		const a = drawn.get(0);
+		const b = drawn.get(1);
+		for (const [netId, za] of a) {
+			const h = history.get(netId);
+			if (h === undefined) continue;
+			compared += 1;
+			if (!h.includes(za.aware)) wrong += 1;
+			const zb = b.get(netId);
+			if (zb !== undefined && !h.includes(zb.aware)) disagree += 1;
+		}
+	}
+	info(
+		`${compared} drawn zombie-frames compared · states seen on the server: ${[...seenAware].sort().join(", ")} ` +
+			`(0 idle, 1 suspicious, 2 searching, 3 chasing)`,
+	);
+	check(seenAware.size() >= 3, "the horde went through the states (the check is not comparing idle with idle)");
+	checkEq(wrong, 0, "every drawn state is one the server really had for that zombie in the last half second");
+	checkEq(disagree, 0, "...on the second screen too: two screens never draw a state the server did not have");
+	// the wire costs nothing more: the state rides the meta byte F0 reserved
+	const one = P.encodeSnapshot({
+		tick: 1,
+		players: [],
+		zombies: [{ netId: 5, x: 10, y: 10, angle: 0, flags: 0, type: 1, big: false, mid: false, aware: 3 }],
+		bosses: [],
+	});
+	checkEq(buffer.len(one.parts[0]), 8 + 9, "a zombie record is still 9 bytes with its state (header 8 + 9)");
 }
 
 // ---------------------------------------------------------------- verdict

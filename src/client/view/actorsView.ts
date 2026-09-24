@@ -212,6 +212,9 @@ export class ActorsView {
 		z.detect = (flags & ZombieFlag.Detect) !== 0;
 		// the wire has a bit, not a countdown: the "!" is up exactly while the server says it is up
 		z.detectShow = z.detect ? 1 : 0;
+		// what the awareness marks draw (client/view/zombieAwareness.ts): the state the server decided, 2 bits of
+		// the record (protocol decision 17)
+		z.aware = rz.aware;
 		z.stunned = (flags & ZombieFlag.Stunned) !== 0 ? 1 : 0;
 		z.hitFlash = (flags & ZombieFlag.HitFlash) !== 0 ? 1 : 0;
 		const jumping = (flags & ZombieFlag.Jumping) !== 0;
@@ -361,34 +364,8 @@ export class ActorsView {
 				zb.rush === true,
 				blink,
 			);
-			if (zb.detectShow > 0 && zb.hp > 0) {
-				// "!" made of two rects, always upright on screen
-				const k = math.min(1, zb.detectShow * 4);
-				const hx = zb.x + up.x * (rad * 2.6 + lift);
-				const hy = zb.y + up.y * (rad * 2.6 + lift);
-				r.drawRect(cam, hx + up.x * 6, hy + up.y * 6, {
-					w: 6,
-					h: 16,
-					color: COLORS.detect,
-					alpha: k,
-					rotation: -cam.angle,
-					stroke: BLACK,
-					strokeThickness: 1,
-					strokeAlpha: k * 0.6,
-					zIndex: Z.actorFx,
-				});
-				r.drawRect(cam, hx - up.x * 8, hy - up.y * 8, {
-					w: 6,
-					h: 6,
-					color: COLORS.detect,
-					alpha: k,
-					rotation: -cam.angle,
-					stroke: BLACK,
-					strokeThickness: 1,
-					strokeAlpha: k * 0.6,
-					zIndex: Z.actorFx,
-				});
-			}
+			// the "!" that used to be drawn here is now one of the awareness marks (client/view/zombieAwareness.ts,
+			// drawn by the loop above the night overlay): dot, "?" or "!" for every state the server decides
 		}
 	}
 

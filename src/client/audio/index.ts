@@ -3,7 +3,7 @@
  *
  *   audio        mixer: buses, voice pool, 2D spatialisation, preload
  *   gameAudio    run audio: what the world sounds like (state watcher + refs.fx drain + music)
- *   uiAudio      interface audio, wired by watching the ScreenGui
+ *   uiAudio      interface audio, wired by watching the HUD and menu layers
  *   fxAudio      FxEvent -> sound (ready for the one-line hook in GameLoop.playFx)
  *   footstepAudio the walk cycle sink: what a foot landing sounds like
  */

@@ -746,7 +746,11 @@ export class LocalAdminWorld implements AdminWorld {
 		const now = os.clock();
 		if (now - this.guiSampledAt >= 1) {
 			this.guiSampledAt = now;
-			this.guiCount = this.ctx.screen.GetDescendants().size();
+			// the world's, the HUD's and the menus' ScreenGuis (client/bootstrap.ts)
+			this.guiCount =
+				this.ctx.screen.GetDescendants().size() +
+				this.ctx.hudGui.GetDescendants().size() +
+				this.ctx.uiGui.GetDescendants().size();
 		}
 		return {
 			fps: this.fps,

@@ -143,6 +143,9 @@ export function nearestUsableSolid(world: WorldData, x: number, y: number): Soli
 		y + INTERACT_RADIUS,
 	)) {
 		if (s.kind === "building" || (s.passable === true && !isVehicle(s))) continue;
+		// a building's own walls and furniture do nothing on E: standing by the pharmacy shelves must search the
+		// pharmacy, not "use" the shelf (a wall within reach used to swallow the search the same way)
+		if (s.parentId !== undefined) continue;
 		const isADoor = isDoor(s);
 		const limit = isADoor ? DOOR_REACH : SOLID_REACH;
 		const d = edgeDist(s, x, y);
@@ -159,12 +162,35 @@ export function nearestUsableSolid(world: WorldData, x: number, y: number): Soli
 	return best;
 }
 
-/** the building the survivor stands INSIDE (leaning on the outer wall is not enough) */
+/**
+ * How close to a loot spot a survivor must stand to search (EDI-03): the spot is in front of the furniture that
+ * holds the loot -- the fridge, the pharmacy shelves, the gun rack -- so this is "within arm's reach of it".
+ */
+export const LOOT_REACH = 96;
+
+/** is (x, y) close enough to one of the building's loot spots? (a building without spots: anywhere inside) */
+export function nearLootSpot(b: Solid, x: number, y: number): boolean {
+	const spots = b.lootSpots;
+	if (spots === undefined || spots.size() === 0) return true;
+	for (const p of spots) {
+		const dx = p.x - x;
+		const dy = p.y - y;
+		if (dx * dx + dy * dy <= LOOT_REACH * LOOT_REACH) return true;
+	}
+	return false;
+}
+
+/**
+ * The building the survivor stands INSIDE (leaning on the outer wall is not enough), when they are at one of its
+ * loot spots. The search itself still takes the whole building's loot (MP-05): the spots only say WHERE in the
+ * building it is, so that the loot is where the furniture explains it (EDI-03).
+ */
 export function buildingToSearch(world: WorldData, x: number, y: number): Solid | undefined {
 	const b = buildingAt(world, x, y);
 	if (b === undefined) return undefined;
 	const loot = b.lootItems;
-	return loot !== undefined && loot.size() > 0 ? b : undefined;
+	if (loot === undefined || loot.size() === 0) return undefined;
+	return nearLootSpot(b, x, y) ? b : undefined;
 }
 
 /** does a body (survivor or live zombie) overlap the solid's rect? (blocks closing a door on it) */

@@ -60,6 +60,7 @@ const { PLACEABLES } = require(join(SRC, "shared/sim/placement.ts"));
 const { CRAFT_RECIPES } = require(join(SRC, "shared/data/crafts.ts"));
 const { countItem, addItem } = require(join(SRC, "shared/sim/inventory.ts"));
 const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
+const PH = require(join(SRC, "shared/game/physics.ts"));
 
 // ---------------------------------------------------------------- tiny harness
 
@@ -1437,6 +1438,300 @@ section(
 		),
 		true,
 		"`runOver: false` sobre uma morte: conta",
+	);
+}
+
+section("t) fortificar: barricada ou porta mirada numa janela ou num vao de predio o preenche (EDI-13)");
+{
+	// the generated town: its buildings have doorways and windows (shared/game/interiors.ts)
+	const world = W.serverWorld(W.generateTown(DESIGN.TOWN_SEED));
+	const sim = newSim(world);
+	const house = world.solids.find(
+		s =>
+			s.kind === "building" &&
+			(s.openings ?? []).some(o => o.kind === "window") &&
+			(s.openings ?? []).some(o => o.kind === "door" && !o.main),
+	);
+	check(house !== undefined, "a cidade tem predio com janela e porta dos fundos");
+	const NORMAL = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] };
+	/**
+	 * The CLIENT's ghost (client/systems/build.ts BuildSystem, the drawing the survivor aims with) for a survivor
+	 * standing where `fortify` puts one: builds become the server's (ServerBuild.hold / place) while the client keeps
+	 * drawing its own ghost, so both must land on the same rect
+	 */
+	const { BuildSystem } = require(join(SRC, "client/systems/build.ts"));
+	const clientGhost = (o, placeable) => {
+		const n = NORMAL[o.side];
+		const player = {
+			x: o.x + o.w / 2 - n[0] * 64,
+			y: o.y + o.h / 2 - n[1] * 64,
+			angle: Math.atan2(n[1], n[0]),
+		};
+		const refs = { world, player, players: [], zombies: [], pendingPlace: placeable, save: SAVE.defaultSave() };
+		const bs = new BuildSystem();
+		bs.handleInput(refs, {});
+		bs.update(refs);
+		return bs.getGhost();
+	};
+	const sameRect = (a, b) =>
+		a !== undefined && b !== undefined && a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
+	/** a survivor inside, 64 u in from the opening, aiming at it; then the server's ServerBuild.hold / place */
+	const fortify = (o, slot, placeable) => {
+		const n = NORMAL[o.side];
+		const cx = o.x + o.w / 2 - n[0] * 64;
+		const cy = o.y + o.h / 2 - n[1] * 64;
+		const p = addPlayer(sim, slot, cx, cy);
+		p.state.angle = Math.atan2(n[1], n[0]);
+		sim.build.hold(slot, placeable, undefined);
+		return { p, out: sim.build.place(slot, p.state, [p.state], []) };
+	};
+	const win = house.openings.find(o => o.kind === "window");
+	/**
+	 * A body `radius` wide, 40 u in from the opening, walks straight out through it (60 steps of 4 u) with the one
+	 * moveActor the server, the client's prediction and every zombie move by: how far past the opening's middle it
+	 * ends, outwards (negative: still inside)
+	 */
+	const walkOut = (o, radius, inWorld = world) => {
+		const n = NORMAL[o.side];
+		const mx = o.x + o.w / 2;
+		const my = o.y + o.h / 2;
+		let x = mx - n[0] * 40;
+		let y = my - n[1] * 40;
+		for (let i = 0; i < 60; i++) {
+			const r = PH.moveActor(inWorld, x, y, radius, n[0] * 4, n[1] * 4);
+			x = r.x;
+			y = r.y;
+		}
+		return (x - mx) * n[0] + (y - my) * n[1];
+	};
+	const openBefore = walkOut(win, PH.PLAYER_RADIUS);
+	check(
+		openBefore > 60,
+		"antes: um sobrevivente sai pela janela (pulando, EDI-10)",
+		`${openBefore.toFixed(0)} u para fora`,
+	);
+	const a = fortify(win, 0, 10);
+	checkEq(a.out.kind, "placed", "a barricada mirada na janela entra");
+	const s = a.out.solid;
+	check(
+		s !== undefined && s.x === win.x && s.y === win.y && s.w === win.w && s.h === win.h,
+		"e preenche exatamente o vao da janela, na grossura da parede",
+		s !== undefined ? `${s.x},${s.y} ${s.w}x${s.h} vs ${win.x},${win.y} ${win.w}x${win.h}` : "nada",
+	);
+	check(
+		s !== undefined && s.destructible === true && s.hp > 0 && s.kind === "barricade",
+		"com os pontos de vida dela: a horda derruba (o flow field a ve como SOFT, zombieBrain bate nela)",
+		s !== undefined ? `${s.kind} hp ${s.hp}` : "nada",
+	);
+	check(s !== undefined && W.isBlocking(s), "e bloqueia o corpo: ninguem pula a janela barricada");
+	// placed by the SERVER's build path (ServerBuild.hold / place, the same snapToOpening as the client's ghost): the
+	// server's own movement stops at it, a survivor's and a zombie's alike
+	const survivorAfter = walkOut(win, PH.PLAYER_RADIUS);
+	const zombieAfter = walkOut(win, PH.ZOMBIE_RADIUS);
+	check(
+		survivorAfter < 0 && zombieAfter < 0,
+		"depois: o movimento do servidor para na barricada -- nem sobrevivente nem zumbi atravessa",
+		`sobrevivente ${survivorAfter.toFixed(0)} u, zumbi ${zombieAfter.toFixed(0)} u`,
+	);
+	// the building's entrances, the main one first (world.ts entrancesOf, the API the facade signs read)
+	const entrances = W.entrancesOf(house, []);
+	check(
+		entrances.length >= 2 && entrances[0].main && entrances.slice(1).every(o => !o.main && o.kind === "door"),
+		"entrancesOf: a entrada principal primeiro, depois as outras portas",
+		`${entrances.length} entradas`,
+	);
+	const back = entrances[1];
+	const b = fortify(back, 1, 11);
+	checkEq(b.out.kind, "placed", "uma porta construida no vao dos fundos entra");
+	const d = b.out.solid;
+	check(
+		d !== undefined && d.x === back.x && d.y === back.y && d.w === back.w && d.h === back.h && d.open === false,
+		"e preenche o vao, fechada (abre com E, como toda porta construida)",
+		d !== undefined ? `${d.x},${d.y} ${d.w}x${d.h} open ${d.open}` : "nada",
+	);
+	// the same opening twice: the second one lands on the first and is refused
+	const cg = clientGhost(win, 10);
+	check(
+		sameRect(cg, s),
+		"o fantasma do cliente cai no mesmo retangulo que o servidor colocou (a mesma snapToOpening dos dois lados)",
+		cg ? `${cg.x},${cg.y} ${cg.w}x${cg.h}` : "nada",
+	);
+	const c = fortify(win, 2, 12);
+	checkEq(c.out.kind, "refused", "uma segunda barricada na mesma janela e recusada (o vao ja esta tomado)");
+	// an interior opening is not fortified (review of ea5cf71): an open-plan side can be 300 u wide, and one barricade
+	// would seal it. A ghost aimed at one, with no door or window near, keeps the grid rect
+	const fortifiable = o => o.kind === "door" || o.kind === "window";
+	let inner;
+	let innerHouse;
+	for (const b of world.solids) {
+		if (b.kind !== "building" || inner !== undefined) continue;
+		for (const o of b.openings ?? []) {
+			if (o.kind !== "inner") continue;
+			const cx = o.x + o.w / 2;
+			const cy = o.y + o.h / 2;
+			const clear = world.solids.every(
+				q =>
+					q.kind !== "building" ||
+					(q.openings ?? []).every(
+						e =>
+							!fortifiable(e) ||
+							Math.max(Math.abs(e.x + e.w / 2 - cx), Math.abs(e.y + e.h / 2 - cy)) > 240,
+					),
+			);
+			if (clear) {
+				inner = o;
+				innerHouse = b;
+				break;
+			}
+		}
+	}
+	check(inner !== undefined, "a cidade tem um vao interno longe de portas e janelas", innerHouse?.id);
+	if (inner !== undefined) {
+		const n = NORMAL[inner.side];
+		const q = addPlayer(sim, 4, inner.x + inner.w / 2 - n[0] * 64, inner.y + inner.h / 2 - n[1] * 64);
+		q.state.angle = Math.atan2(n[1], n[0]);
+		sim.build.hold(4, 10, undefined);
+		const gi = sim.build.ghost(4, q.state);
+		const cgi = clientGhost(inner, 10);
+		check(
+			sameRect(cgi, gi),
+			"e o fantasma do cliente fica na mesma celula da grade que o do servidor",
+			cgi ? `${cgi.w}x${cgi.h}` : "nada",
+		);
+		check(
+			gi !== undefined && !(gi.x === inner.x && gi.y === inner.y && gi.w === inner.w && gi.h === inner.h),
+			"uma barricada mirada num vao interno fica na grade (so portas e janelas se preenchem)",
+			gi ? `${gi.x},${gi.y} ${gi.w}x${gi.h} vs vao ${inner.w}x${inner.h}` : "-",
+		);
+	}
+	// away from any opening, the grid as before
+	const field = addPlayer(sim, 3, 60, 60);
+	field.state.angle = 0;
+	sim.build.hold(3, 10, undefined);
+	const g = sim.build.ghost(3, field.state);
+	check(
+		g !== undefined && g.w === 128 && g.h === 32,
+		"longe de qualquer vao, a grade de sempre",
+		g ? `${g.w}x${g.h}` : "-",
+	);
+
+	// ---- the whole F3 path as it runs now (WORLD_SERVER_PHASE, docs/MULTIPLAYER.md §11.3): a craft puts the barricade
+	// on the SERVER's cursor, the click rides an input command through the real wire, the server places it from its own
+	// position and aim, the SolidAdd crosses the wire, and a client's mirror of the same town (client/net/worldMirror.ts)
+	// rebuilds it -- in the window, not as the grid-sized plank the row describes
+	check(
+		CFG.MP_PHASE >= CFG.WORLD_SERVER_PHASE,
+		"nesta fase o servidor e dono das construcoes",
+		`MP_PHASE ${CFG.MP_PHASE}, WORLD_SERVER_PHASE ${CFG.WORLD_SERVER_PHASE}`,
+	);
+	const { applyMirrorEvent, isMirrorEvent } = require(join(SRC, "client/net/worldMirror.ts"));
+	const { fortifies } = require(join(SRC, "shared/sim/placement.ts"));
+	const serverTown = W.serverWorld(W.generateTown(DESIGN.TOWN_SEED));
+	// no `interactive` flag: the simulation owns the world by the phase, as the live server does
+	const live = new ServerSimulation({
+		world: serverTown,
+		clock: new WorldClock({ day: 1, dayTime: 12 }),
+		zombies: false,
+	});
+	const recipe = CRAFT_RECIPES.find(
+		r => r.craftKind === 1 && PLACEABLES[r.resultIndex] && fortifies(PLACEABLES[r.resultIndex]),
+	);
+	check(recipe !== undefined, "existe uma receita de barricada nos dados");
+	const n = NORMAL[win.side];
+	const aim = Math.atan2(n[1], n[0]);
+	const builder = addPlayer(live, 0, win.x + win.w / 2 - n[0] * 64, win.y + win.h / 2 - n[1] * 64);
+	builder.state.angle = aim;
+	// on the cursor the way a craft puts it there (server/sim/craft.ts hands a placeable to ServerBuild.hold; the craft
+	// itself wants a work desk near, which is not what this is about)
+	live.build.hold(0, recipe.resultIndex, recipe.id);
+	check(live.build.placing(0), "a barricada esta no cursor do SERVIDOR");
+	drain(live);
+	send(builder, 1, aim, P.packEdges(1, 0, 0, 0));
+	run(live, 1);
+	const placed = live.world.solids.find(q => q.owner === 0 && q.placeable === recipe.resultIndex);
+	check(
+		sameRect(placed, win),
+		"o clique chega pelo fio e o SERVIDOR a poe exatamente no vao da janela",
+		placed ? `${placed.x},${placed.y} ${placed.w}x${placed.h} vs ${win.w}x${win.h}` : "nada",
+	);
+	const events = drain(live).map(d => d.ev);
+	const encoded = P.encodeWorld({ tick: 1, events });
+	const clientTown = W.generateTown(DESIGN.TOWN_SEED);
+	for (const packet of encoded.packets) {
+		for (const e of P.decodeWorld(packet)?.events ?? []) if (isMirrorEvent(e)) applyMirrorEvent(clientTown, e);
+	}
+	const mirrored = placed !== undefined ? clientTown.solids.find(q => q.id === placed.id) : undefined;
+	check(
+		sameRect(mirrored, win),
+		"e o espelho do cliente, com o SolidAdd do fio, a reconstroi no mesmo vao (nao na tabua de 128 u da grade)",
+		mirrored ? `${mirrored.x},${mirrored.y} ${mirrored.w}x${mirrored.h}` : "nada",
+	);
+	const clientOut = walkOut(win, PH.PLAYER_RADIUS, clientTown);
+	check(
+		clientOut < 0,
+		"e a predicao do cliente tambem para nela: cliente e servidor colidem com a mesma barricada",
+		`${clientOut.toFixed(0)} u`,
+	);
+}
+
+section("u) a cidade gerada em fatias e a mesma: o servidor cede entre dois predios num reset (MP-22)");
+{
+	// server/net/mpHost.ts generates a world reset's town a slice per frame through `pace`; the town must not know
+	let calls = 0;
+	const sliced = W.generateTown(DESIGN.TOWN_SEED, () => {
+		calls += 1;
+	});
+	const whole = W.generateTown(DESIGN.TOWN_SEED);
+	const buildings = whole.solids.filter(s => s.kind === "building").length;
+	checkEq(calls, buildings, "pace e chamado uma vez por predio, depois do interior dele");
+	const key = w => w.solids.map(s => `${s.kind}:${s.x}:${s.y}:${s.w}:${s.h}:${s.parentId}`).join("|");
+	check(key(sliced) === key(whole), "e a cidade e a mesma, solido por solido", `${sliced.solids.length} solidos`);
+	checkEq(mapHashOf(sliced), mapHashOf(whole), "o mesmo mapHash (o que o cliente confere ao entrar)");
+}
+
+section("v) o objetivo 'Search a house' aponta para onde a busca responde (EDI-03, review of ea5cf71)");
+{
+	// the onboarding's arrow (client/onboarding/objectives.ts) must lead to a loot spot -- the search only answers
+	// within arm's reach of one (interactQuery.ts nearLootSpot) -- not to the middle of the house or its door
+	const IQ = require(join(SRC, "shared/sim/interactQuery.ts"));
+	const { OBJECTIVES, newMemory } = require(join(SRC, "client/onboarding/objectives.ts"));
+	const world = W.serverWorld(W.generateTown(DESIGN.TOWN_SEED));
+	const house = world.solids.find(s => s.kind === "building" && s.tags === "house" && (s.lootSpots ?? []).length > 0);
+	house.lootItems = [{ kind: 0, id: 1, count: 1 }];
+	const loot = OBJECTIVES.find(o => o.id === "loot");
+	const refs = { world, player: { x: house.doorX, y: house.doorY } };
+	const t = loot.target(refs, newMemory());
+	check(
+		t !== undefined && house.lootSpots.some(q => q.x === t.x && q.y === t.y),
+		"da porta, a seta aponta para um ponto de busca da casa",
+		t ? `${t.x.toFixed(0)},${t.y.toFixed(0)}` : "nada",
+	);
+	check(
+		t !== undefined && IQ.buildingToSearch(world, t.x, t.y) === house,
+		"e ali a busca responde (dentro da casa, ao alcance do movel)",
+	);
+	check(!/door-side/.test(loot.hint), "o texto nao manda mais usar o prompt da porta", loot.hint);
+	// WORLD_SERVER_PHASE: the client knows only what the flag of the building it stands in says (worldMirror's
+	// resetMirror empties every other). Any house may still hold loot, so the arrow still leads to a loot spot; and the
+	// house the survivor stands in with no flag is known empty, so the arrow leaves it for the next one
+	const mirror = W.generateTown(DESIGN.TOWN_SEED);
+	for (const b of mirror.solids) if (b.kind === "building") b.lootItems = [];
+	const spotOf = (w, x, y) =>
+		w.solids.find(b => b.kind === "building" && (b.lootSpots ?? []).some(q => q.x === x && q.y === y));
+	const same = mirror.solids.find(b => b.id === house.id);
+	const u = loot.target({ world: mirror, player: { x: same.doorX, y: same.doorY } }, newMemory());
+	check(
+		u !== undefined && spotOf(mirror, u.x, u.y) !== undefined,
+		"sem saber o loot de nenhuma casa (o servidor so conta a de dentro), a seta ainda leva a um ponto de busca",
+		u ? `${u.x.toFixed(0)},${u.y.toFixed(0)}` : "nada",
+	);
+	const at = same.lootSpots[0];
+	const w2 = loot.target({ world: mirror, player: { x: at.x, y: at.y } }, newMemory());
+	const next = w2 !== undefined ? spotOf(mirror, w2.x, w2.y) : undefined;
+	check(
+		next !== undefined && next !== same,
+		"e dentro de uma casa sem o sinal de loot (vazia), a seta aponta para a proxima",
+		next ? `${next.tags} #${next.id}` : "nada",
 	);
 }
 

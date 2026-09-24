@@ -22,7 +22,8 @@
  *  4. the texts: "HP 88 / 100", "FOOD 58 / 100", "LV 3 · 30 / 120", the ammo chip -- and the sky (4b): the world's
  *     day, the countdown to nightfall ("Night in 2:14") and at night to daybreak, in real seconds, the sun / moon on
  *     its arc and the horde's pips, the red pulse of the last 30 s (still with Reduce Motion), and the life's day only
- *     when it differs from the world's (MP-13 / MP-20); no text carries a contour (UI-04);
+ *     when it differs from the world's (MP-13 / MP-20); no text carries a contour (UI-04); with Reduce Motion
+ *     nothing throbs: low HP holds its fill lit, low food holds it red, the low-HP vignette holds one value;
  *  5. touch: the compact console never covers the move stick or the fire controls, measured on the touch layout's
  *     own numbers (shared/engine/input.ts), at 1120x630 ("phone") and 1360x435 (wide), with the default controls,
  *     left-handed, at the largest sizes and with a fixed stick -- and its tiles stay a thumb wide; the sky's touch
@@ -31,11 +32,22 @@
  *     is in that row, left of Menu (desktop: the third plate of the console's row, after Bag and Menu), a thumb
  *     target, and covers nothing either -- the sky included; and at the largest HUD size the banner is 1,2x, still
  *     at the top, and still narrows off the corner.
+ *  5b. the three ScreenGuis (client/bootstrap.ts): the world's covers the whole screen (ScreenInsets.None), the HUD's and
+ *     the menus' the device safe area, drawn world < HUD < menus; the menus' one is off in a run with nothing open and
+ *     a toast or the hit flash turn it on; and on a phone with a notch (both sides, or one) the move stick and the aim
+ *     pad are hit exactly where they are drawn -- a finger's Position is measured from the core UI safe area, as the
+ *     engine reports it --, the buttons stay in the safe area under the bar, and the aim cursor turns around the
+ *     survivor at the middle of the WHOLE screen.
+ *  5c. the player's device is UserInputService.PreferredInput, one answer (client/ui/device.ts): a hybrid device with its
+ *     mouse in use gets the desktop HUD AND the mouse aim; switching to the touch screen rebuilds the HUD with the
+ *     thumbs' controls and turns the aim to touch; a pad names X in the hint and opens Controls on Gamepad; back to the
+ *     keyboard the hint says E without a rebuild; a phone is the touch HUD as before.
  *
  * Pure Node (>= 18) plus the project's TypeScript.
  */
 import { join } from "node:path";
 import { installUiShims } from "./ui-shim.mjs";
+import { layoutGame, rectOf } from "./ui-layout.mjs";
 
 const ui = installUiShims({ seed: 1, viewport: [1120, 630] });
 const { SRC, require, INTERNAL, flush, service, measure, setViewport, setClock, getClock } = ui;
@@ -489,6 +501,48 @@ hud.update(state({ hunger: 10 }));
 check("fome baixa pisca a barra de fome em vermelho", sameColor(face(barFill("Food")), BAR.hp));
 blinkAt(false);
 hud.update(state());
+
+// Reduce Motion: nothing throbs. Low HP holds its fill lit and low food holds it red at both phases of the blink, and the
+// low-HP vignette holds one value through the whole pulse (its middle), like the hit flash over the menus
+{
+	const gs = service("GuiService");
+	const vignetteTop = deep(hudRoot(), "VignetteTop");
+	const across = over => {
+		const seen = { hpFill: new Set(), foodRed: new Set(), vignette: new Set() };
+		for (let i = 0; i < 48; i++) {
+			setClock(5000 + i / 30);
+			hud.update(state(over));
+			seen.hpFill.add(barFill("Hp").Visible);
+			seen.foodRed.add(sameColor(face(barFill("Food")), BAR.hp));
+			seen.vignette.add(vignetteTop.BackgroundTransparency.toFixed(4));
+		}
+		return seen;
+	};
+	// (the Luau shims make a Set's size a method, as roblox-ts has it)
+	const count = set => [...set].length;
+	const moving = across({ hp: 10, hunger: 10 });
+	gs.ReducedMotionEnabled = true;
+	flush();
+	const still = across({ hp: 10, hunger: 10 });
+	gs.ReducedMotionEnabled = false;
+	flush();
+	check(
+		"sem Reduce Motion a HP baixa pisca, a fome baixa pisca e a vinheta pulsa (o controle do teste)",
+		count(moving.hpFill) === 2 && count(moving.foodRed) === 2 && count(moving.vignette) > 5,
+		`HP ${[...moving.hpFill]}, fome ${[...moving.foodRed]}, vinheta ${count(moving.vignette)} valores`,
+	);
+	check(
+		"com Reduce Motion nada pulsa: HP baixa acesa, fome baixa vermelha, a vinheta de HP baixa num valor so",
+		count(still.hpFill) === 1 &&
+			still.hpFill.has(true) &&
+			count(still.foodRed) === 1 &&
+			still.foodRed.has(true) &&
+			count(still.vignette) === 1 &&
+			Number([...still.vignette][0]) < 1,
+		`HP ${[...still.hpFill]}, fome vermelha ${[...still.foodRed]}, vinheta ${[...still.vignette].join(", ")}`,
+	);
+	hud.update(state());
+}
 
 // ammo: magazine / reserve on the gun in hand, the reserve alone on the others, red when empty
 check(
@@ -1093,6 +1147,233 @@ setViewport(1120, 630, TOP_BAR);
 function isUnder(inst, root) {
 	if (root === undefined) return false;
 	return inst === root || inst.IsDescendantOf(root);
+}
+
+// ---------------------------------------------------------------- 5b) three ScreenGuis, and a phone with a notch
+
+console.log("\n5b) tres ScreenGuis (mundo / HUD / menus) e o toque num celular com entalhe\n");
+{
+	const pg = service("Players").LocalPlayer.FindFirstChild("PlayerGui");
+	const [world, hudG, uiG] = ["GameGui", "HudGui", "UiGui"].map(n => pg.FindFirstChild(n));
+	check(
+		"tres ScreenGuis, desenhadas nesta ordem (DisplayOrder): o mundo, a HUD, os menus",
+		world === ctx.screen &&
+			hudG === ctx.hudGui &&
+			uiG === ctx.uiGui &&
+			world.DisplayOrder < hudG.DisplayOrder &&
+			hudG.DisplayOrder < uiG.DisplayOrder,
+		[world, hudG, uiG].map(g => `${g?.Name} ${g?.DisplayOrder}`).join(" < "),
+	);
+	check(
+		"o mundo cobre a tela inteira (ScreenInsets None, sem recorte); a HUD e os menus ficam na area segura do aparelho",
+		world.ScreenInsets === Enum.ScreenInsets.None &&
+			world.ClipToDeviceSafeArea === false &&
+			world.SafeAreaCompatibility === Enum.SafeAreaCompatibility.None &&
+			hudG.ScreenInsets === Enum.ScreenInsets.DeviceSafeInsets &&
+			uiG.ScreenInsets === Enum.ScreenInsets.DeviceSafeInsets &&
+			[world, hudG, uiG].every(g => g.ZIndexBehavior === Enum.ZIndexBehavior.Sibling && g.ResetOnSpawn === false),
+		[world, hudG, uiG].map(g => `${g.Name} ${g.ScreenInsets?.Name}`).join(", "),
+	);
+	const root = ctx.root;
+	check(
+		"cada camada na sua: mundo < noite < fundo dos menus na do mundo; a HUD na da HUD; os menus na dos menus",
+		root.Parent === world &&
+			ctx.worldLayer.Parent === root &&
+			ctx.darkLayer.Parent === root &&
+			ctx.backdropLayer.Parent === root &&
+			ctx.worldLayer.ZIndex < ctx.darkLayer.ZIndex &&
+			ctx.darkLayer.ZIndex < ctx.backdropLayer.ZIndex &&
+			ctx.hudLayer.Parent === hudG &&
+			ctx.uiLayer.Parent === uiG,
+		`mundo ${ctx.worldLayer.ZIndex}, noite ${ctx.darkLayer.ZIndex}, fundo ${ctx.backdropLayer.ZIndex}`,
+	);
+	// the menus' ScreenGui: off in a run with nothing open; a toast or the hit flash turn it on, and off again
+	const { showToast } = require(join(SRC, "client/ui/widgets.ts"));
+	const { DangerFlash } = require(join(SRC, "client/ui/dangerFlash.ts"));
+	const offInRun = hud.isMounted() && uiG.Enabled === false;
+	showToast(ctx.uiLayer, "Saving...");
+	flush();
+	const onToast = uiG.Enabled;
+	for (const t of ctx.uiLayer.FindFirstChild("ToastStack").GetChildren()) if (t.Name === "Toast") t.Destroy();
+	flush();
+	const offAfterToast = uiG.Enabled === false;
+	const flash = new DangerFlash(ctx);
+	flash.frame(1 / 60, true, 100);
+	flash.frame(1 / 60, true, 80);
+	const onFlash = uiG.Enabled;
+	flash.reset();
+	const offAfterFlash = uiG.Enabled === false;
+	check(
+		"a ScreenGui dos menus nao desenha na partida sem menu; um toast ou o flash de dano a ligam, e ela desliga quando somem",
+		offInRun && onToast && offAfterToast && onFlash && offAfterFlash,
+		`partida ${offInRun}, toast ${onToast} -> ${offAfterToast}, flash ${onFlash} -> ${offAfterFlash}`,
+	);
+
+	// a phone with a notch: the world under it, the HUD beside it, and a finger lands where the control is drawn
+	const gs = service("GuiService");
+	const PHONES = [
+		// an iPhone held sideways: the notch's side and its twin are both inset, and the home indicator at the bottom
+		["844x390, entalhe dos dois lados + indicador", 844, 390, 36, { left: 47, right: 47, bottom: 21 }],
+		// an Android punch-hole on one side only: the safe area is off-centre
+		["800x360, furo de camera a esquerda", 800, 360, 36, { left: 32 }],
+	];
+	for (const [label, w, h, bar, cut] of PHONES) {
+		setViewport(w, h, bar, 120, cut);
+		input.aimMode = "touch";
+		hud.update(state());
+		layoutGame(ui, ctx);
+		const L = boot.getTouchLayout();
+		const safe = { x: cut.left ?? 0, y: cut.top ?? 0, w: w - (cut.left ?? 0) - (cut.right ?? 0) };
+		safe.h = h - safe.y - (cut.bottom ?? 0);
+		// where the core UI safe area starts on the screen: a touch's Position is measured from there (the engine's own
+		// "accounting for GUI insets"), which is the whole point of the shim's GetInsetArea / GetGuiInset
+		const none = gs.GetInsetArea(Enum.ScreenInsets.None);
+		const core = { x: -none.Min.X, y: -none.Min.Y };
+		const centre = f => {
+			const r = rectOf(f);
+			return [r.x + r.w / 2, r.y + r.h / 2];
+		};
+		const near = (a, b) => Math.abs(a - b) <= 0.5;
+		check(
+			`${label}: a geometria de toque e a da area segura (${safe.w} x ${safe.h}), e o mundo cobre a tela inteira`,
+			L.viewW === safe.w &&
+				L.viewH === safe.h &&
+				rectOf(ctx.worldLayer).w === w &&
+				rectOf(ctx.hudLayer).x === safe.x,
+			`toque ${L.viewW} x ${L.viewH}, mundo ${rectOf(ctx.worldLayer).w}, HUD a partir de x ${rectOf(ctx.hudLayer).x}`,
+		);
+		const bad = [];
+		for (const [name, frame, at] of [
+			["o analogico", deep(hudRoot(), "JoyBase"), [L.move.homeX, L.move.homeY]],
+			["o pad de mira", deep(hudRoot(), "AimPad"), [L.aim.homeX, L.aim.homeY]],
+		]) {
+			const [cx, cy] = centre(frame);
+			if (!near(cx, safe.x + at[0]) || !near(cy, safe.y + at[1])) bad.push(`${name} desenhado em ${cx},${cy}`);
+			// the finger on the drawn centre, as the engine reports it, through bootstrap's real handler
+			const finger = {
+				UserInputType: Enum.UserInputType.Touch,
+				KeyCode: Enum.KeyCode.Unknown,
+				Position: new Vector3(cx - core.x, cy - core.y, 0),
+			};
+			uis.InputBegan.Fire(finger, false);
+			flush();
+			const hit =
+				name === "o analogico"
+					? input.joystickActive && near(input.joystickBaseX, at[0]) && near(input.joystickBaseY, at[1])
+					: input.aimStickActive && near(input.aimStickBaseX, at[0]) && near(input.aimStickBaseY, at[1]);
+			if (!hit) bad.push(`${name}: o toque no desenho nao pega o controle ali`);
+			uis.InputEnded.Fire(finger, false);
+			flush();
+		}
+		check(
+			`${label}: o analogico e o pad de mira: onde estao desenhados e onde o dedo os pega e o mesmo ponto`,
+			bad.length === 0,
+			bad.join("; "),
+		);
+		const out = [];
+		for (const name of ["BagBtn", "MenuBtn", "ReloadBtn", "ChipSlot", "SkyPlate"]) {
+			const r = rectOf(deep(hudRoot(), name));
+			const inside =
+				r.x >= safe.x - 0.5 &&
+				r.x + r.w <= safe.x + safe.w + 0.5 &&
+				r.y >= safe.y + bar - 0.5 &&
+				r.y + r.h <= safe.y + safe.h + 0.5;
+			if (!inside)
+				out.push(`${name} [${Math.round(r.x)}, ${Math.round(r.y)}, ${Math.round(r.w)} x ${Math.round(r.h)}]`);
+		}
+		check(
+			`${label}: Bag, Menu, Reload, o chip e o relogio ficam na area segura, abaixo da barra`,
+			out.length === 0,
+			out.join("; "),
+		);
+		// the aim cursor rides around the survivor, who is the middle of the WHOLE screen (the camera), not of the safe area
+		const cursor = deep(hudRoot(), "AimCursor");
+		const [kx, ky] = centre(cursor);
+		const reach = Math.max(64 * L.scale, 52);
+		const rad = (cursor.Rotation * Math.PI) / 180;
+		const [ox, oy] = [kx - Math.cos(rad) * reach, ky - Math.sin(rad) * reach];
+		check(
+			`${label}: a mira de toque gira em volta do sobrevivente (o centro da tela inteira)`,
+			cursor.Visible && near(ox, w / 2) && near(oy, h / 2),
+			`${ox.toFixed(1)}, ${oy.toFixed(1)} / ${w / 2}, ${h / 2}`,
+		);
+	}
+	setViewport(1120, 630, TOP_BAR);
+	hud.update(state());
+}
+
+// ---------------------------------------------------------------- 5c) the player's device: UserInputService.PreferredInput
+
+console.log("\n5c) o dispositivo do jogador: UserInputService.PreferredInput, uma resposta so\n");
+{
+	const { currentScheme, SCHEME_KEYBOARD, SCHEME_TOUCH, SCHEME_GAMEPAD } = require(
+		join(SRC, "client/ui/tutorial.ts"),
+	);
+	const { gamepadActive } = require(join(SRC, "client/ui/widgets.ts"));
+	const hintKey = () => deep(deep(hudRoot(), "HintBox"), "Key")?.FindFirstChild("Text")?.Text;
+	const touchDrawn = () => deep(hudRoot(), "BagBtn") !== undefined && deep(consoleFrame(), "Bag") === undefined;
+	const deskDrawn = () => deep(hudRoot(), "BagBtn") === undefined && deep(consoleFrame(), "Bag") !== undefined;
+	// a touch laptop / a tablet with a keyboard: a touch screen AND a mouse, the mouse in use. The old HUD read only
+	// TouchEnabled and drew the thumbs' controls while the bootstrap aimed with the mouse: two answers in one frame
+	hud.unmount();
+	uis.TouchEnabled = true;
+	uis.MouseEnabled = true;
+	uis.GetLastInputType = () => Enum.UserInputType.MouseMovement;
+	uis.PreferredInput = Enum.PreferredInput.KeyboardAndMouse;
+	input.aimMode = "mouse";
+	hud.mount();
+	hud.update(state());
+	check(
+		"aparelho hibrido com o mouse em uso: a HUD de desktop, a mira do mouse e as teclas do teclado (uma resposta so)",
+		deskDrawn() && input.aimMode === "mouse" && currentScheme() === SCHEME_KEYBOARD && !gamepadActive(),
+		`HUD ${deskDrawn() ? "desktop" : "toque"}, mira ${input.aimMode}, esquema ${currentScheme()}`,
+	);
+	// the player puts the mouse down and plays on the glass: the HUD rebuilds for touch, the aim follows the thumbs
+	const toTouch = measure(() => {
+		uis.PreferredInput = Enum.PreferredInput.Touch;
+		flush();
+		hud.update(state());
+	});
+	check(
+		"o jogador passa a usar a tela de toque: a HUD se refaz com os controles de toque, a mira vira de toque, Controls abre em Touch",
+		touchDrawn() && input.aimMode === "touch" && currentScheme() === SCHEME_TOUCH,
+		`${toTouch.created} criadas, ${toTouch.destroyed} destruidas`,
+	);
+	// ...then picks a pad up: no touch controls, and every hint names the pad's buttons
+	uis.PreferredInput = Enum.PreferredInput.Gamepad;
+	flush();
+	hud.update(state());
+	hud.setInteractHint("E: Open door");
+	const padKey = hintKey();
+	check(
+		"e pega um controle: a HUD de desktop de novo, a dica diz X, o foco do kit e o do controle, Controls abre em Gamepad",
+		deskDrawn() && padKey === "X" && gamepadActive() && currentScheme() === SCHEME_GAMEPAD,
+		`dica ${padKey}, esquema ${currentScheme()}`,
+	);
+	// ...and back to the keyboard: the hint says E again, without a rebuild (the hints follow every frame)
+	const toKeys = measure(() => {
+		uis.PreferredInput = Enum.PreferredInput.KeyboardAndMouse;
+		flush();
+		hud.setInteractHint("E: Open door");
+	});
+	check(
+		"de volta ao teclado: a dica diz E, sem refazer a HUD (so o toque troca os controles)",
+		hintKey() === "E" && toKeys.created === 0 && toKeys.destroyed === 0 && currentScheme() === SCHEME_KEYBOARD,
+		`dica ${hintKey()}, ${toKeys.created} criadas`,
+	);
+	// a phone is a phone: PreferredInput Touch from the start is the touch HUD, as TouchEnabled without a mouse was
+	hud.unmount();
+	uis.MouseEnabled = false;
+	uis.GetLastInputType = () => Enum.UserInputType.Touch;
+	uis.PreferredInput = undefined;
+	hud.mount();
+	hud.update(state());
+	check(
+		"um celular (sem mouse, o toque em uso): a HUD de toque, como antes",
+		touchDrawn() && currentScheme() === SCHEME_TOUCH,
+	);
+	hud.setInteractHint(undefined);
+	void SCHEME_KEYBOARD;
 }
 
 hud.unmount();

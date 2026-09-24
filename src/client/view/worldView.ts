@@ -27,10 +27,23 @@ import { Camera, ViewRect } from "shared/engine/camera";
 import { TOWN } from "shared/engine/constants";
 import { Renderer, SpriteOpts } from "shared/engine/renderer";
 import { clamp } from "shared/engine/vec2";
-import { GroundRect, hash01, Lot, querySolids, Rect, Road, Solid, WorldData } from "shared/game/world";
+import type { FloorKind } from "shared/game/interiors";
+import {
+	DoorSide,
+	GroundRect,
+	hash01,
+	Lot,
+	queryParts,
+	queryTown,
+	Rect,
+	Road,
+	Solid,
+	WorldData,
+} from "shared/game/world";
 import { drawBuildingSign } from "./buildingSigns";
 import { drawParkedVehicle } from "./vehicleView";
 import { circleInView, overlaps, part, SIDES } from "./drawKit";
+import { FLOOR_FLAT, InteriorView } from "./interiorView";
 import { artId, artSize, artSlice } from "./worldArt";
 import { WORLD_TEXEL, WorldArtName } from "./worldArtAssets";
 
@@ -48,6 +61,8 @@ const GROUND = {
 	stall: WHITE.Lerp(COLORS.road, 0.25),
 	playground: COLORS.dirtPath.Lerp(WHITE, 0.25),
 	ramp: COLORS.uiYellow.Lerp(COLORS.sidewalk, 0.35),
+	porch: COLORS.floorWood.Lerp(COLORS.furnDark, 0.2),
+	patio: COLORS.sidewalk.Lerp(WHITE, 0.06),
 	zebra: WHITE.Lerp(COLORS.road, 0.12),
 	lane: WHITE.Lerp(COLORS.road, 0.3),
 	island: COLORS.sidewalk.Lerp(WHITE, 0.2),
@@ -65,6 +80,8 @@ const ZEBRA_STEP = 48;
 const PARK_TINT = Color3.fromRGB(228, 246, 231);
 const DRIVE_TINT = Color3.fromRGB(235, 235, 235);
 const PATH_TINT = Color3.fromRGB(211, 198, 172);
+/** a porch deck is the house's floor boards, weathered */
+const PORCH_TINT = Color3.fromRGB(214, 206, 196);
 /** the paint and body of a burnt-out car */
 const BURNT = Color3.fromRGB(66, 60, 56);
 const DOOR_GAP = Color3.fromRGB(28, 28, 30);
@@ -101,6 +118,21 @@ const LITTER: Array<WorldArtName> = ["litter0", "litter1", "litter2"];
 const BLOOD: Array<WorldArtName> = ["blood0", "blood1"];
 const OIL: Array<WorldArtName> = ["oil0", "oil1"];
 const CRACK: Array<WorldArtName> = ["crack0", "crack1"];
+/** the texture of each interior floor, and the tint that keeps a borrowed one in its room's colour */
+const FLOOR_ART: Record<FloorKind, WorldArtName> = {
+	wood: "floorWood",
+	tile: "floorTile",
+	shop: "floorShop",
+	carpet: "floorCarpet",
+	kitchen: "floorKitchen",
+	bath: "floorBath",
+	concrete: "concrete",
+};
+/** half the width of a flat roof's seam cover: the parapet's rim (4 texels), the flat drawing's stroke (3 px) */
+const SEAM_RIM_ART = 16;
+const SEAM_RIM_FLAT = 4;
+/** a back room's concrete floor: the sidewalk's concrete texture, darkened to COLORS.floorConcrete (test:world-art §6) */
+export const CONCRETE_FLOOR_TINT = Color3.fromRGB(214, 214, 212);
 
 /**
  * The one SpriteOpts every art draw fills (the hot path allocates no table per sprite). `artOpts` resets every
@@ -203,6 +235,13 @@ export class WorldView {
 	/** a pitched roof's colour in full sun, half light and shade (built once per building, not per frame) */
 	private readonly roofShades = new Map<Solid, Array<Color3>>();
 	private shadesFor?: WorldData;
+	/** furniture, decoration, openings, entrance marks (client/view/interiorView.ts) */
+	readonly interior = new InteriorView();
+	/** a building without parts is one part: itself (reused, never allocated per frame) */
+	private readonly onePart: Array<Rect> = [];
+	/** the seams of each compound flat roof, flat and art drawing (`seamsOf`), per world */
+	private readonly seamsFlat = new Map<Solid, Array<Rect>>();
+	private readonly seamsArt = new Map<Solid, Array<Rect>>();
 
 	constructor(shadow: ShadowFn) {
 		this.shadow = shadow;
@@ -321,6 +360,8 @@ export class WorldView {
 		}
 		let color = GROUND.ramp;
 		if (k === "verge") color = GROUND.verge;
+		else if (k === "porch") color = GROUND.porch;
+		else if (k === "patio") color = GROUND.patio;
 		else if (k === "walk") color = GROUND.walk;
 		else if (k === "drive") color = GROUND.drive;
 		else if (k === "apron") color = GROUND.apron;
@@ -475,17 +516,29 @@ export class WorldView {
 	drawSolids(r: Renderer, cam: Camera, v: ViewRect, world: WorldData): void {
 		const list = this.queryBuf;
 		list.clear();
-		// pad: canopies reach ~90 px past the trunk, shadows ~20 px past their caster
-		querySolids(world, v.minX - 140, v.minY - 140, v.maxX + 140, v.maxY + 140, list);
+		// pad: canopies reach ~90 px past the trunk, shadows ~20 px past their caster. The town first, without the
+		// buildings' own walls and furniture (queryTown); those only while a roof in view is lifted, below -- the
+		// same solids in the same order as one querySolids, minus the parts no open roof shows (review of ea5cf71)
+		const x0 = v.minX - 140;
+		const y0 = v.minY - 140;
+		const x1 = v.maxX + 140;
+		const y1 = v.maxY + 140;
+		queryTown(world, x0, y0, x1, y1, list);
+		let open = false;
 		if (world !== this.shadesFor) {
 			this.roofShades.clear();
+			this.seamsFlat.clear();
+			this.seamsArt.clear();
 			this.shadesFor = world;
 		}
 		for (const s of list) {
 			if (s.kind === "building") {
 				// the art culls on its own (its shadow reaches further); the flat drawing keeps its old margin
-				if (this.drawBuildingArt(r, cam, s, v)) continue;
-				if (overlaps(s.x - 30, s.y - 30, s.w + 60, s.h + 60, v)) this.drawBuilding(r, cam, s, v);
+				if (!this.drawBuildingArt(r, cam, s, v) && overlaps(s.x - 30, s.y - 30, s.w + 60, s.h + 60, v)) {
+					this.drawBuilding(r, cam, s, v);
+				}
+				this.drawSignage(r, cam, v, s);
+				if (!this.interior.roofOpaque(s)) open = true;
 			} else if (s.tags === "border") {
 				if (!this.drawBorderArt(r, cam, s, v)) this.drawBorder(r, cam, s, v);
 			} else if (s.kind === "tree") {
@@ -508,6 +561,21 @@ export class WorldView {
 				}
 			}
 		}
+		// a building's walls, windows and furniture: nothing to draw under a roof that is on, so with every roof in
+		// view on (a survivor out in the street) the parts are not even looked up
+		if (!open) return;
+		list.clear();
+		queryParts(world, x0, y0, x1, y1, list);
+		for (const s of list) {
+			if (s.kind === "window") continue;
+			const home = this.interior.parentOf(world, s);
+			if (this.interior.roofOpaque(home)) continue;
+			if (!overlaps(s.x - 16, s.y - 16, s.w + 32, s.h + 32, v)) continue;
+			const bt = home?.buildingType ?? 1;
+			const house = bt === 1 || bt === 2;
+			if (s.kind === "furniture") this.interior.drawFurniture(r, cam, s);
+			else if (!this.drawWallArt(r, cam, s, house)) this.interior.drawWall(r, cam, s, house);
+		}
 	}
 
 	private shake(s: Solid): { x: number; y: number } {
@@ -517,71 +585,181 @@ export class WorldView {
 		return { x: math.sin(this.clock * 70) * amp, y: math.cos(this.clock * 55) * amp * 0.6 };
 	}
 
+	/** the rects of a building's footprint: its parts, or the record itself when it has none */
+	private partsOf(s: Solid): Array<Rect> {
+		const parts = s.parts;
+		if (parts !== undefined) return parts;
+		this.onePart[0] = s;
+		return this.onePart;
+	}
+
+	/**
+	 * Where two parts of a flat roof meet: one roof, not two buildings side by side, so the rims drawn along the
+	 * seam are covered, `rim` short of each end (the outer rim runs on across it). Built once per building.
+	 */
+	private seamsOf(s: Solid, rim: number): Array<Rect> {
+		const key = rim === SEAM_RIM_ART ? this.seamsArt : this.seamsFlat;
+		const cached = key.get(s);
+		if (cached !== undefined) return cached;
+		const out: Array<Rect> = [];
+		const parts = s.parts ?? [];
+		for (let i = 0; i < parts.size(); i++) {
+			for (let j = i + 1; j < parts.size(); j++) {
+				const a = parts[i];
+				const b = parts[j];
+				const x = math.abs(a.x + a.w - b.x) < 0.5 ? b.x : math.abs(b.x + b.w - a.x) < 0.5 ? a.x : undefined;
+				if (x !== undefined) {
+					const y0 = math.max(a.y, b.y) + rim;
+					const y1 = math.min(a.y + a.h, b.y + b.h) - rim;
+					if (y1 > y0) out.push({ x: x - rim, y: y0, w: rim * 2, h: y1 - y0 });
+				}
+				const y = math.abs(a.y + a.h - b.y) < 0.5 ? b.y : math.abs(b.y + b.h - a.y) < 0.5 ? a.y : undefined;
+				if (y !== undefined) {
+					const x0 = math.max(a.x, b.x) + rim;
+					const x1 = math.min(a.x + a.w, b.x + b.w) - rim;
+					if (x1 > x0) out.push({ x: x0, y: y - rim, w: x1 - x0, h: rim * 2 });
+				}
+			}
+		}
+		key.set(s, out);
+		return out;
+	}
+
+	/**
+	 * The inside of a building whose roof is not on (the survivor is in it, or it is fading): each room's floor,
+	 * the decoration, and the frames of the doorways and windows. A building without rooms (a test's plain box) keeps
+	 * the old single floor in its type's colour.
+	 */
+	private drawInterior(r: Renderer, cam: Camera, s: Solid, v: ViewRect, art: boolean): void {
+		const rooms = s.rooms;
+		if (rooms === undefined) {
+			const bt = s.buildingType ?? 1;
+			const isHouse = bt === 1 || bt === 2;
+			r.drawRect(cam, s.x + s.w / 2, s.y + s.h / 2, {
+				w: s.w,
+				h: s.h,
+				color: isHouse ? COLORS.floorWood : bt === 4 || bt === 6 ? COLORS.floorTile : COLORS.floorShop,
+				stroke: BLACK,
+				strokeAlpha: 0.25,
+				strokeThickness: 2,
+				zIndex: Z.floor,
+			});
+			return;
+		}
+		for (const q of rooms) {
+			if (!overlaps(q.x, q.y, q.w, q.h, v)) continue;
+			const name = FLOOR_ART[q.floor];
+			const id = art ? artId(name) : undefined;
+			if (id !== undefined) {
+				const tint = q.floor === "concrete" ? CONCRETE_FLOOR_TINT : undefined;
+				this.tileRect(r, cam, q.x, q.y, q.w, q.h, v, name, id, Z.floor, tint, 1);
+				continue;
+			}
+			drawClipped(r, cam, q.x, q.y, q.w, q.h, v, { color: FLOOR_FLAT[q.floor], zIndex: Z.floor });
+		}
+		this.interior.drawDecor(r, cam, s, v);
+		this.interior.drawOpenings(r, cam, s, v);
+	}
+
+	/** the old single doormat and eave, for a building record without openings (tests' plain boxes) */
+	private drawPlainEntrance(r: Renderer, cam: Camera, s: Solid, roofA: number, eave: Color3): void {
+		const n = sideNormal(s.doorSide);
+		const dx = s.doorX ?? s.x + s.w / 2;
+		const dy = s.doorY ?? s.y + s.h;
+		if (roofA < 0) {
+			const matOff = TOWN.WALL_T / 2 + 14;
+			r.drawRect(cam, dx + n.x * matOff, dy + n.y * matOff, {
+				w: n.x !== 0 ? 22 : TOWN.DOOR_W - 24,
+				h: n.x !== 0 ? TOWN.DOOR_W - 24 : 22,
+				color: COLORS.doormat,
+				cornerRadius: 3,
+				zIndex: Z.floorDetail,
+			});
+			return;
+		}
+		const ex = dx + n.x * (TOWN.WALL_T / 2 - 6);
+		const ey = dy + n.y * (TOWN.WALL_T / 2 - 6);
+		r.drawRect(cam, ex, ey, {
+			w: n.x !== 0 ? 12 : TOWN.DOOR_W,
+			h: n.x !== 0 ? TOWN.DOOR_W : 12,
+			color: eave,
+			alpha: roofA,
+			zIndex: Z.roof + 1,
+		});
+	}
+
 	private drawBuilding(r: Renderer, cam: Camera, s: Solid, v: ViewRect): void {
 		const cx = s.x + s.w / 2;
 		const cy = s.y + s.h / 2;
 		const roofA = s.roofAlpha ?? 1;
 		const bt = s.buildingType ?? 1;
 		const isHouse = bt === 1 || bt === 2;
-		// building shadow (the roof's, like the original: 0.3 * roof_alpha)
+		const parts = this.partsOf(s);
+		// building shadow (the roof's, like the original: 0.3 * roof_alpha), one per part of the footprint
 		const so = this.shadow(cx, cy, 20);
-		if (overlaps(s.x + so.x, s.y + so.y, s.w, s.h, v)) {
-			r.drawRect(cam, cx + so.x, cy + so.y, {
-				w: s.w,
-				h: s.h,
+		const shX = so.x;
+		const shY = so.y;
+		for (const p of parts) {
+			if (!overlaps(p.x + shX, p.y + shY, p.w, p.h, v)) continue;
+			r.drawRect(cam, p.x + p.w / 2 + shX, p.y + p.h / 2 + shY, {
+				w: p.w,
+				h: p.h,
 				color: BLACK,
 				alpha: 0.3 * math.max(roofA, 0.4),
 				zIndex: Z.shadow,
 			});
 		}
-		// floor (visible through the doorway / when the roof fades)
-		r.drawRect(cam, cx, cy, {
-			w: s.w,
-			h: s.h,
-			color: isHouse ? COLORS.floorWood : bt === 4 || bt === 6 ? COLORS.floorTile : COLORS.floorShop,
-			stroke: BLACK,
-			strokeAlpha: 0.25,
-			strokeThickness: 2,
-			zIndex: Z.floor,
-		});
-		// doormat just outside the door: shows the entrance even with the roof closed
-		const n = sideNormal(s.doorSide);
-		const dx = s.doorX ?? cx;
-		const dy = s.doorY ?? s.y + s.h;
-		const matOff = TOWN.WALL_T / 2 + 14;
-		r.drawRect(cam, dx + n.x * matOff, dy + n.y * matOff, {
-			w: n.x !== 0 ? 22 : TOWN.DOOR_W - 24,
-			h: n.x !== 0 ? TOWN.DOOR_W - 24 : 22,
-			color: COLORS.doormat,
-			cornerRadius: 3,
-			zIndex: Z.floorDetail,
-		});
+		// the inside, only while the roof is not on (a closed roof covers the whole footprint)
+		if (!this.interior.roofOpaque(s)) this.drawInterior(r, cam, s, v, false);
+		// doormats outside every door: the entrances read even with the roof closed
+		if (s.openings !== undefined) this.interior.drawDoormats(r, cam, s, v, undefined);
+		else this.drawPlainEntrance(r, cam, s, -1, BLACK);
 		if (roofA <= 0.01) return;
 		const roof = s.roofColor ?? COLORS.roofGray;
 		const roofDark = roof.Lerp(BLACK, 0.3);
-		r.drawRect(cam, cx, cy, {
-			w: s.w,
-			h: s.h,
-			color: roof,
-			alpha: roofA,
-			stroke: roofDark,
-			strokeThickness: 3,
-			strokeAlpha: roofA,
-			zIndex: Z.roof,
-		});
-		if (isHouse) {
-			// ridge along the long axis
-			const alongX = s.w >= s.h;
-			r.drawRect(cam, cx, cy, {
-				w: alongX ? s.w - 80 : 12,
-				h: alongX ? 12 : s.h - 80,
-				color: roofDark,
-				alpha: roofA * 0.8,
-				zIndex: Z.roof + 1,
+		for (const p of parts) {
+			const px = p.x + p.w / 2;
+			const py = p.y + p.h / 2;
+			r.drawRect(cam, px, py, {
+				w: p.w,
+				h: p.h,
+				color: roof,
+				alpha: roofA,
+				stroke: roofDark,
+				strokeThickness: 3,
+				strokeAlpha: roofA,
+				zIndex: Z.roof,
 			});
-		} else {
-			// flat roof: a/c box
-			r.drawRect(cam, cx + s.w * 0.22, cy - s.h * 0.2, {
+			if (isHouse) {
+				// a ridge along each wing's long axis: an L-shaped house reads as two gables meeting
+				const alongX = p.w >= p.h;
+				r.drawRect(cam, px, py, {
+					w: alongX ? math.max(12, p.w - 80) : 12,
+					h: alongX ? 12 : math.max(12, p.h - 80),
+					color: roofDark,
+					alpha: roofA * 0.8,
+					zIndex: Z.roof + 1,
+				});
+			}
+		}
+		if (!isHouse) {
+			// one flat roof over the whole footprint: the parts' strokes along the seams are covered
+			for (const q of this.seamsOf(s, SEAM_RIM_FLAT)) {
+				r.drawRect(cam, q.x + q.w / 2, q.y + q.h / 2, {
+					w: q.w,
+					h: q.h,
+					color: roof,
+					alpha: roofA,
+					zIndex: Z.roof + 1,
+				});
+			}
+		}
+		const wing = s.mainWing ?? s;
+		const wx = wing.x + wing.w / 2;
+		const wy = wing.y + wing.h / 2;
+		if (!isHouse) {
+			// flat roof: a/c box on the main wing
+			r.drawRect(cam, wx + wing.w * 0.22, wy - wing.h * 0.2, {
 				w: 90,
 				h: 70,
 				color: roof.Lerp(WHITE, 0.25),
@@ -591,27 +769,26 @@ export class WorldView {
 				zIndex: Z.roof + 1,
 			});
 		}
-		// darker eave over the doorway: the entrance reads from above
-		const ex = dx + n.x * (TOWN.WALL_T / 2 - 6);
-		const ey = dy + n.y * (TOWN.WALL_T / 2 - 6);
-		r.drawRect(cam, ex, ey, {
-			w: n.x !== 0 ? 12 : TOWN.DOOR_W,
-			h: n.x !== 0 ? TOWN.DOOR_W : 12,
-			color: roofDark.Lerp(BLACK, 0.3),
-			alpha: roofA,
-			zIndex: Z.roof + 1,
-		});
-		this.drawSignage(r, cam, v, s, roofA);
+		// darker eaves over the doorways and dark glass over the windows: the entrances read from above
+		const eave = roofDark.Lerp(BLACK, 0.3);
+		if (s.openings !== undefined) this.interior.drawRoofMarks(r, cam, s, roofA, eave, v);
+		else this.drawPlainEntrance(r, cam, s, roofA, eave);
 	}
 
 	/**
 	 * How the building says what it is (client/view/buildingSigns.ts, DESIGN_RULES EDI-03, ART-07): the storefront
 	 * sign beside the main entrance and, on a hospital, the helipad. The ONE hook of the signage, shared by the flat
 	 * and the art drawing and by the menus' flyover: it hands the sign the building's type, its main entrance (where,
-	 * and in which wall) and the roof rect the sign stands on -- the only lines to change when a building has several
-	 * wings or entrances (the main one's, and the main wing's rect). Nothing else here knows a sign exists.
+	 * and in which wall) and the roof rect the sign stands on. A building of several wings and entrances
+	 * (shared/game/interiors.ts) hands its MAIN entrance (`doorX`/`doorY`/`doorSide`: the one facing the street) and
+	 * its main wing (`Solid.mainWing`: the part behind the stretch of facade that holds that door, so the sign stays
+	 * on that facade -- in a porch or a school's entrance court too -- and the helipad on that wing's roof). Called
+	 * once per building per frame, from `drawSolids`, for the flat and the art drawing alike. Nothing else here knows
+	 * a sign exists.
 	 */
-	private drawSignage(r: Renderer, cam: Camera, v: ViewRect, s: Solid, a: number): void {
+	private drawSignage(r: Renderer, cam: Camera, v: ViewRect, s: Solid): void {
+		const a = s.roofAlpha ?? 1;
+		if (a <= 0.01) return;
 		drawBuildingSign(
 			r,
 			cam,
@@ -620,7 +797,7 @@ export class WorldView {
 			s.doorX ?? s.x + s.w / 2,
 			s.doorY ?? s.y + s.h,
 			s.doorSide ?? "bottom",
-			s,
+			s.mainWing ?? s,
 			a,
 			this.shadow,
 		);
@@ -1002,7 +1179,8 @@ export class WorldView {
 			return true;
 		}
 		if (k === "verge") return this.tiled(r, cam, g, v, "grass", z);
-		if (k === "walk") return this.tiled(r, cam, g, v, "pavers", z);
+		if (k === "porch") return this.tiled(r, cam, g, v, "floorWood", z, PORCH_TINT);
+		if (k === "walk" || k === "patio") return this.tiled(r, cam, g, v, "pavers", z);
 		if (k === "drive") return this.tiled(r, cam, g, v, "concrete", z, DRIVE_TINT);
 		if (k === "apron") return this.tiled(r, cam, g, v, "apron", z);
 		if (k === "parking") return this.tiled(r, cam, g, v, "asphaltLot", z);
@@ -1181,120 +1359,158 @@ export class WorldView {
 	}
 
 	/**
-	 * A building with textured roof, floor and soft shadow. Houses get a gable roof whose sunlit slope is lighter
-	 * (which slope follows the sun, LUZ-01) and a chimney; flat roofs a parapet with its shadow on the roof and
-	 * rooftop units. The roof keeps the colour that identifies the building type (EDI-03): the texture is grey and
-	 * tinted with it. A doorstep marks the entrance. Answers false when the roof texture is not live.
+	 * A building with textured roof, floors and soft shadow, one part of its footprint at a time (an L-shaped house
+	 * is two gables meeting, a U-shaped school three membrane roofs). Houses get a gable roof whose sunlit slope is
+	 * lighter (which slope follows the sun, LUZ-01) and a chimney; flat roofs a parapet with its shadow on the roof
+	 * and rooftop units. The roof keeps the colour that identifies the building type (EDI-03): the texture is grey
+	 * and tinted with it. A doorstep marks every entrance. Answers false when the roof texture is not live.
 	 */
 	private drawBuildingArt(r: Renderer, cam: Camera, s: Solid, v: ViewRect): boolean {
 		const bt = s.buildingType ?? 1;
 		const isHouse = bt === 1 || bt === 2;
-		const alongX = s.w >= s.h;
-		const roofTex: WorldArtName = isHouse
-			? alongX
-				? "roofShingleH"
-				: "roofShingleV"
-			: bt === 3 || bt === 4 || bt === 5
-				? "roofMembrane"
-				: "roofGravel";
-		const roofId = artId(roofTex);
-		if (roofId === undefined) return false;
+		const flatTex: WorldArtName = bt === 3 || bt === 4 || bt === 5 ? "roofMembrane" : "roofGravel";
+		// the texture of a house decides by its box (one check per building); each part picks its own direction
+		const roofProbe: WorldArtName = isHouse ? "roofShingleH" : flatTex;
+		if (artId(roofProbe) === undefined) return false;
 		if (!overlaps(s.x - 60, s.y - 60, s.w + 120, s.h + 120, v)) return true;
 		const cx = s.x + s.w / 2;
 		const cy = s.y + s.h / 2;
 		const roofA = s.roofAlpha ?? 1;
+		const parts = this.partsOf(s);
 		// soft drop shadow, a little longer than the flat one: a building is taller than a car
 		const so = this.shadow(cx, cy, 30);
-		const sx = cx + so.x;
-		const sy = cy + so.y;
+		const shX = so.x;
+		const shY = so.y;
 		const sb = artId("shadowBox");
-		if (sb !== undefined) {
-			const o = sliced(artOpts(sb, s.w + 16, s.h + 16, Z.shadow), "shadowBox", 3);
-			o.alpha = 0.36 * math.max(roofA, 0.4);
-			r.drawRect(cam, sx, sy, o);
-		} else {
-			r.drawRect(cam, sx, sy, {
-				w: s.w,
-				h: s.h,
-				color: BLACK,
-				alpha: 0.3 * math.max(roofA, 0.4),
-				zIndex: Z.shadow,
-			});
+		for (const p of parts) {
+			const sx = p.x + p.w / 2 + shX;
+			const sy = p.y + p.h / 2 + shY;
+			if (sb !== undefined) {
+				const o = sliced(artOpts(sb, p.w + 16, p.h + 16, Z.shadow), "shadowBox", 3);
+				o.alpha = 0.36 * math.max(roofA, 0.4);
+				r.drawRect(cam, sx, sy, o);
+			} else {
+				r.drawRect(cam, sx, sy, {
+					w: p.w,
+					h: p.h,
+					color: BLACK,
+					alpha: 0.3 * math.max(roofA, 0.4),
+					zIndex: Z.shadow,
+				});
+			}
 		}
-		// floor (seen through the doorway, and when the roof fades with the survivor inside)
-		const floorTex: WorldArtName = isHouse ? "floorWood" : bt === 4 || bt === 6 ? "floorTile" : "floorShop";
-		const floorId = artId(floorTex);
-		if (floorId !== undefined) {
-			this.tileRect(r, cam, s.x, s.y, s.w, s.h, v, floorTex, floorId, Z.floor, undefined, 1, BLACK, 2, 0.25);
-		} else {
-			r.drawRect(cam, cx, cy, {
-				w: s.w,
-				h: s.h,
-				color: isHouse ? COLORS.floorWood : bt === 4 || bt === 6 ? COLORS.floorTile : COLORS.floorShop,
-				stroke: BLACK,
-				strokeAlpha: 0.25,
-				strokeThickness: 2,
-				zIndex: Z.floor,
-			});
-		}
-		// the doorstep and the mat on it: the entrance reads even with the roof closed
-		const n = sideNormal(s.doorSide);
-		const dx = s.doorX ?? cx;
-		const dy = s.doorY ?? s.y + s.h;
-		const stepOff = TOWN.WALL_T / 2 + 10;
-		r.drawRect(cam, dx + n.x * stepOff, dy + n.y * stepOff, {
-			w: n.x !== 0 ? 20 : TOWN.DOOR_W + 20,
-			h: n.x !== 0 ? TOWN.DOOR_W + 20 : 20,
-			color: STEP,
-			stroke: BLACK,
-			strokeAlpha: 0.22,
-			strokeThickness: 1,
-			zIndex: Z.floorDetail,
-		});
-		const matOff = TOWN.WALL_T / 2 + 14;
-		r.drawRect(cam, dx + n.x * matOff, dy + n.y * matOff, {
-			w: n.x !== 0 ? 22 : TOWN.DOOR_W - 24,
-			h: n.x !== 0 ? TOWN.DOOR_W - 24 : 22,
-			color: COLORS.doormat,
-			cornerRadius: 3,
-			zIndex: Z.floorDetail + 1,
-		});
+		// the rooms' floors, the decoration and the frames (only while the roof is not on)
+		if (!this.interior.roofOpaque(s)) this.drawInterior(r, cam, s, v, true);
+		// the doorstep and the mat on it, at every door: the entrances read even with the roof closed
+		if (s.openings !== undefined) this.interior.drawDoormats(r, cam, s, v, STEP);
+		else this.drawPlainEntrance(r, cam, s, -1, BLACK);
 		if (roofA <= 0.01) return true;
 		const roof = s.roofColor ?? COLORS.roofGray;
 		const shades = this.roofShadesOf(s, roof);
 		const sun = this.shadow(cx, cy, 1);
-		if (isHouse) {
-			// gable: the slope that faces the light is the roof's own colour, the other one is in shade
-			const d = alongX ? sun.y : sun.x;
-			const first = d > 0.25 ? shades[0] : d < -0.25 ? shades[2] : shades[1];
-			const second = d > 0.25 ? shades[2] : d < -0.25 ? shades[0] : shades[1];
-			if (alongX) {
-				this.tileRect(r, cam, s.x, s.y, s.w, s.h / 2, v, roofTex, roofId, Z.roof, first, roofA);
-				this.tileRect(r, cam, s.x, cy, s.w, s.h / 2, v, roofTex, roofId, Z.roof, second, roofA);
+		const sunX = sun.x;
+		const sunY = sun.y;
+		const wing = s.mainWing ?? s;
+		const wx = wing.x + wing.w / 2;
+		const wy = wing.y + wing.h / 2;
+		for (const p of parts) {
+			const px = p.x + p.w / 2;
+			const py = p.y + p.h / 2;
+			if (isHouse) {
+				// gable: the slope that faces the light is the roof's own colour, the other one is in shade
+				const alongX = p.w >= p.h;
+				const tex: WorldArtName = alongX ? "roofShingleH" : "roofShingleV";
+				const id = artId(tex);
+				if (id === undefined) continue;
+				const d = alongX ? sunY : sunX;
+				const first = d > 0.25 ? shades[0] : d < -0.25 ? shades[2] : shades[1];
+				const second = d > 0.25 ? shades[2] : d < -0.25 ? shades[0] : shades[1];
+				if (alongX) {
+					this.tileRect(r, cam, p.x, p.y, p.w, p.h / 2, v, tex, id, Z.roof, first, roofA);
+					this.tileRect(r, cam, p.x, py, p.w, p.h / 2, v, tex, id, Z.roof, second, roofA);
+				} else {
+					this.tileRect(r, cam, p.x, p.y, p.w / 2, p.h, v, tex, id, Z.roof, first, roofA);
+					this.tileRect(r, cam, px, p.y, p.w / 2, p.h, v, tex, id, Z.roof, second, roofA);
+				}
+				// ridge cap along the wing's long axis: half-lit, with a dark edge on both sides
+				r.drawRect(cam, px, py, {
+					w: alongX ? p.w - 8 : 12,
+					h: alongX ? 12 : p.h - 8,
+					color: shades[1],
+					alpha: roofA,
+					stroke: shades[3],
+					strokeThickness: 2,
+					strokeAlpha: roofA,
+					zIndex: Z.roof + 1,
+				});
+				const eaves = artId("eaves");
+				if (eaves !== undefined) {
+					const o = sliced(artOpts(eaves, p.w, p.h, Z.roof + 2), "eaves", WORLD_TEXEL);
+					o.alpha = roofA;
+					r.drawRect(cam, px, py, o);
+				}
 			} else {
-				this.tileRect(r, cam, s.x, s.y, s.w / 2, s.h, v, roofTex, roofId, Z.roof, first, roofA);
-				this.tileRect(r, cam, cx, s.y, s.w / 2, s.h, v, roofTex, roofId, Z.roof, second, roofA);
+				const id = artId(flatTex);
+				if (id === undefined) continue;
+				this.tileRect(r, cam, p.x, p.y, p.w, p.h, v, flatTex, id, Z.roof, roof, roofA);
+				// the parapet facing the light throws a band of shadow onto the roof (LUZ-01): along the axis the
+				// light mostly comes from, one sprite per part
+				const inset = 12;
+				if (math.abs(sunY) >= math.abs(sunX)) {
+					const bh = 16 * math.abs(sunY);
+					const by = sunY > 0 ? p.y + inset + bh / 2 : p.y + p.h - inset - bh / 2;
+					r.drawRect(cam, px, by, {
+						w: p.w - inset * 2,
+						h: bh,
+						color: BLACK,
+						alpha: 0.2 * roofA,
+						zIndex: Z.roof + 1,
+					});
+				} else {
+					const bw = 16 * math.abs(sunX);
+					const bx = sunX > 0 ? p.x + inset + bw / 2 : p.x + p.w - inset - bw / 2;
+					r.drawRect(cam, bx, py, {
+						w: bw,
+						h: p.h - inset * 2,
+						color: BLACK,
+						alpha: 0.2 * roofA,
+						zIndex: Z.roof + 1,
+					});
+				}
+				const parapet = artId("parapet");
+				if (parapet !== undefined) {
+					const o = sliced(artOpts(parapet, p.w, p.h, Z.roof + 2), "parapet", WORLD_TEXEL);
+					o.alpha = roofA;
+					r.drawRect(cam, px, py, o);
+				}
 			}
-			// ridge cap along the long axis: half-lit, with a dark edge on both sides
-			r.drawRect(cam, cx, cy, {
-				w: alongX ? s.w - 8 : 12,
-				h: alongX ? 12 : s.h - 8,
-				color: shades[1],
-				alpha: roofA,
-				stroke: shades[3],
-				strokeThickness: 2,
-				strokeAlpha: roofA,
-				zIndex: Z.roof + 1,
-			});
-			// a brick chimney on most houses, on the ridge, a quarter along it
+		}
+		if (!isHouse) {
+			// one flat roof over the whole footprint: the parapets' rims along the seams are covered with roof
+			const id = artId(flatTex);
+			if (id !== undefined) {
+				for (const q of this.seamsOf(s, SEAM_RIM_ART)) {
+					this.tileRect(r, cam, q.x, q.y, q.w, q.h, v, flatTex, id, Z.roof + 3, roof, roofA);
+				}
+			}
+		}
+		if (isHouse) {
+			// a brick chimney on most houses, a quarter along the ridge of the roof part over the main wing
 			const hc = hash01(s.x, s.y, 61);
 			const chimney = artId("chimney");
 			if (hc < 0.7) {
+				let gable: Rect = wing;
+				for (const p of parts) {
+					if (wx >= p.x && wx <= p.x + p.w && wy >= p.y && wy <= p.y + p.h) gable = p;
+				}
+				const gx = gable.x + gable.w / 2;
+				const gy = gable.y + gable.h / 2;
+				const alongX = gable.w >= gable.h;
 				const k = hc < 0.35 ? -0.28 : 0.28;
-				const chx = alongX ? cx + s.w * k : cx + 22;
-				const chy = alongX ? cy - 22 : cy + s.h * k;
+				const chx = alongX ? gx + gable.w * k : gx + 22;
+				const chy = alongX ? gy - 22 : gy + gable.h * k;
 				if (chimney !== undefined) {
-					const o = artOpts(chimney, 32, 32, Z.roof + 2);
+					const o = artOpts(chimney, 32, 32, Z.roof + 3);
 					o.alpha = roofA;
 					r.drawRect(cam, chx, chy, o);
 				} else {
@@ -1306,77 +1522,39 @@ export class WorldView {
 						stroke: BLACK,
 						strokeAlpha: 0.5 * roofA,
 						strokeThickness: 2,
-						zIndex: Z.roof + 2,
+						zIndex: Z.roof + 3,
 					});
 				}
 			}
-			const eaves = artId("eaves");
-			if (eaves !== undefined) {
-				const o = sliced(artOpts(eaves, s.w, s.h, Z.roof + 2), "eaves", WORLD_TEXEL);
-				o.alpha = roofA;
-				r.drawRect(cam, cx, cy, o);
-			}
 		} else {
-			this.tileRect(r, cam, s.x, s.y, s.w, s.h, v, roofTex, roofId, Z.roof, roof, roofA);
-			// the parapet facing the light throws a band of shadow onto the roof (LUZ-01): along the axis the light
-			// mostly comes from, one sprite
-			const inset = 12;
-			if (math.abs(sun.y) >= math.abs(sun.x)) {
-				const bh = 16 * math.abs(sun.y);
-				const by = sun.y > 0 ? s.y + inset + bh / 2 : s.y + s.h - inset - bh / 2;
-				r.drawRect(cam, cx, by, {
-					w: s.w - inset * 2,
-					h: bh,
-					color: BLACK,
-					alpha: 0.2 * roofA,
-					zIndex: Z.roof + 1,
-				});
-			} else {
-				const bw = 16 * math.abs(sun.x);
-				const bx = sun.x > 0 ? s.x + inset + bw / 2 : s.x + s.w - inset - bw / 2;
-				r.drawRect(cam, bx, cy, {
-					w: bw,
-					h: s.h - inset * 2,
-					color: BLACK,
-					alpha: 0.2 * roofA,
-					zIndex: Z.roof + 1,
-				});
-			}
-			this.drawRoofUnits(r, cam, s, cx, cy, roofA);
-			const parapet = artId("parapet");
-			if (parapet !== undefined) {
-				const o = sliced(artOpts(parapet, s.w, s.h, Z.roof + 2), "parapet", WORLD_TEXEL);
-				o.alpha = roofA;
-				r.drawRect(cam, cx, cy, o);
-			}
+			this.drawRoofUnits(r, cam, wing, s.doorSide, wx, wy, roofA);
 		}
-		// darker eave over the doorway: the entrance reads from above
-		const ex = dx + n.x * (TOWN.WALL_T / 2 - 6);
-		const ey = dy + n.y * (TOWN.WALL_T / 2 - 6);
-		r.drawRect(cam, ex, ey, {
-			w: n.x !== 0 ? 12 : TOWN.DOOR_W,
-			h: n.x !== 0 ? TOWN.DOOR_W : 12,
-			color: shades[3],
-			alpha: roofA,
-			zIndex: Z.roof + 2,
-		});
-		this.drawSignage(r, cam, v, s, roofA);
+		// darker eaves over the doorways and dark glass over the windows: the entrances read from above
+		if (s.openings !== undefined) this.interior.drawRoofMarks(r, cam, s, roofA, shades[3], v);
+		else this.drawPlainEntrance(r, cam, s, roofA, shades[3]);
 		return true;
 	}
 
 	/**
-	 * An air conditioner and a vent on a flat roof, one at each end of its back half: the front, over the entrance,
-	 * is where the storefront sign stands (client/view/buildingSigns.ts), and a hospital's middle is its helipad.
-	 * One sprite each.
+	 * An air conditioner and a vent on a flat roof (the main wing `s` of a building whose main entrance is in wall
+	 * `side`), one at each end of its back half: the front, over the entrance, is where the storefront sign stands
+	 * (client/view/buildingSigns.ts), and a hospital's middle is its helipad. One sprite each.
 	 */
-	private drawRoofUnits(r: Renderer, cam: Camera, s: Solid, cx: number, cy: number, a: number): void {
+	private drawRoofUnits(
+		r: Renderer,
+		cam: Camera,
+		s: Rect,
+		side: DoorSide | undefined,
+		cx: number,
+		cy: number,
+		a: number,
+	): void {
 		const ac = artId("acUnit");
 		const vent = artId("vent");
 		const h = hash01(s.x, s.y, 71);
 		// which end of the back the air conditioner takes, picked by the building
 		const flip = h < 0.5 ? 1 : -1;
 		// the entrance wall's outward normal (nx, ny): the units go the other way
-		const side = s.doorSide;
 		const nx = side === "left" ? -1 : side === "right" ? 1 : 0;
 		const ny = nx !== 0 ? 0 : side === "top" ? -1 : 1;
 		const alongX = ny !== 0;
@@ -1396,7 +1574,7 @@ export class WorldView {
 		}
 	}
 
-	private drawWallArt(r: Renderer, cam: Camera, s: Solid): boolean {
+	private drawWallArt(r: Renderer, cam: Camera, s: Solid, house = true): boolean {
 		const id = artId("wall");
 		if (id === undefined) return false;
 		const o = artOpts(id, s.w, s.h, Z.structure);
@@ -1404,7 +1582,8 @@ export class WorldView {
 		o.scaleType = "tile";
 		o.tileW = size.w * WORLD_TEXEL;
 		o.tileH = size.h * WORLD_TEXEL;
-		o.imageTint = COLORS.wallHouse;
+		const base = house ? COLORS.wallHouse : COLORS.wallShop;
+		o.imageTint = s.inner === true ? base.Lerp(WHITE, 0.18) : base;
 		o.stroke = COLORS.wallWood;
 		o.strokeThickness = 1;
 		o.strokeAlpha = 0.8;

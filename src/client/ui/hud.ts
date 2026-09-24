@@ -2,6 +2,7 @@ import { GameContext } from "shared/game/context";
 import { langGet } from "shared/data/lang";
 import { MIN_TOUCH_PX, TouchButton, TouchLayout } from "shared/engine/input";
 import { getTouchLayout, onTouchLayoutChanged, refreshTouchLayout } from "../bootstrap";
+import { inputDevice, onInputDeviceChanged, safeOrigin, screenSize } from "./device";
 import { CONSOLE_MARGIN, HudConsole, HudState, PxRect, placeTouchChip, placeTouchSky } from "./hudConsole";
 import { HudNav } from "./hudNav";
 import type { PlayerSaveData } from "shared/game/save";
@@ -24,6 +25,7 @@ import {
 	makeAnchored,
 	makeFrame,
 	makeLabel,
+	reducedMotion,
 	setBadge,
 	setButtonEnabled,
 	setDesign,
@@ -55,8 +57,6 @@ function classify(msg: string): MessageKind {
 	if (msg === "No ammo") return "warn";
 	return "normal";
 }
-
-const UserInputService = game.GetService("UserInputService");
 
 const FEED_MAX = 4;
 const FEED_TIME = 3.5;
@@ -291,6 +291,8 @@ export class Hud {
 	// ---- touch layer (pixel space; see the helpers above)
 	private touchLayer: Frame | undefined;
 	private touchOff: (() => void) | undefined;
+	/** the player's input device changing under the HUD (client/ui/device.ts): the touch controls come or go */
+	private deviceOff: RBXScriptConnection | undefined;
 	private touch = false;
 	private aimPad: Frame | undefined;
 	/** where the stick's base and the aim pad were last placed (updateTouch writes only a move) */
@@ -299,6 +301,9 @@ export class Hud {
 	private aimKnob: Frame | undefined;
 	private aimArrow: Frame | undefined;
 	private aimCursor: Frame | undefined;
+	/** where the survivor is drawn, in the touch layer's pixels (buildTouch) */
+	private aimCentreX = 0;
+	private aimCentreY = 0;
 	private joyDead: Frame | undefined;
 	private useLabel: TextLabel | undefined;
 	private reloadBtn: TextButton | undefined;
@@ -324,7 +329,9 @@ export class Hud {
 		this.mounted = true;
 		this.last.clear();
 		const ctx = this.ctx;
-		const mobile = UserInputService.TouchEnabled;
+		// the touch controls are for a touch screen in use (UserInputService.PreferredInput, client/ui/device.ts): not for
+		// a touch laptop driven with its mouse, which the bootstrap aims with the mouse too
+		const mobile = inputDevice() === "touch";
 		this.touch = mobile;
 		// "UI size" setting (0..1, default 0.5): 80% .. 120% of the HUD controls
 		const k = 0.8 + 0.4 * math.clamp(ctx.save.settings.uiSize, 0, 1);
@@ -390,6 +397,16 @@ export class Hud {
 			if (!this.mounted || this.root === undefined) return;
 			this.buildTouch(this.root);
 			this.placeConsole();
+		});
+		// a hybrid device picked up or put down its touch screen mid-run: the HUD is rebuilt for the new one (the key
+		// hints follow the pad or the keyboard by themselves, every frame)
+		this.deviceOff = onInputDeviceChanged(device => {
+			if (!this.mounted || (device === "touch") === this.touch) return;
+			task.defer(() => {
+				if (!this.mounted) return;
+				this.unmount();
+				this.mount();
+			});
 		});
 	}
 
@@ -588,12 +605,17 @@ export class Hud {
 		this.aimArrow = pxRect(pad, "AimArrow", L.aim.baseR, L.aim.baseR, L.aim.baseR * 0.5, 4, THEME.foreground, 14);
 		this.aimArrow.Visible = false;
 
-		// the same heading, out in the world next to the survivor (the camera centre)
+		// the same heading, out in the world next to the survivor: the camera centre, the middle of the WHOLE screen the
+		// world covers, in this layer's safe-area pixels (client/ui/device.ts)
+		const o = safeOrigin();
+		const v = screenSize();
+		this.aimCentreX = v.X / 2 - o.X;
+		this.aimCentreY = v.Y / 2 - o.Y;
 		const cursor = pxRect(
 			layer,
 			"AimCursor",
-			L.viewW / 2,
-			L.viewH / 2,
+			this.aimCentreX,
+			this.aimCentreY,
 			math.max(18 * L.scale, 14),
 			math.max(4 * L.scale, 3),
 			THEME.foreground,
@@ -810,6 +832,8 @@ export class Hud {
 		this.mounted = false;
 		this.touchOff?.();
 		this.touchOff = undefined;
+		this.deviceOff?.Disconnect();
+		this.deviceOff = undefined;
 		this.root?.Destroy();
 		this.root = undefined;
 		this.console = undefined;
@@ -894,12 +918,14 @@ export class Hud {
 			}
 		}
 
-		// damage vignette: hit flash + a slow pulse when HP is low
+		// damage vignette: hit flash + a slow pulse when HP is low -- held at its middle under Reduce Motion, as the hit
+		// flash over the menus holds instead of easing (dangerFlash.ts): the danger still shows, it just does not throb
 		this.flash = math.max(0, this.flash - 1.6 / 60);
 		let intensity = math.max(math.clamp(state.hitFlash, 0, 1) * 0.75, this.flash);
 		if (hpRatio > 0 && hpRatio < 0.3) {
 			const low = (0.3 - hpRatio) / 0.3;
-			intensity = math.max(intensity, low * (0.3 + 0.15 * math.sin(now * 4)));
+			const pulse = reducedMotion() ? 0 : 0.15 * math.sin(now * 4);
+			intensity = math.max(intensity, low * (0.3 + pulse));
 		}
 		const transparency = 1 - math.clamp(intensity, 0, 0.9);
 		if (transparency !== this.vignetteT) {
@@ -978,9 +1004,9 @@ export class Hud {
 				const rad = math.rad(deg);
 				const reach = math.max(64 * L.scale, 52);
 				this.aimCursor.Position = new UDim2(
-					sx(L.viewW / 2 + math.cos(rad) * reach),
+					sx(this.aimCentreX + math.cos(rad) * reach),
 					0,
-					sy(L.viewH / 2 + math.sin(rad) * reach),
+					sy(this.aimCentreY + math.sin(rad) * reach),
 					0,
 				);
 				this.aimCursor.Rotation = deg;

@@ -21,6 +21,7 @@
  * Fallback: when a texture has no asset id (skinAssets.ts) or the client fails to fetch one, every surface
  * repaints itself as the previous flat look (BackgroundColor3 + UIStroke + UICorner). The UI is never blank.
  */
+import { safeOrigin, safeSize, screenSize, topInset } from "./device";
 import { SKIN_TEXTURES, SKIN_TEXTURE_NAMES, SKIN_UNIT, SkinTextureName } from "./skinAssets";
 import { BORDER, OVER_WORLD, RADIUS, THEME, TRANSPARENCY } from "./theme";
 
@@ -37,29 +38,23 @@ export const PRESS_DROP = 2;
 
 // ---------------------------------------------------------------- safe area & scale
 
-/** height (px) covered by the Roblox top bar; our ScreenGui ignores the inset, so we keep clear of it */
-export function topInset(): number {
-	const [topLeft] = GuiService.GetGuiInset();
-	let inset = topLeft.Y;
-	const [ok, value] = pcall(() => GuiService.TopbarInset);
-	if (ok) {
-		const rect = value as Rect;
-		if (rect.Height > 0) inset = math.max(inset, rect.Max.Y);
-	}
-	return math.max(0, inset);
-}
+/** height (px) covered by the Roblox top bar in the interface's coordinates (device.ts: the one copy of it) */
+export { topInset };
 
+/**
+ * The screen the HUD and the menus are laid out on, px: the device safe area their ScreenGuis draw in (device.ts). On a
+ * screen with no cut-out it is the whole screen. The world's own size is device.ts screenSize.
+ */
 export function viewportSize(): Vector2 {
-	const cam = Workspace.CurrentCamera;
-	if (cam !== undefined && cam.ViewportSize.X > 1 && cam.ViewportSize.Y > 1) return cam.ViewportSize;
-	return new Vector2(DESIGN_W, DESIGN_H);
+	return safeSize();
 }
 
 /**
  * The Roblox top bar as the layout needs it: how tall it is, and the stretch of it its buttons leave free.
  *
  * `GuiService.TopbarInset` is "the unoccupied area between the Roblox left-most controls and the edge of the device
- * safe area", in the coordinates of a ScreenGui with IgnoreGuiInset (ours, bootstrap.ts): the buttons sit left of
+ * safe area", in the coordinates of a ScreenGui with IgnoreGuiInset -- the device safe area, where the HUD's and the
+ * menus' ScreenGuis draw (ScreenInsets.DeviceSafeInsets, bootstrap.ts): the buttons sit left of
  * `Min.X` (and right of `Max.X`, should a platform put any there), from the top of the screen down to the bar's
  * height. The rest of the bar's height is empty screen, and a window may use it (DESIGN_RULES UI-07).
  *
@@ -417,6 +412,20 @@ export function onLayoutChange(owner: Instance, fn: () => void): void {
 	fn();
 }
 
+/**
+ * Stretches `frame` -- a child of a full-size layer of the HUD or the menus, which start at the device safe area -- over
+ * the WHOLE screen, so what it holds is placed in the world's pixels (cam.worldToScreen): the coach's pointer. Kept in
+ * sync with the screen; whatever lands outside the safe area is clipped there by its ScreenGui.
+ */
+export function coverWholeScreen(frame: GuiObject): void {
+	onLayoutChange(frame, () => {
+		const o = safeOrigin();
+		const v = screenSize();
+		frame.Position = UDim2.fromOffset(-o.X, -o.Y);
+		frame.Size = UDim2.fromOffset(v.X, v.Y);
+	});
+}
+
 // ---------------------------------------------------------------- text: never outlined
 
 /*
@@ -560,12 +569,26 @@ function findBoxStroke(target: GuiObject, name: string): UIStroke | undefined {
 	return nested !== undefined && nested.IsA("UIStroke") ? nested : undefined;
 }
 
-/** every fade of the kit lands here; `motionTime` is what makes Reduce Motion cut them to an instant jump */
-function tweenTo<T extends Instance>(obj: T, time: number, props: Partial<ExtractMembers<T, Tweenable>>): Tween {
-	const info = new TweenInfo(motionTime(time), Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
+/**
+ * THE tween of the interface: every fade and move of the kit, widgets.tween, the logo and the nameplate's pop land here,
+ * and nothing else in src/ calls TweenService (`npm run test:settings` checks it). `motionTime` is what makes Reduce
+ * Motion cut every one of them to an instant jump. `reverses`: it plays back to where it started (a pop).
+ */
+export function motionTween<T extends Instance>(
+	obj: T,
+	time: number,
+	props: Partial<ExtractMembers<T, Tweenable>>,
+	reverses = false,
+): Tween {
+	const info = new TweenInfo(motionTime(time), Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, reverses);
 	const t = TweenService.Create(obj, info, props);
 	t.Play();
 	return t;
+}
+
+/** every fade of the kit lands here */
+function tweenTo<T extends Instance>(obj: T, time: number, props: Partial<ExtractMembers<T, Tweenable>>): Tween {
+	return motionTween(obj, time, props);
 }
 
 /** a missed texture fetch is often transient; this is how long we wait before asking again */
@@ -798,53 +821,63 @@ function disableSkin(): void {
  *    a valid id draws as soon as the fetch lands, so a transient miss needs NO fallback -- it would only
  *    cost the player the skin for the rest of the session. We therefore retry once and give up on the skin
  *    only when EVERY texture is still missing, which is what a moderated or deleted upload looks like.
+ *
+ * The fetch is the FIRST step of the client's one preload plan (client/boot/preloadPlan.ts: the skin, then the town
+ * the lobby shows, then the signs and the characters, then the sounds), not a thread of its own started at import.
  */
-if (skinOn) {
-	task.spawn(() => {
-		const ids: Array<string> = [];
-		for (const name of SKIN_TEXTURE_NAMES) {
-			const id = SKIN_TEXTURES[name].id;
-			if (id !== "") ids.push(id);
-		}
-		if (ids.size() === 0) return;
+let skinPreloaded = false;
 
-		/** preloads `list` through real ImageLabels; returns the ids that did not arrive */
-		const fetchMissing = (list: Array<string>): Array<string> => {
-			const holder = new Instance("Folder");
-			holder.Parent = ContentProvider;
-			const probes: Array<ImageLabel> = [];
-			for (const id of list) {
-				const probe = new Instance("ImageLabel");
-				probe.Image = id;
-				probe.Parent = holder;
-				probes.push(probe);
-			}
-			const missing: Array<string> = [];
-			pcall(() =>
-				ContentProvider.PreloadAsync(probes, (id: string, status: Enum.AssetFetchStatus) => {
-					if (status !== Enum.AssetFetchStatus.Success) missing.push(id);
-				}),
-			);
-			holder.Destroy();
-			return missing;
-		};
+/**
+ * Fetches the skin's textures (one retry) and falls back to the flat UI when none of them can be. YIELDS until then;
+ * answers how many were asked for and how many did not arrive. Client only; the second call does nothing.
+ */
+export function preloadSkin(): { total: number; missing: number } {
+	if (skinPreloaded || !skinOn) return { total: 0, missing: 0 };
+	skinPreloaded = true;
+	const ids: Array<string> = [];
+	for (const name of SKIN_TEXTURE_NAMES) {
+		const id = SKIN_TEXTURES[name].id;
+		if (id !== "") ids.push(id);
+	}
+	if (ids.size() === 0) return { total: 0, missing: 0 };
 
-		let missing = fetchMissing(ids);
-		if (missing.size() > 0) {
-			task.wait(RETRY_DELAY);
-			missing = fetchMissing(missing);
+	/** preloads `list` through real ImageLabels; returns the ids that did not arrive */
+	const fetchMissing = (list: Array<string>): Array<string> => {
+		const holder = new Instance("Folder");
+		holder.Parent = ContentProvider;
+		const probes: Array<ImageLabel> = [];
+		for (const id of list) {
+			const probe = new Instance("ImageLabel");
+			probe.Image = id;
+			probe.Parent = holder;
+			probes.push(probe);
 		}
-		if (missing.size() === 0) return;
+		const missing: Array<string> = [];
+		pcall(() =>
+			ContentProvider.PreloadAsync(probes, (id: string, status: Enum.AssetFetchStatus) => {
+				if (status !== Enum.AssetFetchStatus.Success) missing.push(id);
+			}),
+		);
+		holder.Destroy();
+		return missing;
+	};
 
-		if (missing.size() >= ids.size()) {
-			// none of them arrived twice over: the uploads themselves are unavailable
-			warn(`[ui] skin textures unavailable (${missing.size()}/${ids.size()}): falling back to the flat UI`);
-			disableSkin();
-			return;
-		}
+	let missing = fetchMissing(ids);
+	if (missing.size() > 0) {
+		task.wait(RETRY_DELAY);
+		missing = fetchMissing(missing);
+	}
+	if (missing.size() === 0) return { total: ids.size(), missing: 0 };
+
+	if (missing.size() >= ids.size()) {
+		// none of them arrived twice over: the uploads themselves are unavailable
+		warn(`[ui] skin textures unavailable (${missing.size()}/${ids.size()}): falling back to the flat UI`);
+		disableSkin();
+	} else {
 		// some arrived: keep the skin, the rest draw as soon as the engine gets them
 		warn(`[ui] ${missing.size()}/${ids.size()} skin textures are slow; keeping the skin`);
-	});
+	}
+	return { total: ids.size(), missing: missing.size() };
 }
 
 // ---------------------------------------------------------------- surface recipes

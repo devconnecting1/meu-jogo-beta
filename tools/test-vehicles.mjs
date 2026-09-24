@@ -782,7 +782,8 @@ section("B6. noise: the motorcycle's engine and horn are an event the horde hear
 		});
 		const sp = addPlayer(sim, 0, 3000, 3000, fueled(40));
 		park(world, item, 3000, 3040);
-		const z = createZombie(1, 3350, 3000, 1, false);
+		// 250 u off, well inside the idle ring of 400 even after an idle walker's wander (IA-03) in the time it spreads
+		const z = createZombie(1, 3250, 3000, 1, false);
 		z.detect = false;
 		z.angle = 0; // facing away
 		sim.horde.zombies.push(z);
@@ -795,10 +796,20 @@ section("B6. noise: the motorcycle's engine and horn are an event the horde hear
 	const engine = moto.noises.filter(n => n.source === "engine");
 	check(engine.length >= 5, "the idling motorcycle rings every half second", `${engine.length} rings in 3 s`);
 	checkEq(engine[0]?.radius, MOTO.noiseIdle, `...a ring of ${MOTO.noiseIdle} u at idle`);
-	check(moto.z.detect === true, "a walker 350 u away behind a wall hears it and comes to look");
+	// IA-03: a noise says where it came from, never where you are -- the walker goes to look (suspicious or searching),
+	// and only its eyes would make that a chase
+	check(
+		(moto.z.aware ?? 0) >= 1,
+		"a walker 250 u away behind a wall hears it and comes to look",
+		`aware ${moto.z.aware ?? 0}`,
+	);
 	const bike = hear(21);
 	check(bike.noises.filter(n => n.source === "engine").length === 0, "the bicycle has no engine");
-	check(bike.z.detect !== true, "...and the same walker never notices the stopped bicycle");
+	check(
+		(bike.z.aware ?? 0) === 0 && bike.z.detect !== true,
+		"...and the same walker never notices the stopped bicycle",
+		`aware ${bike.z.aware ?? 0}`,
+	);
 	// full throttle: the ring grows with speed
 	const { world, sim, noises } = serverWith({ width: 20000 });
 	const sp = addPlayer(sim, 0, 1000, 2000, fueled(40));
@@ -1097,8 +1108,10 @@ section(
 			d.tick(0, 0, PRESS_E);
 			d.ticks(90, 1, 0);
 			sim.horde.zombies.length = 0;
-			const z = createZombie(1, sp.state.x + 300, 3000, 1, false);
+			const z = createZombie(1, sp.state.x + 300, sp.state.y, 1, false);
 			z.hp = 5;
+			// held in the rider's lane (an idle walker wanders since IA-03): the question is the credit, not the aim
+			z.stunned = 1e6;
 			sim.horde.zombies.push(z);
 			for (let i = 0; i < 90 && sim.vehicles.riding(0); i++) d.tick(1, 0);
 			const a = save.achievements;

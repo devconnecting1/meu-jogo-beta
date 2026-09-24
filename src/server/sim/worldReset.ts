@@ -93,6 +93,12 @@ export interface EndWorldOptions {
 	/** seconds, for measuring the generator (os.clock on the server); omitted = not measured */
 	clock?: () => number;
 	/**
+	 * Handed to `generateTown`, which calls it between two buildings' interiors: the host yields there when a frame's
+	 * share of the work is spent (server/net/mpHost.ts), so a new town costs no stall. It cannot change the town, and
+	 * nothing has changed yet while it runs; a throw from it abandons the reset (step 3) and the old world goes on.
+	 */
+	pace?: () => void;
+	/**
 	 * Called the moment the simulation stands in the new town, BEFORE anything else happens: from then on the reset
 	 * is committed whatever fails after it, so the host names the town the simulation runs (its seed, the Workspace
 	 * attribute) there and then (review of de4ba1e, N2).
@@ -137,7 +143,8 @@ export function pickTownSeed(previous: number, roll: () => number = () => rndInt
 
 /**
  * The world `current` ends, as `report` (life.ts rule 6) says, and a new one begins — the five steps at the top of
- * this file, in that order. Returns what happened; nothing here waits for anything.
+ * this file, in that order. Returns what happened; nothing here waits for anything but `options.pace`, while the new
+ * town is generated and before anything has changed.
  */
 export function endWorld(
 	parts: WorldParts,
@@ -159,7 +166,7 @@ export function endWorld(
 		wholeIn(requested, 1, TOWN_SEED_MAX) && requested !== current.seed ? requested : pickTownSeed(current.seed);
 	const clock = options.clock;
 	const t0 = clock !== undefined ? clock() : 0;
-	const world = generateTown(seed);
+	const world = generateTown(seed, options.pace);
 	const generateMs = clock !== undefined ? math.floor((clock() - t0) * 1000 + 0.5) : 0;
 	const mapHash = mapHashOf(world);
 	// everything that can fail comes first, and changes nothing until it has all succeeded (step 3): a throw from

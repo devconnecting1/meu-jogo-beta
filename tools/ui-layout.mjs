@@ -138,6 +138,25 @@ export function layout(ui, root, screen, passes = 3) {
 	}
 }
 
+/**
+ * Lays out the game's three ScreenGuis (client/bootstrap.ts) as the engine does: each in the rect its ScreenInsets gives
+ * (GuiService:GetInsetArea, the shim's model of it) -- the world's (None) from the screen's corner, the HUD's and the
+ * menus' (DeviceSafeInsets) from the device safe area's. Rects come back in the WHOLE screen's pixels, so what the world
+ * draws and what the HUD draws can be compared directly.
+ */
+export function layoutGame(ui, ctx, passes = 3) {
+	const gs = ui.service("GuiService");
+	const none = gs.GetInsetArea(Enum.ScreenInsets.None);
+	const boxOf = gui => {
+		const r = gs.GetInsetArea(gui.ScreenInsets ?? Enum.ScreenInsets.CoreUISafeInsets);
+		return { x: r.Min.X - none.Min.X, y: r.Min.Y - none.Min.Y, w: r.Width, h: r.Height };
+	};
+	for (let i = 0; i < passes; i++) {
+		for (const gui of [ctx.screen, ctx.hudGui, ctx.uiGui]) place(gui, boxOf(gui));
+		ui.flush();
+	}
+}
+
 /** the rect the last `layout` gave `g`, in screen pixels */
 export function rectOf(g) {
 	const p = g.AbsolutePosition;
