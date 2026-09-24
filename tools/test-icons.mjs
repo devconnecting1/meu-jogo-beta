@@ -201,7 +201,8 @@ section("1) the atlas: manifest, PNG and itemIconAtlas.ts agree; each cell is it
 
 const FAKE = "rbxassetid://910000001";
 const manifest = JSON.parse(readFileSync(join(ART_DIR, "manifest.json"), "utf8"));
-const entry = manifest.textures.find(t => t.kind === "atlas");
+// the item icons' atlas by its name: the town has other atlases (furniture, blood, the trees of VEG-06)
+const entry = manifest.textures.find(t => t.kind === "atlas" && t.name === "itemIcons");
 const { ICON_ATLAS_CELLS, ICON_ATLAS_W, ICON_ATLAS_H } = require(join(SRC, "client/ui/itemIconAtlas.ts"));
 const png = readFileSync(join(ART_DIR, entry?.file ?? "itemIcons.png"));
 const atlasImg = decodePNG(png);

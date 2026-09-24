@@ -1,5 +1,25 @@
 import { COLORS, Z } from "shared/engine/colors";
 import { DESIGN, TOWN } from "shared/engine/constants";
+import {
+	GROVE_COMPANION,
+	GROVE_DEAD,
+	GROVE_EDGE_SHRUB,
+	STREET_DEAD,
+	STREET_OTHER,
+	STREET_YOUNG,
+	TREE_DEAD,
+	TREE_LOOKS_MAX,
+	TREE_PINE,
+	TREE_SHRUB,
+	TREE_SITE_MIX,
+	TREE_SPECIES,
+	TREE_TWIN_CLEAR,
+	TREE_TWIN_NEAR,
+	TREE_YOUNG,
+	treeLook,
+	treeSpecies,
+} from "shared/data/trees";
+import type { TreeSite } from "shared/data/trees";
 import { chance, rnd, rndInt, rndRange } from "shared/engine/rng";
 import { Vec2, v2 } from "shared/engine/vec2";
 import { DYNAMIC_ID_BASE } from "shared/net/mpConfig";
@@ -118,8 +138,12 @@ export interface Solid {
 	 * was abandoned mid-fill (the hose in its tank, the driver's door open).
 	 */
 	face?: DoorSide;
+	/**
+	 * furniture, a prop, a car at a pump: see above. A tree: its look, `species * TREE_LOOKS_MAX + look`
+	 * (shared/data/trees.ts, VEG-06) -- libm-free, the same on the server and every client (MP-26).
+	 */
 	variant?: number;
-	/** tree only: visual canopy radius */
+	/** tree only: visual canopy radius (its species' range, shared/data/trees.ts) */
 	canopyR?: number;
 	/** tree, a gas station's canopy and its price sign: the renderer-eased opacity (see-through with a body under it) */
 	canopyAlpha?: number;
@@ -575,6 +599,25 @@ export function smallCos(a: number): number {
 export function hash01(x: number, y: number, salt = 0): number {
 	const n = math.sin(x * 12.9898 + y * 78.233 + salt * 37.719) * 43758.5453;
 	return n - math.floor(n);
+}
+
+/** a prime under 2^26: the square of anything below it stays under 2^53, exact in every double */
+const TREE_P = 67108859;
+
+/**
+ * An exact 0..1 hash of a point, for the trees (VEG-06): integer steps only -- two squares and three multiplies, each
+ * modulo a prime, every intermediate under 2^53 -- so it is the same number on every platform, unlike `hash01`, which
+ * goes through the libm. A tree's species and look ride on it, and they are part of the solid (its `variant`), which
+ * the server and every client must build to the bit (MP-26, npm run test:seed). Non-linear on purpose: a street's
+ * trees stand at a regular pitch, and a linear hash of a regular lattice is a regular pattern again.
+ */
+export function treeHash(x: number, y: number, salt: number): number {
+	let s = (math.floor(x) * 7919 + math.floor(y) * 4099 + salt * 104729 + 12345) % TREE_P;
+	s = (s * s + 7) % TREE_P;
+	s = (s * 48271 + 11) % TREE_P;
+	s = (s * s + 13) % TREE_P;
+	s = (s * 16807 + 17) % TREE_P;
+	return s / TREE_P;
 }
 
 /** Dead Town colour recipe: make_colour_hsv(floor(irandom(250)/10)*10, 70, 190) */
@@ -1652,10 +1695,72 @@ function placeCivic(g: Gen, lot: Lot, def: BuildingDef, edges: Array<LotEdge>): 
 	return false;
 }
 
-function addTree(w: WorldData, cx: number, cy: number): void {
+// ---- trees (VEG-06, shared/data/trees.ts): what each one is, drawn from where it stands and never from the town's
+// stream -- so choosing them moves nothing else of the town
+
+/** one of `weights` (a TREE_SITE_MIX row), picked by `h` in 0..1 */
+function pickSpecies(weights: ReadonlyArray<number>, h: number): number {
+	let total = 0;
+	for (const x of weights) total += x;
+	let r = h * total;
+	let last = 0;
+	for (let i = 0; i < weights.size(); i++) {
+		if (weights[i] <= 0) continue;
+		last = i;
+		r -= weights[i];
+		if (r < 0) return i;
+	}
+	return last;
+}
+
+/** a colour of the palette by its name (shared/data/trees.ts names its tints so) */
+function paletteColor(name: string): Color3 {
+	return (COLORS as unknown as Record<string, Color3>)[name] ?? COLORS.treeLeaf;
+}
+
+const twinScratch: Array<Solid> = [];
+
+/**
+ * The look of a new tree of species `sp` at (cx, cy) (VEG-06): never one a tree of its kind already has within
+ * TREE_TWIN_NEAR while another look is free there; among those, the one its kind's trees within TREE_TWIN_CLEAR use
+ * least (each counting by 1 / its distance squared: under 1/3600 each, so a near twin always weighs more than every far
+ * one together), starting from the look its spot hashes to. Exact arithmetic only (no libm, no Map).
+ */
+function freeLook(w: WorldData, cx: number, cy: number, sp: number): number {
+	const looks = TREE_SPECIES[sp].looks;
+	const first = math.min(looks - 1, math.floor(treeHash(cx, cy, 2) * looks));
+	const R = TREE_TWIN_CLEAR;
+	twinScratch.clear();
+	querySolids(w, cx - R, cy - R, cx + R, cy + R, twinScratch);
+	const crowd: Array<number> = [];
+	for (let i = 0; i < looks; i++) crowd.push(0);
+	for (const s of twinScratch) {
+		if (s.kind !== "tree" || s.variant === undefined || treeSpecies(s.variant) !== sp) continue;
+		const dx = s.x + s.w / 2 - cx;
+		const dy = s.y + s.h / 2 - cy;
+		const d2 = dx * dx + dy * dy;
+		if (d2 > R * R) continue;
+		crowd[treeLook(s.variant)] += (d2 < TREE_TWIN_NEAR * TREE_TWIN_NEAR ? 1 : 0) + 1 / math.max(3600, d2);
+	}
+	let best = first;
+	for (let k = 1; k < looks; k++) {
+		const look = (first + k) % looks;
+		if (crowd[look] < crowd[best]) best = look;
+	}
+	return best;
+}
+
+/**
+ * A tree centred at (cx, cy), planted at `site`: its species (`species`, or the site's mix), its look (`freeLook`), its
+ * crown's size in the species' range and one of its greens (VEG-06). The solid is what it always was: the 44 u trunk
+ * (TOWN.TREE_TRUNK), whatever grows on it.
+ */
+function addTree(w: WorldData, cx: number, cy: number, site: TreeSite, species?: number): Solid {
 	const t = TOWN.TREE_TRUNK;
-	const h = hash01(cx, cy, 5);
-	addSolid(w, {
+	const sp = species ?? pickSpecies(TREE_SITE_MIX[site], treeHash(cx, cy, 1));
+	const def = TREE_SPECIES[sp];
+	const k = def.tints[math.min(def.tints.size() - 1, math.floor(treeHash(cx, cy, 4) * def.tints.size()))];
+	return addSolid(w, {
 		kind: "tree",
 		x: cx - t / 2,
 		y: cy - t / 2,
@@ -1665,18 +1770,42 @@ function addTree(w: WorldData, cx: number, cy: number): void {
 		hpMax: 100,
 		destructible: true,
 		tags: "tree",
-		canopyR: TOWN.CANOPY_R_MIN + math.floor(h * (TOWN.CANOPY_R_MAX - TOWN.CANOPY_R_MIN + 1)),
+		canopyR: def.rMin + math.floor(treeHash(cx, cy, 3) * (def.rMax - def.rMin + 1)),
 		canopyAlpha: 1,
-		tint: COLORS.treeLeaf.Lerp(COLORS.treeLeafLight, hash01(cx, cy, 9) * 0.6),
+		tint: paletteColor(k[0]).Lerp(paletteColor(k[1]), k[2]),
+		variant: sp * TREE_LOOKS_MAX + freeLook(w, cx, cy, sp),
 	});
 }
 
 /** tree trunk centred at (cx, cy) with `pad` of walkable space around it */
-function tryTree(g: Gen, cx: number, cy: number, pad: number, allowRoad = false): boolean {
+function tryTree(
+	g: Gen,
+	cx: number,
+	cy: number,
+	pad: number,
+	site: TreeSite,
+	species?: number,
+	allowRoad = false,
+): boolean {
 	const t = TOWN.TREE_TRUNK;
 	if (!g.placer.canPlace(cx - t / 2, cy - t / 2, t, t, pad, allowRoad)) return false;
-	addTree(g.w, cx, cy);
+	addTree(g.w, cx, cy, site, species);
 	return true;
+}
+
+/**
+ * A planted street's tree (a verge, a pit, a median): the street's species -- one per street, both sides alike, from
+ * its index and the town -- but for a young one where one was lost, now and then another kind and, off downtown,
+ * rarely one that died (APO-01: a few).
+ */
+function streetSpecies(g: Gen, site: TreeSite, road: number, cx: number, cy: number): number {
+	const mix = TREE_SITE_MIX[site];
+	const main = pickSpecies(mix, treeHash(road * 131 + 7, g.townSeed % 1000003, 21));
+	const roll = treeHash(cx, cy, 22);
+	if (roll < STREET_YOUNG) return TREE_YOUNG;
+	if (site !== "pit" && roll < STREET_YOUNG + STREET_DEAD) return TREE_DEAD;
+	if (roll < STREET_YOUNG + STREET_DEAD + STREET_OTHER) return pickSpecies(mix, treeHash(cx, cy, 23));
+	return main;
 }
 
 /** usable [u0,u1] of an edge's service strip: one car length (+ the trunk) clear of each street corner */
@@ -1770,23 +1899,181 @@ function streetTrees(g: Gen, lot: Lot): void {
 			if (pits) {
 				lot.ground.push({ ...edgeRect(e, u - 32, u + 32, 2, TOWN.VERGE - 2), kind: "pit" });
 			}
-			if (g.rng.chance(pits ? 0.55 : 0.85)) addTree(g.w, c.x, c.y);
+			if (g.rng.chance(pits ? 0.55 : 0.85)) {
+				const site: TreeSite = pits ? "pit" : "street";
+				addTree(g.w, c.x, c.y, site, streetSpecies(g, site, e.road, c.x, c.y));
+			}
 		}
 	}
 }
 
-/** Trees in yards, parks, plazas and vacant corners: most of the town's trees. */
+/** what grows in a lot's yard on its own (VEG-06): a downtown planter, a school's grounds, a plaza, a house's yard */
+function yardSite(lot: Lot): TreeSite {
+	if (lot.kind === "plaza") return "plaza";
+	if (lot.zone === "commercial") return "shop";
+	if (lot.zone === "civic") return "civic";
+	return "yard";
+}
+
+/** Trees in yards, plazas and vacant corners: most of the town's trees (a park's are `parkTrees`). */
 function yardTrees(g: Gen, lot: Lot, n: number, pad: number): void {
 	const yard = lot.yard;
+	const site = yardSite(lot);
 	let placedTrees = 0;
 	for (let attempt = 0; attempt < n * 6 && placedTrees < n; attempt++) {
 		const cx = snap8(yard.x + 56 + g.rng.next() * math.max(1, yard.w - 112));
 		const cy = snap8(yard.y + 56 + g.rng.next() * math.max(1, yard.h - 112));
-		if (tryTree(g, cx, cy, pad)) {
+		if (tryTree(g, cx, cy, pad, site)) {
 			placedTrees++;
 			// downtown yards are paved: the tree grows in a planter
 			if (lot.zone === "commercial") lot.ground.push({ x: cx - 36, y: cy - 36, w: 72, h: 72, kind: "pit" });
 		}
+	}
+}
+
+/**
+ * How many trees `yardTrees(g, lot, n, pad)` would plant here -- with exactly its draws from the town's stream -- but
+ * planting none: a trunk it would have planted is only remembered, and a later one must keep clear of it as it would
+ * of the planted tree (querySolids' own test). `parkTrees` lays the park out in groves from its own stream; drawing
+ * this from the town's keeps that stream, and so every car, lawn patch and yard tree drawn after a park, exactly where
+ * this seed always had it (the validated towns, the goldens: tools/golden/world-flat.json `noTrees`).
+ */
+function scatterDry(g: Gen, lot: Lot, n: number, pad: number): number {
+	const yard = lot.yard;
+	const t = TOWN.TREE_TRUNK;
+	const ghosts: Array<Rect> = [];
+	for (let attempt = 0; attempt < n * 6 && ghosts.size() < n; attempt++) {
+		const cx = snap8(yard.x + 56 + g.rng.next() * math.max(1, yard.w - 112));
+		const cy = snap8(yard.y + 56 + g.rng.next() * math.max(1, yard.h - 112));
+		const x = cx - t / 2;
+		const y = cy - t / 2;
+		if (!g.placer.canPlace(x, y, t, t, pad)) continue;
+		let free = true;
+		for (const q of ghosts) {
+			if (q.x < x + t + pad && q.x + q.w > x - pad && q.y < y + t + pad && q.y + q.h > y - pad) {
+				free = false;
+				break;
+			}
+		}
+		if (free) ghosts.push({ x, y, w: t, h: t });
+	}
+	return ghosts.size();
+}
+
+/** a park's own stream (`parkTrees`): from the town's seed and where the park lies, never from the town's stream */
+function parkSeed(town: number, lot: Lot): number {
+	const a = (math.floor(lot.x) * 7919 + math.floor(lot.y) * 104729 + 49999) % 2147483647;
+	return ((a + (math.floor(math.abs(town)) % 1000003) * 131) % 2147483646) + 1;
+}
+
+/** a park's grove (`parkTrees`) */
+interface Grove {
+	x: number;
+	y: number;
+	/** how far its trees stand from its middle */
+	rad: number;
+	/** its kind of tree */
+	sp: number;
+	/** the walkable space kept round each trunk in it: trees closer in one grove than in another (40 lets a body by) */
+	pad: number;
+}
+
+/** trees standing closer than this to a park tree make it a dense spot: its green darker */
+const PARK_DENSE_R = 240;
+
+/**
+ * A park's trees (VEG-03, VEG-06): as many as the uniform scatter would have planted (`scatterDry`), laid out as a
+ * real park grows -- three to five groves, each a stand of one kind (oaks, limes, pines...) with its own spacing and
+ * its trees thicker towards its middle, a companion of another kind here and there, a shrub or two at its edge, rarely
+ * a dead one -- and a fifth of them loners on the open lawn between the groves. The greens are darker where the trees
+ * stand thick. All from the park's own stream (`parkSeed`) and exact arithmetic (a grove's spread is a sum of
+ * uniforms, not an angle): the server and every client lay the same park (MP-26).
+ */
+function parkTrees(g: Gen, lot: Lot, n: number, pad: number): void {
+	const count = scatterDry(g, lot, n, pad);
+	const yard = lot.yard;
+	const r = new TownRng(parkSeed(g.townSeed, lot));
+	r.next();
+	r.next();
+	const groves: Array<Grove> = [];
+	const k = r.int(3, 5);
+	for (let i = 0; i < k; i++) {
+		groves.push({
+			x: yard.x + 150 + r.next() * math.max(1, yard.w - 300),
+			y: yard.y + 150 + r.next() * math.max(1, yard.h - 300),
+			rad: r.range(130, 240),
+			sp: pickSpecies(TREE_SITE_MIX.park, r.next()),
+			pad: r.int(40, 56),
+		});
+	}
+	const loners = math.floor(count * 0.2);
+	const t = TOWN.TREE_TRUNK;
+	const inYard = (cx: number, cy: number) =>
+		cx >= yard.x + 56 && cx <= yard.x + yard.w - 56 && cy >= yard.y + 56 && cy <= yard.y + yard.h - 56;
+	const planted: Array<Solid> = [];
+	// one dead tree a park at most (APO-01: a few in the whole town)
+	let dead = false;
+	for (let attempt = 0; attempt < count * 40 && planted.size() < count; attempt++) {
+		const lone = planted.size() >= count - loners || attempt >= count * 30;
+		let cx: number;
+		let cy: number;
+		let keep = 72;
+		let sp: number;
+		if (lone) {
+			cx = snap8(yard.x + 56 + r.next() * math.max(1, yard.w - 112));
+			cy = snap8(yard.y + 56 + r.next() * math.max(1, yard.h - 112));
+			sp = pickSpecies(TREE_SITE_MIX.park, r.next());
+		} else {
+			const gr = groves[r.int(0, k - 1)];
+			// thicker towards the middle: the sum of two uniforms
+			const dx = (r.next() + r.next() - 1) * gr.rad;
+			const dy = (r.next() + r.next() - 1) * gr.rad;
+			cx = snap8(gr.x + dx);
+			cy = snap8(gr.y + dy);
+			keep = gr.pad;
+			// where two groves meet, a tree is the kind of the one whose middle is nearer: stands of one kind, not a mix
+			let home = gr;
+			let best = dx * dx + dy * dy;
+			for (const o of groves) {
+				const ox = gr.x + dx - o.x;
+				const oy = gr.y + dy - o.y;
+				if (ox * ox + oy * oy < best) {
+					best = ox * ox + oy * oy;
+					home = o;
+				}
+			}
+			const roll = r.next();
+			const edge = best > home.rad * home.rad * 0.3;
+			if (roll < GROVE_DEAD && !dead) sp = TREE_DEAD;
+			else if (edge && roll < GROVE_DEAD + GROVE_EDGE_SHRUB) sp = TREE_SHRUB;
+			else if (roll > 1 - GROVE_COMPANION) sp = pickSpecies(TREE_SITE_MIX.park, r.next());
+			else sp = home.sp;
+		}
+		if (!inYard(cx, cy)) continue;
+		if (!g.placer.canPlace(cx - t / 2, cy - t / 2, t, t, keep)) continue;
+		if (sp === TREE_DEAD) dead = true;
+		planted.push(addTree(g.w, cx, cy, "park", sp));
+	}
+	// Rarely the groves and the lawn run out of tries before the scatter's count (a park whose playground and court
+	// take the open quarters): the rest go on the first free spots of the lawn, row by row, still a body's width apart
+	// -- so the park always plants exactly the scatter's count and every id after it stays where it was
+	for (let y = yard.y + 56; planted.size() < count && y <= yard.y + yard.h - 56; y += 8) {
+		for (let x = yard.x + 56; planted.size() < count && x <= yard.x + yard.w - 56; x += 8) {
+			if (g.placer.canPlace(x - t / 2, y - t / 2, t, t, 40)) planted.push(addTree(g.w, x, y, "park"));
+		}
+	}
+	// the dense spots darker: each crown's green towards the dark by how many trees stand round it
+	for (const s of planted) {
+		const sp = treeSpecies(s.variant ?? 0);
+		if (sp === TREE_DEAD || s.tint === undefined) continue;
+		let near = 0;
+		for (const o of planted) {
+			const dx = o.x - s.x;
+			const dy = o.y - s.y;
+			if (o !== s && dx * dx + dy * dy < PARK_DENSE_R * PARK_DENSE_R) near++;
+		}
+		const dark = sp === TREE_PINE ? COLORS.treePineDark : COLORS.treeLeafDark;
+		s.tint = s.tint.Lerp(dark, math.min(0.4, 0.08 + near * 0.07));
 	}
 }
 
@@ -2239,7 +2526,7 @@ function buildCampus(
 	for (const t of q.trees) {
 		let clear = true;
 		for (const c of g.placer.bossClear) if (circleHitsRect(c, t.x - 22, t.y - 22, 44, 44)) clear = false;
-		if (clear) addTree(w, t.x, t.y);
+		if (clear) addTree(w, t.x, t.y, "quad");
 	}
 	// --- the verges, ramps and paved cuts of the block's sidewalks, again, round the campus's own entrances
 	sidewalkGround(g, lot);
@@ -3010,12 +3297,12 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 				k++;
 				const cx = road.vertical ? m.x + m.w / 2 : u;
 				const cy = road.vertical ? u : m.y + m.h / 2;
-				if (rng.chance(0.9)) tryTree(g, cx, cy, 16, true);
+				if (rng.chance(0.9)) tryTree(g, cx, cy, 16, "median", streetSpecies(g, "median", idx, cx, cy), true);
 			}
 		}
 	}
 	for (const lot of w.lots) {
-		if (lot.kind === "park") yardTrees(g, lot, rng.int(20, 30), 56);
+		if (lot.kind === "park") parkTrees(g, lot, rng.int(20, 30), 56);
 		else if (lot.kind === "plaza") yardTrees(g, lot, rng.int(10, 16), 56);
 		else if (lot.zone === "commercial") yardTrees(g, lot, rng.int(0, 2), 72);
 		else if (lot.zone === "civic") yardTrees(g, lot, rng.int(2, 5), 64);

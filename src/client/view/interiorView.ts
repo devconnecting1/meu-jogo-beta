@@ -22,6 +22,8 @@ import type { Decor, FloorKind, Opening } from "shared/game/interiors";
 import { Solid, WorldData } from "shared/game/world";
 import { windowIntact } from "shared/game/windows";
 import { overlaps, SIDES } from "./drawKit";
+import { EntranceArt } from "./entranceArt";
+import { entranceStyle, FlatRect } from "./entrances";
 import { InteriorArt } from "./interiorArt";
 
 const BLACK = COLORS.shadow;
@@ -45,7 +47,6 @@ const WALL_INNER_HOUSE = COLORS.wallHouse.Lerp(WHITE, 0.18);
 const WALL_INNER_SHOP = COLORS.wallShop.Lerp(WHITE, 0.18);
 const GLASS_DARK = COLORS.carGlass;
 const BLOOD_DRY = COLORS.blood.Lerp(BLACK, 0.35);
-const MAT = COLORS.doormat;
 const RUG_BORDER = COLORS.rug.Lerp(COLORS.goodsC, 0.35);
 /** a notice board's cork, and the reagent bottles on a lab's shelves (EDI-17) */
 const CORK = COLORS.furnWood.Lerp(COLORS.goodsC, 0.35);
@@ -127,10 +128,13 @@ export class InteriorView {
 	private parentsFor?: WorldData;
 	/** the pixel-art drawing of all of it, used where its textures have ids (ART-01) */
 	readonly art = new InteriorArt();
+	/** the doors and entrances in pixel art (ART-17), where the entrances' atlas has an id */
+	readonly entrances = new EntranceArt();
 
 	/** the world the frame's interiors are drawn in (worldView, once per frame): the art's plans are per world */
 	useWorld(world: WorldData): void {
 		this.art.useWorld(world);
+		this.entrances.useWorld(world);
 	}
 
 	/** the building a wall, window or piece of furniture belongs to */
@@ -581,24 +585,27 @@ export class InteriorView {
 	/**
 	 * The frames of the building's openings, seen from inside: a threshold under a doorway, a window with its glass in
 	 * or broken (EDI-18) and, under a broken one, the glass on the floor. Each is the interiors' atlas cell when that is
-	 * uploaded (client/view/interiorArt.ts: the pane or the empty frame, and the shards) and these Frames otherwise.
+	 * uploaded (client/view/interiorArt.ts: the pane or the empty frame, and the shards) and these Frames otherwise; an
+	 * outside door is first its entrance's frame and the leaves pinned inside (ART-17, ./entranceArt.ts).
 	 */
 	drawOpenings(r: Renderer, cam: Camera, b: Solid, v: ViewRect): void {
 		const list = b.openings;
 		if (list === undefined) return;
 		for (const o of list) {
-			// a window's shards lie up to ~40 u off its sill: the frame is culled with them
-			const m = o.kind === "window" ? 40 : 8;
+			// a window's shards lie up to ~40 u off its sill, a door's leaves pinned inside (with the entrances' art) ~60 u
+			// along its wall: the frame is culled with them
+			const m = o.kind === "window" ? 40 : o.kind === "door" && this.entrances.live() !== undefined ? 64 : 8;
 			if (!overlaps(o.x - m, o.y - m, o.w + 2 * m, o.h + 2 * m, v)) continue;
-			this.drawOpening(r, cam, o);
+			this.drawOpening(r, cam, b, o);
 		}
 	}
 
-	private drawOpening(r: Renderer, cam: Camera, o: Opening): void {
+	private drawOpening(r: Renderer, cam: Camera, b: Solid, o: Opening): void {
 		const cx = o.x + o.w / 2;
 		const cy = o.y + o.h / 2;
 		const along = o.w >= o.h;
 		if (o.kind !== "window") {
+			if (o.kind === "door" && this.entrances.doorway(r, cam, b, o)) return;
 			if (this.art.opening(r, cam, o)) return;
 			// a threshold strip across a doorway
 			const t = o.kind === "door" ? COLORS.furnDark : COLORS.furnWood;
@@ -672,31 +679,48 @@ export class InteriorView {
 		}
 	}
 
-	/** a doormat outside every door of the building: the entrances read with the roof on */
-	drawDoormats(r: Renderer, cam: Camera, b: Solid, v: ViewRect, step: Color3 | undefined): void {
+	/**
+	 * The entrance outside every door of the building, read with the roof on (ART-17): its pixel art where the
+	 * entrances' atlas has an id (./entranceArt.ts: the stoop, the leaves pinned outside...), else flat -- the thing
+	 * on the ground (a step, a mat, a ramp, the steps, a bay's hazard paint) and the one detail that says which entrance
+	 * it is (the coir mat, the aluminium nosing, the yellow warning strip...): two Frames at most (ART-16's budget).
+	 */
+	drawEntrances(r: Renderer, cam: Camera, b: Solid, v: ViewRect): void {
 		const list = b.openings;
 		if (list === undefined) return;
-		const off = TOWN.WALL_T / 2 + 14;
+		const bt = b.buildingType ?? 1;
 		for (const o of list) {
 			if (o.kind !== "door") continue;
+			if (this.entrances.outside(r, cam, b, o, v)) continue;
 			const nx = normalX(o.side);
 			const ny = normalY(o.side);
-			const cx = o.x + o.w / 2 + nx * off;
-			const cy = o.y + o.h / 2 + ny * off;
-			if (!overlaps(cx - 80, cy - 80, 160, 160, v)) continue;
-			const across = nx !== 0;
-			if (step !== undefined) {
-				const so = edged(
-					flat(across ? 20 : o.w + 20, across ? o.h + 20 : 20, step, Z.floorDetail),
-					BLACK,
-					0.22,
-				);
-				r.drawRect(cam, cx - nx * 4, cy - ny * 4, so);
-			}
-			const m = flat(across ? 22 : o.w - 24, across ? o.h - 24 : 22, MAT, Z.floorDetail + 1);
-			m.cornerRadius = 3;
-			r.drawRect(cam, cx, cy, m);
+			const cx = o.x + o.w / 2 + nx * (TOWN.WALL_T / 2);
+			const cy = o.y + o.h / 2 + ny * (TOWN.WALL_T / 2);
+			if (!overlaps(cx - 100, cy - 100, 200, 200, v)) continue;
+			const style = entranceStyle(bt, o.main);
+			this.drawFlatEntrance(r, cam, o, style.base, Z.floorDetail, nx, ny);
+			if (style.detail !== undefined) this.drawFlatEntrance(r, cam, o, style.detail, Z.floorDetail + 1, nx, ny);
 		}
+	}
+
+	/** one flat rect of an entrance (./entrances.ts FlatRect), outside doorway `o` whose wall faces (nx, ny) */
+	private drawFlatEntrance(
+		r: Renderer,
+		cam: Camera,
+		o: Opening,
+		f: FlatRect,
+		z: number,
+		nx: number,
+		ny: number,
+	): void {
+		const across = nx !== 0;
+		const len = (across ? o.h : o.w) + f.along;
+		const off = TOWN.WALL_T / 2 + f.off;
+		const at = f.at ?? 0;
+		const s = flat(across ? f.depth : len, across ? len : f.depth, f.color, z);
+		if (f.radius !== undefined) s.cornerRadius = f.radius;
+		if (f.edge === true) edged(s, BLACK, 0.22);
+		r.drawRect(cam, o.x + o.w / 2 + nx * off + (across ? 0 : at), o.y + o.h / 2 + ny * off + (across ? at : 0), s);
 	}
 
 	/**
@@ -709,13 +733,16 @@ export class InteriorView {
 	drawRoofMarks(r: Renderer, cam: Camera, b: Solid, a: number, eave: Color3, v: ViewRect, glint = false): void {
 		const list = b.openings;
 		if (list === undefined) return;
+		const bt = b.buildingType ?? 1;
 		for (const o of list) {
 			// only the marks in view: a big building half on screen has dozens of openings off it
 			if (o.kind === "inner" || !overlaps(o.x - 16, o.y - 16, o.w + 32, o.h + 32, v)) continue;
+			const door = o.kind === "door";
+			// a door's lintel in the entrances' art (ART-17): the house's hood, the shop's header, the bay's hood...
+			if (door && this.entrances.lintel(r, cam, b, o, a)) continue;
 			const nx = normalX(o.side);
 			const ny = normalY(o.side);
 			const across = nx !== 0;
-			const door = o.kind === "door";
 			const depth = door ? 12 : 8;
 			const intact = door || paneIntact(o);
 			// on the outer edge of the wall, inside the roof
@@ -725,7 +752,7 @@ export class InteriorView {
 			const s = flat(
 				across ? depth : o.w,
 				across ? o.h : depth,
-				door ? eave : intact ? GLASS_DARK : HOLE_DARK,
+				door ? (entranceStyle(bt, o.main).eave ?? eave) : intact ? GLASS_DARK : HOLE_DARK,
 				Z.roof + 2,
 			);
 			s.alpha = a;

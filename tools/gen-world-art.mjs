@@ -39,6 +39,10 @@
  *            And the everyday town's fixtures' (`townProps`, tools/town-prop-art.mjs, ART-16): the market's stalls,
  *            tents, crates and carts, the street's lamps, hydrants and benches, the parks' and the backyards' things,
  *            the building site's, and the ground they stand on, its cells in src/client/view/townPropAtlas.ts
+ *            And the buildings' doors (`entrances`, tools/entrance-art.mjs, ART-17): the ground outside each doorway,
+ *            the leaves of its double door, its frame and the lintel over it, its cells in src/client/view/entranceAtlas.ts
+ *            And the trees' (`trees`, tools/tree-art.mjs, VEG-06): every kind's crowns in their looks, greyscale (the
+ *            tree's green tints them), their light in a second band, and the trunk; its cells in treeAtlas.ts
  *   ui       not town art either: the game's name, LAST TOWN, in the bold pixel font of tools/title-font.mjs (the one
  *            the store art's wordmark uses, docs/promo) -- the lobby's title and the splash (client/ui/logo.ts).
  *            GREYSCALE + alpha like the UI skin: three cells stacked top to bottom (the ink -- outline and hard
@@ -62,7 +66,9 @@ import { bossArt } from "./boss-art.mjs";
 import { buildIconAtlas, loadIconData } from "./icon-atlas.mjs";
 import { furnitureArt, furnitureAtlasModule, furnitureSheet } from "./furniture-art.mjs";
 import { bloodArt, bloodAtlasModule, bloodSheet } from "./blood-art.mjs";
+import { treeArt, treeAtlasModule, treeSheet } from "./tree-art.mjs";
 import { townPropArt, townPropAtlasModule, townPropSheet } from "./town-prop-art.mjs";
+import { entranceArt, entranceAtlasModule, entranceSheet, SHEET_STYLES } from "./entrance-art.mjs";
 import { dilate, layoutText, TITLE_H } from "./title-font.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -73,8 +79,12 @@ const FURNITURE_TS_OUT = join(ROOT, "src", "client", "view", "furnitureAtlas.ts"
 const FURNITURE_SHEET = join(ROOT, "docs", "art", "furniture-sheet.png");
 const BLOOD_TS_OUT = join(ROOT, "src", "client", "view", "bloodAtlas.ts");
 const BLOOD_SHEET = join(ROOT, "docs", "art", "blood-sheet.png");
+const TREE_TS_OUT = join(ROOT, "src", "client", "view", "treeAtlas.ts");
+const TREE_SHEET = join(ROOT, "docs", "art", "tree-sheet.png");
 const TOWN_PROP_TS_OUT = join(ROOT, "src", "client", "view", "townPropAtlas.ts");
 const TOWN_PROP_SHEET = join(ROOT, "docs", "art", "town-props-sheet.png");
+const ENTRANCE_TS_OUT = join(ROOT, "src", "client", "view", "entranceAtlas.ts");
+const ENTRANCE_SHEET = join(ROOT, "docs", "art", "entrances-sheet.png");
 const SHEET = join(ROOT, "docs", "art", "world-art-sheet.png");
 /** world units per texel */
 const WORLD_TEXEL = 4;
@@ -788,84 +798,18 @@ function shadowBox() {
 // ================================================================ TREES
 
 /**
- * A canopy: a lumpy crown of leaf clusters (a "cauliflower" of spheres) in a 40 x 40 texel box. `mask` is its
- * greyscale silhouette with the leaf texture (tinted with the tree's own green, VEG-04's translucency applies
- * to it), `shade` the untinted light: highlights on the top-left of every cluster, shadow between clusters and
- * under the crown, and a dark outline.
+ * The trees' kinds are DATA in src/shared/data/trees.ts (the generator and the drawing read the same table): like the
+ * signs' module it imports nothing, so a bare transpile runs it here. Their art is tools/tree-art.mjs (one atlas).
  */
-function canopy(seed) {
-	const n = 40;
-	const c = n / 2 - 0.5;
-	const r = rng(seed);
-	const blobs = [{ x: c, y: c, rad: 10 + r() * 1.5, z: 6 }];
-	const ring = 7 + Math.floor(r() * 2);
-	const phase = r() * Math.PI * 2;
-	for (let i = 0; i < ring; i++) {
-		const a = phase + (i / ring) * Math.PI * 2 + (r() - 0.5) * 0.5;
-		const d = 9 + r() * 2.5;
-		blobs.push({ x: c + Math.cos(a) * d, y: c + Math.sin(a) * d, rad: 6.8 + r() * 2.2, z: 2 + r() * 2 });
-	}
-	for (let i = 0; i < 3; i++) {
-		const a = r() * Math.PI * 2;
-		blobs.push({ x: c + Math.cos(a) * 5, y: c + Math.sin(a) * 5, rad: 6 + r() * 1.5, z: 7 + r() * 2 });
-	}
-	const top = new Int16Array(n * n).fill(-1);
-	const height = new Float32Array(n * n).fill(-1);
-	for (let y = 0; y < n; y++) {
-		for (let x = 0; x < n; x++) {
-			for (let b = 0; b < blobs.length; b++) {
-				const o = blobs[b];
-				const d2 = (x - o.x) ** 2 + (y - o.y) ** 2;
-				if (d2 > o.rad * o.rad) continue;
-				const h = Math.sqrt(o.rad * o.rad - d2) + o.z;
-				if (h > height[y * n + x]) {
-					height[y * n + x] = h;
-					top[y * n + x] = b;
-				}
-			}
-		}
-	}
-	const inside = (x, y) => x >= 0 && y >= 0 && x < n && y < n && top[y * n + x] >= 0;
-	const mask = new Tex(n, n);
-	const shade = new Tex(n, n);
-	const L = [-0.55, -0.62, 0.56];
-	const leaf = noiseTile(n, 10, seed + 3);
-	for (let y = 0; y < n; y++) {
-		for (let x = 0; x < n; x++) {
-			if (!inside(x, y)) continue;
-			const o = blobs[top[y * n + x]];
-			// leaf clumps: two tones in the mask, so the tint shows a little texture even without the shade layer
-			const g = leaf[y * n + x] > 0.15 ? 255 : leaf[y * n + x] > -0.35 ? 238 : 222;
-			mask.set(x, y, [g, g, g]);
-			const nx = (x - o.x) / o.rad;
-			const ny = (y - o.y) / o.rad;
-			const nz = Math.sqrt(Math.max(0, 1 - nx * nx - ny * ny));
-			let lam = nx * L[0] + ny * L[1] + nz * L[2];
-			// a texel of a lower cluster just below/right of a higher one is in that one's shadow
-			const ux = Math.round(x - 1.6);
-			const uy = Math.round(y - 1.6);
-			if (inside(ux, uy) && height[uy * n + ux] > height[y * n + x] + 2.2) lam -= 0.45;
-			const dither = (x + y) % 2 === 0 ? 0.04 : -0.04;
-			const v = lam + dither;
-			if (v > 0.8) shade.set(x, y, WHITE, 78);
-			else if (v > 0.6) shade.set(x, y, WHITE, 34);
-			else if (v > 0.35) {
-				// the plain foliage colour
-			} else if (v > 0.12) shade.set(x, y, BLACK, 46);
-			else shade.set(x, y, BLACK, 92);
-		}
-	}
-	// outline: every edge texel, darker on the lower right (the side away from the light)
-	for (let y = 0; y < n; y++) {
-		for (let x = 0; x < n; x++) {
-			if (!inside(x, y)) continue;
-			const edge = !inside(x - 1, y) || !inside(x + 1, y) || !inside(x, y - 1) || !inside(x, y + 1);
-			if (!edge) continue;
-			const lowerRight = !inside(x + 1, y) || !inside(x, y + 1);
-			shade.set(x, y, BLACK, lowerRight ? 150 : 96);
-		}
-	}
-	return { mask, shade };
+function loadTrees() {
+	const ts = createRequire(import.meta.url)("typescript");
+	const src = readFileSync(join(ROOT, "src", "shared", "data", "trees.ts"), "utf8");
+	const js = ts.transpileModule(src, {
+		compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+	}).outputText;
+	const exports = {};
+	runInNewContext(js, { exports, module: { exports }, math: { floor: Math.floor } });
+	return exports;
 }
 
 // ================================================================ CARS
@@ -2000,11 +1944,17 @@ function build() {
 	add_("eaves", "slice", roofRim("eaves"), "pitched roof rim: drip edge and fascia", { slice: [4, 4, 8, 8] });
 	add_("parapet", "slice", roofRim("parapet"), "flat roof rim: parapet, coping, inner face", { slice: [4, 4, 8, 8] });
 	add_("shadowBox", "slice", shadowBox(), "soft rectangular drop shadow", { slice: [6, 6, 10, 10] });
-	for (let i = 0; i < 3; i++) {
-		const { mask, shade } = canopy(61 + i * 17);
-		add_(`canopy${i}`, "mask", mask, `tree crown ${i + 1}: silhouette + leaves (tint: foliage)`);
-		add_(`canopyShade${i}`, "overlay", shade, `tree crown ${i + 1}: light, shadow and outline`);
-	}
+	// the town's trees (DESIGN_RULES VEG-06): every kind in its looks, masks and their light, and the trunk
+	const species = loadTrees().TREE_SPECIES;
+	const trees = treeArt({ species });
+	const crowns = trees.cells.reduce((n, list) => n + list.length, 0);
+	add_(
+		"trees",
+		"atlas",
+		trees.atlas,
+		`trees: ${crowns} crowns of ${species.length} kinds (greyscale masks, tint: foliage; their light below) and the trunk (client/view/worldView.ts)`,
+		{ trees, species },
+	);
 	CAR_STYLES.forEach((style, i) => {
 		const art = carArt(style, 71 + i * 13);
 		add_(`car${i}`, "mask", art.mask, `${style.name}: body (tint: paint)`);
@@ -2142,6 +2092,15 @@ function build() {
 		townProps.atlas,
 		`the town's fixtures: ${townProps.report.cells} cells of market, street, park, backyard and building-site pieces and their ground (client/view/townPropArt.ts)`,
 		{ townProps },
+	);
+	// the buildings' doors and entrances (DESIGN_RULES ART-17): the stoop, the leaves, the frame, the lintel
+	const entrances = entranceArt({ C });
+	add_(
+		"entrances",
+		"atlas",
+		entrances.atlas,
+		`the buildings' entrances: ${entrances.report.cells} cells of stoops, door leaves, frames and lintels, each side baked on its own (client/view/entranceArt.ts)`,
+		{ entrances },
 	);
 	// the game's name (UI-10): the lobby's title and the splash, not the town -- uploaded with it all the same
 	const mark = wordmark();
@@ -2318,6 +2277,19 @@ function writeBloodModule() {
 	console.log(`wrote ${BLOOD_SHEET} (${sheet.w}x${sheet.h})`);
 }
 
+/** src/client/view/treeAtlas.ts and docs/art/tree-sheet.png (every crown in each of its greens, as the game draws) */
+function writeTreeModule() {
+	const t = textures.find(x => x.trees !== undefined);
+	writeFileSync(TREE_TS_OUT, treeAtlasModule(t.trees, t.name));
+	const crowns = t.trees.cells.reduce((n, list) => n + list.length, 0);
+	console.log(`wrote ${TREE_TS_OUT} (${crowns} crowns, atlas ${t.tex.w} x ${t.tex.h})`);
+	if (process.argv.includes("--no-sheet")) return;
+	const sheet = treeSheet(t.trees, drawText, C, t.species);
+	mkdirSync(dirname(TREE_SHEET), { recursive: true });
+	writeFileSync(TREE_SHEET, encodePNG(sheet, true));
+	console.log(`wrote ${TREE_SHEET} (${sheet.w}x${sheet.h})`);
+}
+
 /** src/client/view/townPropAtlas.ts and docs/art/town-props-sheet.png (every fixture in every look, magnified) */
 function writeTownPropModule() {
 	const t = textures.find(x => x.townProps !== undefined);
@@ -2330,6 +2302,20 @@ function writeTownPropModule() {
 	mkdirSync(dirname(TOWN_PROP_SHEET), { recursive: true });
 	writeFileSync(TOWN_PROP_SHEET, encodePNG(sheet, true));
 	console.log(`wrote ${TOWN_PROP_SHEET} (${sheet.w}x${sheet.h})`);
+}
+
+/** src/client/view/entranceAtlas.ts and docs/art/entrances-sheet.png (every entrance style, from the street and inside) */
+function writeEntranceModule() {
+	const t = textures.find(x => x.entrances !== undefined);
+	writeFileSync(ENTRANCE_TS_OUT, entranceAtlasModule(t.entrances, t.name));
+	console.log(
+		`wrote ${ENTRANCE_TS_OUT} (${t.entrances.report.cells} cells, ${t.entrances.report.unique} unique, atlas ${t.tex.w} x ${t.tex.h})`,
+	);
+	if (process.argv.includes("--no-sheet")) return;
+	const sheet = entranceSheet(t.entrances, drawText, C, SHEET_STYLES);
+	mkdirSync(dirname(ENTRANCE_SHEET), { recursive: true });
+	writeFileSync(ENTRANCE_SHEET, encodePNG(sheet, true));
+	console.log(`wrote ${ENTRANCE_SHEET} (${sheet.w}x${sheet.h})`);
 }
 
 /** every texture magnified on one page, labelled, tiles shown 2 x 2 so the seams can be checked */
@@ -2346,7 +2332,9 @@ function contactSheet() {
 				t.atlas === undefined &&
 				t.furniture === undefined &&
 				t.blood === undefined &&
-				t.townProps === undefined,
+				t.trees === undefined &&
+				t.townProps === undefined &&
+				t.entrances === undefined,
 		)
 		.map(t => {
 			const reps = t.kind === "tile" || t.kind === "tileTint" ? 2 : 1;
@@ -2369,14 +2357,13 @@ function contactSheet() {
 		img.data[i * 4 + 3] = 255;
 	}
 	// masks and greyscale tiles are shown tinted with a sample colour, as the game would
-	const sample = { canopy: C.treeLeaf, car: [150, 60, 60], wall: C.wallHouse, roof: [160, 70, 60] };
+	const sample = { car: [150, 60, 60], wall: C.wallHouse, roof: [160, 70, 60] };
 	let y0 = pad;
 	for (const row of rows) {
 		row.forEach((c, ci) => {
 			const t = c.t;
 			let tint = [255, 255, 255];
-			if (t.name.startsWith("canopy") && t.kind === "mask") tint = sample.canopy;
-			else if (t.name.startsWith("car") && t.kind === "mask") tint = sample.car;
+			if (t.name.startsWith("car") && t.kind === "mask") tint = sample.car;
 			else if (t.name === "wall") tint = sample.wall;
 			else if (t.kind === "tileTint") tint = sample.roof;
 			const x0 = ci * cellW + pad;
@@ -2428,7 +2415,9 @@ if (!process.argv.includes("--assets")) {
 	writeIconAtlasModule();
 	writeFurnitureModule();
 	writeBloodModule();
+	writeTreeModule();
 	writeTownPropModule();
+	writeEntranceModule();
 	console.log(`world-art: ${textures.length} textures in ${OUT_DIR} (${(bytes / 1024).toFixed(1)} kB)`);
 	if (!process.argv.includes("--no-sheet")) contactSheet();
 }

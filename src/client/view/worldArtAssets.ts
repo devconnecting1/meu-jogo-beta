@@ -46,12 +46,7 @@ export type WorldArtName =
 	| "eaves"
 	| "parapet"
 	| "shadowBox"
-	| "canopy0"
-	| "canopyShade0"
-	| "canopy1"
-	| "canopyShade1"
-	| "canopy2"
-	| "canopyShade2"
+	| "trees"
 	| "car0"
 	| "carTrim0"
 	| "carDamage0"
@@ -172,6 +167,7 @@ export type WorldArtName =
 	| "furniture"
 	| "blood"
 	| "townProps"
+	| "entrances"
 	| "wordmark";
 
 export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
@@ -235,18 +231,8 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	parapet: { id: "rbxassetid://106192217360435", w: 12, h: 12, slice: [4, 4, 8, 8] },
 	/** slice: soft rectangular drop shadow */
 	shadowBox: { id: "rbxassetid://126704842880759", w: 16, h: 16, slice: [6, 6, 10, 10] },
-	/** mask: tree crown 1: silhouette + leaves (tint: foliage) */
-	canopy0: { id: "rbxassetid://135695969741387", w: 40, h: 40 },
-	/** overlay: tree crown 1: light, shadow and outline */
-	canopyShade0: { id: "rbxassetid://112795457788106", w: 40, h: 40 },
-	/** mask: tree crown 2: silhouette + leaves (tint: foliage) */
-	canopy1: { id: "rbxassetid://94759302502078", w: 40, h: 40 },
-	/** overlay: tree crown 2: light, shadow and outline */
-	canopyShade1: { id: "rbxassetid://124845124258321", w: 40, h: 40 },
-	/** mask: tree crown 3: silhouette + leaves (tint: foliage) */
-	canopy2: { id: "rbxassetid://91170123216072", w: 40, h: 40 },
-	/** overlay: tree crown 3: light, shadow and outline */
-	canopyShade2: { id: "rbxassetid://93088950930991", w: 40, h: 40 },
+	/** atlas: trees: 41 crowns of 8 kinds (greyscale masks, tint: foliage; their light below) and the trunk (client/view/worldView.ts) */
+	trees: { id: "rbxassetid://108973533068703", w: 512, h: 266 },
 	/** mask: sedan: body (tint: paint) */
 	car0: { id: "rbxassetid://127118296635301", w: 50, h: 25 },
 	/** overlay: sedan: glass, lights, wheels, outline */
@@ -302,23 +288,23 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** sprite: manhole cover */
 	manhole: { id: "rbxassetid://96964095561833", w: 8, h: 8 },
 	/** sprite: rain puddle in a gutter: long, stepped edge (sky streaks, lit rim, wet halo) */
-	puddle0: { id: "", w: 38, h: 11 },
+	puddle0: { id: "rbxassetid://133449956224871", w: 38, h: 11 },
 	/** sprite: rain puddle in a gutter: long, stepped edge, on a vertical road */
-	puddle0V: { id: "", w: 11, h: 38 },
+	puddle0V: { id: "rbxassetid://133768820371427", w: 11, h: 38 },
 	/** sprite: rain puddle in a gutter, a small pool past its end (sky streaks, lit rim, wet halo) */
-	puddle1: { id: "", w: 30, h: 10 },
+	puddle1: { id: "rbxassetid://118856175608293", w: 30, h: 10 },
 	/** sprite: rain puddle in a gutter, a small pool past its end, on a vertical road */
-	puddle1V: { id: "", w: 10, h: 30 },
+	puddle1V: { id: "rbxassetid://89354468515095", w: 10, h: 30 },
 	/** sprite: rain puddle in a lane: a dip in the asphalt (sky streaks, lit rim, wet halo) */
-	puddle2: { id: "", w: 22, h: 14 },
+	puddle2: { id: "rbxassetid://82231774772497", w: 22, h: 14 },
 	/** sprite: rain puddle in a lane: a dip in the asphalt, on a vertical road */
-	puddle2V: { id: "", w: 14, h: 22 },
+	puddle2V: { id: "rbxassetid://103817440914774", w: 14, h: 22 },
 	/** sprite: rain puddle in a lane, a small pool before it (sky streaks, lit rim, wet halo) */
-	puddle3: { id: "", w: 32, h: 15 },
+	puddle3: { id: "rbxassetid://130785761895865", w: 32, h: 15 },
 	/** sprite: rain puddle in a lane, a small pool before it, on a vertical road */
-	puddle3V: { id: "", w: 15, h: 32 },
+	puddle3V: { id: "rbxassetid://78848680608666", w: 15, h: 32 },
 	/** sprite: a drop's ring on a puddle (4 texels) */
-	puddleDrop: { id: "", w: 3, h: 3 },
+	puddleDrop: { id: "rbxassetid://126451428508632", w: 3, h: 3 },
 	/** sprite: storm drain */
 	drain: { id: "rbxassetid://96075237212369", w: 8, h: 4 },
 	/** sprite: fuel dispenser, upright: the station sign's white cabinet, dark display, red stripe, hose and nozzle */
@@ -487,6 +473,8 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	blood: { id: "rbxassetid://138018740222052", w: 96, h: 264 },
 	/** atlas: the town's fixtures: 306 cells of market, street, park, backyard and building-site pieces and their ground (client/view/townPropArt.ts) */
 	townProps: { id: "rbxassetid://112108955248177", w: 1024, h: 662 },
+	/** atlas: the buildings' entrances: 836 cells of stoops, door leaves, frames and lintels, each side baked on its own (client/view/entranceArt.ts) */
+	entrances: { id: "rbxassetid://133379865386550", w: 1024, h: 176 },
 	/** ui: the LAST TOWN wordmark: three 86 x 13 cells top to bottom, the ink (tint: background), the fill of LAST (tint: brand) and of TOWN (tint: foreground) (client/ui/logo.ts) */
 	wordmark: { id: "rbxassetid://132745135799721", w: 86, h: 39 },
 };
@@ -523,12 +511,7 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"eaves",
 	"parapet",
 	"shadowBox",
-	"canopy0",
-	"canopyShade0",
-	"canopy1",
-	"canopyShade1",
-	"canopy2",
-	"canopyShade2",
+	"trees",
 	"car0",
 	"carTrim0",
 	"carDamage0",
@@ -649,5 +632,6 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"furniture",
 	"blood",
 	"townProps",
+	"entrances",
 	"wordmark",
 ];

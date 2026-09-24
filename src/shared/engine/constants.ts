@@ -136,10 +136,11 @@ export const TOWN = {
 	/** building wall thickness and doorway width */
 	WALL_T: 20,
 	DOOR_W: 112,
-	/** tree trunk collision (original mask_50_50) and visual canopy radius range */
+	/**
+	 * tree trunk collision (original mask_50_50), every kind of tree alike; the crowns' sizes are each kind's
+	 * (shared/data/trees.ts, VEG-06)
+	 */
 	TREE_TRUNK: 44,
-	CANOPY_R_MIN: 75,
-	CANOPY_R_MAX: 86,
 	/** street-tree spacing: one pitch per street (8.7–10.9 m), trees on both sides line up */
 	TREE_PITCH_MIN: 480,
 	TREE_PITCH_MAX: 600,
