@@ -165,6 +165,12 @@ export function preloadWorldArt(): void {
 			lost.add("blood");
 			warn("[world] the blood's atlas did not load: the blood is drawn flat");
 		}
+		// the trees' atlas (VEG-06): a crown that never arrives is a trunk that stops the body with nothing drawn on it
+		// (P3, COL-01), so the trees go back to their flat drawing
+		if (WORLD_ART.trees.id !== "" && missing.includes(WORLD_ART.trees.id)) {
+			lost.add("trees");
+			warn("[world] the trees' atlas did not load: the trees are drawn flat");
+		}
 		if (lost.size() > 0) changed();
 		warn("[world] some art textures are slow; keeping the art");
 	});

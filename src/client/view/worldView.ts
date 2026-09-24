@@ -30,6 +30,7 @@ import { Renderer, SpriteOpts } from "shared/engine/renderer";
 import { clamp } from "shared/engine/vec2";
 import type { FloorKind } from "shared/game/interiors";
 import { SIGN_ART } from "shared/data/buildingSigns";
+import { TREE_SPECIES, treeLook, treeSpecies } from "shared/data/trees";
 import {
 	DoorSide,
 	GroundRect,
@@ -53,6 +54,7 @@ import { circleInView, overlaps, part, SIDES } from "./drawKit";
 import { FLOOR_FLAT, InteriorView } from "./interiorView";
 import { artId, artSize, artSlice } from "./worldArt";
 import { WORLD_TEXEL, WorldArtName } from "./worldArtAssets";
+import { TREE_BAND_H, TREE_CELLS, TREE_TRUNK_CELL } from "./treeAtlas";
 
 const WHITE = COLORS.white;
 const BLACK = COLORS.shadow;
@@ -176,14 +178,16 @@ const CAR_BROKEN = 1;
 const CAR_BURNT = 2;
 /** car body styles in the art (sedan, hatchback, pickup, SUV) */
 const CAR_STYLES = 4;
-const CANOPY_STYLES = 3;
+/**
+ * A shrub's crown (VEG-06): lower than a person, so under every body (a survivor beside a shrub stands over its
+ * leaves; it never hides a zombie, LEG-03), over the ground and the trunks' layer's shadows; its light one layer up.
+ */
+const Z_SHRUB = Z.structure;
 /** the named textures, typed once (template strings would allocate a string per car per frame) */
 const CAR_MASK: Array<WorldArtName> = ["car0", "car1", "car2", "car3"];
 const CAR_TRIM: Array<WorldArtName> = ["carTrim0", "carTrim1", "carTrim2", "carTrim3"];
 const CAR_DAMAGE: Array<WorldArtName> = ["carDamage0", "carDamage1", "carDamage2", "carDamage3"];
 const CAR_WRECK: Array<WorldArtName> = ["carWreck0", "carWreck1", "carWreck2", "carWreck3"];
-const CANOPY_MASK: Array<WorldArtName> = ["canopy0", "canopy1", "canopy2"];
-const CANOPY_SHADE: Array<WorldArtName> = ["canopyShade0", "canopyShade1", "canopyShade2"];
 const LITTER: Array<WorldArtName> = ["litter0", "litter1", "litter2"];
 const BLOOD: Array<WorldArtName> = ["blood0", "blood1"];
 const OIL: Array<WorldArtName> = ["oil0", "oil1"];
@@ -249,6 +253,20 @@ function artOpts(id: string, w: number, h: number, z: number): SpriteOpts {
 	o.sliceY1 = undefined;
 	o.sliceScale = undefined;
 	o.pixelated = undefined;
+	o.rectX = undefined;
+	o.rectY = undefined;
+	o.rectW = undefined;
+	o.rectH = undefined;
+	return o;
+}
+
+/** `artOpts` for one square cell of an atlas: its corner (x, y) and side `n`, in texels */
+function cellOpts(id: string, w: number, h: number, z: number, x: number, y: number, n: number): SpriteOpts {
+	const o = artOpts(id, w, h, z);
+	o.rectX = x;
+	o.rectY = y;
+	o.rectW = n;
+	o.rectH = n;
 	return o;
 }
 
@@ -2032,42 +2050,53 @@ export class WorldView {
 	}
 
 	/**
-	 * A tree: a pixel-art crown (one of three shapes, tinted with the tree's own green) with its light and shadow,
-	 * the crown's silhouette as its shadow on the ground, and the trunk. The crown keeps VEG-04's see-through
-	 * (`canopyAlpha`, eased by the loop while an actor is under it).
+	 * A tree (VEG-06): its kind's crown in its own look -- one cell of the trees' atlas (tools/tree-art.mjs), a drawing
+	 * lit from the top left and never turned, tinted with the tree's own green, at the tree's own size -- with its
+	 * light over it, its silhouette as its shadow on the ground (as long as the kind is tall), and the trunk: the 44 u
+	 * collision box, drawn at exactly that size. A crown keeps VEG-04's see-through (`canopyAlpha`, eased by the loop
+	 * while a body is under it); a shrub stands lower than a person, so it is drawn under the bodies, never over one,
+	 * and shows no trunk. Four sprites a tree (three a shrub), the same as the three crowns before it.
 	 */
 	private drawTreeArt(r: Renderer, cam: Camera, s: Solid, v: ViewRect): boolean {
-		const k = math.floor(hash01(s.x, s.y, 13) * CANOPY_STYLES) % CANOPY_STYLES;
-		const mask = artId(CANOPY_MASK[k]);
-		if (mask === undefined) return false;
+		const atlas = artId("trees");
+		if (atlas === undefined) return false;
+		const kind = math.clamp(treeSpecies(s.variant ?? 0), 0, TREE_SPECIES.size() - 1);
+		const sp = TREE_SPECIES[kind];
+		const looks = TREE_CELLS[kind];
+		const cell = looks[treeLook(s.variant ?? 0) % looks.size()];
 		const sh = this.shake(s);
 		const cx = s.x + s.w / 2 + sh.x;
 		const cy = s.y + s.h / 2 + sh.y;
 		const rad = s.canopyR ?? 80;
-		if (!circleInView(cx, cy, rad + 48, v)) return true;
-		const a = s.canopyAlpha ?? 1;
+		if (!circleInView(cx, cy, rad + sp.lift + 8, v)) return true;
+		const a = sp.low ? 1 : (s.canopyAlpha ?? 1);
 		const d = rad * 2;
-		const so = this.shadow(cx, cy, 34);
-		const shadow = artOpts(mask, d, d, Z.shadow);
+		const so = this.shadow(cx, cy, sp.lift);
+		const shadow = cellOpts(atlas, d, d, Z.shadow, cell[0], cell[1], cell[2]);
 		shadow.imageTint = BLACK;
 		shadow.alpha = 0.26;
 		r.drawRect(cam, cx + so.x, cy + so.y, shadow);
-		r.drawCircle(cam, cx, cy, s.w, {
-			color: COLORS.treeTrunk,
-			stroke: COLORS.treeTrunk.Lerp(BLACK, 0.4),
-			strokeThickness: 2,
-			zIndex: Z.structure,
-		});
-		const crown = artOpts(mask, d, d, Z.canopy);
+		if (!sp.low) {
+			const trunk = cellOpts(
+				atlas,
+				s.w,
+				s.h,
+				Z.structure,
+				TREE_TRUNK_CELL[0],
+				TREE_TRUNK_CELL[1],
+				TREE_TRUNK_CELL[2],
+			);
+			trunk.imageTint = COLORS.treeTrunk;
+			r.drawRect(cam, cx, cy, trunk);
+		}
+		const z = sp.low ? Z_SHRUB : Z.canopy;
+		const crown = cellOpts(atlas, d, d, z, cell[0], cell[1], cell[2]);
 		crown.imageTint = s.tint ?? COLORS.treeLeaf;
 		crown.alpha = a;
 		r.drawRect(cam, cx, cy, crown);
-		const shade = artId(CANOPY_SHADE[k]);
-		if (shade !== undefined) {
-			const o = artOpts(shade, d, d, Z.canopy + 1);
-			o.alpha = a;
-			r.drawRect(cam, cx, cy, o);
-		}
+		const shade = cellOpts(atlas, d, d, z + 1, cell[0], cell[1] + TREE_BAND_H, cell[2]);
+		shade.alpha = a;
+		r.drawRect(cam, cx, cy, shade);
 		return true;
 	}
 

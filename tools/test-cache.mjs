@@ -600,7 +600,7 @@ check(
 	town[0] === WORLD_ART.itemIcons.id &&
 		town[1] === WORLD_ART.wordmark.id &&
 		town.length > 60 &&
-		["asphalt", "grass", "roofShingleH", "canopy0", "car0"].every(n => town.includes(WORLD_ART[n].id)) &&
+		["asphalt", "grass", "roofShingleH", "trees", "car0"].every(n => town.includes(WORLD_ART[n].id)) &&
 		laterIds.every(id => !town.includes(id)),
 	`${town.length} texturas`,
 );
@@ -712,6 +712,14 @@ function planWithFailures(fail) {
 			art.artId("itemIcons") === undefined &&
 			art.artId("dogs") === WORLD_ART.dogs.id &&
 			art.artId("asphalt") === WORLD_ART.asphalt.id,
+	);
+}
+{
+	// VEG-06: a crown that never arrives would leave a trunk that stops the body with nothing drawn on it (P3)
+	const [art] = planWithFailures([WORLD_ART.trees.id]);
+	check(
+		"o atlas das arvores que nao chega cai sozinho para as arvores lisas (VEG-06); o resto da arte fica",
+		art.artId("trees") === undefined && art.artId("asphalt") === WORLD_ART.asphalt.id,
 	);
 }
 for (const n of pendingUpload) WORLD_ART[n].id = "";

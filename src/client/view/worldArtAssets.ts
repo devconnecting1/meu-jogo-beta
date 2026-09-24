@@ -46,12 +46,7 @@ export type WorldArtName =
 	| "eaves"
 	| "parapet"
 	| "shadowBox"
-	| "canopy0"
-	| "canopyShade0"
-	| "canopy1"
-	| "canopyShade1"
-	| "canopy2"
-	| "canopyShade2"
+	| "trees"
 	| "car0"
 	| "carTrim0"
 	| "carDamage0"
@@ -214,18 +209,8 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	parapet: { id: "rbxassetid://77285850845081", w: 12, h: 12, slice: [4, 4, 8, 8] },
 	/** slice: soft rectangular drop shadow */
 	shadowBox: { id: "rbxassetid://100011874413072", w: 16, h: 16, slice: [6, 6, 10, 10] },
-	/** mask: tree crown 1: silhouette + leaves (tint: foliage) */
-	canopy0: { id: "rbxassetid://73465981877902", w: 40, h: 40 },
-	/** overlay: tree crown 1: light, shadow and outline */
-	canopyShade0: { id: "rbxassetid://79729616067760", w: 40, h: 40 },
-	/** mask: tree crown 2: silhouette + leaves (tint: foliage) */
-	canopy1: { id: "rbxassetid://89590010697770", w: 40, h: 40 },
-	/** overlay: tree crown 2: light, shadow and outline */
-	canopyShade1: { id: "rbxassetid://78267299787002", w: 40, h: 40 },
-	/** mask: tree crown 3: silhouette + leaves (tint: foliage) */
-	canopy2: { id: "rbxassetid://100206983226107", w: 40, h: 40 },
-	/** overlay: tree crown 3: light, shadow and outline */
-	canopyShade2: { id: "rbxassetid://87939293634230", w: 40, h: 40 },
+	/** atlas: trees: 41 crowns of 8 kinds (greyscale masks, tint: foliage; their light below) and the trunk (client/view/worldView.ts) */
+	trees: { id: "", w: 512, h: 266 },
 	/** mask: sedan: body (tint: paint) */
 	car0: { id: "rbxassetid://90907187103557", w: 50, h: 25 },
 	/** overlay: sedan: glass, lights, wheels, outline */
@@ -460,12 +445,7 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"eaves",
 	"parapet",
 	"shadowBox",
-	"canopy0",
-	"canopyShade0",
-	"canopy1",
-	"canopyShade1",
-	"canopy2",
-	"canopyShade2",
+	"trees",
 	"car0",
 	"carTrim0",
 	"carDamage0",
