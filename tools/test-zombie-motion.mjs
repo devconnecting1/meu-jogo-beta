@@ -62,6 +62,22 @@
  * the meter's 0.4x/1.8x), and the eased camera plus pixel rounding (a perfectly drawn body never steps back a
  * pixel through it, in any run).
  *
+ * THE MAX DRAWN SPEED (h)-(k), the owner's report of 2026-09-24: "when I explore, the enemies left behind get teleported
+ * to other places: I see enemies on screen going very fast from one region to another". Every drawn frame of every
+ * zombie against the fastest that body ever moved on the server: at most 1.25x that times dt + 4 u, unless the frame
+ * lands faded (alpha <= 0.1, a snap that starts a fade-in) or both ends are off the screen.
+ *   (h) 90 s exploring by day with the REAL population (spawns, recycling, relocations), 1920 x 1080, clean and WAN;
+ *   (i) the same at night with the waves; (j) a re-entry in the near and the mid ring (the wire skips six samples);
+ *   (k) the server moving a body 670 u under the same netId (the client's own guard).
+ * Root cause: the population put a wave walker or a special left behind back on the survivor's ring under the SAME
+ * netId (shared/sim/ai/population.ts `cleanup`), and every screen that still had it interpolated it across the town.
+ * Before (PZ_SRC at c72aa6c): (h) 126 frames, the worst 726 u in one frame (43 591 u/s, 194x its own speed), 40
+ * same-netId jumps, 61 of 166 new bodies born on screen; (j) 41 u in one frame at alpha 0.38; (k) 228 u in one frame.
+ * Now: 0 fast frames everywhere, 0 jumps (a relocation is a new netId), 0 of 200 new bodies on screen, the horde as
+ * big (14 and 28 at the end, before and after). Ruled out by the same runs: the netId reuse after the tomb change (a
+ * freed id comes back 2 s later, after the client retired the track; the lives are split per body here) and the
+ * swap-remove draw order (the view writes each sprite's absolute position every frame, nothing eases per slot).
+ *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs.
  */
 import { join } from "node:path";
@@ -124,6 +140,8 @@ const angleDiff = (a, b) => {
 	else if (d < -Math.PI) d += TAU;
 	return d;
 };
+/** one tick of this is faster than any zombie moves (mpConfig ZOMBIE_TELEPORT_UPS: 1500 u/s): a body moved, not walked */
+const TELEPORT_TICK_U = (CFG.ZOMBIE_TELEPORT_UPS ?? 1500) / SIM_HZ;
 /** zombies walk slower than a survivor (90 u/s against 210): their meter judges from this speed up */
 const ZOMBIE_MOVING_UPS = HM.ZOMBIE_MOVING_UPS ?? 40;
 /**
@@ -243,13 +261,28 @@ function run(scn, profileName) {
 	const randomUp = mulberry32(SEED ^ 0x51ed270b);
 	const randomFrames = mulberry32(SEED ^ 0x2545f491);
 
-	const world = W.createWorld(6000, 6000);
+	const world = W.createWorld(scn.worldSize ?? 6000, scn.worldSize ?? 6000);
 	const sim = new ServerSimulation({ world, zombies: true, interactive: false });
 	const horde = sim.horde;
-	horde.clock.setClock(12, 5);
+	horde.clock.setClock(scn.hour ?? 12, scn.day ?? 5);
 	horde.clock.isRaining = false;
-	// the ambient population would wander into the measurement: the scenario places every body itself
-	horde.population.update = () => {};
+	if (scn.night === true) horde.clock.fillNight();
+	// the ambient population would wander into the measurement: the scenario places every body itself -- unless the
+	// population IS the scenario (h): the real spawner, recycling and relocations around a survivor who explores
+	if (scn.population !== true) horde.population.update = () => {};
+	/** (h) the population's relocations (shared/sim/ai/population.ts `cleanup`), through its own hook when there is one */
+	let relocations = 0;
+	const moved = horde.refs.onZombieMoved;
+	horde.refs.onZombieMoved = z => {
+		relocations += 1;
+		moved?.(z);
+	};
+	/** (j) the part filter's own memory, fresh for every run */
+	const filterState = {};
+	/** (h) server-side: a netId whose body moved more than TELEPORT_TICK_U in one tick, and spawns seen on screen */
+	const teleports = [];
+	let spawns = 0;
+	let spawnsInView = 0;
 
 	const snaps = [];
 	const worldPackets = [];
@@ -267,8 +300,8 @@ function run(scn, profileName) {
 	};
 	const replicator = new Replicator(sim, transport, { tick0Time: T0, mapHash: mapHashOf(world) });
 
-	const sx = 3000;
-	const sy = 3000;
+	const sx = scn.start?.x ?? 3000;
+	const sy = scn.start?.y ?? 3000;
 	const sp = PL.createServerPlayer({ slot: 0, userId: 1, name: "me" }, defaultSave(), sx, sy, sim.tick, SIM_HZ);
 	sp.state.hpMax = 1e6;
 	sp.state.hp = 1e6;
@@ -282,12 +315,16 @@ function run(scn, profileName) {
 
 	// ---- the server's truth every tick, and the ticks it SENT for each zombie
 	const truth = new Map(); // netId -> Map(tick -> {x, y, a})
+	const lives = new Map(); // netId -> [{ body, from, vmax }]: (h)-(k) the bodies that went by that netId, in order
 	const sent = new Map(); // netId -> ascending ticks carried by a snapshot
 	const tickWall = []; // tick -> wall-clock time it was simulated
 	let serverWall = T0;
+	const viewW = scn.viewW ?? 1360;
+	const viewH = scn.viewH ?? 600;
 	sim.onTick = tick => {
 		tickWall[tick] = serverWall;
-		for (const z of watched) {
+		// (h) every body the population made, not only the scenario's own
+		for (const z of scn.population === true ? horde.zombies : watched) {
 			const id = horde.netIdOf(z);
 			if (!(id > 0)) continue;
 			let m = truth.get(id);
@@ -296,6 +333,29 @@ function run(scn, profileName) {
 				truth.set(id, m);
 			}
 			m.set(tick, { x: z.x, y: z.y, a: z.angleSlow });
+			// one LIFE per (netId, body): the server hands a freed netId out again 2 s later, to another body
+			let list = lives.get(id);
+			if (list === undefined) {
+				list = [];
+				lives.set(id, list);
+			}
+			let life = list[list.length - 1];
+			if (life === undefined || life.body !== z) {
+				life = { body: z, from: tick, last: undefined, lastTick: -1, vmax: 0 };
+				list.push(life);
+				// a body the survivor's screen shows the tick it appears (a spawn, or a relocation's new identity)
+				spawns += 1;
+				if (Math.abs(z.x - sp.state.x) <= viewW / 2 && Math.abs(z.y - sp.state.y) <= viewH / 2)
+					spawnsInView += 1;
+			}
+			if (life.last !== undefined && life.lastTick === tick - 1) {
+				const d = Math.hypot(z.x - life.last.x, z.y - life.last.y);
+				// faster than any zombie walks: the body was MOVED under the same netId (what every client draws racing)
+				if (d > TELEPORT_TICK_U) teleports.push({ tick, netId: id, d });
+				else life.vmax = Math.max(life.vmax, d * SIM_HZ);
+			}
+			life.last = { x: z.x, y: z.y };
+			life.lastTick = tick;
 		}
 		const before = snaps.length;
 		replicator.afterTick(tick);
@@ -333,7 +393,7 @@ function run(scn, profileName) {
 	cl.snapshots.setRate(SIM_HZ);
 	cl.prediction.attach(world, local, lsave);
 	const cam = new Camera();
-	cam.setView(scn.viewW ?? 1360, scn.viewH ?? 600);
+	cam.setView(viewW, viewH);
 	cam.x = sx;
 	cam.y = sy;
 	/** the same view locked on the survivor, against which the eased camera is judged (hypothesis 4) */
@@ -413,7 +473,7 @@ function run(scn, profileName) {
 				});
 				if (pong !== undefined) pongDown.send(ev.at, pong);
 			}
-			if (scn.event !== undefined) scn.event(ev.at - T0, { watched, sx, sy });
+			if (scn.event !== undefined) scn.event(ev.at - T0, { watched, sx, sy, horde });
 			sim.advance(ev.dt);
 			for (const part of snaps) down.send(ev.at, part);
 			snaps.length = 0;
@@ -439,7 +499,14 @@ function run(scn, profileName) {
 		}
 		for (const payload of down.poll(now)) {
 			const part = P.decodeSnapshotPart(payload);
-			if (part !== undefined) cl.queue.push(part);
+			if (part === undefined) continue;
+			// (i) what the wire stops carrying for a while (a body out of the interest, of the light, behind a roof)
+			if (scn.filterPart !== undefined) {
+				part.zombies = part.zombies.filter(zs =>
+					scn.filterPart(zs, clientT, { watched, horde, state: filterState }),
+				);
+			}
+			cl.queue.push(part);
 		}
 		// `scn.clockStep`: GetServerTimeNow() itself steps (the engine re-syncing it) -- the client's clock re-locks
 		const step = scn.clockStep !== undefined && clientT >= scn.clockStep.at ? scn.clockStep.seconds : 0;
@@ -539,6 +606,8 @@ function run(scn, profileName) {
 			list.push({
 				t: clientT,
 				dt,
+				// the render tick it was drawn at: which of the netId's lives this frame shows (h-k)
+				tick: at,
 				x: z.x,
 				y: z.y,
 				a: z.angle,
@@ -578,6 +647,16 @@ function run(scn, profileName) {
 		// a breakpoint scenario: when the server came back (client time), and the delay the run ended on
 		resumeT: scn.clockStep !== undefined ? scn.clockStep.at : resumeAt - T0,
 		delayEnd: cl.snapshots.delay(),
+		// (h), (i), (j): what the population did, and what the buffer did about breaks in a track
+		teleports,
+		lives,
+		relocations,
+		spawns,
+		spawnsInView,
+		restarts: cl.snapshots.stats().restarts ?? 0,
+		viewW,
+		viewH,
+		zombiesEnd: horde.zombies.length,
 	};
 }
 
@@ -882,6 +961,67 @@ function afterPause(res) {
 	return { freeze, pastAfter, delayEnd: res.delayEnd };
 }
 
+/**
+ * (h)–(k) THE MAX DRAWN SPEED. Every drawn frame of every zombie against the fastest that very body ever moved on the
+ * server (tick to tick, its whole life): a frame may cover at most SPEED_MARGIN × that speed × dt + SPEED_SLACK_U. The
+ * one exception is a snap nobody sees: the frame lands at an alpha of at most FADE_SNAP_ALPHA (it starts a fade-in),
+ * or both ends of it are off the screen. A body drawn racing from one region to another -- the owner's report of
+ * 2026-09-24 -- is exactly a frame that breaks this with the body on screen and opaque.
+ */
+const SPEED_MARGIN = 1.25;
+const SPEED_SLACK_U = 4;
+const FADE_SNAP_ALPHA = 0.1;
+const SCREEN_MARGIN = 40;
+/** (h): at most this share of the new bodies may appear on the 1920 x 1080 screen (§3.5 "fora da tela") */
+const SPAWN_IN_VIEW_MAX_PCT = 10;
+
+function drawnSpeed(res) {
+	const out = { frames: 0, fast: 0, worstRatio: 0, worstStep: 0, worstUps: 0, samples: [] };
+	const onScreen = f =>
+		f.px >= -SCREEN_MARGIN &&
+		f.px <= res.viewW + SCREEN_MARGIN &&
+		f.py >= -SCREEN_MARGIN &&
+		f.py <= res.viewH + SCREEN_MARGIN;
+	for (const [netId, frames] of res.rec) {
+		const list = res.lives.get(netId);
+		if (list === undefined) continue;
+		// the fastest this body really went, tick to tick, over its whole life (a move across the map is not a speed:
+		// the server-side check counts it apart); a frame is judged against the life its render tick is in
+		const vmaxAt = tick => {
+			let life = list[0];
+			for (const l of list) if (l.from <= tick) life = l;
+			return life.vmax;
+		};
+		for (let i = 1; i < frames.length; i++) {
+			const a = frames[i - 1];
+			const b = frames[i];
+			// consecutive client frames of the same track only (a body that retired and came back is a new drawing)
+			if (Math.abs(b.t - a.t - b.dt) > 1e-6) continue;
+			const shown = b.alpha > FADE_SNAP_ALPHA && (onScreen(a) || onScreen(b));
+			if (!shown) continue;
+			out.frames += 1;
+			const vmax = vmaxAt(b.tick);
+			const d = Math.hypot(b.x - a.x, b.y - a.y);
+			const allowed = vmax * b.dt * SPEED_MARGIN + SPEED_SLACK_U;
+			if (vmax > 0) out.worstRatio = Math.max(out.worstRatio, d / (vmax * b.dt));
+			if (d > out.worstStep) {
+				out.worstStep = d;
+				out.worstUps = d / b.dt;
+			}
+			if (d > allowed) {
+				out.fast += 1;
+				if (out.samples.length < 4) {
+					out.samples.push(
+						`#${netId} t=${b.t.toFixed(2)} s: ${d.toFixed(0)} u in one frame (${(d / b.dt).toFixed(0)} u/s, ` +
+							`it never went over ${vmax.toFixed(0)} u/s), alpha ${b.alpha.toFixed(2)}`,
+					);
+				}
+			}
+		}
+	}
+	return out;
+}
+
 const rate = (n, s) => (s > 0 ? n / s : 0);
 const f2 = v => v.toFixed(2);
 
@@ -930,6 +1070,32 @@ function hunter(type, x, y, sx, sy) {
 }
 
 const still = () => ({ x: 0, y: 0 });
+
+/** (h), (i): a long loop through town at the survivor's full speed, legs of [x, y, seconds], from t = 1 s */
+const EXPLORE_LEGS = [
+	[1, 0, 12],
+	[0, 1, 8],
+	[-1, 0, 6],
+	[0, 1, 6],
+	[1, 0, 10],
+	[0, -1, 14],
+	[-1, 0, 8],
+	[0, 1, 4],
+	[1, 1, 10],
+	[-1, 0, 12],
+];
+function explore(t) {
+	let at = 1;
+	if (t < at) return still();
+	for (const [x, y, s] of EXPLORE_LEGS) {
+		if (t < at + s) {
+			const l = Math.hypot(x, y);
+			return { x: x / l, y: y / l };
+		}
+		at += s;
+	}
+	return still();
+}
 
 const SCENARIOS = {
 	a: {
@@ -1011,6 +1177,102 @@ const SCENARIOS = {
 		setup: ({ sx, sy }) => [hunter(1, sx - 760, sy + 40, sx, sy)],
 		input: still,
 	},
+	/*
+	 * The owner's report of 2026-09-24: "when I explore, the enemies left behind get teleported to other places: I see
+	 * enemies on screen going very fast from one region to another". The REAL population this time -- ambient walkers,
+	 * specials, the recycling of shared/sim/ai/population.ts `cleanup` -- around a survivor who walks a long loop through
+	 * an open town at 210 u/s, on a 1920 x 1080 screen. Before the fix a special left behind was put back on the
+	 * survivor's ring under the same netId, every few seconds, and drawn crossing the screen at 10 000-23 000 u/s.
+	 */
+	h: {
+		title: "(h) 90 s explorando de dia com a populacao real (reciclagem e realocacao), tela 1920x1080",
+		seconds: 90,
+		warmup: 1,
+		population: true,
+		worldSize: 14000,
+		start: { x: 2000, y: 2000 },
+		day: 6,
+		hour: 12,
+		viewW: 1920,
+		viewH: 1080,
+		profiles: ["clean", "wan"],
+		ownVerdict: true,
+		speedCheck: true,
+		setup: () => [],
+		input: explore,
+	},
+	/* the same walk at night, with the waves on: the dark rule hides most of it, the ring still refills the tide */
+	i: {
+		title: "(i) o mesmo passeio a noite, com as ondas (19h30)",
+		seconds: 60,
+		warmup: 1,
+		population: true,
+		worldSize: 14000,
+		start: { x: 2000, y: 2000 },
+		day: 6,
+		hour: 19.5,
+		night: true,
+		viewW: 1920,
+		viewH: 1080,
+		profiles: ["clean"],
+		ownVerdict: true,
+		speedCheck: true,
+		setup: () => [],
+		input: explore,
+	},
+	/*
+	 * A re-entry (§4.4): the wire stops carrying a body for longer than its ring's despawn timeout -- it stepped out of
+	 * the light, behind a roof, out of the interest -- and carries it again before the client retired the track (which
+	 * is fading it out by then): six samples of a walker in the near ring (0.35 s against a 0.3 s timeout) and six of one
+	 * in the mid ring (0.7 s against 0.6 s). Each came back tens of units further on and used to be interpolated from
+	 * where it was last seen: held, half faded, then jumping most of the way in one frame.
+	 */
+	j: {
+		title: "(j) dois andadores somem do fio e voltam antes de a trilha se aposentar (reentrada, anel proximo e medio)",
+		seconds: 6,
+		warmup: 0.5,
+		viewW: 1920,
+		viewH: 1080,
+		profiles: ["clean", "wan"],
+		ownVerdict: true,
+		speedCheck: true,
+		restartExpected: 2,
+		setup: ({ sx, sy }) => [hunter(1, sx - 520, sy + 40, sx, sy), hunter(1, sx - 900, sy - 480, sx, sy)],
+		input: still,
+		filterPart: (zs, t, { watched, horde, state }) => {
+			const which = zs.netId === horde.netIdOf(watched[0]) ? 0 : zs.netId === horde.netIdOf(watched[1]) ? 1 : -1;
+			if (which < 0 || t < (which === 0 ? 2 : 1)) return true;
+			const dropped = state[which] ?? 0;
+			if (dropped >= 6) return true;
+			state[which] = dropped + 1;
+			return false;
+		},
+	},
+	/*
+	 * The client's own guard: the SERVER moves a body 670 u under the same netId, on screen (nothing does since the
+	 * population gives a relocation a new identity; this stands for whatever could). 670 u in 50 ms is not a walk.
+	 */
+	k: {
+		title: "(k) o servidor move um corpo 670 u sem trocar o netId (a guarda do cliente)",
+		seconds: 6,
+		warmup: 0.5,
+		viewW: 1920,
+		viewH: 1080,
+		profiles: ["clean", "wan"],
+		ownVerdict: true,
+		speedCheck: true,
+		restartExpected: 1,
+		setup: ({ sx, sy }) => [hunter(1, sx - 520, sy + 40, sx, sy)],
+		input: still,
+		event: (t, { watched }) => {
+			const z = watched[0];
+			if (t >= 2.5 && z._moved !== true) {
+				z._moved = true;
+				z.x += 600;
+				z.y -= 300;
+			}
+		},
+	},
 	d: {
 		title: "(d) um investidor guardando distancia e investindo, e um andador recuando de tiro duas vezes",
 		seconds: 12,
@@ -1040,6 +1302,8 @@ console.log(
 const results = {};
 /** the breakpoint scenarios' raw runs, judged on their own (`ownVerdict`) */
 const pauses = {};
+/** (h)–(k): the max drawn speed of each run */
+const speeds = {};
 for (const key of Object.keys(SCENARIOS).sort()) {
 	const scn = SCENARIOS[key];
 	console.log("\n" + scn.title);
@@ -1049,6 +1313,21 @@ for (const key of Object.keys(SCENARIOS).sort()) {
 		const s = summarize(res);
 		results[key][prof] = s;
 		printRow(prof, s, res);
+		if (scn.speedCheck === true) {
+			const sp = drawnSpeed(res);
+			speeds[`(${key}) ${prof}`] = { sp, res, scn };
+			console.log(
+				`           velocidade desenhada: ${sp.fast} quadros mais rapidos que o proprio zumbi, em ${sp.frames} quadros ` +
+					`na tela | pior ${sp.worstRatio.toFixed(2)}x a velocidade real dele (${sp.worstStep.toFixed(1)} u num quadro, ` +
+					`${sp.worstUps.toFixed(0)} u/s)`,
+			);
+			console.log(
+				`           servidor: ${res.relocations} realocacoes, ${res.teleports.length} saltos de um mesmo netId, ` +
+					`${res.spawns} corpos novos (${res.spawnsInView} surgiram na tela) | cliente: ${res.restarts} trilhas ` +
+					`recomecadas | zumbis no fim ${res.zombiesEnd}`,
+			);
+			for (const line of sp.samples) console.log(`             ${line}`);
+		}
 		if (scn.pause !== undefined || scn.clockStep !== undefined) {
 			const p = afterPause(res);
 			p.clockStep = scn.clockStep !== undefined;
@@ -1161,6 +1440,43 @@ for (const [tag, p] of Object.entries(pauses)) {
 		p.pastAfter === 0,
 		`${p.pastAfter} quadros`,
 	);
+}
+
+console.log(" a velocidade desenhada (h-k): nenhum zumbi cruza a tela mais rapido do que anda");
+for (const [tag, { sp, res, scn }] of Object.entries(speeds)) {
+	check(
+		`${tag}: nenhum zumbi na tela desenhado mais rapido que a velocidade real dele (${SPEED_MARGIN}x + ` +
+			`${SPEED_SLACK_U} u por quadro; um salto so com alfa <= ${FADE_SNAP_ALPHA} ou fora da tela)`,
+		sp.fast === 0,
+		`${sp.fast} quadros em ${sp.frames}; pior ${sp.worstRatio.toFixed(2)}x, ${sp.worstUps.toFixed(0)} u/s`,
+	);
+	if (scn.population === true) {
+		check(
+			`${tag}: nenhum netId pula de lugar no servidor (a realocacao da populacao e um corpo novo, com outro netId)`,
+			res.teleports.length === 0,
+			`${res.teleports.length} saltos, ${res.relocations} realocacoes`,
+		);
+	}
+	if (scn.restartExpected !== undefined) {
+		check(
+			`${tag}: cada trilha recomeca no lugar novo (e aparece aos poucos) em vez de deslizar ate la`,
+			res.restarts === scn.restartExpected,
+			`${res.restarts} recomeco(s) de ${scn.restartExpected}`,
+		);
+	}
+}
+{
+	const h = speeds["(h) clean"]?.res;
+	if (h !== undefined) {
+		// the walk has to exercise what it is about, or the checks above prove nothing
+		check("(h) clean: o passeio faz a populacao realocar zumbis", h.relocations >= 5, `${h.relocations}`);
+		const pct = (100 * h.spawnsInView) / Math.max(1, h.spawns);
+		check(
+			`(h) clean: um corpo novo (spawn ou realocacao) quase nunca surge na tela 1920x1080 (<= ${SPAWN_IN_VIEW_MAX_PCT} %)`,
+			pct <= SPAWN_IN_VIEW_MAX_PCT,
+			`${h.spawnsInView} de ${h.spawns}, ${pct.toFixed(1)} %`,
+		);
+	}
 }
 
 console.log("");

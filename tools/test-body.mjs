@@ -80,6 +80,14 @@
  *                           to what landed; the leave still retries in place; a save that cannot be encoded or is too
  *                           large backs off too; a notice that cannot be sent never costs a write; a refresh is silent;
  *                           a lost lock is announced ("stopped") and never written over (the review of a454292).
+ *  33. THE FIRST FRAME       (the owner's report of 2026-09-24: "entering the world, the player spawns in one place, and
+ *                           a few ms later appears in another") the client pieces netClient.ts runs, on the packets the
+ *                           real server sent: nothing is drawn until the first self block, then the first 30 frames are
+ *                           all at the server's spot, the survivor and the camera -- a fresh body, a kept one, a corpse;
+ *                           and a daybreak stand-up cuts the camera instead of panning it (client/net/entryHold.ts).
+ *  34. NOBODY IS THE HOST    the first player (slot 0, a private server's owner) leaving, dying and going Home, or being
+ *                           replaced by a newcomer in the same slot: the tick, the clock, the town, the snapshots, the
+ *                           horde and the night's wave around the others, the roster and the scoreboard all go on.
  *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs, plus the small fake Roblox below.
  */
@@ -3821,6 +3829,559 @@ section("32) SAV-01: no client-chosen write, coalesced event saves, the budget f
 		}
 	}
 });
+
+// ================================================================ 33: the first frame is the server's
+
+/**
+ * The client of one player, as client/net/netClient.ts and client/gameLoop.ts run it, on the packets the REAL server sent
+ * it (Snap and World, `oneWay` seconds later): the handshake (InitBegin, its own PlayerJoined), the bind, the reconcile of
+ * every self block, the prediction, the entry hold (client/net/entryHold.ts) and the camera. `guess` is where
+ * `GameLoop.init` put the survivor before the server said anything (its own street near the centre). `hold: false` plays
+ * the client as it was before the hold (for the "before" numbers): drawn from the first frame, the camera eased.
+ */
+function entryClient(s, p, guess, { hold = true, oneWay = 0.04 } = {}) {
+	const P = s.P;
+	const { ClockSync } = require(join(SRC, "client/net/clockSync.ts"));
+	const { CommandStream } = require(join(SRC, "client/net/commands.ts"));
+	const { Prediction } = require(join(SRC, "client/net/prediction.ts"));
+	const { SnapshotBuffer } = require(join(SRC, "client/net/snapshotBuffer.ts"));
+	const { Camera } = require(join(SRC, "shared/engine/camera.ts"));
+	const { createPlayer } = require(join(SRC, "shared/game/player.ts"));
+	const { defaultSave } = require(join(SRC, "shared/game/save.ts"));
+	let EntryHold;
+	try {
+		EntryHold = require(join(SRC, "client/net/entryHold.ts")).EntryHold;
+	} catch {
+		EntryHold = undefined; // an older src: no hold at all
+	}
+	const save = defaultSave();
+	const player = createPlayer(save, guess.x, guess.y);
+	const cam = new Camera();
+	cam.setView(1920, 1080);
+	cam.x = guess.x;
+	cam.y = guess.y;
+	const gate = hold && EntryHold !== undefined ? new EntryHold() : undefined;
+	gate?.begin(true, 0);
+	const c = {
+		clock: new ClockSync(),
+		commands: new CommandStream(),
+		prediction: new Prediction(),
+		snapshots: new SnapshotBuffer(),
+		inbox: [],
+		queue: [],
+		hasEpoch: false,
+		mySlot: -1,
+		bound: false,
+		lastSelfTick: -Infinity,
+		raw: { moveX: 0, moveY: 0, magnitude: 0, aim: 0, held: 0 },
+		sampled: [],
+		player,
+		cam,
+		/** every frame the run drew: where the survivor and the camera were */
+		drawn: [],
+		held: 0,
+		/** after each server beat: what the server sent since (`drive` drains the remotes once for every client) */
+		collect(snaps, worlds) {
+			for (const e of snaps) {
+				if (e.to === p) c.inbox.push({ at: clockNow + oneWay, kind: "snap", payload: e.args[0] });
+			}
+			for (const e of worlds) {
+				if (e.to === undefined || e.to === p)
+					c.inbox.push({ at: clockNow + oneWay, kind: "world", payload: e.args[0] });
+			}
+		},
+		/** one client frame at `clockNow` */
+		frame(dt) {
+			const due = c.inbox.filter(m => m.at <= clockNow);
+			c.inbox = c.inbox.filter(m => m.at > clockNow);
+			for (const m of due) {
+				if (m.kind === "snap") {
+					const part = P.decodeSnapshotPart(m.payload);
+					if (part !== undefined) c.queue.push(part);
+					continue;
+				}
+				const batch = P.decodeWorld(m.payload);
+				if (batch === undefined) continue;
+				for (const ev of batch.events) {
+					if (ev.t === P.WorldEv.InitBegin) {
+						c.clock.setEpoch(ev.tick0Time, ev.simHz);
+						c.snapshots.setRate(ev.simHz);
+						c.hasEpoch = true;
+					} else if (ev.t === P.WorldEv.PlayerJoined && ev.userId === p.UserId) {
+						c.mySlot = ev.slot;
+					} else if (ev.t === P.WorldEv.PlayerLife && ev.slot === c.mySlot) {
+						player.dead = ev.state === P.LifeState.Dead;
+					}
+				}
+			}
+			const active = c.hasEpoch && c.mySlot >= 0;
+			if (active) {
+				if (!c.bound) {
+					// netClient `bind`: the prediction takes the survivor where the loop put it
+					c.bound = true;
+					c.prediction.attach(s.host.world, player, save);
+					c.commands.reset();
+					c.snapshots.reset();
+				}
+				const tick = c.clock.update(dt, clockNow);
+				const refTick = c.clock.tickNow();
+				for (const part of c.queue) {
+					const pt = unwrap(P, part.tick, refTick);
+					c.snapshots.receive(part, refTick, clockNow);
+					const block = part.self;
+					if (block === undefined || pt <= c.lastSelfTick) continue;
+					c.lastSelfTick = pt;
+					c.commands.ack(block.ackSeq);
+					c.prediction.reconcile(block, c.commands.unacked(), clockNow);
+				}
+				c.queue.length = 0;
+				c.sampled.length = 0;
+				c.commands.sample(dt, c.raw, c.sampled);
+				for (const cmd of c.sampled) c.prediction.step(cmd);
+				c.snapshots.advance(dt, tick, clockNow, s.host.world);
+				c.prediction.present(dt, c.commands.phase(), c.commands.newest());
+			}
+			// client/gameLoop.ts: the entry hold, then the camera (cut or eased)
+			const placed = active && (c.prediction.placed?.() ?? true);
+			const snaps = c.prediction.snapCount?.() ?? 0;
+			if (gate !== undefined) {
+				if (gate.frame(dt, placed, snaps)) {
+					cam.x = player.x;
+					cam.y = player.y;
+				} else if (!gate.holding()) cam.follow(player.x, player.y, Math.min(1, dt * 8));
+			} else cam.follow(player.x, player.y, Math.min(1, dt * 8));
+			if (gate?.holding() === true) {
+				c.held += 1;
+				return;
+			}
+			c.drawn.push({ t: clockNow, x: player.x, y: player.y, cx: cam.x, cy: cam.y });
+		},
+	};
+	return c;
+}
+
+/** a u16 wire tick unwrapped next to a reference tick (shared/net/codec.ts `unwrapTick`) */
+function unwrap(P, tick16, ref) {
+	const codec = require(join(SRC, "shared/net/codec.ts"));
+	return codec.unwrapTick(tick16, Math.floor(ref));
+}
+
+/** the server's heartbeats and the client's frames side by side, at 60 Hz both */
+function drive(s, clients, seconds) {
+	const net = s.env.services.ReplicatedStorage.FindFirstChild("Net");
+	const snapRemote = net.FindFirstChild(s.P.REMOTE_SNAP);
+	const worldRemote = net.FindFirstChild(s.P.REMOTE_WORLD);
+	const n = Math.round(seconds * 60);
+	for (let i = 0; i < n; i++) {
+		s.beat();
+		const snaps = snapRemote.sent.splice(0);
+		const worlds = worldRemote.sent.splice(0);
+		for (const c of clients) {
+			c.collect(snaps, worlds);
+			c.frame(1 / 60);
+		}
+	}
+}
+
+/** the first `n` drawn frames against the server's spot: the worst distance of the survivor and of the camera */
+function firstFrames(c, at, n = 30) {
+	const frames = c.drawn.slice(0, n);
+	let body = 0;
+	let camera = 0;
+	for (const f of frames) {
+		body = Math.max(body, Math.hypot(f.x - at.x, f.y - at.y));
+		camera = Math.max(camera, Math.hypot(f.cx - at.x, f.cy - at.y));
+	}
+	return { frames: frames.length, body, camera, first: frames[0] };
+}
+
+section("33) the first frame of a run is drawn where the server put the survivor (entry hold, the camera cut)", () => {
+	const s = bootServer();
+	// the client's own guess (GameLoop.findSpawnPoint: a street near the centre), far from wherever the server puts us
+	const guessFor = sp => ({ x: sp.state.x + 900, y: sp.state.y - 500 });
+	const EPS = 1;
+	const N = 30;
+
+	// (a) a fresh body at the server's safe spawn, (b) a kept one back where it left, (c) a corpse where it fell
+	const cases = [];
+	{
+		const a = s.join(newUser(), "fresh");
+		s.immortal.add(a);
+		s.intent(a, s.P.IntentKind.EnterWorld);
+		// the client starts drawing the moment it asks (mountRun): its guess is where the server will NOT put it
+		const probe = { x: 0, y: 0 };
+		const ca = entryClient(s, a, probe);
+		const cb = entryClient(s, a, probe, { hold: false });
+		// the guess is only known relative to the spawn once the server chose it: re-seat both clients' guess then (the
+		// admission's welcome and snapshots wait in the remotes meanwhile, as if they had taken that long to arrive)
+		s.run(0.6);
+		const sp = s.body(a);
+		const g = guessFor(sp);
+		for (const c of [ca, cb]) {
+			c.player.x = g.x;
+			c.player.y = g.y;
+			c.cam.x = g.x;
+			c.cam.y = g.y;
+		}
+		// the welcome went out with the admission: hand it to both clients as it is still in the remotes
+		drive(s, [ca, cb], 1.2);
+		cases.push({ name: "(a) a fresh body", at: { x: sp.state.x, y: sp.state.y }, hold: ca, before: cb });
+	}
+	{
+		const b = s.join(newUser(), "kept");
+		s.immortal.add(b);
+		s.enter(b);
+		for (let i = 0; i < 90; i++) {
+			s.walk(b, 0.3);
+			s.beat();
+		}
+		s.exit(b);
+		s.run(1.2);
+		const kept = s.host.lives.keptBody(b.UserId);
+		const g = { x: (kept?.x ?? 0) - 700, y: (kept?.y ?? 0) + 400 };
+		// drop what the first stay sent: this client is a new run
+		s.env.services.ReplicatedStorage.FindFirstChild("Net").FindFirstChild(s.P.REMOTE_SNAP).sent.length = 0;
+		s.env.services.ReplicatedStorage.FindFirstChild("Net").FindFirstChild(s.P.REMOTE_WORLD).sent.length = 0;
+		const cb = entryClient(s, b, g);
+		const cbOld = entryClient(s, b, g, { hold: false });
+		s.intent(b, s.P.IntentKind.EnterWorld);
+		drive(s, [cb, cbOld], 1.8);
+		const sp = s.body(b);
+		cases.push({ name: "(b) a kept body", at: { x: sp.state.x, y: sp.state.y }, hold: cb, before: cbOld });
+	}
+	{
+		const d = s.join(newUser(), "corpse");
+		s.enter(d);
+		const sp0 = s.kill(d);
+		const where = { x: sp0.state.x, y: sp0.state.y };
+		s.exit(d);
+		s.run(1.2);
+		s.env.services.ReplicatedStorage.FindFirstChild("Net").FindFirstChild(s.P.REMOTE_SNAP).sent.length = 0;
+		s.env.services.ReplicatedStorage.FindFirstChild("Net").FindFirstChild(s.P.REMOTE_WORLD).sent.length = 0;
+		const g = { x: where.x + 650, y: where.y + 380 };
+		const cd = entryClient(s, d, g);
+		const cdOld = entryClient(s, d, g, { hold: false });
+		s.intent(d, s.P.IntentKind.EnterWorld);
+		drive(s, [cd, cdOld], 1.8);
+		cases.push({ name: "(c) a corpse waiting for daybreak", at: where, hold: cd, before: cdOld });
+	}
+
+	for (const k of cases) {
+		const now = firstFrames(k.hold, k.at, N);
+		const old = firstFrames(k.before, k.at, N);
+		const settle = k.before.drawn.findIndex(f => Math.hypot(f.cx - k.at.x, f.cy - k.at.y) <= 8);
+		const wrong = k.before.drawn.filter(f => Math.hypot(f.x - k.at.x, f.y - k.at.y) > EPS).length;
+		info(
+			`${k.name}: before the hold the first frame was drawn ${f1(old.first ? Math.hypot(old.first.x - k.at.x, old.first.y - k.at.y) : NaN)} u ` +
+				`from the server's spot (${wrong} frame(s) drew the survivor elsewhere), the camera ${f1(old.camera)} u off at worst ` +
+				`in the first ${N} frames and within 8 u of it only from frame ${settle} (${Math.round((settle * 1000) / 60)} ms) on; ` +
+				`now ${k.hold.held} frame(s) held (${Math.round((k.hold.held * 1000) / 60)} ms), then drawn there`,
+		);
+		check(
+			now.frames === N && now.body <= EPS && now.camera <= EPS,
+			`${k.name}: the first ${N} drawn frames are all at the server's spot (the survivor and the camera, ±${EPS} u)`,
+			`${now.frames} frames; survivor ${f1(now.body)} u, camera ${f1(now.camera)} u off at worst`,
+		);
+		check(
+			k.hold.held > 0 && k.hold.held <= 45,
+			`${k.name}: …after holding a few frames (the welcome's trip, never the ${3} s give-up)`,
+			`${k.hold.held} frame(s)`,
+		);
+	}
+
+	// (d) daybreak stands the corpse up at a safe spot, in the world: the camera is CUT there, never panned across
+	{
+		const w = s.join(newUser(), "dawn");
+		s.enter(w);
+		s.env.services.ReplicatedStorage.FindFirstChild("Net").FindFirstChild(s.P.REMOTE_SNAP).sent.length = 0;
+		s.env.services.ReplicatedStorage.FindFirstChild("Net").FindFirstChild(s.P.REMOTE_WORLD).sent.length = 0;
+		const sp0 = s.body(w);
+		const cw = entryClient(s, w, { x: sp0.state.x, y: sp0.state.y });
+		const cwOld = entryClient(s, w, { x: sp0.state.x, y: sp0.state.y }, { hold: false });
+		// the welcome of this entry already went out: seed the clients as a live session does (epoch + slot)
+		for (const c of [cw, cwOld]) {
+			c.clock.setEpoch(s.host.replicator.options?.tick0Time ?? 1000, 60);
+			c.hasEpoch = true;
+			c.mySlot = sp0.slot;
+		}
+		drive(s, [cw, cwOld], 0.5);
+		s.nightLeft(1.5);
+		s.kill(w);
+		const corpse = { x: s.body(w).state.x, y: s.body(w).state.y };
+		drive(s, [cw, cwOld], 2.5);
+		const up = s.body(w);
+		const spot = { x: up.state.x, y: up.state.y };
+		drive(s, [cw, cwOld], 1.0);
+		const moved = Math.hypot(spot.x - corpse.x, spot.y - corpse.y);
+		const between = c => {
+			let worst = 0;
+			for (const f of c.drawn) {
+				const off = Math.min(
+					Math.hypot(f.cx - corpse.x, f.cy - corpse.y),
+					Math.hypot(f.cx - spot.x, f.cy - spot.y),
+				);
+				worst = Math.max(worst, off);
+			}
+			return worst;
+		};
+		info(
+			`(d) daybreak moved the body ${f1(moved)} u; before, the camera passed ${f1(between(cwOld))} u away from both ` +
+				`spots on its way across; now ${f1(between(cw))} u`,
+		);
+		check(
+			up.state.dead === false && moved > 64,
+			"(d) the dead survivor stood up at daybreak somewhere else (the case being tested)",
+			`dead ${up.state.dead}, moved ${f1(moved)} u`,
+		);
+		check(
+			between(cw) <= 64,
+			"(d) the camera is cut from the corpse to the new spot, never drawn panning across the town in between",
+			`${f1(between(cw))} u off both spots at worst`,
+		);
+	}
+});
+
+// ================================================================ 34: nobody is the host
+
+/*
+ * "Suppose the server's main player (the first one to join) and then others join. That main player dies or leaves: does
+ * the server die/stop working?" (the owner, 2026-09-24). The real server with the first player -- slot 0, the first
+ * readable load, the owner of a private server -- leaving, dying, being replaced; what the others must keep: the tick,
+ * their snapshots, the clock, the town, the horde and its night waves around THEM, the roster and the scoreboard, and a
+ * world that ends only by MP-22's rule (tools/test-reset.mjs 19 has the world's end when everybody goes).
+ */
+section(
+	"34) nobody is the host: the first player leaving, dying or being replaced changes nothing for the others",
+	() => {
+		const net = s => s.env.services.ReplicatedStorage.FindFirstChild("Net");
+		const snapsTo = (s, p) =>
+			net(s)
+				.FindFirstChild(s.P.REMOTE_SNAP)
+				.sent.filter(e => e.to === p).length;
+		const clearSnaps = s => {
+			net(s).FindFirstChild(s.P.REMOTE_SNAP).sent.length = 0;
+		};
+		const zombiesNear = (s, sp, r = 1600) =>
+			s.sim.horde.zombies.filter(z => Math.hypot(z.x - sp.state.x, z.y - sp.state.y) <= r);
+		/** the World events one client was sent (its own and the broadcast ones), decoded, in order */
+		const worldTo = (s, p) => {
+			const out = [];
+			for (const e of net(s).FindFirstChild(s.P.REMOTE_WORLD).sent) {
+				if (e.to !== undefined && e.to !== p) continue;
+				const batch = s.P.decodeWorld(e.args[0]);
+				if (batch !== undefined) for (const ev of batch.events) out.push(ev);
+			}
+			return out;
+		};
+
+		// (a) the first player leaves the server while the others play -- by day, and through a night's wave
+		{
+			const s = bootServer();
+			const wipes = s.wipes();
+			const a = s.join(newUser(), "first");
+			const b = s.join(newUser(), "second");
+			const c = s.join(newUser(), "third");
+			for (const p of [a, b, c]) s.immortal.add(p);
+			s.enter(a);
+			s.enter(b);
+			s.enter(c);
+			check(
+				s.body(a)?.slot === 0,
+				"(a) the first player is in slot 0 (the case being tested)",
+				`slot ${s.body(a)?.slot}`,
+			);
+			s.sim.clock.setClock(12, 3);
+			s.run(2);
+			const seed = s.host.seed;
+			const tick0 = s.sim.tick;
+			const hour0 = s.sim.clock.dayTime;
+			s.quit(a);
+			clearSnaps(s);
+			// the horde the first player saw goes (a clean slate): what comes back is spawned around whoever is left
+			s.sim.horde.zombies.length = 0;
+			const spawned0 = s.sim.horde.population.spawned;
+			s.run(20);
+			const spB = s.body(b);
+			const spC = s.body(c);
+			check(
+				s.sim.tick - tick0 >= 20 * 60 - 2 && s.sim.clock.dayTime > hour0 && s.host.seed === seed,
+				"(a) the first leaves: the tick and the clock go on, in the same town",
+				`${s.sim.tick - tick0} ticks in 20 s, ${f1(hour0)} h -> ${f1(s.sim.clock.dayTime)} h`,
+			);
+			check(
+				snapsTo(s, a) === 0 && snapsTo(s, b) >= 350 && snapsTo(s, c) >= 350,
+				"(a) …the others keep their snapshots (20 Hz), the one who left gets none",
+				`first ${snapsTo(s, a)}, second ${snapsTo(s, b)}, third ${snapsTo(s, c)} parts`,
+			);
+			check(
+				s.sim.horde.population.spawned > spawned0 &&
+					zombiesNear(s, spB).length + zombiesNear(s, spC).length > 0,
+				"(a) …the horde spawns again, around THEM",
+				`${s.sim.horde.population.spawned - spawned0} spawned, ${zombiesNear(s, spB).length} near the second, ` +
+					`${zombiesNear(s, spC).length} near the third`,
+			);
+			// the night's waves are the clock's and the clusters', not the first player's (the dusk's fill, as an admin forces it)
+			s.sim.clock.fillNight();
+			s.sim.clock.setClock(19.02, 3);
+			s.run(15);
+			const waves = s.sim.horde.zombies.filter(z => z.wave === true);
+			check(
+				waves.length > 0 &&
+					waves.every(
+						z =>
+							Math.min(
+								Math.hypot(z.x - spB.state.x, z.y - spB.state.y),
+								Math.hypot(z.x - spC.state.x, z.y - spC.state.y),
+							) <= 1650,
+					),
+				"(a) …and the night's wave comes for the two who stayed",
+				`${waves.length} wave zombie(s) at ${f1(s.sim.clock.dayTime)} h`,
+			);
+			check(
+				wipes.length === 0 && !spB.state.dead && !spC.state.dead,
+				"(a) …with no world's end in sight",
+				`wipes ${wipes.length}`,
+			);
+		}
+
+		// (b) the first player dies and walks home while the other lives
+		{
+			const s = bootServer();
+			const wipes = s.wipes();
+			const a = s.join(newUser(), "first");
+			const b = s.join(newUser(), "second");
+			s.immortal.add(b);
+			s.enter(a);
+			s.enter(b);
+			s.sim.clock.setClock(12, 3);
+			s.kill(a);
+			s.exit(a);
+			const spawned0 = s.sim.horde.population.spawned;
+			s.run(40, 0.25);
+			const spB = s.body(b);
+			check(
+				wipes.length === 0 && !s.host.lives.wipeWindowOpen() && spB !== undefined && !spB.state.dead,
+				"(b) the first dies and goes Home, the second lives: no window, no world's end (somebody is alive)",
+				`wipes ${wipes.length}, window ${s.host.lives.wipeWindowOpen()}`,
+			);
+			check(
+				s.sim.horde.population.spawned > spawned0 && zombiesNear(s, spB).length > 0,
+				"(b) …the horde keeps coming for the one standing",
+				`${s.sim.horde.population.spawned - spawned0} spawned, ${zombiesNear(s, spB).length} near`,
+			);
+			check(
+				s.host.isDead(a, s.save(a)) === true,
+				"(b) …and the first is still dead in the lobby (daybreak or Rebirth)",
+			);
+			const back = s.enter(a);
+			check(back !== undefined && back.state.dead === true, "(b) …and walks back in dead, to wait for daybreak");
+		}
+
+		// (c) the first player leaves and a new one joins: the slot is reused, nothing of the first comes with it
+		{
+			const s = bootServer();
+			const a = s.join(newUser(), "first");
+			const b = s.join(newUser(), "second");
+			for (const p of [a, b]) s.immortal.add(p);
+			s.enter(a);
+			s.enter(b);
+			const saveA = s.save(a);
+			saveA.day = 9;
+			saveA.zombieKills = 57;
+			s.run(2);
+			const slotA = s.body(a).slot;
+			s.quit(a);
+			s.run(1);
+			s.clearWorldLog();
+			clearSnaps(s);
+			const d = s.join(newUser(), "newcomer");
+			s.immortal.add(d);
+			const spD = s.enter(d);
+			s.run(1);
+			const mine = worldTo(s, d);
+			const init = mine.find(ev => ev.t === s.P.WorldEv.InitBegin);
+			const tallies = mine.filter(ev => ev.t === s.P.WorldEv.PlayerTally && ev.slot === spD?.slot);
+			const tally = tallies[tallies.length - 1];
+			check(
+				spD !== undefined && spD.slot === slotA && !spD.state.dead,
+				"(c) the newcomer takes the slot the first left (0), standing",
+				`slot ${spD?.slot}`,
+			);
+			check(
+				init !== undefined && init.seed === s.host.seed,
+				"(c) …is told the server's town (InitBegin: the seed the others play in)",
+				`seed ${init?.seed} vs ${s.host.seed}`,
+			);
+			check(
+				mine.some(ev => ev.t === s.P.WorldEv.PlayerJoined && ev.userId === b.UserId) &&
+					worldTo(s, b).some(ev => ev.t === s.P.WorldEv.PlayerJoined && ev.userId === d.UserId),
+				"(c) …the roster: the newcomer learns of the second, and the second of the newcomer",
+			);
+			check(
+				tally !== undefined && tally.lifeDay === s.save(d).day && tally.kills === 0,
+				"(c) …and the scoreboard shows the newcomer's own numbers, not the first player's (day 9, 57 kills)",
+				tally === undefined ? "no PlayerTally" : `life day ${tally.lifeDay}, kills ${tally.kills}`,
+			);
+			check(
+				snapsTo(s, d) > 0 && snapsTo(s, a) === 0,
+				"(c) …and the snapshots go to the newcomer",
+				`${snapsTo(s, d)} parts`,
+			);
+		}
+
+		// (e) a private server: its owner (PrivateServerOwnerId) leaves while a guest plays, then comes back
+		{
+			const s = bootServer({ privateServer: true });
+			const wipes = s.wipes();
+			const owner = s.join(7, "owner");
+			const guest = s.join(newUser(), "guest");
+			s.immortal.add(owner);
+			s.immortal.add(guest);
+			s.enter(owner);
+			s.enter(guest);
+			s.sim.clock.setClock(12, 3);
+			for (let i = 0; i < 60; i++) {
+				s.walk(owner, 1.1);
+				s.beat();
+			}
+			s.run(1);
+			const kept = { x: s.body(owner).state.x, y: s.body(owner).state.y, hp: s.body(owner).state.hp };
+			const seed = s.host.seed;
+			s.quit(owner);
+			clearSnaps(s);
+			s.run(15, 0.25);
+			check(
+				wipes.length === 0 && snapsTo(s, guest) > 0 && s.host.seed === seed && !s.body(guest).state.dead,
+				"(e) a private server's owner leaves: the guest plays on in the same town",
+				`guest ${snapsTo(s, guest)} parts, wipes ${wipes.length}`,
+			);
+			const owner2 = s.join(7, "owner");
+			const back = s.enter(owner2);
+			check(
+				back !== undefined &&
+					Math.hypot(back.state.x - kept.x, back.state.y - kept.y) < 1 &&
+					back.state.hp <= kept.hp,
+				"(e) …and the owner, back, gets the body they left (no teleport, no heal): nothing on the server is the owner's",
+				back === undefined
+					? "no body"
+					: `${f1(Math.hypot(back.state.x - kept.x, back.state.y - kept.y))} u off`,
+			);
+			// the solo case: the only survivor of a reserved server leaves and comes back to it
+			s.quit(guest);
+			s.quit(owner2);
+			s.run(10, 0.25);
+			const owner3 = s.join(7, "owner");
+			const again = s.enter(owner3);
+			check(
+				again !== undefined && !again.state.dead && s.host.seed === seed && wipes.length === 0,
+				"(e) alone on it, the owner leaves and rejoins: the same world, the same body (the server kept both 5 min)",
+				again === undefined
+					? "no body"
+					: `seed ${s.host.seed === seed ? "same" : "new"}, wipes ${wipes.length}`,
+			);
+		}
+	},
+);
 
 // ================================================================
 

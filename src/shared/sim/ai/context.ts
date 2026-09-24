@@ -195,6 +195,15 @@ export interface AiRefs {
 	 */
 	onZombieGone?: (z: ZombieState, killed: boolean) => void;
 	/**
+	 * The population is about to MOVE this zombie across the map: a wave walker or a special that fell out of every
+	 * survivor's spawn square, put back on the ring of the nearest one (shared/sim/ai/population.ts `cleanup`). Called
+	 * while it still stands where it was. To the clients it is a different body from here on: the server gives it a new
+	 * identity (server/sim/zombies.ts), so the old one leaves in silence where it stood and the new one fades in where it
+	 * lands -- under its old netId every screen that still had it drew it racing across the town in one snapshot
+	 * (docs/MULTIPLAYER.md §4.4, the owner's report of 2026-09-24, tools/test-zombie-motion.mjs (h)).
+	 */
+	onZombieMoved?: (z: ZombieState) => void;
+	/**
 	 * How a bite, a blast or a boss takes HP off a survivor (§2.3 "Dano em jogadores", MP-00).
 	 *
 	 * `damageToPlayer` deliberately becomes a no-op at MP_PHASE ≥ 2 (shared/game/player.ts), because a CLIENT

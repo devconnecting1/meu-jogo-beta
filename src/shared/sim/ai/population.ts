@@ -47,6 +47,16 @@ export const CLUSTER_CLAIM = 1600;
 const CLUSTER_TICK = 1;
 /** §3.5: a boss's HP scales with the survivors within this of the anchor when it wakes */
 const BOSS_SCALE_RANGE = 1500;
+/**
+ * Half of the screen a zombie should not appear on (§3.5 "fora da tela"): a 1920 × 1080 view at zoom 1 (1 u = 1 px,
+ * client/bootstrap.ts) around a survivor, plus a big walker's width. The original's 1120 × 630 view never showed its
+ * 720–1080 px spawn ring; ours, at a player's native resolution, shows the near half of it. The server does not know
+ * each client's screen, so this is the common one: a wider one still sees the ring, and the fade-in covers it.
+ */
+export const SPAWN_VIEW_HALF_W = 1000;
+export const SPAWN_VIEW_HALF_H = 580;
+/** how far past that screen's edge a spawn is pushed out along its own direction */
+const SPAWN_VIEW_PUSH = 8;
 
 /** §3.5: S(k) = 1 + 0,5·(k − 1) — sublinear on purpose, see the header */
 export function clusterScale(k: number): number {
@@ -142,6 +152,26 @@ function pickSpecialType(zombies: Array<ZombieState>): ZombieType {
 	return choose(SPECIAL_TYPES) as ZombieType;
 }
 
+/**
+ * `p` (a point on the ring of `cx, cy`), moved out along its own direction to just past the edge of the screen of a
+ * survivor standing at the centre (SPAWN_VIEW_HALF_*) when it is on that screen and the edge is still within `maxR`;
+ * `p` itself otherwise (already off it, or the screen reaches past the ring that way: the corners of a wide screen).
+ */
+function pushOffScreen(cx: number, cy: number, p: { x: number; y: number }, maxR: number): { x: number; y: number } {
+	const dx = p.x - cx;
+	const dy = p.y - cy;
+	if (math.abs(dx) > SPAWN_VIEW_HALF_W || math.abs(dy) > SPAWN_VIEW_HALF_H) return p;
+	const r = math.sqrt(dx * dx + dy * dy);
+	if (r <= 0) return p;
+	const ux = dx / r;
+	const uy = dy / r;
+	const toSide = math.abs(ux) > 1e-6 ? SPAWN_VIEW_HALF_W / math.abs(ux) : math.huge;
+	const toTop = math.abs(uy) > 1e-6 ? SPAWN_VIEW_HALF_H / math.abs(uy) : math.huge;
+	const edge = math.min(toSide, toTop) + SPAWN_VIEW_PUSH;
+	if (edge > maxR) return p;
+	return { x: cx + ux * edge, y: cy + uy * edge };
+}
+
 function rollGroundLoot(): { kind: number; index: number; count: number } {
 	const lootTable = BUILDING_SPAWNS[0];
 	const e = choose(lootTable);
@@ -214,9 +244,23 @@ export class Population {
 		return true;
 	}
 
+	/** off the screen of every survivor in the world (SPAWN_VIEW_HALF_*), the dead too: they are looking as well */
+	private offEveryScreen(refs: Ctx.AiRefs, x: number, y: number): boolean {
+		for (const p of refs.players) {
+			if (math.abs(p.x - x) <= SPAWN_VIEW_HALF_W && math.abs(p.y - y) <= SPAWN_VIEW_HALF_H) return false;
+		}
+		return true;
+	}
+
 	/**
 	 * A point on the spawn ring of `cx, cy` that is free of solids and — MP-09 — at least MP09_SAFE_RADIUS
 	 * from EVERY survivor, not just the one the ring is drawn around.
+	 *
+	 * `hidden`: and preferably off every survivor's screen. A point on the part of the ring the screen shows is first
+	 * pushed out along its own direction to just past the screen's edge, when that is still on the ring — so the
+	 * directions a zombie comes from stay as even as they were, it just starts where nobody sees it appear. Only when
+	 * none of the tries lands off every screen is the first acceptable point taken as it is: the horde's numbers
+	 * never wait on a screen (and the client fades a body in anyway).
 	 */
 	private ringOpen(
 		refs: Ctx.AiRefs,
@@ -225,16 +269,20 @@ export class Population {
 		minR: number,
 		maxR: number,
 		safe = false,
+		hidden = false,
 	): { x: number; y: number } | undefined {
 		const world: WorldData = refs.world;
+		let fallback: { x: number; y: number } | undefined;
 		for (let i = 0; i < 12; i++) {
-			const p = randomRingPoint(cx, cy, minR, maxR);
+			let p = randomRingPoint(cx, cy, minR, maxR);
+			if (hidden) p = pushOffScreen(cx, cy, p, maxR);
 			if (p.x < 0 || p.y < 0 || p.x > world.width || p.y > world.height) continue;
 			if (circleBlocked(world, p.x, p.y, SPAWN_CLEARANCE) !== undefined) continue;
 			if (safe && !this.farFromEveryone(refs, p.x, p.y)) continue;
-			return p;
+			if (!hidden || this.offEveryScreen(refs, p.x, p.y)) return p;
+			if (fallback === undefined) fallback = p;
 		}
-		return undefined;
+		return fallback;
 	}
 
 	/**
@@ -321,7 +369,7 @@ export class Population {
 		// MP-09: hard ceiling on what one server simulates
 		if (refs.zombies.size() >= MP09_ZOMBIE_CAP) return false;
 		const p = this.ringPlayer(refs, c, st);
-		const pos = this.ringOpen(refs, p.x, p.y, DESIGN.ZOMBIE_SPAWN_MIN, DESIGN.ZOMBIE_SPAWN_MAX, true);
+		const pos = this.ringOpen(refs, p.x, p.y, DESIGN.ZOMBIE_SPAWN_MIN, DESIGN.ZOMBIE_SPAWN_MAX, true, true);
 		if (pos === undefined) return false;
 		const z = createZombie(zType, pos.x, pos.y, refs.clock.day, wave);
 		// anti-ESP (§4.3, §9.1): born at the alpha the light at (pos.x, pos.y) already gives it, not always
@@ -464,17 +512,24 @@ export class Population {
 		return false;
 	}
 
-	/**
-	 * Zombies that fell out of every survivor's spawn square: plain walkers vanish; wave walkers and specials
-	 * are moved back onto the ring of the nearest survivor (original deactive/respawn), so a night wave or a
-	 * rare special is not lost just because somebody ran.
-	 */
 	/** a zombie nobody can see any more leaves in silence: the replication has to know it is gone (§4.4) */
 	private recycle(refs: Ctx.AiRefs, i: number): void {
 		if (refs.onZombieGone !== undefined) refs.onZombieGone(refs.zombies[i], false);
 		refs.zombies.remove(i);
 	}
 
+	/**
+	 * Zombies that fell out of every survivor's spawn square: plain walkers vanish; wave walkers and specials
+	 * are moved back onto the ring of the nearest survivor (original deactive/respawn), so a night wave or a
+	 * rare special is not lost just because somebody ran.
+	 *
+	 * The move is a despawn and a spawn to everybody watching, never a walk: the replication gives the body a new
+	 * identity (`onZombieMoved`, before it moves), it lands preferably off every screen (`ringOpen` hidden), and it
+	 * arrives at the alpha the light THERE gives it, like any spawn (`spawnAlpha`: kept from where it was, a body lit
+	 * over there would be sent to a viewer who is in the dark here, §4.3). Under the old identity every screen that
+	 * still had it drew it crossing the town in one snapshot: a special orbiting an explorer, relocated every few
+	 * seconds, at 10 000–20 000 u/s (tools/test-zombie-motion.mjs (h), the owner's report of 2026-09-24).
+	 */
 	private cleanup(refs: Ctx.AiRefs): void {
 		for (let i = refs.zombies.size() - 1; i >= 0; i--) {
 			const z = refs.zombies[i];
@@ -483,10 +538,12 @@ export class Population {
 			if (z.wave || z.special) {
 				const pi = Ctx.nearestPlayerIndex(refs, z.x, z.y);
 				const p = refs.players[pi < 0 ? 0 : pi];
-				const pos = this.ringOpen(refs, p.x, p.y, DESIGN.ZOMBIE_SPAWN_MIN, DESIGN.ZOMBIE_SPAWN_MAX, true);
+				const pos = this.ringOpen(refs, p.x, p.y, DESIGN.ZOMBIE_SPAWN_MIN, DESIGN.ZOMBIE_SPAWN_MAX, true, true);
 				if (pos !== undefined) {
+					if (refs.onZombieMoved !== undefined) refs.onZombieMoved(z);
 					z.x = pos.x;
 					z.y = pos.y;
+					z.alpha = spawnAlpha(refs, pos.x, pos.y);
 					z.spawnX = pos.x;
 					z.spawnY = pos.y;
 					z.jumping = false;

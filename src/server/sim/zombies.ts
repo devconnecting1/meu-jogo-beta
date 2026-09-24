@@ -160,6 +160,9 @@ export class ZombieWorld {
 				this.solidCount = this.world.solids.size();
 			},
 			onZombieGone: (z, killed) => this.retire(z, killed),
+			// moved across the map by the population: the old identity leaves in silence where the body stands now, and
+			// the end of this tick hands it a new one (`trackEntities`) -- a new body to every client, never a walk
+			onZombieMoved: z => this.retire(z, false),
 			puddles: [],
 			sounds: [],
 			explosions: [],
@@ -322,6 +325,10 @@ export class ZombieWorld {
 	/**
 	 * A zombie is leaving the world and the simulation said so itself, which is the only way to know WHERE it
 	 * fell and WHY (a record stamped at the end of the tick is already one tick stale, and the body is gone).
+	 *
+	 * Also the first half of a relocation (`onZombieMoved`): the body stays in the list, so `trackEntities` finds it
+	 * without a record at the end of this tick and gives it a fresh netId -- which is exactly a despawn here and a
+	 * spawn there to every client (§4.4). The freed id comes back only NET_ID_REUSE_DELAY_S later, like any other.
 	 */
 	private retire(z: ZombieState, killed: boolean): void {
 		const rec = this.ids.get(z);

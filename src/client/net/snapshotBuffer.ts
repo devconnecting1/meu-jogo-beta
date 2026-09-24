@@ -62,6 +62,8 @@ import {
 	SIM_HZ,
 	SNAP_NEAR_HZ,
 	TRACK_FADE_IN_RATE,
+	TRACK_SNAP_SLACK_U,
+	ZOMBIE_TELEPORT_UPS,
 	midViewExtraTicks,
 	ticksPer,
 } from "shared/net/mpConfig";
@@ -318,10 +320,16 @@ class ActorTrack {
 	extra = -1;
 	/** where it stands in the buffer's draw order (`SnapshotBuffer.zOrder`), or -1 */
 	ix = -1;
+	/**
+	 * The tick the track (re)started at (`SnapshotBuffer.restartTrack`): a sample from before it belongs to the body it
+	 * was before the break, and interpolated towards the new one it would draw the very slide the restart is for.
+	 */
+	floor = -math.huge;
 
 	constructor(readonly netId: number) {}
 
 	insert(s: ActorSample): boolean {
+		if (s.tick < this.floor) return false;
 		return insertSample(this.samples, s);
 	}
 }
@@ -387,6 +395,8 @@ export interface SnapshotStats {
 	relocks: number;
 	/** seconds of hitch frames the render time did not run through, because no tick had arrived for them */
 	absorbedS: number;
+	/** zombie tracks started again, faded in, instead of drawn gliding: a re-entry or a teleport (`discontinuous`) */
+	restarts: number;
 }
 
 /** the median of a few values (LOCK_SAMPLES), without touching the caller's array */
@@ -506,6 +516,8 @@ export class SnapshotBuffer {
 	private accepted = 0;
 	private dropped = 0;
 	private stalls = 0;
+	/** zombie tracks started again at a re-entry or a teleport (`restartTrack`) */
+	private restarts = 0;
 
 	/** the server's SIM_HZ, from InitBegin (§3.1: it may be the 30 Hz fallback) */
 	setRate(simHz: number): void {
@@ -578,6 +590,45 @@ export class SnapshotBuffer {
 		this.zOrder.push(track);
 		this.zombies.set(netId, track);
 		return track;
+	}
+
+	/**
+	 * Does a sample of `track`, newer than all it holds, break its walk? Two ways, and neither may be drawn as motion:
+	 *
+	 *   re-entry  nothing came for longer than its ring's despawn timeout (§4.4): it left the interest, the light or the
+	 *             roof rule and came back (or the snapshot cap skipped it). Whatever it did meanwhile was not sent, and
+	 *             interpolating from where it was last seen showed a body gliding there -- held, then jumping to wherever
+	 *             the interpolation stood between the two;
+	 *   teleport  further from its last sample than any zombie can go in that time (ZOMBIE_TELEPORT_UPS): a netId the
+	 *             server moved or handed to another body. The server gives a relocation a new netId, so this is the
+	 *             client's guard for whatever else could; drawn, it was a body racing across the screen.
+	 */
+	private discontinuous(track: ActorTrack, tick: number, x: number, y: number): boolean {
+		const n = track.samples.size();
+		if (n === 0) return false;
+		const last = track.samples[n - 1];
+		const gap = tick - last.tick;
+		if (gap <= 0) return false;
+		if (gap > (track.mid ? DESPAWN_MID_S : DESPAWN_NEAR_S) * this.simHz) return true;
+		const dx = x - last.x;
+		const dy = y - last.y;
+		const reach = (ZOMBIE_TELEPORT_UPS * gap) / this.simHz + TRACK_SNAP_SLACK_U;
+		return dx * dx + dy * dy > reach * reach;
+	}
+
+	/**
+	 * The track starts again at `tick` (see `discontinuous`): its history is dropped, so it is drawn at the new sample from
+	 * the next frame on, never interpolated from the old one; it fades in from nothing there, like a body seen for the
+	 * first time; and nothing from before `tick` may join it again (`floor`). Its place in the draw order and its extra
+	 * delay stay: the server mirrors that delay per (viewer, netId) until the client would have retired the track, so it
+	 * must go on easing as it was (server/net/interest.ts `noteSent`).
+	 */
+	private restartTrack(track: ActorTrack, tick: number): void {
+		track.samples.clear();
+		track.floor = tick;
+		track.alpha = 0;
+		track.hasDrawn = false;
+		this.restarts += 1;
 	}
 
 	/** a zombie track goes: the last one of the draw order takes its place, so nobody else moves (`zOrder`) */
@@ -676,6 +727,7 @@ export class SnapshotBuffer {
 			}
 			let track = this.zombies.get(z.netId);
 			if (track === undefined) track = this.addZombie(z.netId);
+			else if (this.discontinuous(track, tick, z.x, z.y)) this.restartTrack(track, tick);
 			if (track.insert(zombieSample(tick, z))) {
 				track.lastSeen = arrival;
 				track.mid = z.mid;
@@ -1176,6 +1228,7 @@ export class SnapshotBuffer {
 			stalls: this.stalls,
 			relocks: this.relocks,
 			absorbedS: this.absorbedTicks / this.simHz,
+			restarts: this.restarts,
 		};
 	}
 }

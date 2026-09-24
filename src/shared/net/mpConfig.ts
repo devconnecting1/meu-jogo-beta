@@ -229,6 +229,16 @@ export const DESPAWN_NEAR_S = 0.3;
 export const DESPAWN_MID_S = 0.6;
 export const DESPAWN_FADE_S = 0.15;
 /**
+ * (§4.4, §5.1) Faster than any zombie can move, u/s: the charger's rush tops out at 750 (zombieTuning RUSH_SPEED_MAX),
+ * a walker at 150 with a 270 knockback on top. Two samples of one netId further apart than this (plus
+ * TRACK_SNAP_SLACK_U) are not one walk, and the client does not draw them as one: it starts the track again at the new
+ * sample, faded in (client/net/snapshotBuffer.ts `discontinuous`). The server never sends that since a relocation
+ * takes a new netId (server/sim/zombies.ts); this is the client's own guard, for whatever else could.
+ */
+export const ZOMBIE_TELEPORT_UPS = 1500;
+/** what two samples may disagree by on top of ZOMBIE_TELEPORT_UPS: the wire's 0.5 u steps and a tick of rounding */
+export const TRACK_SNAP_SLACK_U = 24;
+/**
  * A received body's fade-in, alpha per second (client/net/snapshotBuffer.ts). The server needs it too: a track that
  * never fully appeared fades out sooner, and server/net/interest.ts has to know when the client's track is gone.
  */

@@ -1053,9 +1053,19 @@ export class LifeKeeper {
 		let waiting = 0;
 		const dead = new Array<number>();
 		for (const [userId, rec] of this.records) {
-			// somebody who left the server is not a survivor of this world any more, and somebody who never had a
-			// body in it (a death carried in from another session, asked about from the lobby) never was
-			if (rec.goneFor !== undefined || !rec.entered) continue;
+			// somebody who never had a body in this world (a death carried in from another session, asked about from the
+			// lobby) never was one of its survivors
+			if (!rec.entered) continue;
+			if (rec.goneFor !== undefined) {
+				// somebody who left the server is not a survivor of this world any more: never counted standing. But one who
+				// left it DEAD while the world was already lost -- the window open -- declined (`disconnect`: "sair do
+				// servidor", MP-22), and still counts among its fallen: without that, the last of the dead walking out
+				// closed the window as if the world were merely empty, and it went on, lost, for whoever came next (a
+				// newcomer entered it on its old day and the dead came back dead into it; tools/test-reset.mjs 19). A
+				// death left behind while somebody still stood is only a departure: nobody is waiting on it
+				if (rec.dead && this.wipeIn !== undefined) dead.push(userId);
+				continue;
+			}
 			const sp = this.inWorld(rec);
 			// a body standing in the street is standing, whatever its save is doing
 			if (sp !== undefined && !sp.state.dead) {
