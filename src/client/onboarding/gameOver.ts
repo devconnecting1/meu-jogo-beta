@@ -37,6 +37,8 @@ import {
 	uiScale,
 } from "../ui/widgets";
 
+const RunService = game.GetService("RunService");
+
 /*
  * The death screen (docs/DESIGN_RULES.md UI-13, MP-21, MP-22): what happened, what happens next, what you can do
  * about it, and -- quietly, last -- what the life added up to.
@@ -244,9 +246,13 @@ function findGui(root: Instance, name: string): GuiObject | undefined {
 	return undefined;
 }
 
-/** the screen both endings share, in one of its modes; `refresh` is its per-frame half */
+/**
+ * the screen both endings share, in one of its modes; `refresh` is its per-frame half, `lesson` the cause line's alone
+ * (the "over" state, which nothing refreshes)
+ */
 interface DeathScreen {
 	refresh(seconds: number, night: boolean): void;
+	lesson(): void;
 	close(): void;
 }
 
@@ -689,6 +695,9 @@ function buildDeathScreen(
 		refresh(seconds: number, night: boolean): void {
 			refresh(seconds, night);
 		},
+		lesson(): void {
+			if (root.Parent !== undefined) writeLesson(causeOf?.());
+		},
 		close(): void {
 			confirm?.Destroy();
 			confirm = undefined;
@@ -704,7 +713,13 @@ function buildDeathScreen(
  */
 export function showRunSummary(ctx: GameContext, summary: RunSummary, handlers: RunSummaryHandlers): () => void {
 	const screen = buildDeathScreen(ctx, summary, handlers, false, false, undefined);
-	return (): void => screen.close();
+	// UI-13: nothing refreshes this screen per frame, and the server's word on the cause may land after it opened (a slow
+	// link, a reconnect's re-send): it is read every frame while the screen is up, and written the frame it changes
+	const poll = handlers.cause !== undefined ? RunService.Heartbeat.Connect(() => screen.lesson()) : undefined;
+	return (): void => {
+		poll?.Disconnect();
+		screen.close();
+	};
 }
 
 /** the daybreak screen, while it is on screen */

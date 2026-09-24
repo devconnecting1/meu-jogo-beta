@@ -1,5 +1,6 @@
 import { DESIGN } from "shared/engine/constants";
 import { damageCal, rnd, rndInt } from "shared/engine/rng";
+import { HurtBy } from "shared/data/deathCause";
 import { WeaponKind } from "shared/data/kinds";
 import { WeaponDef, WEAPONS } from "shared/data/weapons";
 import { EQUIPS } from "shared/data/equips";
@@ -64,6 +65,14 @@ export interface PlayerState {
 	 * from the self block's hp (client/net/prediction.ts).
 	 */
 	sinceHurt?: number;
+	/**
+	 * What took this body's hp LAST while it was still alive (shared/data/deathCause.ts `HurtBy`): a blow
+	 * (`applyPlayerDamage`: a bite, a boss, a blast, a crash), the empty stomach, poison, or rotten meat. At the death it
+	 * says what was lethal -- the death screen's cause and the analytics `Died` field read it (UI-13 / BEM-08: "Starved."
+	 * only when starving killed). Written only while hp was above 0, so the step that crossed 0 is the one kept. Never on
+	 * the wire; undefined = nothing recorded (a fresh body).
+	 */
+	lastHurt?: number;
 	/** seconds of spitter-acid slow left (set by zombieAI while standing in a puddle) */
 	puddleSlow?: number;
 	vehicleId: number;
@@ -220,6 +229,7 @@ export function itemUseEffect(p: PlayerState, save: PlayerSaveData, usableId: nu
 	if (!itemUseWouldWork(p, save, usableId)) return false;
 	const u = USABLES[usableId];
 
+	if (u.hp < 0 && p.hp > 0) p.lastHurt = HurtBy.Item;
 	p.hp = math.clamp(p.hp + u.hp, -1000, p.hpMax);
 	if (u.hp < 0) p.sinceHurt = 0;
 	p.hungry = math.clamp(p.hungry + u.hunger, 0, p.hungryMax);
@@ -263,6 +273,7 @@ export function applyPlayerDamage(p: PlayerState, save: PlayerSaveData, raw: num
 		dd -= playerEquipDefence(save);
 		if (dd < 0) dd = 0;
 	}
+	if (dd > 0 && p.hp > 0) p.lastHurt = HurtBy.Blow;
 	p.hp -= dd;
 	if (dd > 0) p.sinceHurt = 0;
 	p.hitFlash = 1;

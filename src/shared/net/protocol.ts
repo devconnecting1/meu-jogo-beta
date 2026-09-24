@@ -125,16 +125,23 @@
  *       - The survivor's own hands: the wallet's `bag` (shared/game/save.ts `BagMirror`) carries `holster` 0 / 1 next
  *         to `ack`, so the client's prediction is laid over the server's answer by the nonce, like every verb's
  *         (client/net/bagPrediction.ts `rebase`). `readBag` clamps it; a bag without it reads 0, drawn. Never saved.
- * 21. (UI-13 / BEM-08, the death screen teaches) No new message and no byte more per event: one more AnnounceKind,
- *     `Died` (7), whose `arg` is the cause the server read off the body at the instant it killed this survivor
- *     (shared/data/deathCause.ts `deathKindOf`, the same rule as the analytics `Died` event): the kind in bits 0-2
- *     (1 horde, 2 hunger, 3 poison, 4 boss) and bit 3 set when it happened at night -- `deathWireOf`. S→C only, reliable,
- *     and DIRECTED: server/sim/life.ts `died` -> server/net/replication.ts `died` -> `queueFor(slot)`, like TitleUnlocked;
- *     nobody else hears why somebody died. The decoder refuses any arg `deathFromWire` does not know (kind 0 or > 4, any
- *     other bit), like a TitleUnlocked arg out of range, and the client never lets it reach the round banner
- *     (netClient.ts: it is noted for the death screen and nothing else). A client and its server always run the same
- *     build, so no older decoder ever meets the new kind. It carries nothing the dead survivor could not see: their own
- *     hunger and poison, and whether a boss stood within BOSS_REACH (bosses are on the snapshot). No C→S change.
+ * 23. (UI-13 / BEM-04 / BEM-08, the death screen teaches, the dawn card's break line) No new message and no byte more
+ *     per event: two more AnnounceKinds, both S→C only, reliable and DIRECTED (`queueFor(slot)`, like TitleUnlocked):
+ *       - `Died` (7), whose `arg` is the cause of this survivor's death, read by the server off the lethal damage
+ *         (shared/data/deathCause.ts `deathKindOf`, the same rule as the analytics `Died` event): the kind in bits 0-2
+ *         (1 horde, 2 hunger, 3 poison, 4 boss) and bit 3 set when it happened at night (19:00-06:00) --
+ *         `deathWireOf`. server/sim/life.ts `died` -> server/net/replication.ts `died`; the life record keeps it and
+ *         `enter` sends it again, after the welcome's PlayerLife Dead, to a survivor who comes back to the same death
+ *         (Home and PLAY, a reconnect). Nobody else hears why somebody died. The decoder refuses any arg
+ *         `deathFromWire` does not know (kind 0 or > 4, any other bit).
+ *       - `BreakNudge` (8), arg 0 and nothing else: the SERVER's rule gave this survivor the break line at dawn
+ *         (shared/data/wellbeing.ts `breakNudgeEarned`: a session of BREAK_NUDGE_MIN minutes, the night lived standing
+ *         since midnight; once per session, decided in server/main.server.ts, which also logs the analytics
+ *         `BreakNudge`), so the line the player reads and the event the dashboard counts are one decision.
+ *     The client never lets either reach the round banner (netClient.ts: each is noted for its screen and nothing
+ *     else). A client and its server always run the same build, so no older decoder ever meets the new kinds. Neither
+ *     carries anything the survivor could not see or know: their own hunger and poison, whether a boss stood within
+ *     BOSS_REACH (bosses are on the snapshot), and how long they have played. No C→S change.
  */
 import {
 	NetReader,
@@ -1487,12 +1494,17 @@ export const AnnounceKind = {
 	/** (MON-05) arg = the title byte (`titleToWire`, 1..TITLE_WIRE_MAX); sent only to the survivor who earned it */
 	TitleUnlocked: 6,
 	/**
-	 * (UI-13, note 21) arg = why this survivor just died (shared/data/deathCause.ts `deathWireOf`: the kind, and bit 3 for
+	 * (UI-13, note 23) arg = why this survivor just died (shared/data/deathCause.ts `deathWireOf`: the kind, and bit 3 for
 	 * night); sent only to the survivor who died
 	 */
 	Died: 7,
+	/**
+	 * (BEM-04, note 23) arg = 0: the server's rule gave this survivor the dawn card's break line (a long session, a night
+	 * lived standing); sent only to them, once per session. The client shows the line because the server said so
+	 */
+	BreakNudge: 8,
 } as const;
-const ANNOUNCE_KIND_MAX = 7;
+const ANNOUNCE_KIND_MAX = 8;
 
 export interface WSolidAdd {
 	t: typeof WorldEv.SolidAdd;
@@ -1936,8 +1948,10 @@ function readWorldEvent(r: NetReader): WorldEvent | undefined {
 		if (msg < 1 || msg > ANNOUNCE_KIND_MAX) return undefined;
 		// MON-05: a title that does not exist is not something to announce
 		if (msg === AnnounceKind.TitleUnlocked && (arg < 1 || arg > TITLE_WIRE_MAX)) return undefined;
-		// note 21: a cause the server never writes (kind 0 or past the table, a stray bit) is malformed
+		// note 23: a cause the server never writes (kind 0 or past the table, a stray bit) is malformed
 		if (msg === AnnounceKind.Died && deathFromWire(arg) === undefined) return undefined;
+		// ...and the break line carries nothing: any other arg is malformed
+		if (msg === AnnounceKind.BreakNudge && arg !== 0) return undefined;
 		return { t: WorldEv.Announce, msg, arg };
 	} else if (t === WorldEv.ZombieDied) {
 		const netId = r.u16();

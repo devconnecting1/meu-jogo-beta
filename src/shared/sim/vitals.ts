@@ -26,6 +26,7 @@
  *
  * Pure: no Instances, no services, no random numbers.
  */
+import { HurtBy } from "shared/data/deathCause";
 import type { PlayerState } from "shared/game/player";
 import type { PlayerSaveData } from "shared/game/save";
 
@@ -107,12 +108,15 @@ export function stepVitals(p: PlayerState, save: PlayerSaveData, dt: number): vo
 	const hungerRate = 1 - save.skillLevels[8] / 3;
 	p.hungry = math.max(0, p.hungry - HUNGER_PER_S * hungerRate * dt);
 	let hurt = false;
+	// what took the hp is noted only while the body was alive: the step that crossed 0 is the lethal one (deathCause.ts)
 	if (p.hungry <= 0) {
+		if (p.hp > 0) p.lastHurt = HurtBy.Hunger;
 		p.hp -= STARVE_HP_PER_S * dt;
 		hurt = true;
 	}
 	if (p.buffs.poison > 0) {
 		p.buffs.poison -= dt;
+		if (p.hp > 0) p.lastHurt = HurtBy.Poison;
 		p.hp -= POISON_HP_PER_S * (save.skillLevels[20] > 0 ? 0.5 : 1) * dt;
 		hurt = true;
 	}

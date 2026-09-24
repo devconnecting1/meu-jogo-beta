@@ -569,7 +569,7 @@ export const LANG_TABLE: Array<string> = [
 	// the death screen's lesson (DESIGN_RULES UI-13 / BEM-08, shared/data/deathCause.ts): the cause the server read off
 	// the body, then one tip for it after "Tip:" -- facts of this game, never a blame
 	"Killed by the horde at night.",
-	"Killed by zombies in daylight.",
+	"Killed by zombies.",
 	"Starved.",
 	"Poisoned.",
 	"Killed by a boss.",
@@ -599,10 +599,9 @@ export const LANG_TABLE: Array<string> = [
 	"Progress saved",
 	"You've played for over 90 minutes. Dawn is a good time for a break.",
 	// the level-up line (DESIGN_RULES BEM-08): what the level gave, and where it is spent ("Level 5 · +1 skill point ·
-	// Bag › Skills"; "Level" and "Skills" are listed above)
+	// Backpack › Skills": the window's own title; "Level", "Backpack" and "Skills" are listed above)
 	"skill point",
 	"skill points",
-	"Bag",
 	// UI-06: the rule said out loud -- the "How to play" tips (one key, as tutorial.ts passes it)
 	"The backpack and the menu never stop the world: open them somewhere safe.#Fire keeps the night lit and cooks what you find — 10 wood makes a campfire, no workbench needed.#Houses are looted once with E; their shelves refill after half a day.#Hunger drains all day: eat before it empties, not after.#Waves come at 19:00, 22:00 and 01:00. Be somewhere you chose.",
 	// the item card (client/ui/itemCard.ts + itemInfo.ts, DESIGN_RULES UI-08): types, stat labels, notes and the

@@ -7,8 +7,10 @@
  *
  *   zombies   the killing blows the SERVER credited to this survivor over the night (`save.zombieKills`, the counter the
  *             wallet push mirrors; MON-05): never a guess made here
- *   damage    the health this survivor lost over the night, as the body the client draws had it (the server's own hp in
- *             a session, read back from the self block): every bite, blast, poison tick and empty-stomach tick
+ *   damage    the health this survivor lost over the night: in a session the SERVER's hp, read from the last self block
+ *             (client/net/netClient.ts `netSelfHp`) -- never the prediction, whose wobble around each ack would count
+ *             as hits; offline the body's own. Every bite, blast, poison tick and empty-stomach tick; a heal never
+ *             takes a hit back
  *   items     the pickups client/systems/pickups.ts counted: only the ones the server made for THIS survivor
  *
  * A night counts from the first frame this survivor is alive in the city after nightfall (or after a Rebirth in it) to
@@ -16,7 +18,7 @@
  * does leaving the city. A night lived for less than MIN_NIGHT_SHARE of its length (a survivor who walked in at 05:50)
  * earns no card: there was no night to report. Pure: no Instances, no services.
  */
-import { BREAK_NUDGE_MIN, MIN_NIGHT_SHARE, NIGHT_LIVED_S } from "shared/data/wellbeing";
+import { MIN_NIGHT_SHARE, NIGHT_LIVED_S } from "shared/data/wellbeing";
 
 export { MIN_NIGHT_SHARE };
 
@@ -95,9 +97,9 @@ export class NightTally {
 }
 
 /**
- * The break line (BEM-04, research §4.7 recommendation 3): once per session, and only once the session has lasted
- * BREAK_NUDGE_MIN minutes. `sessionSeconds`: real seconds since this client joined the server.
+ * The break line (BEM-04, research §4.7 recommendation 3) is the SERVER's decision (shared/data/wellbeing.ts
+ * `breakNudgeEarned`, told as `Announce{BreakNudge}`): this client only shows it. On the dawn card when the card is up
+ * (or comes up within this many seconds of being told: the two dawns, the server's and this client's, are a frame or
+ * two apart); otherwise, on the message feed -- a line the server counted is always a line the player saw.
  */
-export function breakNudgeDue(sessionSeconds: number, alreadyShown: boolean): boolean {
-	return !alreadyShown && sessionSeconds >= BREAK_NUDGE_MIN * 60;
-}
+export const BREAK_CARD_WAIT_S = 3;

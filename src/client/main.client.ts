@@ -24,6 +24,8 @@ import {
 	netLeaveWorld,
 	netOnTown,
 	netPrewarm,
+	netSelfHp,
+	netTakeBreakNudge,
 	netTownSeed,
 	remotePlayers,
 	TownNotice,
@@ -40,7 +42,7 @@ import {
 import { craft, craftBlocker, stationNear } from "./systems/craftSystem";
 import { chooseWeapon } from "./systems/combat";
 import { hintedItem, interactHint } from "./systems/interaction";
-import { NightTally, breakNudgeDue } from "./systems/nightReport";
+import { BREAK_CARD_WAIT_S, NightTally } from "./systems/nightReport";
 import { pickupCount } from "./systems/pickups";
 import * as net from "./systems/saveClient";
 import * as Bag from "./net/backpackSync";
@@ -142,10 +144,11 @@ let endedLife: RunSummary | undefined;
 let deathCause: DeathNote | undefined;
 /** BEM-04: the night being counted for the dawn card (client/systems/nightReport.ts) */
 const nightTally = new NightTally();
-/** os.clock() this client started -- joined the server: a session's length for the dawn card's break line */
-const SESSION_START = os.clock();
-/** the break line was shown this session (it is shown once) */
-let breakNudged = false;
+/**
+ * BEM-04: os.clock() the server told this survivor the break line (netClient.ts `netTakeBreakNudge`), until it is shown:
+ * on the dawn card, or on the feed after BREAK_CARD_WAIT_S without one. The client never decides the line itself.
+ */
+let breakNudgeAt: number | undefined;
 /** MP-22: worlds that ended while this client was connected; a run action that raced one is superseded by it */
 let worldResets = 0;
 /**
@@ -306,8 +309,9 @@ function trackAfter(): void {
 
 /**
  * BEM-04: one frame of the night's numbers (client/systems/nightReport.ts); at the first light after a night this
- * survivor lived through standing, the dawn card -- with the break line once per session after a long one. Runs every
- * frame of a run, the dead included (a death drops the night).
+ * survivor lived through standing, the dawn card. The break line is the server's word (protocol note 23): on the card
+ * when it is up, else on the feed -- shown whenever it was told, never decided here. Runs every frame of a run, the
+ * dead included (a death drops the night).
  */
 function stepNight(alive: boolean): void {
 	const refs = loop.getRefs();
@@ -315,15 +319,21 @@ function stepNight(alive: boolean): void {
 	const report = nightTally.step({
 		night: refs.daynight.isNight,
 		alive: alive && ctx.phase === "playing",
-		hp: refs.player.hp,
+		// the server's hp when it owns the body (the self block), never the prediction's
+		hp: netSelfHp() ?? refs.player.hp,
 		kills: ctx.save.zombieKills,
 		pickups: pickupCount(),
 		now,
 	});
-	if (report === undefined) return;
-	const nudge = breakNudgeDue(now - SESSION_START, breakNudged);
-	if (nudge) breakNudged = true;
-	hud.showDawnReport(report, nudge);
+	if (report !== undefined) hud.showDawnReport(report);
+	if (netTakeBreakNudge()) breakNudgeAt = now;
+	if (breakNudgeAt === undefined) return;
+	if (hud.dawnBreakLine()) {
+		breakNudgeAt = undefined;
+	} else if (now - breakNudgeAt >= BREAK_CARD_WAIT_S) {
+		hud.breakLineOnFeed();
+		breakNudgeAt = undefined;
+	}
 }
 
 // ---------------------------------------------------------------- screens

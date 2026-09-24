@@ -3846,44 +3846,106 @@ section("33) BEM: the dead survivor alone is told why (UI-13), and the dawn asks
 			.filter(e => e.t === srv.P.WorldEv.Announce && e.msg === srv.P.AnnounceKind.Died)
 			.map(e => DC.deathFromWire(e.arg));
 
-	// (a) starving at night, poisoned by day: each death told once, to the one who died, with its cause
+	// (a) the cause is the LETHAL damage's source (L8 of the review of ca9494a): the empty stomach at night, poison by day
+	// -- each death told once, to the one who died -- and a starving body a blow finishes is the blow's
+	const { SPAWN_SHIELD_S } = require(join(SRC, "server/sim/players.ts"));
 	{
 		const s = bootServer();
 		const a = s.join(newUser(), "starved");
 		const b = s.join(newUser(), "witness");
 		const c = s.join(newUser(), "poisoned");
+		const d = s.join(newUser(), "bitten");
 		s.immortal.add(b);
 		const spA = s.enter(a);
 		s.enter(b);
 		s.sim.clock.setClock(22);
-		s.run(0.5);
+		s.run(SPAWN_SHIELD_S + 0.5);
+		// the last hundredth of its hp, and an empty stomach: the next tick of hunger is the lethal one
 		spA.state.hungry = 0;
-		s.kill(a);
+		spA.state.hp = 0.005;
+		const starvedIn = s.runUntil(() => spA.state.dead === true, 2);
+		s.beat();
 		const first = causes(s, a);
 		check(
-			first.length === 1 && first[0]?.kind === DC.DeathKind.Hunger && first[0]?.night === true,
-			"a survivor who starves at 22:00 is told Announce{Died}: Hunger, at night -- once",
-			JSON.stringify(first),
+			starvedIn >= 0 &&
+				spA.state.lastHurt === DC.HurtBy.Hunger &&
+				first.length === 1 &&
+				first[0]?.kind === DC.DeathKind.Hunger &&
+				first[0]?.night === true,
+			"a survivor the empty stomach kills at 22:00 (the hunger tick took the last hp) is told Announce{Died}: Hunger, at night -- once",
+			JSON.stringify({ starvedIn, lastHurt: spA.state.lastHurt, first }),
 		);
 		check(causes(s, b).length === 0, "…and nobody else hears it (directed, like a title)");
-		// another survivor, in the afternoon: fed, poisoned
+		// another survivor, in the afternoon: fed, poisoned, and the poison takes the last of it
 		s.sim.clock.setClock(14);
 		const spC = s.enter(c);
-		// past the entry's spawn shield (server/sim/players.ts SPAWN_SHIELD_S), so the blow lands
-		const { SPAWN_SHIELD_S } = require(join(SRC, "server/sim/players.ts"));
 		s.run(SPAWN_SHIELD_S + 0.5);
 		spC.state.hungry = spC.state.hungryMax;
 		spC.state.buffs.poison = 10;
-		s.kill(c);
+		spC.state.hp = 0.01;
+		const poisonedIn = s.runUntil(() => spC.state.dead === true, 2);
+		s.beat();
 		const poisoned = causes(s, c);
 		check(
-			s.body(c)?.state.dead === true &&
+			poisonedIn >= 0 &&
 				poisoned.length === 1 &&
 				poisoned[0]?.kind === DC.DeathKind.Poison &&
 				poisoned[0]?.night === false &&
 				causes(s, a).length === 1,
-			"a death poisoned at 14:00: Poison, by day (the same rule as the analytics Died event), told to that one only",
+			"a death the poison dealt at 14:00: Poison, by day (the same rule as the analytics Died event), told to that one only",
 			JSON.stringify(poisoned),
+		);
+		// starving AND bitten: the stomach took hp first, the blow took the rest -- the blow killed (Horde, no boss)
+		const spD = s.enter(d);
+		s.run(SPAWN_SHIELD_S + 0.5);
+		spD.state.hungry = 0;
+		spD.state.hp = 50;
+		s.run(0.5);
+		const starving = spD.state.lastHurt;
+		s.kill(d);
+		const bitten = causes(s, d);
+		check(
+			starving === DC.HurtBy.Hunger &&
+				s.body(d)?.state.dead === true &&
+				bitten.length === 1 &&
+				bitten[0]?.kind === DC.DeathKind.Horde,
+			'a starving survivor a blow finishes is "Killed by zombies.", never "Starved." (the lethal damage was the blow)',
+			JSON.stringify({ starving, bitten }),
+		);
+		// L3: the cause is kept with the life record and told again, after the Dead, to one who comes back to that death
+		s.exit(a);
+		s.clearWorldLog();
+		const back = s.enter(a);
+		const seen = worldTo(s, a);
+		const deadAt = seen.findIndex(
+			e => e.t === s.P.WorldEv.PlayerLife && e.slot === back?.slot && e.state === s.P.LifeState.Dead,
+		);
+		const diedAt = seen.findIndex(e => e.t === s.P.WorldEv.Announce && e.msg === s.P.AnnounceKind.Died);
+		const again = causes(s, a);
+		check(
+			back?.state.dead === true &&
+				deadAt >= 0 &&
+				diedAt > deadAt &&
+				again.length === 1 &&
+				again[0]?.kind === DC.DeathKind.Hunger &&
+				again[0]?.night === true,
+			"Home e PLAY morto: o PlayerLife Dead e, DEPOIS dele, o mesmo Announce{Died} (Hunger, a noite) de novo -- a tela de morte ainda sabe o porque",
+			JSON.stringify({ deadAt, diedAt, again }),
+		);
+		// a reconnect within the kept body's memory: the same
+		const idC = c.UserId;
+		s.quit(c);
+		s.clearWorldLog();
+		const c2 = s.join(idC, "poisoned");
+		const backC = s.enter(c2);
+		const againC = causes(s, c2);
+		check(
+			backC?.state.dead === true &&
+				againC.length === 1 &&
+				againC[0]?.kind === DC.DeathKind.Poison &&
+				againC[0]?.night === false,
+			"uma reconexao ao mesmo corpo morto: o Announce{Died} (Poison, de dia) chega de novo",
+			JSON.stringify(againC),
 		);
 	}
 
@@ -3921,6 +3983,57 @@ section("33) BEM: the dead survivor alone is told why (UI-13), and the dawn asks
 					told.includes("saved"),
 				`daybreak with the survivor standing: one write ${Cad.EVENT_SAVE_DELAY} s after it, and "saved" told (the dawn card's line)`,
 				`${times.length} write(s) ${times.map(t => (t - t0).toFixed(2)).join(", ")} s in (dawn ${dawnAt} s); told ${JSON.stringify(told)}`,
+			);
+		} finally {
+			store.UpdateAsync = original;
+		}
+	}
+
+	// (c) L2 of the review of ca9494a: a dawn whose save has nothing new still gets its answer -- "saved", which is true
+	// (the DataStore holds the live save), with nothing written -- so the dawn card never waits on silence
+	{
+		const s = bootServer();
+		const u = newUser();
+		// in the lobby: a body in the street changes the save every tick (its hunger), so only a save with no body in it
+		// stands still long enough to be "unchanged" -- the rule is the same for both
+		const p = s.join(u, "unchanged");
+		// everything written, and the gap since the last write gone by
+		s.run(Cad.EVENT_SAVE_GAP + 1, 0.25);
+		const store = fakeStore(SAVE_STORE);
+		let writes = 0;
+		const original = store.UpdateAsync;
+		store.UpdateAsync = (k, transform) => {
+			if (k === String(u)) writes += 1;
+			return original(k, transform);
+		};
+		const ackOf = () =>
+			s.env.services.ReplicatedStorage.FindFirstChild("Net")
+				.FindFirstChild("SaveAck")
+				.sent.filter(e => e.to === p && e.args[0]?.store !== undefined)
+				.map(e => e.args[0].store);
+		try {
+			// one write of this session first (the load's copy is encoded apart), then the gap since it gone by
+			s.sim.onDawn({ userId: u, slot: 0 }, false);
+			s.run(Cad.EVENT_SAVE_DELAY + 1, 0.25);
+			s.run(Cad.EVENT_SAVE_GAP + 1, 0.25);
+			const before = ackOf().length;
+			const w0 = writes;
+			// the dawn's own hook -- the one the simulation calls at 06:00 (server/main.server.ts `sim.onDawn`) -- on a save
+			// with nothing new (a real daybreak's survivor always has something: the hunger of the night, its credit)
+			s.sim.onDawn({ userId: u, slot: 0 }, false);
+			s.run(Cad.EVENT_SAVE_DELAY + 1.5, 0.25);
+			const told = ackOf().slice(before);
+			check(
+				writes === w0 && JSON.stringify(told) === '["saved"]',
+				'a dawn with nothing new to write: no write, and "saved" told once (true: the DataStore already holds it)',
+				`${writes - w0} write(s); told ${JSON.stringify(told)}`,
+			);
+			// ...and only a dawn asks: the next unchanged autosave tells nothing
+			s.run(Cad.EVENT_SAVE_GAP + 5, 0.25);
+			check(
+				ackOf().slice(before).length === 1,
+				"…once: the next unchanged pass tells nothing (the dawn's question was answered)",
+				JSON.stringify(ackOf().slice(before)),
 			);
 		} finally {
 			store.UpdateAsync = original;

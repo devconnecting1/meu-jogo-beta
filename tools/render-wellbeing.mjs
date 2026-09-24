@@ -11,7 +11,7 @@
  * Writes, per screen: dawn-<screen>.png -- 06:00 after a night survived: the dawn card with the night's numbers, the
  * server's "Progress saved" and, a long session, the break line (an older checkout, without the card, shows what it
  * showed then: the "Good morning" banner) -- and levelup-<screen>.png, the feed line of a level-up ("Level 5 · +1 skill
- * point · Bag › Skills"; an older checkout: "Level UP"); each with a .json of every text it shows (box, colour, size), for
+ * point · Backpack › Skills"; an older checkout: "Level UP"); each with a .json of every text it shows (box, colour, size), for
  * a pass with a real font. The raster's own text is the 5 x 7 pixel font of tools/pixel-font.mjs. Nothing is checked
  * here: test:hud §10 measures the same drawing.
  */
@@ -133,8 +133,12 @@ const MOMENTS = [
 			hud.showMessage("Good morning");
 			if (typeof hud.showDawnReport !== "function") return;
 			hud.showDawnReport({ zombies: 23, damage: 64, items: 9 }, true);
+			// the server's break line (protocol note 23); ca9494a took it as showDawnReport's second argument instead
+			if (typeof hud.dawnBreakLine === "function") hud.dawnBreakLine();
 			hud.dawnStoreNotice("saving");
 			hud.dawnStoreNotice("saved");
+			// a feed line under it: the card never covers the feed (the review of ca9494a, L1)
+			if (typeof hud.showLevelUp === "function") hud.showLevelUp(6, 1);
 		},
 	},
 	{

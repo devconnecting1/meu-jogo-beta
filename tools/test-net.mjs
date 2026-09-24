@@ -1635,10 +1635,15 @@ test("World: the roster carries the title under the name, and nothing but a real
 		eq(`TitleUnlocked naming title byte ${bad}`, P.decodeWorld(bufOf(b)), undefined);
 	}
 	const bogusKind = raw.slice();
-	bogusKind[6] = P.AnnounceKind.Died + 1;
-	eq("an Announce kind past the last one (Died)", P.decodeWorld(bufOf(bogusKind)), undefined);
+	const lastKind = Math.max(...Object.values(P.AnnounceKind));
+	bogusKind[6] = lastKind + 1;
+	eq(
+		"an Announce kind past the last one (BreakNudge)",
+		lastKind === P.AnnounceKind.BreakNudge ? P.decodeWorld(bufOf(bogusKind)) : `a new last kind ${lastKind}`,
+		undefined,
+	);
 
-	// UI-13 (protocol note 21): Announce{Died, arg = the cause} -- the kind in bits 0-2, bit 3 for night, nothing else
+	// UI-13 (protocol note 23): Announce{Died, arg = the cause} -- the kind in bits 0-2, bit 3 for night, nothing else
 	const DC = require(join(SRC, "shared/data/deathCause.ts"));
 	for (const kind of [DC.DeathKind.Horde, DC.DeathKind.Hunger, DC.DeathKind.Poison, DC.DeathKind.Boss]) {
 		for (const night of [false, true]) {
@@ -1661,6 +1666,25 @@ test("World: the roster carries the title under the name, and nothing but a real
 		b[7] = bad & 255;
 		b[8] = (bad >> 8) & 255;
 		eq(`Died with a cause the server never writes (${bad})`, P.decodeWorld(bufOf(b)), undefined);
+	}
+	// BEM-04 (protocol note 23): Announce{BreakNudge} carries arg 0 and nothing else
+	const nudge = P.encodeWorld({
+		tick: 3,
+		events: [{ t: P.WorldEv.Announce, msg: P.AnnounceKind.BreakNudge, arg: 0 }],
+	}).packets[0];
+	const nudged = P.decodeWorld(nudge);
+	ok(
+		nudged?.events.length === 1 &&
+			nudged.events[0].t === P.WorldEv.Announce &&
+			nudged.events[0].msg === P.AnnounceKind.BreakNudge &&
+			nudged.events[0].arg === 0,
+		"BreakNudge (arg 0) decodes",
+	);
+	for (const bad of [1, 8, 255, 65535]) {
+		const b = bytesOf(nudge).slice();
+		b[7] = bad & 255;
+		b[8] = (bad >> 8) & 255;
+		eq(`BreakNudge with an arg the server never writes (${bad})`, P.decodeWorld(bufOf(b)), undefined);
 	}
 	// a boss kill keeps carrying any u16: the check is for titles only
 	const boss = P.decodeWorld(

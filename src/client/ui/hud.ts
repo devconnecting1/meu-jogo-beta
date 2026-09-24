@@ -1214,23 +1214,23 @@ export class Hud {
 	}
 
 	/**
-	 * BEM-08 (research §4.4): a level-up that says what it gave -- "Level 5 · +1 skill point · Bag › Skills" -- in the
+	 * BEM-08 (research §4.4): a level-up that says what it gave -- "Level 5 · +1 skill point · Backpack › Skills" -- in the
 	 * XP's blue on the feed, instead of a bare "Level UP". A level gives exactly one skill point and nothing else
 	 * (server/sim/progress.ts `awardExp`), so that is what it says; `gained` levels at once give that many points.
 	 */
 	showLevelUp(level: number, gained: number): void {
 		const n = math.max(1, math.floor(gained));
 		const points = `+${n} ${this.tr(n === 1 ? "skill point" : "skill points")}`;
-		const text = `${this.tr("Level")} ${math.floor(level)} · ${points} · ${this.tr("Bag")} › ${this.tr("Skills")}`;
+		const text = `${this.tr("Level")} ${math.floor(level)} · ${points} · ${this.tr("Backpack")} › ${this.tr("Skills")}`;
 		this.pushFeed(text, GAME.xp);
 	}
 
 	/**
 	 * BEM-04: the night in numbers, at dawn, for a survivor who lived through it (client/systems/nightReport.ts decides
-	 * that). `breakLine`: a long session (nightReport.ts `breakNudgeDue`). Takes the banner's box: a "Good morning" is not
-	 * drawn over it. Never blocks anything and goes by itself (client/ui/dawnCard.ts).
+	 * that). Takes the banner's box: a "Good morning" is not drawn over it. Never blocks anything, takes no click but its
+	 * ╳'s and goes by itself (client/ui/dawnCard.ts).
 	 */
-	showDawnReport(report: NightReport, breakLine: boolean): void {
+	showDawnReport(report: NightReport): void {
 		const dawn = this.dawn;
 		if (!this.mounted || dawn === undefined) return;
 		// the banner's box is the card's now: a "Good morning" already up gives way at once (a 0 s fade replaces any
@@ -1239,7 +1239,25 @@ export class Hud {
 		if (this.bannerCard !== undefined) fadeSurface(this.bannerCard, 0, 1);
 		if (this.banner !== undefined) fadeText(this.banner, 0, 1);
 		if (this.bannerSub !== undefined) fadeText(this.bannerSub, 0, 1);
-		dawn.show(report, breakLine, math.min(this.bannerMaxW, DAWN_W), os.clock());
+		// px per design unit of the box: messageReach's recipe (the HUD size scales it)
+		const v = viewportSize();
+		const px = math.min(v.X / DESIGN_W, v.Y / DESIGN_H) * this.uiK;
+		dawn.show(report, math.min(this.bannerMaxW, DAWN_W), px, os.clock());
+	}
+
+	/**
+	 * BEM-04: the server gave this survivor the break line (protocol note 23): on the dawn card, if it is up. False when
+	 * it is not (client/main.client.ts then asks for `breakLineOnFeed`).
+	 */
+	dawnBreakLine(): boolean {
+		return this.mounted && this.dawn !== undefined && this.dawn.addBreakLine();
+	}
+
+	/** BEM-04: the break line the server gave, with no dawn card up to carry it: one line on the message feed */
+	breakLineOnFeed(): void {
+		const dawn = this.dawn;
+		if (!this.mounted || dawn === undefined) return;
+		this.pushFeed(dawn.breakText(), THEME.foreground);
 	}
 
 	/** what the server said about a write of this player's save (saveClient.ts `onStoreState`): the dawn card's line */

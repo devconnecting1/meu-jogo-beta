@@ -270,7 +270,7 @@ export interface LifeWire {
 	/** a reliable PlayerLife delta (§4.5) */
 	life(slot: number, state: number): void;
 	/**
-	 * UI-13: why the survivor in `slot` died, to them alone (`Announce{Died}`, protocol note 21; `arg` is
+	 * UI-13: why the survivor in `slot` died, to them alone (`Announce{Died}`, protocol note 23; `arg` is
 	 * shared/data/deathCause.ts `deathWireOf`). Optional: a keeper wired to no client (a test) has nobody to tell.
 	 */
 	died?(slot: number, arg: number): void;
@@ -328,6 +328,12 @@ interface LifeRecord {
 	 * of this world — a read-only session's death on a blank save became the real save's life day 1.
 	 */
 	newLifeOwed: boolean;
+	/**
+	 * UI-13: the `Announce{Died}` arg of this survivor's last death (shared/data/deathCause.ts `deathWireOf`), told
+	 * again whenever they come back to the world still dead (`enter`); forgotten when they stand up. Undefined: none
+	 * known (a death this server did not see, one carried in over from another session's save).
+	 */
+	lastDeath?: number;
 }
 
 /** the v3 run body as the last departure wrote it (§7.2) */
@@ -428,6 +434,7 @@ export class LifeKeeper {
 			if (state !== undefined && owns && !rec.unloaded) unloadMagazine(state, save);
 			state = undefined;
 			rec.dead = false;
+			rec.lastDeath = undefined;
 			rec.downFor = undefined;
 			rec.fullNext = true;
 		}
@@ -479,6 +486,9 @@ export class LifeKeeper {
 		if (state.dead) rec.declined = false;
 		if (owns) save.runOver = state.dead;
 		this.wire.welcome(sp);
+		// UI-13: back in the street to wait, the death screen still says why -- after the welcome's own PlayerLife Dead,
+		// on the same directed, ordered channel (the review of ca9494a, L3)
+		if (state.dead && rec.lastDeath !== undefined) this.wire.died?.(slot, rec.lastDeath);
 		return sp;
 	}
 
@@ -563,6 +573,8 @@ export class LifeKeeper {
 		const bosses = this.sim.horde?.bossRoster.list;
 		const dayTime = this.sim.clock.dayTime;
 		const arg = deathWireOf(deathKindOf(sp.state, bosses), isNightAt(dayTime));
+		// kept with the record, so a survivor who comes back to this death (Home and PLAY, a reconnect) hears it again
+		rec.lastDeath = arg;
 		if (arg !== undefined) this.wire.died?.(sp.slot, arg);
 		Analytics.death(sp.save, dayTime, this.sim.count(), sp.state, bosses);
 	}
@@ -582,6 +594,7 @@ export class LifeKeeper {
 		rec.body = undefined;
 		rec.unloaded = false;
 		rec.dead = false;
+		rec.lastDeath = undefined;
 		rec.downFor = undefined;
 		rec.declined = false;
 		rec.fullNext = true;
@@ -671,6 +684,7 @@ export class LifeKeeper {
 		rec.body = undefined;
 		rec.unloaded = false;
 		rec.dead = false;
+		rec.lastDeath = undefined;
 		rec.downFor = undefined;
 		rec.declined = false;
 		rec.fullNext = false;
@@ -869,6 +883,7 @@ export class LifeKeeper {
 		}
 		rec.save = save;
 		rec.dead = false;
+		rec.lastDeath = undefined;
 		rec.downFor = undefined;
 		rec.declined = false;
 		rec.fullNext = true;
@@ -942,6 +957,8 @@ export class LifeKeeper {
 		const dead = b.runRev === save.runRev ? rec.dead || (owns && save.runOver) : owns && save.runOver;
 		if (dead && !rec.dead) rec.downFor = daybreakWaitSeconds(this.sim.clock.dayTime);
 		if (!dead) rec.downFor = undefined;
+		// a death that moved in from elsewhere is not the one this record saw
+		if (!(dead && rec.dead)) rec.lastDeath = undefined;
 		rec.dead = dead;
 		return false;
 	}
@@ -1028,6 +1045,7 @@ export class LifeKeeper {
 		sp.state = freshBody(sp.save, spawn.x, spawn.y, true);
 		sp.spawnShieldUntil = sim.tick + math.floor(SPAWN_SHIELD_S * sim.simHz);
 		rec.dead = false;
+		rec.lastDeath = undefined;
 		rec.downFor = undefined;
 		rec.declined = false;
 		rec.fullNext = false;

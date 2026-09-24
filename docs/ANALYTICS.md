@@ -27,7 +27,7 @@ Referências: as páginas oficiais `production/analytics` (índice, `get-started
 3. **Cardinalidade baixa.** Os campos customizados são poucos textos fixos ("Life day - 4-7", "Time - Night"):
    nada de texto livre, nome ou UserId. Os SKUs são os nomes do catálogo (9 pacotes, 9 trajes) e mais 7 fixos. O
    teste (§13 da suíte) prova que cada valor visto é de um conjunto fechado e que o teto de combinações dos três
-   campos é **536**, contra o limite de **8.000** por experiência.
+   campos é **537**, contra o limite de **8.000** por experiência.
 4. **Abaixo do limite.** O limite documentado é **120 + 20 × CCU chamadas por minuto** por servidor. O módulo usa no
    máximo **75 %** disso em qualquer janela de 60 s (`RATE_SHARE`); o que não cabe espera numa fila limitada (512) e
    sai quando a janela abre. Um evento de economia que precisa esperar é **somado** ao último evento de economia do
@@ -243,7 +243,7 @@ servidor.
 | TitleEarned    | —                         | `Title - Survivor` / `Horde Breaker` / `Week One`                                                                             | o servidor concedeu o título (MON-05), uma vez por save                                                           | quantos ganham cada título por dia?                     |
 | SessionEnded   | minutos jogados na sessão | `Where - Lobby/City/Dead`; `Time - Night/Dawn/Day`; `Visit - First/Returning`                                                 | ao sair do servidor, **toda** sessão gravável (inclusive quem nunca entrou na cidade)                             | **onde se desiste**: no lobby, na cidade, morto?        |
 | SessionLength  | minutos jogados na sessão | `Length - 0-14 min/15-59 min/1-2 h/2-3 h/3 h+`                                                                                | junto do SessionEnded, **toda** sessão gravável                                                                   | a cauda da sessão (guarda da BEM-07, §15)               |
-| BreakNudge     | —                         | `Left - Yes` / `No`                                                                                                           | uma vez por sessão: o amanhecer que deu a linha da pausa (§15); sai na saída ou 2 min depois                      | a linha da pausa é ouvida? (BEM-04)                     |
+| BreakNudge     | —                         | `Left - Yes` / `No` / `Unknown` (o servidor fechou nos 2 min)                                                                 | uma vez por sessão: o amanhecer em que o servidor deu a linha (§15); sai 5 s depois da saída ou 2 min depois      | a linha da pausa é ouvida? (BEM-04)                     |
 | SessionKills   | golpes finais na sessão   | `Kills - 0/1-9/10-49/50-199/200+`                                                                                             | ao sair do servidor, se entrou na cidade                                                                          | quanto se luta por sessão                               |
 | WeaponKills    | golpes finais com o tipo  | `Weapon - Rifle/Pistol/MG/Shotgun/Sniper/Bow/Melee/Special/Machine/Other`                                                     | ao sair, **um por tipo de arma usado** na sessão (o crédito de abate do servidor diz o tipo)                      | que armas se usam (soma e usuários únicos por tipo)     |
 | Crafted        | crafts na sessão          | `Kind - Crafted` / `Cooked` / `Smelted`                                                                                       | ao sair, se > 0 (decisão do servidor: `sim.onBackpack`)                                                           | cozinha e fundição são usadas?                          |
@@ -266,12 +266,18 @@ Buckets de dia: `1`, `2-3`, `4-7`, `8-14`, `15-29`, `30+` (os degraus da dificul
 - **SessionLength** (2026-09-24, BEM-07): o mesmo valor do SessionEnded, com o comprimento num balde. A página de
   eventos custom dá média, mínimo e máximo de um valor, **nunca um percentil**: a cauda (a fatia de sessões acima de
   2 h e de 3 h) só se lê contando por `Length`. Um evento a mais por sessão, na saída.
-- **BreakNudge** (2026-09-24, BEM-04): às 06:00, o servidor dá a linha da pausa pela **mesma regra** que o cliente a
-  mostra (`shared/data/wellbeing.ts`): sessão de 90 min ou mais (`BREAK_NUDGE_MIN`, desde a carga do save) e uma
-  noite vivida de pé na cidade (metade dela, `NIGHT_LIVED_S`), uma vez por sessão; `Left - Yes` se a saída veio em
-  até 2 min (`BREAK_NUDGE_LEFT_S`), `Left - No` quando os 2 min passam com o jogador ainda aqui. O relógio do cliente
-  começa ao entrar no servidor e o do servidor na carga do save (segundos depois): uma sessão que cruza os 90 min
-  exatamente no amanhecer pode ver a linha sem o evento — ruído, não viés.
+- **BreakNudge** (2026-09-24, BEM-04; revisto na revisão de ca9494a, L7): a linha da pausa é **uma decisão só, do
+  servidor**. Às 06:00, `server/main.server.ts` (`sim.onDawn`) pergunta `breakNudgeEarned` (`shared/data/wellbeing.ts`:
+  sessão de 90 min ou mais no servidor, `BREAK_NUDGE_MIN`, desde a entrada; a noite vivida de pé desde a meia-noite, a
+  mesma presença que o título Survivor conta; uma vez por sessão) e, no mesmo passo, avisa aquele sobrevivente
+  (`Announce{BreakNudge}`, nota 23 do protocolo) e chama `Analytics.breakNudge`. O cliente não tem relógio próprio
+  para isso: mostra o que ouviu, no cartão do amanhecer ou, sem cartão, no feed. Então **linha contada é linha
+  enviada**, e linha enviada é linha vista (o `test:analytics` §12c confere, por jogador, avisos = eventos). O campo:
+  `Left - Yes` se o jogador saiu em até 2 min (`BREAK_NUDGE_LEFT_S`), `Left - No` quando os 2 min passam com ele
+  ainda aqui, e **`Left - Unknown`** quando o servidor fecha nesse meio-tempo (atualização, desligamento, manutenção:
+  ninguém sabe se ele escolheu sair). Para isso o veredito de uma saída espera 5 s (`NUDGE_HOLD_S`): os kicks de um
+  fechamento podem chegar ao `PlayerRemoving` antes do `BindToClose`. Só o fechamento de um servidor que esvaziou
+  (`Enum.CloseReason.ServerEmpty`, o último jogador saiu) mantém o `Yes` / `No` de quem saiu antes dele.
 - **WeaponKills**: a contagem é por abate (`progress.ts` `creditKill` / `creditMachineKill`, depois da trava de run
   assistida, igual a `zombieKills`), mas só vira evento na saída: 1 a 3 por sessão na prática, nunca um por abate. A
   soma por `Weapon` é o total de abates com cada tipo; "usuários únicos" diz quantos usam cada um.
@@ -293,7 +299,7 @@ Uma New game que nunca ficou de pé e é engolida por um fim de mundo não conta
 - **Enxurrada** (§8: 6 jogadores ricos comprando 150 pacotes cada em 10 s, muito além do balde do ShopAction):
   nenhum minuto passa de 180, nada é descartado, cada moeda chega (900 compras viram 186 eventos somados).
 - Por tipo, também longe dos tetos: 1 moeda (limite 5), 5 transactionTypes (20), 25 SKUs (100), 7 funis com o
-  Onboarding (10), 13 passos no maior (100), 14 nomes custom (100), teto de 536 combinações de campos (8.000).
+  Onboarding (10), 13 passos no maior (100), 14 nomes custom (100), teto de 537 combinações de campos (8.000).
 
 ## 7. O que o dono vê no Creator Hub, e quando
 
@@ -501,7 +507,7 @@ antes (§12). Tudo abaixo continua agregado, do servidor e de cardinalidade baix
 | **Onde se para**      | `SessionEnded` (contagem) por `Time`: `Dawn` + `Day` contra `Night`                                                    | a fatia que para de dia ou ao amanhecer **cai**; queremos que ela suba (o cartão do amanhecer é a aposta, BEM-04)            |
 | **Retorno (D7)**      | Creator Hub → Retention (vem sozinha, sem código): D1, **D7**, D30                                                     | D7 cai depois de uma mudança, mesmo com a sessão subindo                                                                     |
 | **Gostar (a página)** | Creator Hub → Feedback: votos e comentários da página, semanalmente                                                    | queda depois de uma mudança de retenção é alarme **mesmo com a D7 subindo**                                                  |
-| **A linha da pausa**  | `BreakNudge` por `Left`                                                                                                | nenhum: é medida do que a linha faz (a fatia de `Left - Yes`); a guarda dela é a D7 e a página não caírem                    |
+| **A linha da pausa**  | `BreakNudge` por `Left` (`Unknown` fica de fora da fatia: o servidor fechou)                                           | nenhum: é medida do que a linha faz (a fatia de `Left - Yes`); a guarda dela é a D7 e a página não caírem                    |
 | **Gasto sob pressão** | funil Rebirth (§4.3) por `Afford - Yes`                                                                                | a conversão sobe depois de uma mudança de interface **sem** as vidas ficarem mais longas (`LifeEnded`): é empurrão, não jogo |
 
 **O que existe, por guarda** (conferido em 2026-09-24): a cauda e o lugar da parada são nossos (`SessionLength` e o

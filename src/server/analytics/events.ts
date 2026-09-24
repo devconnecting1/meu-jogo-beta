@@ -40,7 +40,7 @@
  */
 import { GAME_NAME } from "shared/module";
 import { DeathBody, DeathBoss, DeathKind, deathKindOf } from "shared/data/deathCause";
-import { BREAK_NUDGE_LEFT_S, BREAK_NUDGE_MIN, NIGHT_LIVED_S, isDawnAt } from "shared/data/wellbeing";
+import { BREAK_NUDGE_LEFT_S, isDawnAt } from "shared/data/wellbeing";
 import { COSTUMES, SHOP_PACKS, rebirthPrice } from "shared/data/shop";
 import { TITLES, TitleId } from "shared/data/titles";
 import { PlayerSaveData, ownsTitle } from "shared/game/save";
@@ -64,6 +64,11 @@ export const DEFERRED_MAX = 512;
 export const POLL_S = 1;
 /** a player who left is forgotten this long after, so a hook that runs late in the leave (a death) still finds them */
 const LEAVE_GRACE_S = 15;
+/**
+ * BEM-04: a leave's `BreakNudge` verdict waits this long (seconds, < LEAVE_GRACE_S), so a server that is closing -- whose
+ * kicks may reach PlayerRemoving before BindToClose -- is told apart from a player who chose to go (`Left - Unknown`)
+ */
+const NUDGE_HOLD_S = 5;
 /** a fault is warned at most this often (seconds): a bug here must be visible, never a flood */
 const FAULT_LOG_S = 60;
 
@@ -427,9 +432,10 @@ interface Entry {
 	atNight: boolean | undefined;
 	/** ...and the dawn window (06:00-07:30, shared/data/wellbeing.ts `isDawnAt`): the healthy stopping point (BEM-04) */
 	atDawn: boolean;
-	/** clock() since which the body has stood in the city alive, without a break (undefined: not standing now) */
-	standingSince?: number;
-	/** clock() of this session's dawn that earned the break line (BEM-04), and whether its BreakNudge went out */
+	/**
+	 * clock() when the server told this session the dawn card's break line (BEM-04: server/main.server.ts decides and
+	 * calls `breakNudge` in the same step, so a line counted is a line sent), and whether its BreakNudge went out
+	 */
 	nudgedAt?: number;
 	nudgeLogged: boolean;
 	/** tonight's Night funnel session, while it is open */
@@ -794,13 +800,6 @@ export class ServerAnalytics {
 		this.custom(e, EVENT.SessionEnded, tenths, fields);
 		// BEM-07: the tail of the session length, by bucket (no percentile on a custom value: docs/ANALYTICS.md §15)
 		this.custom(e, EVENT.SessionLength, tenths, { CustomField01: `Length - ${lengthBucket(minutes)}` });
-		// BEM-04: a break line earned and not yet told: did they leave within BREAK_NUDGE_LEFT_S of it?
-		if (e.nudgedAt !== undefined && !e.nudgeLogged) {
-			e.nudgeLogged = true;
-			this.custom(e, EVENT.BreakNudge, undefined, {
-				CustomField01: endedAt - e.nudgedAt <= BREAK_NUDGE_LEFT_S ? "Left - Yes" : "Left - No",
-			});
-		}
 		if (!e.entered) return;
 		const kills = math.max(0, e.save.zombieKills - e.killsAtLoad);
 		this.custom(e, EVENT.SessionKills, kills, { CustomField01: `Kills - ${killBucket(kills)}` });
@@ -815,9 +814,41 @@ export class ServerAnalytics {
 		if (e.used > 0) this.custom(e, EVENT.ItemsUsed, e.used);
 	}
 
-	/** BindToClose: every session still here is summarized, and the queue gets what the window still allows */
-	shutdown(): void {
-		for (const [, e] of this.entries) this.summarize(e);
+	/**
+	 * BEM-04: the server told this player the dawn card's break line (server/main.server.ts, the same step that sends
+	 * `Announce{BreakNudge}`). Once per session; its `BreakNudge` goes out when they leave, or BREAK_NUDGE_LEFT_S later.
+	 */
+	breakNudge(player: Player): void {
+		const e = this.entries.get(player);
+		if (e === undefined || e.ephemeral || e.leftAt !== undefined || e.nudgedAt !== undefined) return;
+		e.nudgedAt = this.clock();
+	}
+
+	/**
+	 * BEM-04: the verdict on a break line told and not yet logged -- did they leave within BREAK_NUDGE_LEFT_S of it?
+	 * `unknown`: the server closed around it, so nobody can say whether they chose to go (docs/ANALYTICS.md §15).
+	 */
+	private nudgeVerdict(e: Entry, unknown: boolean): void {
+		const at = e.nudgedAt;
+		if (at === undefined || e.nudgeLogged || e.ephemeral) return;
+		e.nudgeLogged = true;
+		let left = "Left - No";
+		if (unknown) left = "Left - Unknown";
+		else if (e.leftAt !== undefined && e.leftAt - at <= BREAK_NUDGE_LEFT_S) left = "Left - Yes";
+		this.custom(e, EVENT.BreakNudge, undefined, { CustomField01: left });
+	}
+
+	/**
+	 * BindToClose: every session still here is summarized, and the queue gets what the window still allows. `emptied`:
+	 * the server closes because the last player left (CloseReason.ServerEmpty) -- every leave before it was a choice;
+	 * any other close (an update, a shutdown, maintenance) makes a break line still waiting for its verdict unknowable,
+	 * and so does a player the close found still here.
+	 */
+	shutdown(emptied = false): void {
+		for (const [, e] of this.entries) {
+			this.summarize(e);
+			this.nudgeVerdict(e, !emptied || e.leftAt === undefined);
+		}
 		this.drain();
 	}
 
@@ -831,19 +862,16 @@ export class ServerAnalytics {
 			// a removal this module missed (a Player already parented to nil) is a leave too
 			if (e.leftAt === undefined && player.Parent === undefined) this.playerLeft(player);
 			if (e.leftAt !== undefined) {
+				// BEM-04: a leave's verdict, once NUDGE_HOLD_S passed without a close
+				if (now - e.leftAt >= NUDGE_HOLD_S) this.nudgeVerdict(e, false);
 				if (now - e.leftAt >= LEAVE_GRACE_S) gone.push(player);
 				continue;
 			}
 			this.pollEntry(e);
-			for (const step of hours) {
-				this.nightPhase(e, step);
-				if (step === NIGHT_PHASE_HOURS.size()) this.breakAtDawn(e, now);
-			}
+			for (const step of hours) this.nightPhase(e, step);
 			// BEM-04: the break line stood for BREAK_NUDGE_LEFT_S and they are still here
-			if (e.nudgedAt !== undefined && !e.nudgeLogged && now - e.nudgedAt > BREAK_NUDGE_LEFT_S) {
-				e.nudgeLogged = true;
-				this.custom(e, EVENT.BreakNudge, undefined, { CustomField01: "Left - No" });
-			}
+			const nudgedAt = e.nudgedAt;
+			if (nudgedAt !== undefined && now - nudgedAt > BREAK_NUDGE_LEFT_S) this.nudgeVerdict(e, false);
 		}
 		for (const player of gone) {
 			const e = this.entries.get(player);
@@ -909,19 +937,6 @@ export class ServerAnalytics {
 		if (step >= NIGHT_PHASE_HOURS.size()) e.night = undefined;
 	}
 
-	/**
-	 * BEM-04 at 06:00: the dawn card's break line is earned by the rule the client shows it by -- a session of
-	 * BREAK_NUDGE_MIN minutes and a night lived standing in the city (NIGHT_LIVED_S of it) -- once per session. Counted
-	 * here, told on leaving or BREAK_NUDGE_LEFT_S later (`Left - Yes/No`).
-	 */
-	private breakAtDawn(e: Entry, now: number): void {
-		if (e.ephemeral || e.nudgedAt !== undefined) return;
-		const since = e.standingSince;
-		if (since === undefined || now - since < NIGHT_LIVED_S) return;
-		if (now - e.loadedAt < BREAK_NUDGE_MIN * 60) return;
-		e.nudgedAt = now;
-	}
-
 	private pollEntry(e: Entry): void {
 		const save = e.save;
 		const w = this.world;
@@ -931,9 +946,6 @@ export class ServerAnalytics {
 			const hour = w.dayTime();
 			e.atNight = isNightAt(hour);
 			e.atDawn = isDawnAt(hour);
-			// standing in the city, alive, without a break (a death, the lobby): how long a night they lived
-			if (body === undefined || body.dead) e.standingSince = undefined;
-			else if (e.standingSince === undefined) e.standingSince = this.clock();
 		}
 		const key = lifeKeyOf(save);
 		if (key !== e.lifeKey) {
@@ -1380,7 +1392,7 @@ function boot(): ServerAnalytics | undefined {
 		});
 	});
 	Players.PlayerRemoving.Connect(player => guard(c => c.playerLeft(player)));
-	game.BindToClose(() => guard(c => c.shutdown()));
+	game.BindToClose(reason => guard(c => c.shutdown(reason === Enum.CloseReason.ServerEmpty)));
 	print(`[${GAME_NAME}] analytics on${inStudio ? " (Studio: counted, never sent)" : ""}`);
 	return core;
 }
@@ -1403,6 +1415,11 @@ function guard(fn: (core: ServerAnalytics) => void): void {
 /** server/main.server.ts `loadSession`: the save loaded (`status` "new" = a first visit; `arm`, its experiment) */
 export function sessionLoaded(player: Player, status: string, save: PlayerSaveData, arm?: string): void {
 	guard(c => c.sessionLoaded(player, status, save, arm));
+}
+
+/** server/main.server.ts `sim.onDawn`: this player was just told the dawn card's break line (BEM-04) */
+export function breakNudge(player: Player): void {
+	guard(c => c.breakNudge(player));
 }
 
 /** server/net/mpHost.ts: the town the Night funnel follows (undefined when the host stops) */

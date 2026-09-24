@@ -3,54 +3,66 @@
  * gentle line about a break (docs/DESIGN_RULES.md BEM-04; research docs/research/MOTIVATION_AND_ETHICS.md §4.1 and §4.7).
  *
  *   ┌─────────────────────────────────────────────────────┐
- *   │ ☀ Night survived                                  ╳ │   the state, and the ╳ that says a tap / click sends it away
+ *   │ ☀ Night survived                                  ╳ │   the state, and the ╳ -- the card's one button
  *   │ 12 zombies     85 damage taken     7 items found    │   the night's numbers, in the numbers' yellow (UI-08)
  *   │ ▣ Progress saved                                    │   ONLY after the server said a write landed (SAV-01)
- *   │ You've played for over 90 minutes. Dawn is a good…  │   once per session, after BREAK_NUDGE_MIN minutes
+ *   │ You've played for over 90 minutes. Dawn is a good…  │   only when the SERVER gave the line (protocol note 23)
  *   └─────────────────────────────────────────────────────┘
  *
  * The rules it keeps:
  *  - NEVER BLOCKING (UI-06): nothing pauses and nothing waits for it. It sits in the banner's own box at the top centre
- *    (hud.ts, the messages' place: never over the survivor, the console or a thumb), takes the pad from nobody (nothing in
- *    it is Selectable, UI-09) and goes by itself after DAWN_SHOW_S. A tap or a click on it sends it away sooner.
+ *    (hud.ts, the messages' place: never over the survivor, the console or a thumb), and never gets bigger than that
+ *    box (DAWN_H: the feed under it stays clear, on a phone too). It takes no input but the ╳'s: the card and its texts
+ *    are not Active, so a click or a touch that starts on them is the game's (a shot, the floating stick, the aim) --
+ *    only the ╳ (a MIN_TOUCH_PX hit, not Selectable) sends it away sooner. It takes the pad from nobody (UI-09).
  *  - "Progress saved" is said only when the SERVER pushed "saved" on SaveAck after the card opened (client/ui/saveIndicator.ts
- *    reads the same push): a write that landed, never a promise. "Saving..." while one is in flight; the red
- *    "Progress not saved — retrying" if it fails. Nothing at all when no write happened: silence is not a claim.
+ *    reads the same push): a write that landed, or the DataStore already holding the live save -- never a promise. The
+ *    server asks for a write at 06:00 and answers it even when nothing changed (server/main.server.ts `sim.onDawn`), so
+ *    the card waits for that word, up to DAWN_MAX_S. "Saving..." while a write flies; the red "Progress not saved —
+ *    retrying" if it fails. Nothing at all when the server never said: silence is not a claim.
  *  - No reward to stay, no count to the next night, no "one more night" (BEM-02 / BEM-04): it reports and it goes.
  *  - Nothing moves: it appears and it goes, so Reduce Motion has nothing to take away (like the pickup chips).
- *  - Theme tokens only (UI-01), no text contour (UI-04), every text through lang.ts; built once, on the first dawn of a
- *    mount (a HUD that never sees one pays nothing), and only rewritten afterwards (UI-09: no Instance per frame or per
- *    dawn -- test:hud).
+ *  - Theme tokens only (UI-01), no text contour (UI-04), every text through lang.ts. Its Instances are made on the first
+ *    dawn of each HUD mount (a HUD that never sees one pays nothing for them); every later dawn, notice and frame of that
+ *    mount only rewrites them (test:hud).
  */
+import { MIN_TOUCH_PX } from "shared/engine/input";
 import type { StoreState } from "shared/net/net";
 import type { NightReport } from "../systems/nightReport";
 import { PixelIcon } from "./pixelIcon";
 import { GAME, STAT, TEXT, THEME, TRANSPARENCY, fontOf } from "./theme";
-import { Card, fixedTextPx, fmtInt, makeLabel, setDesign, setVisible, uiScale } from "./widgets";
+import { Card, fixedTextPx, fmtInt, makeLabel, setDesign, setVisible } from "./widgets";
 
-/** the card's box, design units: as wide as it needs and as tall as the banner's box (hud.ts BANNER_H) */
+/** the card's box, design units: the banner's box (hud.ts BANNER_H), which the card never outgrows */
 export const DAWN_W = 560;
 export const DAWN_H = 110;
-/** the card without the break line */
-const DAWN_H_SHORT = 90;
-/** how long the card stays (s) */
+/** how long the card stays once the server's word on the dawn's save is in (s) */
 export const DAWN_SHOW_S = 12;
-/** it waits for a write in flight ("Saving...") at most until this (s) */
+/** it waits for that word at most until this (s): the dawn's write goes within ~20 s (SAV-01's delay and gap) */
 export const DAWN_MAX_S = 24;
 /** "Progress saved" stays at least this long once it arrived (s) */
 export const DAWN_SAVED_HOLD_S = 3;
+/** the one sentence of the break line (lang.ts; test:analytics checks it says BREAK_NUDGE_MIN) */
+const BREAK_KEY = "You've played for over 90 minutes. Dawn is a good time for a break.";
 
 const PAD = 14;
 const SUN = 18;
 const DISK = 14;
 const CROSS = 14;
-const TITLE_Y = 8;
-const TITLE_H = 26;
-const STATS_Y = 38;
-const STATS_H = 26;
-const STORE_Y = 68;
-const ROW_H = 18;
-const BREAK_Y = 88;
+/** the ╳'s hit, design units (and never under MIN_TOUCH_PX screen px) */
+const CROSS_HIT = 30;
+const TITLE_Y = 6;
+const TITLE_H = 24;
+const STATS_Y = 31;
+const STATS_H = 22;
+const STORE_Y = 55;
+const ROW_H = 16;
+const BREAK_Y = 73;
+const BOTTOM = 5;
+/** the card without the break line */
+const DAWN_H_SHORT = STORE_Y + ROW_H + BOTTOM;
+/** an average glyph's advance in a sans text, as a share of its size: whether the break line needs a second row */
+const GLYPH_W = 0.55;
 
 const BOLD = fontOf("sans", Enum.FontWeight.Bold);
 
@@ -84,6 +96,7 @@ interface Parts {
 	disk: PixelIcon;
 	store: TextLabel;
 	breakLine: TextLabel;
+	/** the ╳'s hit: the card's ONLY input (M1 of the review of ca9494a) */
 	dismiss: TextButton;
 }
 
@@ -100,6 +113,8 @@ export class DawnCard {
 	private dismissed = false;
 	private w = DAWN_W;
 	private h = DAWN_H;
+	/** screen px per design unit of the box (hud.ts: the HUD's scale), for the break line's rows */
+	private px = 1;
 	/** rows the break line takes (0: none) */
 	private breakRows = 0;
 
@@ -115,26 +130,18 @@ export class DawnCard {
 	}
 
 	/**
-	 * Opens the card with the night's numbers. `breakLine`: the session is a long one (nightReport.ts `breakNudgeDue`).
-	 * `maxW`: the widest the top centre allows now (hud.ts fitMessages narrows it off the touch corner).
+	 * Opens the card with the night's numbers, without the break line (that is the server's: `addBreakLine`). `maxW`:
+	 * the widest the top centre allows now (hud.ts fitMessages narrows it off the touch corner); `px`: screen px per
+	 * design unit of the box.
 	 */
-	show(report: NightReport, breakLine: boolean, maxW: number, now: number): void {
+	show(report: NightReport, maxW: number, px: number, now: number): void {
 		const p = this.parts ?? this.build();
-		const w = math.clamp(maxW, 280, DAWN_W);
-		const breakText = breakLine
-			? this.tr("You've played for over 90 minutes. Dawn is a good time for a break.")
-			: "";
-		// the break line takes a second row where it would not fit one -- a card narrowed off the touch corner, a phone's
-		// text floor (TEXT.sm drawn bigger than its design size): it wraps instead of shrinking under the floor
-		const size = math.max(TEXT.sm, fixedTextPx(TEXT.sm) / uiScale());
-		const [chars] = utf8.len(breakText);
-		const needed = (typeIs(chars, "number") ? chars : breakText.size()) * size * 0.5;
-		this.breakRows = breakLine ? (needed > w - PAD * 2 ? 2 : 1) : 0;
-		const h = breakLine ? BREAK_Y + this.breakRows * ROW_H + 4 : DAWN_H_SHORT;
 		this.shownAt = now;
 		this.savedAt = undefined;
 		this.storeState = undefined;
 		this.dismissed = false;
+		this.px = math.max(px, 0.01);
+		this.breakRows = 0;
 		p.title.Text = this.tr("Night survived");
 		for (let i = 0; i < STATS.size(); i++) {
 			const [field, one, many] = STATS[i];
@@ -142,11 +149,35 @@ export class DawnCard {
 			p.cells[i].value.Text = fmtInt(n);
 			p.cells[i].key.Text = this.tr(n === 1 ? one : many);
 		}
-		p.breakLine.Text = breakText;
-		setVisible(p.breakLine, breakLine);
+		p.breakLine.Text = "";
+		setVisible(p.breakLine, false);
 		this.writeStore();
-		this.layout(p, w, h);
+		this.layout(p, math.clamp(maxW, 280, DAWN_W), DAWN_H_SHORT);
 		setVisible(p.card, true);
+	}
+
+	/**
+	 * BEM-04: the server gave this survivor the break line (protocol note 23): it goes on the card if the card is up.
+	 * False when it is not (client/main.client.ts then puts the line on the feed). The card grows for it, never past
+	 * DAWN_H: one row, or two where one would not fit (a card narrowed off the touch corner, a phone's text floor).
+	 */
+	addBreakLine(): boolean {
+		const p = this.parts;
+		if (p === undefined || this.shownAt === undefined) return false;
+		const text = this.breakText();
+		const [chars] = utf8.len(text);
+		const needed = (typeIs(chars, "number") ? chars : text.size()) * fixedTextPx(TEXT.sm) * GLYPH_W;
+		const room = (this.w - PAD * 2) * this.px;
+		this.breakRows = needed > room ? 2 : 1;
+		p.breakLine.Text = text;
+		setVisible(p.breakLine, true);
+		this.layout(p, this.w, math.min(DAWN_H, BREAK_Y + this.breakRows * ROW_H + BOTTOM));
+		return true;
+	}
+
+	/** the break line's sentence, in the player's language (hud.ts: the feed's copy of it when no card is up) */
+	breakText(): string {
+		return this.tr(BREAK_KEY);
 	}
 
 	/**
@@ -160,19 +191,21 @@ export class DawnCard {
 		this.writeStore();
 	}
 
-	/** every frame of a run: the card's time runs out; writes nothing while it stays */
+	/**
+	 * Every frame of a run: the card's time runs out; writes nothing while it stays. It waits for the server's word on
+	 * the dawn's save (nothing yet, or "Saving..."), at most DAWN_MAX_S; once the word is in, DAWN_SHOW_S from the
+	 * opening, and "Progress saved" DAWN_SAVED_HOLD_S at least.
+	 */
 	update(now: number): void {
 		const at = this.shownAt;
 		if (at === undefined) return;
-		const up = now - at;
-		let stay = DAWN_SHOW_S;
-		// a write in flight is waited for, up to DAWN_MAX_S: the card was opened to say what is saved
-		if (this.storeState === "saving") stay = DAWN_MAX_S;
-		if (this.savedAt !== undefined) stay = math.max(stay, this.savedAt - at + DAWN_SAVED_HOLD_S);
-		if (up >= math.min(stay, DAWN_MAX_S)) this.hide();
+		const s = this.storeState;
+		let stay = s === undefined || s === "saving" ? DAWN_MAX_S : DAWN_SHOW_S;
+		if (this.savedAt !== undefined) stay = math.max(DAWN_SHOW_S, this.savedAt - at + DAWN_SAVED_HOLD_S);
+		if (now - at >= math.min(stay, DAWN_MAX_S)) this.hide();
 	}
 
-	/** takes the card away (its time ran out, a tap, a banner with news, the HUD unmounting) */
+	/** takes the card away (its time ran out, the ╳, a banner with news, the HUD unmounting) */
 	hide(): void {
 		this.shownAt = undefined;
 		this.savedAt = undefined;
@@ -196,6 +229,8 @@ export class DawnCard {
 			transparency: TRANSPARENCY.hud,
 			zIndex: 3,
 		});
+		// click-through: a click or a touch that starts on the card is the game's (UI-06), only the ╳ takes one
+		card.Active = false;
 		const z = card.ZIndex + 1;
 		const sun = PixelIcon(card, "Sun", "sun", PAD + SUN / 2, TITLE_Y + TITLE_H / 2, SUN, GAME.sun, z);
 		const title = makeLabel(card, "Title", "", 0, 0, 10, 10, TEXT.lg, THEME.foreground, {
@@ -236,17 +271,22 @@ export class DawnCard {
 			align: "left",
 			zIndex: z,
 		});
-		// the whole card is the target that sends it away (a thumb on a phone, a click on a desktop) -- and never a stop
-		// of the pad's: Selectable off, so the controller stays the survivor's (UI-09), and nothing registers for B
+		// the ╳'s hit, the card's one button: a thumb's size on a phone (MIN_TOUCH_PX, like the scoreboard's), a click's
+		// on a desktop -- and never a stop of the pad's: Selectable off, so the controller stays the survivor's (UI-09)
 		const dismiss = new Instance("TextButton");
 		dismiss.Name = "Dismiss";
 		dismiss.Text = "";
 		dismiss.BackgroundTransparency = 1;
+		dismiss.BackgroundColor3 = THEME.background;
+		dismiss.TextColor3 = THEME.foreground;
 		dismiss.BorderSizePixel = 0;
 		dismiss.AutoButtonColor = false;
 		dismiss.Selectable = false;
-		dismiss.Size = UDim2.fromScale(1, 1);
+		dismiss.AnchorPoint = new Vector2(0.5, 0.5);
 		dismiss.ZIndex = z + 1;
+		const min = new Instance("UISizeConstraint");
+		min.MinSize = new Vector2(MIN_TOUCH_PX, MIN_TOUCH_PX);
+		min.Parent = dismiss;
 		dismiss.Activated.Connect(() => {
 			this.dismissed = true;
 			this.hide();
@@ -274,7 +314,7 @@ export class DawnCard {
 		p.disk.setColor(look.icon);
 	}
 
-	/** places everything in a card `w` x `h` design units, centred in the box (only when the card opens) */
+	/** places everything in a card `w` x `h` design units, centred in the box (when it opens, and for the break line) */
 	private layout(p: Parts, w: number, h: number): void {
 		this.w = w;
 		this.h = h;
@@ -292,7 +332,11 @@ export class DawnCard {
 		centre(p.sun.frame, PAD + SUN / 2, TITLE_Y + TITLE_H / 2);
 		const tx = PAD + SUN + 8;
 		at(p.title, tx, TITLE_Y, w - tx - PAD - CROSS - 8, TITLE_H);
-		centre(p.cross.frame, w - PAD - CROSS / 2, TITLE_Y + TITLE_H / 2);
+		const crossX = w - PAD - CROSS / 2;
+		const crossY = TITLE_Y + TITLE_H / 2;
+		centre(p.cross.frame, crossX, crossY);
+		centre(p.dismiss, crossX, crossY);
+		p.dismiss.Size = UDim2.fromScale(CROSS_HIT / w, CROSS_HIT / h);
 		// three cells across the card: each the number, then its words, as wide as the number needs
 		const cellW = (w - PAD * 2) / STATS.size();
 		for (let i = 0; i < p.cells.size(); i++) {

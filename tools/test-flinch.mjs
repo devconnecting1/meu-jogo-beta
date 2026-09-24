@@ -216,6 +216,18 @@ check(
 		"a struck machine holds still too (machinesView.ts: `hit > 0 && !this.reduceMotion`)",
 		/if \(hit > 0 && !this\.reduceMotion\)/.test(machines),
 	);
+	// every wobble of a machine's drawn position (cx / cy moved by a sine of the clock) sits behind the same gate: the
+	// struck flinch and a running oil generator's shiver (the review of ca9494a)
+	const wobbles = machines.split("\n").filter(l => /\bc[xy] \+= math\.(sin|cos)\(t \*/.test(l)).length;
+	const gated = machines.match(/if \([^)]*!this\.reduceMotion\) \{\n[^}]*\}/g) ?? [];
+	const gatedLines = gated.reduce((n, block) => n + (block.match(/c[xy] \+= /g) ?? []).length, 0);
+	check(
+		"...and so does a running oil generator's shiver: every sine that moves a machine is behind `!this.reduceMotion`",
+		/if \(s\.tags === "oil_generator" && working && !this\.reduceMotion\)/.test(machines) &&
+			wobbles >= 4 &&
+			gatedLines === wobbles,
+		`${gatedLines} of ${wobbles} wobbles gated`,
+	);
 	check(
 		"GameLoop reads Reduce Motion every frame into the camera (update) and the town and machines (draw)",
 		/ctx\.cam\.reduceMotion = reducedMotion\(\);/.test(loop) &&

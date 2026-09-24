@@ -809,11 +809,19 @@ export class Replicator {
 	}
 
 	/**
-	 * UI-13 (protocol note 21): why the survivor in `slot` just died, for their death screen -- `arg` is
+	 * UI-13 (protocol note 23): why the survivor in `slot` just died, for their death screen -- `arg` is
 	 * shared/data/deathCause.ts `deathWireOf`. Reliable and DIRECTED like a title: their news, nobody else's.
 	 */
 	died(slot: number, arg: number): void {
 		this.queueFor(slot, { t: WorldEv.Announce, msg: AnnounceKind.Died, arg });
+	}
+
+	/**
+	 * BEM-04 (protocol note 23): the survivor in `slot` earned the dawn card's break line (server/main.server.ts decides,
+	 * shared/data/wellbeing.ts `breakNudgeEarned`). Directed, like a title.
+	 */
+	breakNudge(slot: number): void {
+		this.queueFor(slot, { t: WorldEv.Announce, msg: AnnounceKind.BreakNudge, arg: 0 });
 	}
 
 	// ------------------------------------------------------------ per tick (§3.1 step 4)

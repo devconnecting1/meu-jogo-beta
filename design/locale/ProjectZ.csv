@@ -535,7 +535,7 @@ If nobody is left standing, a new town begins at day 1."
 ,,,Nobody else is standing: this town ends now and a new one begins.
 ,,,New best!
 ,,,Killed by the horde at night.
-,,,Killed by zombies in daylight.
+,,,Killed by zombies.
 ,,,Starved.
 ,,,Poisoned.
 ,,,Killed by a boss.
@@ -564,7 +564,6 @@ If nobody is left standing, a new town begins at day 1."
 ,,,You've played for over 90 minutes. Dawn is a good time for a break.
 ,,,skill point
 ,,,skill points
-,,,Bag
 ,,,"The backpack and the menu never stop the world: open them somewhere safe.
 Fire keeps the night lit and cooks what you find — 10 wood makes a campfire, no workbench needed.
 Houses are looted once with E; their shelves refill after half a day.

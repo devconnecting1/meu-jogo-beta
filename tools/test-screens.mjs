@@ -1614,11 +1614,47 @@ console.log(
 		});
 		check("...e 60 quadros com a mesma causa nao escrevem nada", idle.writes === 0, `${idle.writes} escritas`);
 		s.close();
+		// L4 of the review of ca9494a: "You died" (nobody stands you up) is refreshed by nobody -- the screen reads the
+		// server's word itself, every frame it is up (RunService.Heartbeat), and lets go of the frame when it closes
+		{
+			const over = CASES.find(c => !c.wait);
+			const late = { note: undefined };
+			const beats = () => RunService.Heartbeat.conns.length;
+			const beatsBefore = beats();
+			const o = openCase({ ...over, cause: undefined, causeOf: () => late.note });
+			const opened = { cause: text("Cause"), beats: beats() };
+			for (let f = 0; f < 30; f++) RunService.Heartbeat.Fire(1 / 60);
+			flush();
+			const stillGeneral = text("Cause") === general;
+			late.note = { kind: K.Hunger, night: false };
+			const arrive2 = measure(() => {
+				RunService.Heartbeat.Fire(1 / 60);
+				flush();
+			});
+			const got = { cause: text("Cause"), tip: text("Tip") };
+			const quiet = measure(() => {
+				for (let f = 0; f < 60; f++) RunService.Heartbeat.Fire(1 / 60);
+				flush();
+			});
+			o.close();
+			check(
+				'"You died": a causa que chega depois (reconexao, rede lenta) aparece no quadro seguinte -- "Starved." e a dica dela --, sem criar Instance; nada escrito sem mudanca; a leitura acaba com a tela',
+				opened.cause === general &&
+					stillGeneral &&
+					opened.beats === beatsBefore + 1 &&
+					got.cause === "Starved." &&
+					got.tip.startsWith("Tip: ") &&
+					arrive2.created === 0 &&
+					quiet.writes === 0 &&
+					beats() === beatsBefore,
+				JSON.stringify({ opened, got, beats: beats(), before: beatsBefore, quiet: quiet.writes }),
+			);
+		}
 		// every cause says what happened in its words, and a first death always gets the most basic tip of its cause
 		const lines = [];
 		for (const [kind, night, line] of [
 			[K.Horde, true, "Killed by the horde at night."],
-			[K.Horde, false, "Killed by zombies in daylight."],
+			[K.Horde, false, "Killed by zombies."],
 			[K.Hunger, true, "Starved."],
 			[K.Poison, false, "Poisoned."],
 			[K.Boss, true, "Killed by a boss."],
