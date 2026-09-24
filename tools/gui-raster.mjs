@@ -248,21 +248,28 @@ function rasterStrip(cv, f) {
 
 const visible = inst => inst.Visible !== false;
 
+/** one Renderer layer's sprites, siblings by ZIndex, ties in child order (ZIndexBehavior.Sibling) */
+function rasterLayer(cv, layer, resolve) {
+	const sprites = layer.GetChildren().filter(visible);
+	// Array.prototype.sort is stable, so equal ZIndex keeps the child order
+	const order = sprites.map((f, i) => ({ f, i })).sort((a, b) => a.f.ZIndex - b.f.ZIndex || a.i - b.i);
+	for (const { f } of order) rasterSprite(cv, f, resolve);
+}
+
 /**
  * Paints the sprite layer (and, when given, the light map's layer) of a drawn frame.
- * @param drawn { layer, dark?, vw, vh }: the Renderer's layer, the Frame the LightMap lives in, the view size
+ * @param drawn { layer, dark?, over?, vw, vh }: the Renderer's layer, the Frame the LightMap lives in, more
+ *        Renderer layers that sit ABOVE the night (the zombies' awareness marks), the view size
  */
 export function rasterise(drawn, bgColor, resolve) {
 	const cv = new Canvas(drawn.vw, drawn.vh, bgColor);
-	const sprites = drawn.layer.GetChildren().filter(visible);
-	// ZIndexBehavior.Sibling: siblings by ZIndex, ties in child order (Array.prototype.sort is stable)
-	const order = sprites.map((f, i) => ({ f, i })).sort((a, b) => a.f.ZIndex - b.f.ZIndex || a.i - b.i);
-	for (const { f } of order) rasterSprite(cv, f, resolve);
+	rasterLayer(cv, drawn.layer, resolve);
 	if (drawn.dark !== undefined) {
 		for (const lm of drawn.dark.GetChildren().filter(visible)) {
 			for (const strip of lm.GetChildren().filter(visible)) rasterStrip(cv, strip);
 		}
 	}
+	for (const layer of drawn.over ?? []) rasterLayer(cv, layer, resolve);
 	return cv.toRGBA();
 }
 

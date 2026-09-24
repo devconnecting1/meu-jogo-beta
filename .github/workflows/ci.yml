@@ -65,6 +65,10 @@ jobs:
       - name: Cosmetics are drawn (outfits, pets that follow, the wardrobe preview; MON-04)
         run: npm run test:cosmetics
 
+      # IA-05: the blue dot, the gold "?" and the red "!" over the horde, measured on every ground and at night
+      - name: Zombie awareness marks (shape + colour, LEG-03 contrast, never over a survivor, Reduce Motion, no churn)
+        run: npm run test:awareness
+
       - name: A struck tree or car stops shaking (every client-side flinch is aged by one clock)
         run: npm run test:flinch
 

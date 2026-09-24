@@ -16,6 +16,7 @@ import * as Alert from "shared/sim/ai/alert";
 import * as Ctx from "shared/sim/ai/context";
 import * as Flank from "shared/sim/ai/flank";
 import * as Mind from "shared/sim/ai/memory";
+import * as Noise from "shared/sim/ai/noise";
 import * as Sense from "shared/sim/ai/perception";
 import * as T from "shared/sim/ai/zombieTuning";
 import * as Light from "shared/sim/survivorLight";
@@ -30,11 +31,16 @@ import { SpatialHash } from "shared/sim/ai/spatialHash";
  *
  * What the original (obj_zombie / par_zombie) does NOT have, and lives in shared/sim/ai/*:
  *   - eyes: by day it only notices you inside 50 px, and at night or in the rain every zombie on the map turns
- *     hostile at once (perception.ts gives it a range, a cone and a line of sight, keeping the night smell);
- *   - memory: `detect` homes on your LIVE position for ever, through walls, until 7:00 clears it (memory.ts makes
- *     it run to the last place it actually perceived you and search around it before giving up);
+ *     hostile at once (perception.ts gives it a range, a cone and a line of sight through the walls, day and
+ *     night: darkness shortens it and your own light lengthens it; a glimpse at the edge of its eyes makes it
+ *     suspicious before it is sure);
+ *   - ears graded by what made the noise (noise.ts: a gun by class, building, breaking things, running, walking);
+ *   - memory and a visible state: `detect` homes on your LIVE position for ever, through walls, until 7:00 clears
+ *     it (memory.ts: idle → suspicious → searching → chasing, walking to the last place it had a reason to
+ *     believe in and searching around it before giving up; the state goes to every client as 2 bits);
  *   - a pack: no code ever writes another zombie's `detect` (alert.ts makes the first one to spot you shout, with
  *     a hard wake budget so it can never cascade);
+ *   - a gait of its own: speed, sway and turning vary per zombie, always at or below the original's speed;
  *   - a second route: mp_potential_step_object queues everyone on one line (flank.ts prices crowded lanes so part
  *     of the horde comes round the other side);
  *   - a wind-up: it bites the frame it touches you (here a short, readable lean-back you can step out of).
@@ -43,6 +49,8 @@ import { SpatialHash } from "shared/sim/ai/spatialHash";
 // --- per-call scratch (never meaningful across calls; the per-world state lives in refs.ai) ------
 const sepX: Array<number> = [];
 const sepY: Array<number> = [];
+/** each body's radius this tick: `zombieRadius` scans the type table, and the pair loop asked it per PAIR */
+const sepR: Array<number> = [];
 /** the stride `alongContacts` hands back */
 const stride = { x: 0, y: 0 };
 const sepHash = new SpatialHash();
@@ -50,6 +58,8 @@ const sepNear: Array<number> = [];
 const nearSolids: Array<Solid> = [];
 const seekSolids: Array<Solid> = [];
 const alertOut: Array<number> = [];
+/** which zombies of this tick's pass died (removed once the pass is over) */
+const goneAt: Array<boolean> = [];
 /** line-of-sight rays left this frame, and shouts left this frame */
 let losBudget = T.LOS_BUDGET;
 let shoutsLeft = Alert.ALERT_SHOUTS_PER_TICK;
@@ -98,9 +108,13 @@ export function takeKills(ai: Ctx.BrainState): number {
 	return n;
 }
 
-/** the "!" bubble of obj_zombie: shown on the frame a zombie starts hunting */
+/**
+ * The "!" of obj_zombie, and the groan with it: up for DETECT_SHOW_TIME from the tick a zombie starts CHASING
+ * (the wire's Detect bit, which the client's audio listens to). The state itself (`aware`) is what the awareness
+ * marks draw; this is only the moment it changed.
+ */
 function showDetect(z: ZombieState): void {
-	if (!z.detect) z.detectShow = T.DETECT_SHOW_TIME;
+	z.detectShow = T.DETECT_SHOW_TIME;
 }
 
 /**
@@ -115,17 +129,17 @@ export function applyKnockback(z: ZombieState, fromAngle: number, power: number)
 
 /**
  * Everything a zombie does when struck (bullet, arrow, blade, fire, shock): 1 s stun, flash,
- * knockback and it now hunts. Damage itself is applied by the caller.
+ * knockback and it turns towards the attacker. Damage itself is applied by the caller.
  *
- * Better than the original, which never links being shot to `detect` at all: the zombie turns towards
- * WHERE THE SHOT CAME FROM (`fromAngle` points away from the attacker) instead of magically knowing
- * where the shooter stands — so a shot from cover pulls the horde to the cover, not onto you.
- * A heavy hit (melee, headshot, blast) also staggers it and kills any bite it was winding up.
+ * Better than the original, which never links being shot to `detect` at all: the zombie turns SUSPICIOUS
+ * towards WHERE THE SHOT CAME FROM (`fromAngle` points away from the attacker) instead of magically knowing
+ * where the shooter stands — so a shot from cover pulls the horde to the cover, not onto you. One already
+ * chasing keeps chasing. A heavy hit (melee, headshot, blast) also staggers it and kills any bite it was
+ * winding up.
  */
 export function reactToHit(z: ZombieState, knockAngle: number, knockPower: number, stun = T.STUN_TIME): void {
 	if (z.rush !== true) z.stunned = math.max(z.stunned, stun);
 	z.hitFlash = 1;
-	showDetect(z);
 	Mind.report(z, z.x - math.cos(knockAngle) * Mind.SHOT_MEMORY, z.y - math.sin(knockAngle) * Mind.SHOT_MEMORY);
 	if (knockPower >= T.STAGGER_KNOCK) {
 		z.stagger = math.max(z.stagger ?? 0, T.STAGGER_TIME);
@@ -134,26 +148,46 @@ export function reactToHit(z: ZombieState, knockAngle: number, knockPower: numbe
 	applyKnockback(z, knockAngle, knockPower);
 }
 
-// --- noise --------------------------------------------------------------------------------------
+// --- noise (shared/sim/ai/noise.ts) --------------------------------------------------------------
 
 /**
- * Emit a noise ring (obj_sound / obj_sound_shot). Zombies reached by the growing ring start
- * hunting. Only matters in daylight without rain (at night everyone hunts anyway).
- * `unique`: gunfire keeps a single ring alive at a time like the original.
+ * Emit a noise ring (obj_sound / obj_sound_shot). Zombies reached by the growing ring go and look where it came
+ * from (suspicious). Day and night, now that the night no longer turns every zombie at once; the rain masks it.
+ * `shot`: a bang, whose front races out and slows down (the original's shot ring) instead of spreading at a
+ * walking pace.
+ *
+ * A ring from (nearly) the same place as a young one of the same kind merges into it — a machine-gun burst, a
+ * shotgun's pellets landing, six blows on one barricade are ONE noise that carries as far as the loudest — so
+ * the rings a tick has to walk stay few however much is going on. `unique` (the original kept one shot ring at
+ * a time) merges a shot into any young shot ring.
  */
 export function emitSound(refs: Ctx.AiRefs, x: number, y: number, rMax: number, shot: boolean, unique = false): void {
-	if (!refs.clock.soundMatters()) return;
+	const heard = rMax * (refs.clock.isRaining ? Sense.RAIN_HEARING : 1);
+	if (heard <= 0) return;
 	refs.sounds ??= [];
-	if (unique) {
-		for (const s of refs.sounds) {
-			if (s.shot && s.r < s.rMax * 0.5) return;
+	const merge2 = Noise.MERGE_DIST * Noise.MERGE_DIST;
+	for (const s of refs.sounds) {
+		if (s.shot !== shot || s.r >= s.rMax * 0.5) continue;
+		const dx = s.x - x;
+		const dy = s.y - y;
+		if ((unique && shot) || dx * dx + dy * dy <= merge2) {
+			s.rMax = math.max(s.rMax, heard);
+			return;
 		}
 	}
-	refs.sounds.push({ x, y, r: 0, rMax, shot });
+	refs.ai.ringSeq += 1;
+	refs.sounds.push({ x, y, r: 0, rMax: heard, shot, id: refs.ai.ringSeq });
 }
 
 function updateNoise(refs: Ctx.AiRefs, dt: number): void {
-	const matters = refs.clock.soundMatters();
+	// a survivor who left (a leave, a rejoin: a new body is a new PlayerState) takes their footstep track with
+	// them; kept, the map grew by one per rejoin and held every old body alive until the next world
+	const tracks = refs.ai.tracks;
+	if (tracks.size() > refs.players.size()) {
+		for (const [p] of tracks) {
+			if (!refs.players.includes(p)) tracks.delete(p);
+		}
+	}
 	for (const p of refs.players) {
 		const t = Ctx.trackOf(refs, p);
 		let moved = 0;
@@ -165,26 +199,25 @@ function updateNoise(refs: Ctx.AiRefs, dt: number): void {
 			if (moved < 600 * dt + 50) {
 				t.vx = dx / dt;
 				t.vy = dy / dt;
+			} else {
+				moved = 0;
 			}
 		}
 		t.lastX = p.x;
 		t.lastY = p.y;
-
-		if (matters) {
-			// sound_view_walk(dist*30) every frame, flushed every walk_tempo frames (÷1.2, max 200)
-			t.walkAccum += moved * 30;
-			t.walkTimer += dt;
-			if (t.walkTimer >= T.WALK_TEMPO) {
-				t.walkTimer = 0;
-				if (t.walkAccum > 0) {
-					let rMax = math.min(T.WALK_RING_MAX, t.walkAccum / 1.2);
-					// Stealth (skill 15) is the survivor's OWN: a quiet player is quiet for everyone
-					if (refs.saveOf(p).skillLevels[15] > 0) rMax /= 2;
-					emitSound(refs, p.x, p.y, rMax, false);
-				}
-				t.walkAccum = 0;
-			}
-		} else {
+		if (p.dead) {
+			t.walkAccum = 0;
+			t.walkTimer = 0;
+			continue;
+		}
+		// footsteps, flushed every walk_tempo like sys_sound_view, but graded by the gait over that window: the
+		// survivor's run is the original's ring, a slowed survivor's walk half of it (noise.ts)
+		t.walkAccum += moved;
+		t.walkTimer += dt;
+		if (t.walkTimer >= Noise.STEP_TEMPO) {
+			// Stealth (skill 15) is the survivor's OWN: a quiet player is quiet for everyone
+			const r = Noise.footstepRadius(t.walkAccum / t.walkTimer, refs.saveOf(p).skillLevels[15] > 0);
+			if (r > 0) emitSound(refs, p.x, p.y, r, false);
 			t.walkAccum = 0;
 			t.walkTimer = 0;
 		}
@@ -199,13 +232,29 @@ function updateNoise(refs: Ctx.AiRefs, dt: number): void {
 		} else {
 			s.r += T.WALK_RING_SPEED * dt;
 		}
+		const r = math.min(s.r, s.rMax);
+		const r2 = r * r;
+		const id = s.id ?? 0;
 		for (const z of refs.zombies) {
-			if (z.detect || z.hp <= 0) continue;
-			if (Ctx.actorDist(z.x, z.y, s.x, s.y) < s.r) {
-				// a noise says WHERE IT CAME FROM, not where the survivor is now: it goes and looks
-				showDetect(z);
-				Mind.report(z, s.x, s.y);
+			const dx = z.x - s.x;
+			const dy = z.y - s.y;
+			if (dx * dx + dy * dy >= r2) continue;
+			// a chasing zombie has better than a noise to go on, a wave zombie always knows, one walking round a
+			// building to another way in is committed to it (flank.ts orbit), and a ring is heard once. Ring ids only
+			// grow, so "once" is "not one older than the last it heard": inside two overlapping rings it answers the
+			// newer, instead of the two taking turns every tick and renewing the walk there for ever
+			if (
+				z.hp <= 0 ||
+				z.wave ||
+				(id !== 0 && id <= (z.heardRing ?? 0)) ||
+				Mind.chasing(z) ||
+				(z.orbit ?? 0) > 0
+			) {
+				continue;
 			}
+			// a noise says WHERE IT CAME FROM, not where the survivor is now: it goes and looks
+			z.heardRing = id;
+			Mind.report(z, s.x, s.y);
 		}
 		if (s.r > s.rMax) sounds.remove(i);
 	}
@@ -293,7 +342,7 @@ function explode(refs: Ctx.AiRefs, z: ZombieState, pi: number): void {
 		const p = refs.players[i];
 		if (Ctx.actorDist(p.x, p.y, z.x, z.y) < 800) Ctx.fxShake(refs, i, 7, 0.3);
 	}
-	emitSound(refs, z.x, z.y, 800, true);
+	emitSound(refs, z.x, z.y, Noise.EXPLOSION, true);
 	// better than the original: the blast also throws and hurts the zombies around it
 	for (const o of refs.zombies) {
 		if (o === z || o.hp <= 0) continue;
@@ -331,7 +380,11 @@ function updateExplosions(refs: Ctx.AiRefs, dt: number): void {
 
 // --- constructions ----------------------------------------------------------------------------
 
-/** a zombie (or blast) hits a player construction; destroyed ones leave the world for real */
+/**
+ * A zombie (or blast) hits a player construction; destroyed ones leave the world for real. Every blow is a bang
+ * the street hears and the collapse a louder one (noise.ts): a siege calls the neighbourhood, so a barricade
+ * buys time, never silence.
+ */
 export function damageStructure(refs: Ctx.AiRefs, s: Solid, dmg: number): void {
 	if (!s.destructible || s.removed === true) return;
 	s.hp -= dmg;
@@ -339,11 +392,27 @@ export function damageStructure(refs: Ctx.AiRefs, s: Solid, dmg: number): void {
 	const cx = s.x + s.w / 2;
 	const cy = s.y + s.h / 2;
 	Ctx.fxDebris(refs, cx, cy, 3, "structure");
+	emitSound(refs, cx, cy, s.hp <= 0 ? Noise.STRUCT_BREAK : Noise.STRUCT_HIT, true);
 	if (s.hp <= 0) {
 		Ctx.fxDebris(refs, cx, cy, 14, "structure");
 		removeSolid(refs.world, s);
 		// the way in just opened: the navigation owner has to re-rasterise that patch (§3.3 dirty tiles)
 		if (refs.onSolidChanged !== undefined) refs.onSolidChanged(s.x, s.y, s.w, s.h);
+	}
+}
+
+/** keeps `refs.ai.anyTrap` true to the world: recounted only when a solid (or an item) came or went */
+function scanTraps(refs: Ctx.AiRefs): void {
+	const w = refs.world;
+	const key = w.solids.size() * 7919 + w.nextId * 31 + w.nextDynamicId;
+	if (key === refs.ai.trapKey) return;
+	refs.ai.trapKey = key;
+	refs.ai.anyTrap = false;
+	for (const s of w.solids) {
+		if (s.tags === "trap" || s.tags === "trap_electric") {
+			refs.ai.anyTrap = true;
+			return;
+		}
 	}
 }
 
@@ -401,6 +470,9 @@ function collectLights(refs: Ctx.AiRefs, dt: number): void {
 
 	lightCount = 0;
 	for (const p of refs.players) {
+		// a corpse holds no torch: a dead survivor lit the zombies round their body, and so put them on the wire
+		// to everyone in range (MP-07) while every screen drew that spot dark
+		if (!Light.carriesLight(p)) continue;
 		const save = refs.saveOf(p);
 		// the survivor's own light, by the ONE rule the client's light map draws too (shared/sim/survivorLight.ts,
 		// LUZ-04): Nocturnal, the torch and night vision widen the circle; the flashlight adds its cone
@@ -465,6 +537,7 @@ function syncWorld(refs: Ctx.AiRefs): void {
 		// value plays differently from the same world started again. That is a difference the determinism
 		// autotest of §12.2 exists to catch, and the only place it can be fixed is here.
 		refs.ai.frameNo = 0;
+		refs.ai.scanFrom = -1;
 		refs.ai.tracks.clear();
 		refs.ai.seenMorning = refs.clock.morningCount;
 		structureLights.clear();
@@ -512,7 +585,9 @@ function navDue(z: ZombieState, distP: number, dt: number): boolean {
  * at a door: it commits to walking round the building for Flank.ORBIT_TIME instead (shared/sim/ai/flank.ts).
  *
  * A zombie that is making progress — including one chewing through a barricade, which resets the timer when
- * it lands a hit — never leaves its lane.
+ * it lands a hit — never leaves its lane. Nor does one that is MOVING without getting nearer: a quick walker
+ * jostling past a slow one in a stream of bodies (every zombie has its own gait, IA-04) is not a queue. A queue
+ * is standing still: more than JAM_STILL from where it last made progress, and it starts counting again.
  */
 function updateJam(refs: Ctx.AiRefs, z: ZombieState, distP: number, dt: number): void {
 	const field = refs.field;
@@ -527,8 +602,13 @@ function updateJam(refs: Ctx.AiRefs, z: ZombieState, distP: number, dt: number):
 		return;
 	}
 	const best = z.bestCells;
-	if (best === undefined || cells < best - Flank.JAM_PROGRESS) {
-		z.bestCells = cells;
+	const ax = z.jamX ?? z.x;
+	const ay = z.jamY ?? z.y;
+	const moved = (z.x - ax) * (z.x - ax) + (z.y - ay) * (z.y - ay) > T.JAM_STILL * T.JAM_STILL;
+	if (best === undefined || cells < best - Flank.JAM_PROGRESS || moved) {
+		z.bestCells = best === undefined || cells < best ? cells : best;
+		z.jamX = z.x;
+		z.jamY = z.y;
 		z.jamT = 0;
 		return;
 	}
@@ -547,12 +627,27 @@ function updateJam(refs: Ctx.AiRefs, z: ZombieState, distP: number, dt: number):
  *
  * §3.3 widens the straight-line case to DIRECT_CHASE (200 u): the multi-source field can be a quarter of a
  * second old, and the last few metres of a chase must not lag behind the body it is chasing.
+ *
+ * `gx, gy`: where the straight last stretch heads — the survivor itself in a chase, the remembered PLACE for a
+ * suspicious zombie that takes the field's way there (`fieldGoto`).
  */
-function chaseHeading(refs: Ctx.AiRefs, z: ZombieState, p: PlayerState, r: number, distP: number, dt: number): number {
+function chaseHeading(
+	refs: Ctx.AiRefs,
+	z: ZombieState,
+	p: PlayerState,
+	r: number,
+	distP: number,
+	dt: number,
+	gx = p.x,
+	gy = p.y,
+): number {
 	if (!navDue(z, distP, dt)) return z.navDir ?? 0;
-	const direct = math.atan2(p.y - z.y, p.x - z.x);
+	const direct = math.atan2(gy - z.y, gx - z.x);
 	let h: number | undefined;
-	if (distP < T.DIRECT_CHASE && Phys.segmentClear(refs.world, z.x, z.y, p.x, p.y, Phys.blocksMovement)) {
+	if (
+		Ctx.actorDist(z.x, z.y, gx, gy) < T.DIRECT_CHASE &&
+		Phys.segmentClear(refs.world, z.x, z.y, gx, gy, Phys.blocksMovement)
+	) {
 		h = direct;
 	} else if ((z.orbit ?? 0) > 0) {
 		// walking round the building instead of queueing: follow the tangent, not the field
@@ -569,6 +664,19 @@ function chaseHeading(refs: Ctx.AiRefs, z: ZombieState, p: PlayerState, r: numbe
 	}
 	z.navDir = h;
 	return h;
+}
+
+/**
+ * Does this suspicious zombie take the chase field's way to its remembered place? Only when that place is where a
+ * survivor still is (within FIELD_GOTO): the field is a map of the ways to them, so it walks through the door and
+ * round the building instead of into the wall — it knows roughly where you are and takes the way a body would.
+ * A survivor who moved on leaves it local steering to an old place, which it gives up if it cannot reach.
+ */
+function fieldGoto(refs: Ctx.AiRefs, z: ZombieState, p: PlayerState): boolean {
+	const lx = z.lastSeenX;
+	const ly = z.lastSeenY;
+	if (p.dead || lx === undefined || ly === undefined || !refs.field.contains(z.x, z.y)) return false;
+	return Ctx.actorDist(lx, ly, p.x, p.y) < T.FIELD_GOTO && Ctx.actorDist(z.x, z.y, lx, ly) > T.DIRECT_CHASE;
 }
 
 /** heading towards a remembered place (last known position, search point): local steering only */
@@ -598,6 +706,7 @@ function computeSeparation(refs: Ctx.AiRefs): void {
 	const n = zs.size();
 	sepX.clear();
 	sepY.clear();
+	sepR.clear();
 	sepHash.begin();
 	// the contact slots are kept between ticks and only ever grow: resetting a count is all a tick costs
 	while (contactN.size() < n) contactN.push(0);
@@ -607,19 +716,20 @@ function computeSeparation(refs: Ctx.AiRefs): void {
 		sepY.push(0);
 		contactN[i] = 0;
 		const a = zs[i];
+		sepR.push(zombieRadius(a));
 		if (a.jumping === true) continue;
 		sepHash.insert(i, a.x, a.y);
 	}
 	for (let i = 0; i < n; i++) {
 		const a = zs[i];
 		if (a.jumping === true) continue;
-		const ra = zombieRadius(a);
+		const ra = sepR[i];
 		sepNear.clear();
 		sepHash.neighbours(a.x, a.y, sepNear);
 		for (const j of sepNear) {
 			if (j <= i) continue;
 			const o = zs[j];
-			const min = ra + zombieRadius(o);
+			const min = ra + sepR[j];
 			const reach = min + T.CONTACT_MARGIN;
 			const dx = o.x - a.x;
 			const dy = o.y - a.y;
@@ -759,45 +869,84 @@ function updateCrowd(refs: Ctx.AiRefs): void {
 	}
 	refs.ai.crowd.begin(cx / n, cy / n);
 	for (const z of refs.zombies) {
-		if (z.detect && z.hp > 0) refs.ai.crowd.add(z.x, z.y);
+		if (z.aware === Mind.Aware.Chasing && z.hp > 0) refs.ai.crowd.add(z.x, z.y);
 	}
 }
 
 // --- perception and the pack ---------------------------------------------------------------------
 
+/** pooled light and weather of this tick (updateSenses) */
+const senseCond: Sense.SenseConditions = { darkness: 0, night: false, raining: false };
+
 /**
- * Can this zombie perceive its target right now? Touch and the night/rain smell are free; sight needs the
- * target inside the range AND the cone AND a clear line. The line is a raycast, so it is spent from a
- * per-frame budget and cached for Sense.losInterval(dist) seconds — a horde never pays 150 rays in one frame.
+ * Per survivor, once per tick: the light they carry or stand in, and so how far each sense reaches against them
+ * (perception.ts). Their own glow, a torch or a flashlight; standing in a lamp's or a fire's light counts as
+ * daylight. Pooled: six survivors, sixty ticks a second.
  */
-function perceive(
-	refs: Ctx.AiRefs,
-	z: ZombieState,
-	p: PlayerState,
-	distP: number,
-	dt: number,
-	senses: Sense.SenseRanges,
-): boolean {
-	if (distP < Sense.TOUCH_RANGE) return true;
-	if (distP < senses.smell) return true;
-	if (!Sense.inSightCone(distP, z.angleSlow, math.atan2(p.y - z.y, p.x - z.x), senses)) {
-		// out of the cone: drop the cached answer so it re-tests the moment the target comes back into it
-		z.losClear = false;
-		z.losCd = 0;
-		return false;
+function updateSenses(refs: Ctx.AiRefs): void {
+	const clock = refs.clock;
+	senseCond.darkness = clock.darkAlpha;
+	senseCond.night = clock.isNight;
+	senseCond.raining = clock.isRaining;
+	const senses = refs.ai.senses;
+	const beacons = refs.ai.beacons;
+	const n = refs.players.size();
+	for (let i = 0; i < n; i++) {
+		const p = refs.players[i];
+		const save = refs.saveOf(p);
+		let b = beacons[i];
+		if (b === undefined) {
+			b = { range: 0, beam: 0, beamAngle: 0 };
+			beacons[i] = b;
+		}
+		// the light they give off, by the ONE rule the light map and `isLit` read (shared/sim/survivorLight.ts,
+		// LUZ-04): the glow or a torch all round, and a flashlight's cone along the aim
+		const cone = Light.survivorCone(save);
+		b.beam = cone !== undefined ? cone.radius : 0;
+		b.beamAngle = p.angle;
+		b.range = Sense.beaconSight(math.max(Light.survivorGlowRadius(save), b.beam));
+		if (b.range < Sense.LAMP_SIGHT) {
+			for (const l of structureLights) {
+				const dx = p.x - l.x;
+				const dy = p.y - l.y;
+				if (dx * dx + dy * dy <= l.r * l.r) {
+					b.range = Sense.LAMP_SIGHT;
+					break;
+				}
+			}
+		}
+		const s = senses[i];
+		const stealthy = save.skillLevels[15] > 0;
+		if (s === undefined) senses[i] = Sense.senseRanges(senseCond, b, stealthy);
+		else Sense.senseRanges(senseCond, b, stealthy, s);
 	}
-	z.losCd = (z.losCd ?? 0) - dt;
-	if ((z.losCd ?? 0) <= 0 && losBudget > 0) {
-		losBudget--;
-		z.losCd = Sense.losInterval(distP) * (0.8 + ((z.id * 7) % 10) / 25);
-		z.losClear = Phys.segmentClear(refs.world, z.x, z.y, p.x, p.y, Phys.blocksMovement);
-	}
-	return z.losClear === true;
+	while (senses.size() > n) senses.pop();
 }
 
 /**
- * The zombie screams and the ones around it answer (shared/sim/ai/alert.ts). They are told the place the
- * shouter saw the survivor, not where the survivor is now, so they converge on it and search.
+ * One LOOK at the target (staggered: perception.ts `senseInterval`). In view = inside the eye cone (or standing
+ * in the survivor's flashlight beam) AND a clear line through the walls (`blocksSight`). The line is a raycast,
+ * spent from a per-tick budget; a zombie the budget could not serve keeps its last answer and looks again on the
+ * next tick, so a horde never pays 150 rays in one tick. Returns false when it had to wait for the budget.
+ */
+function look(refs: Ctx.AiRefs, z: ZombieState, p: PlayerState, pi: number, distP: number): boolean {
+	const senses = Ctx.sensesOf(refs, pi);
+	const toP = math.atan2(p.y - z.y, p.x - z.x);
+	const seen = Sense.inSightCone(distP, z.angleSlow, toP, senses);
+	if (!p.dead && (seen || (distP <= senses.sight && Sense.inBeam(distP, toP + math.pi, senses)))) {
+		if (losBudget <= 0) return false;
+		losBudget--;
+		z.losClear = Phys.segmentClear(refs.world, z.x, z.y, p.x, p.y, Sense.blocksSight);
+	} else {
+		z.losClear = false;
+	}
+	z.sightK = senses.sight > 0 ? distP / senses.sight : 1;
+	return true;
+}
+
+/**
+ * The zombie groans and the ones around it answer (shared/sim/ai/alert.ts). They are told the place the
+ * shouter saw the survivor, not where the survivor is now: they turn suspicious and converge on it.
  */
 function shout(refs: Ctx.AiRefs, z: ZombieState, p: PlayerState): void {
 	if (shoutsLeft <= 0 || (z.alertCd ?? 0) > 0) return;
@@ -809,27 +958,74 @@ function shout(refs: Ctx.AiRefs, z: ZombieState, p: PlayerState): void {
 		const o = refs.zombies[alertOut[k]];
 		// woken zombies also get the cooldown: an alert cannot relay itself across the map
 		o.alertCd = Alert.ALERT_COOLDOWN;
-		o.detectShow = T.DETECT_SHOW_TIME;
 		Mind.report(o, p.x, p.y);
 	}
 }
 
-// --- per type ----------------------------------------------------------------------------------
+// --- natural motion (DESIGN_RULES IA-04) ----------------------------------------------------------
 
-/** random walk with pauses (random_move / alarm[2]) */
+/** a per-zombie constant in [0, 1), hashed from its id: its gait, its sway's phase */
+function trait(z: ZombieState, salt: number): number {
+	return ((((z.id + salt) * 0.6180339887) % 1) + 1) % 1;
+}
+
+/**
+ * Random walk with pauses (random_move / alarm[2]), made to read as a shamble: each leg turns from the last
+ * instead of picking a brand-new bearing, the legs and the stops are longer and uneven, and half the stops are a
+ * look around — the body turns, and its eye cone sweeps the street with it.
+ */
 function wander(z: ZombieState, dt: number): number {
 	z.wanderTimer -= dt;
 	if (z.wanderTimer <= 0) {
 		if (z.wanderPause === true) {
 			z.wanderPause = false;
-			z.wanderTimer = rndRange(2, 4);
-			z.wanderDir = rnd() * math.pi * 2;
+			z.wanderTimer = rndRange(T.WANDER_LEG_MIN, T.WANDER_LEG_MAX);
+			z.wanderDir += rndRange(-T.WANDER_TURN, T.WANDER_TURN);
 		} else {
 			z.wanderPause = true;
-			z.wanderTimer = rndRange(20 / 30, 40 / 30);
+			z.wanderTimer = rndRange(T.WANDER_PAUSE_MIN, T.WANDER_PAUSE_MAX);
+			if (rnd() < T.WANDER_LOOK) z.angle = z.angleSlow + rndRange(-1.6, 1.6);
 		}
 	}
-	return z.wanderPause === true ? 0 : ((z.moveSpeed * 2) / 3) * SPEED_SCALE;
+	if (z.wanderPause === true) return 0;
+	return ((z.moveSpeed * 2) / 3) * SPEED_SCALE * (T.AMBLE_MIN + (1 - T.AMBLE_MIN) * trait(z, 3));
+}
+
+/**
+ * The body walks the way the brain wants, but like a body: never faster than it did (a gait of its own in
+ * [GAIT_MIN, 1] of its speed while chasing), swaying a little in time with its steps, swinging round at a
+ * turn rate instead of snapping, and getting up to speed instead of teleporting its velocity. None of it applies
+ * in the last DIRECT_CHASE of a chase: the approach and the bite stay exactly on line.
+ *
+ * The result is `z.walkDir` (the heading it walks) and `z.pace` (u/s).
+ */
+function naturalMotion(
+	z: ZombieState,
+	heading: number,
+	speed: number,
+	chase: boolean,
+	distP: number,
+	dt: number,
+): void {
+	const close = chase && distP < T.DIRECT_CHASE;
+	let want = heading;
+	let target = speed;
+	if (chase) target *= T.GAIT_MIN + (1 - T.GAIT_MIN) * trait(z, 7);
+	if (target > 0 && !(chase && distP < T.WOBBLE_NEAR)) {
+		const amp = chase ? T.WOBBLE_CHASE : T.WOBBLE_CALM;
+		want += math.sin((z.feetCycle ?? 0) * 0.5 + trait(z, 11) * math.pi * 2) * amp;
+	}
+	const cur = z.walkDir;
+	if (close || cur === undefined || target <= 0) {
+		z.walkDir = want;
+	} else {
+		const turn = (chase ? T.TURN_CHASE : z.aware === Mind.Aware.Idle ? T.TURN_WANDER : T.TURN_ALERT) * dt;
+		const d = angleDiff(cur, want);
+		z.walkDir = math.abs(d) <= turn ? want : cur + (d > 0 ? turn : -turn);
+	}
+	const pace = z.pace ?? target;
+	const step = T.PACE_ACCEL * dt;
+	z.pace = close ? target : math.abs(target - pace) <= step ? target : pace + (target > pace ? step : -step);
 }
 
 /** seconds of sidestep, picking a side that keeps it inside the world it knows */
@@ -1073,12 +1269,17 @@ function startJump(refs: Ctx.AiRefs, z: ZombieState, r: number, dir: number, hun
 	return false;
 }
 
+/**
+ * The jumper only moves by leaping: at the survivor it sees (`hunting`), at the place it has a reason to look
+ * (`goal`, suspicious or searching), or along its wander.
+ */
 function thinkJumper(
 	refs: Ctx.AiRefs,
 	z: ZombieState,
 	p: PlayerState,
 	r: number,
 	hunting: boolean,
+	goal: number | undefined,
 	dt: number,
 	distP: number,
 ): void {
@@ -1087,6 +1288,8 @@ function thinkJumper(
 	let dir: number | undefined;
 	if (hunting) {
 		dir = chaseHeading(refs, z, p, r, distP, dt);
+	} else if (goal !== undefined) {
+		dir = goal;
 	} else if (z.wanderPause !== true) {
 		dir = z.wanderDir;
 	}
@@ -1178,7 +1381,7 @@ function faceAndAnimate(
 	const walking = speed > SPEED_SCALE;
 	if (walking) z.angle = math.atan2(movedY, movedX);
 	if (z.backstep === true || z.holdGround === true) z.angle = math.atan2(p.y - z.y, p.x - z.x);
-	if (z.detect && distP < 100) z.angle = math.atan2(p.y - z.y, p.x - z.x);
+	if (z.aware === Mind.Aware.Chasing && distP < 100) z.angle = math.atan2(p.y - z.y, p.x - z.x);
 	if (z.type === 2 && (z.headX ?? 0) > 0 && z.aimX !== undefined && z.aimY !== undefined) {
 		z.angle = math.atan2(z.aimY - z.y, z.aimX - z.x);
 		z.angleSlow = z.angle;
@@ -1210,8 +1413,67 @@ function faceAndAnimate(
 }
 
 /**
- * Senses + memory for one zombie: what it perceives now, what it remembers, and the shout when it is the
- * first to spot the survivor. Returns what the body should do this frame.
+ * Is it sure it sees the survivor? Touch (every tick, free, through anything); otherwise the staggered look
+ * (`look`) and the certainty it builds: instant up close, a fraction of a second more the further and the
+ * darker, twice as fast for a zombie already looking for someone, and fading once the survivor is out of view.
+ * In view but not yet sure is a GLIMPSE: the zombie walks to where it saw something (suspicious).
+ */
+function senseTarget(
+	refs: Ctx.AiRefs,
+	z: ZombieState,
+	p: PlayerState,
+	pi: number,
+	distP: number,
+	dt: number,
+	was: number,
+): boolean {
+	if (z.sensedFor !== pi) {
+		// the field handed it another survivor: what it saw of the last one (in view, how sure) says nothing about
+		// this one, so it starts from nothing and looks now. A chase goes on through the grace meanwhile, and one
+		// clear look at the new survivor keeps it going (a chase is kept by any clear look). A newborn's first
+		// target keeps its staggered first look (createZombie)
+		if ((z.sensedFor ?? -1) >= 0) z.senseCd = 0;
+		z.sensedFor = pi;
+		z.losClear = false;
+		z.notice = 0;
+	}
+	if (!p.dead && distP < Sense.TOUCH_RANGE) {
+		z.notice = 1;
+		z.losClear = true;
+		return true;
+	}
+	// a newcomer's first look lands somewhere inside its first interval, so a batch born together never looks
+	// in the same tick again
+	if (z.senseCd === undefined) z.senseCd = Sense.senseInterval(distP) * trait(z, 5);
+	z.senseCd = (z.senseCd ?? 0) - dt;
+	if ((z.senseCd ?? 0) <= 0) {
+		const interval = Sense.senseInterval(distP) * (0.8 + trait(z, 5) * 0.4);
+		if (look(refs, z, p, pi, distP)) {
+			z.senseCd = interval;
+			if (z.losClear === true) {
+				let t = Sense.noticeTime(distP, Ctx.sensesOf(refs, pi).sight);
+				if (was === Mind.Aware.Suspicious || was === Mind.Aware.Searching) t /= Sense.NOTICE_ALERT;
+				// a chase is kept by any clear look: certainty is what it takes to START one
+				z.notice = was === Mind.Aware.Chasing || t <= 0 ? 1 : math.min(1, (z.notice ?? 0) + interval / t);
+			} else {
+				z.notice = math.max(0, (z.notice ?? 0) - Sense.NOTICE_DECAY * interval);
+			}
+		} else if (z.losClear === true && (z.senseCd ?? 0) < -T.LOS_STALE) {
+			// the tick's rays ran out before its turn, tick after tick: an "in view" this old is not trusted (the
+			// survivor may have gone behind a wall since), and it counts as out of view until it gets its look
+			z.losClear = false;
+		}
+	} else if (z.losClear === true && (p.dead || distP > Ctx.sensesOf(refs, pi).sight)) {
+		// between looks the last answer stands, but never for a survivor who is now out of range (a respawn, a
+		// teleport): it would "see" them wherever they went
+		z.losClear = false;
+	}
+	return z.losClear === true && (z.notice ?? 0) >= 1;
+}
+
+/**
+ * Senses + memory for one zombie: what it perceives now, what it remembers, the state the players are shown,
+ * and the groan when it is the first to spot the survivor. Returns what the body should do this frame.
  */
 function updateMind(
 	refs: Ctx.AiRefs,
@@ -1221,21 +1483,38 @@ function updateMind(
 	distP: number,
 	dt: number,
 ): Mind.MindAction {
-	if (z.hp <= 0) return "chase"; // a lit exploder walks at you whatever it can Mind.see
-	const wasDetect = z.detect;
-	const perceived = perceive(refs, z, p, distP, dt, Ctx.sensesOf(refs, pi));
-	const action = Mind.think(z, dt, perceived, p.x, p.y, z.x, z.y);
-	if (perceived && !wasDetect) {
-		z.detectShow = T.DETECT_SHOW_TIME;
-		shout(refs, z, p);
+	const was = z.aware ?? Mind.Aware.Idle;
+	if (z.hp <= 0 || z.wave) {
+		// a lit exploder walks at you whatever it can see; a night-wave zombie is the original's tide — it knows
+		// where you are and does not stop knowing, so a wave never breaks up into a search party
+		z.aware = Mind.Aware.Chasing;
+		if (z.wave && !z.detect) Mind.see(z, p.x, p.y);
+		z.lostFor = 0;
+		if (was !== Mind.Aware.Chasing) showDetect(z);
+		return "chase";
 	}
+	const sure = senseTarget(refs, z, p, pi, distP, dt, was);
+	if (!sure && z.losClear === true && !p.dead) Mind.report(z, p.x, p.y); // a glimpse
+	let action = Mind.think(z, dt, sure, p.x, p.y, z.x, z.y);
 	// original leash: a plain ambient walker gives up 2000 px from where it spawned
-	if (action !== "idle" && z.type === 1 && !z.wave) {
+	if (action !== "idle" && z.type === 1) {
 		const fromSpawn = Ctx.actorDist(z.x, z.y, z.spawnX, z.spawnY);
 		if (fromSpawn > T.LEASH_SPAWN && distP > T.LEASH_PLAYER) {
 			Mind.forget(z);
-			return "idle";
+			action = "idle";
 		}
+	}
+	const now = Mind.awareOf(action);
+	z.aware = now;
+	if (now === Mind.Aware.Chasing && was !== Mind.Aware.Chasing) {
+		showDetect(z);
+		// only a zombie that saw the survivor with its own eyes groans for the others
+		if (sure) shout(refs, z, p);
+	} else if (now === Mind.Aware.Idle && was !== Mind.Aware.Idle) {
+		// it gave up: a moment standing where the trail went cold, then it wanders off from there
+		z.notice = 0;
+		z.wanderPause = true;
+		z.wanderTimer = T.GIVE_UP_PAUSE;
 	}
 	return action;
 }
@@ -1274,16 +1553,25 @@ function updateOne(refs: Ctx.AiRefs, z: ZombieState, idx: number, dt: number): b
 		}
 	}
 
-	const r = zombieRadius(z);
+	const r = sepR[idx] ?? zombieRadius(z);
 	let distP = Ctx.actorDist(z.x, z.y, p.x, p.y);
 	if (z.stunned > 0) z.stunned = math.max(0, z.stunned - dt);
 	z.reactionSpeed = math.min(T.REACTION_MAX, z.reactionSpeed);
 	if (z.reactionSpeed > 0) z.reactionSpeed = math.max(0, z.reactionSpeed - DESIGN.REACTION_FRICTION * dt);
 	const action = updateMind(refs, z, p, pi, distP, dt);
-	const hunting = action !== "idle";
+	// the specials only fight what they SEE: a suspicious spitter walks to the place, it does not spit at it
 	const seeing = action === "chase";
-	if (seeing) {
+	const fielded = action === "goto" && fieldGoto(refs, z, p);
+	if (seeing || fielded) {
+		const before = z.bestCells;
 		updateJam(refs, z, distP, dt);
+		// on the field's way, getting nearer along the path IS progress, and so is walking round the building to
+		// another way in (flank.ts orbit): neither is a place it cannot reach (memory GOTO_STALL)
+		const after = z.bestCells;
+		if (fielded && ((z.orbit ?? 0) > 0 || (after !== undefined && (before === undefined || after < before)))) {
+			z.gotoT = 0;
+			z.gotoBest = undefined;
+		}
 	} else {
 		z.jamT = 0;
 		z.bestCells = undefined;
@@ -1320,26 +1608,36 @@ function updateOne(refs: Ctx.AiRefs, z: ZombieState, idx: number, dt: number): b
 	let heading = 0;
 	let speed = 0;
 	let wandering = false;
+	/** a walk the natural-motion pass shapes (chase, goto, search, wander), and whether it is a chase */
+	let natural = false;
+	let chaseWalk = false;
 	const dying = z.hp <= 0;
 	const frozen = z.stunned > 0 || (z.stagger ?? 0) > 0;
-	if (z.type === 2) thinkSpitter(refs, z, p, hunting, dt, distP);
+	const phase = (z.id * 2.399) % (math.pi * 2);
+	if (z.type === 2) thinkSpitter(refs, z, p, seeing, dt, distP);
 	else if (z.type === 3) thinkExploder(refs, z, p, dt, distP);
-	const rushing = z.type === 4 && thinkCharger(refs, z, p, hunting, dt, distP);
+	const rushing = z.type === 4 && thinkCharger(refs, z, p, seeing, dt, distP);
 
 	if (rushing) {
 		heading = z.rushDir ?? 0;
 		speed = (z.rushSpeed ?? T.RUSH_SPEED_MIN) * SPEED_SCALE;
 	} else if (z.type === 5) {
-		thinkJumper(refs, z, p, r, hunting, dt, distP);
+		let goal: number | undefined;
+		if (action === "goto") {
+			goal = math.atan2((z.lastSeenY ?? p.y) - z.y, (z.lastSeenX ?? p.x) - z.x);
+		} else if (action === "search" && Mind.searchWalk(z, phase, dt, z.x, z.y)) {
+			goal = math.atan2(Mind.searchPointY(z, phase) - z.y, Mind.searchPointX(z, phase) - z.x);
+		}
+		thinkJumper(refs, z, p, r, seeing, goal, dt, distP);
 		jumperPoison(refs, z, r);
 		// the jumper never walks: it only moves by jumping
 	} else if ((z.windup ?? 0) > 0) {
-		// winding up: it pulls back, so the bite is something you can Mind.see coming and step out of
+		// winding up: it pulls back, so the bite is something you can see coming and step out of
 		heading = math.atan2(z.y - p.y, z.x - p.x);
 		speed = T.WINDUP_BACK * SPEED_SCALE;
 	} else if (!frozen || dying) {
 		// (a dying exploder ignores the stun: it keeps walking at you with its fuse lit)
-		if (z.type === 2 && hunting) {
+		if (z.type === 2 && seeing) {
 			// spitter kiting: give ground when crowded, hold still to spit, slide otherwise
 			if (distP < T.SPIT_BACK) {
 				heading = steer(world, z, r, math.atan2(z.y - p.y, z.x - p.x));
@@ -1354,14 +1652,14 @@ function updateOne(refs: Ctx.AiRefs, z: ZombieState, idx: number, dt: number): b
 				heading = chaseHeading(refs, z, p, r, distP, dt);
 				speed = z.moveSpeed * SPEED_SCALE;
 			}
-		} else if (z.type === 4 && hunting && (z.strafe ?? 0) > 0 && !rushing) {
+		} else if (z.type === 4 && seeing && (z.strafe ?? 0) > 0 && !rushing) {
 			// charger with no clear lane: slide sideways looking for one instead of grinding a wall
 			heading = steer(world, z, r, strafeHeading(z, p));
 			speed = z.moveSpeed * T.STRAFE_SPEED * SPEED_SCALE;
-		} else if (hunting && z.backstep === true) {
+		} else if (seeing && z.backstep === true) {
 			heading = steer(world, z, r, math.atan2(z.y - p.y, z.x - p.x));
 			speed = z.moveSpeed * SPEED_SCALE;
-		} else if (hunting && z.holdGround === true) {
+		} else if (seeing && z.holdGround === true) {
 			// the charger at the distance it keeps: it waits for its lane (speed stays 0)
 		} else if (seeing || dying) {
 			// the exploder aims at the wall or the group it wants to die next to
@@ -1371,18 +1669,41 @@ function updateOne(refs: Ctx.AiRefs, z: ZombieState, idx: number, dt: number): b
 				heading = chaseHeading(refs, z, p, r, distP, dt);
 			}
 			speed = z.moveSpeed * SPEED_SCALE;
+			natural = true;
+			chaseWalk = true;
 		} else if (action === "goto") {
-			heading = gotoHeading(refs, z, r, z.lastSeenX ?? p.x, z.lastSeenY ?? p.y, distP, dt);
-			speed = z.moveSpeed * SPEED_SCALE;
+			const gx = z.lastSeenX ?? p.x;
+			const gy = z.lastSeenY ?? p.y;
+			heading = fielded
+				? chaseHeading(refs, z, p, r, distP, dt, gx, gy)
+				: gotoHeading(refs, z, r, gx, gy, distP, dt);
+			speed = z.moveSpeed * T.SUSPICIOUS_SPEED * SPEED_SCALE;
+			natural = true;
 		} else if (action === "search") {
-			const phase = (z.id * 2.399) % (math.pi * 2);
-			heading = gotoHeading(refs, z, r, Mind.searchPointX(z, phase), Mind.searchPointY(z, phase), distP, dt);
-			speed = z.moveSpeed * T.SEARCH_SPEED * SPEED_SCALE;
+			if (Mind.searchWalk(z, phase, dt, z.x, z.y)) {
+				heading = gotoHeading(refs, z, r, Mind.searchPointX(z, phase), Mind.searchPointY(z, phase), distP, dt);
+				speed = z.moveSpeed * T.SEARCH_SPEED * SPEED_SCALE;
+			} else {
+				// standing and looking round: the body turns, and the eye cone sweeps with it
+				heading = z.walkDir ?? z.angle;
+				z.angle = Mind.lookAngle(z, phase);
+			}
+			natural = true;
 		} else {
 			speed = wander(z, dt);
 			heading = z.wanderDir;
 			wandering = true;
+			natural = true;
 		}
+	}
+	if (natural) {
+		naturalMotion(z, heading, speed, chaseWalk, distP, dt);
+		heading = z.walkDir ?? heading;
+		speed = z.pace ?? speed;
+	} else {
+		// anything else (a rush, a leap, a wind-up, a kite, a stun) is exact: the next walk starts from it
+		if (speed > 0) z.walkDir = heading;
+		z.pace = speed;
 	}
 
 	// ---- move: intent + knockback + crowd separation, through real collision ------------------
@@ -1417,8 +1738,10 @@ function updateOne(refs: Ctx.AiRefs, z: ZombieState, idx: number, dt: number): b
 			if (distP < T.STRUCT_ATTACK_RANGE) {
 				const dmg = rushing ? (z.damageRush ?? z.damage) : z.damage;
 				damageStructure(refs, hit, damageCal(dmg));
-				// breaking the way in IS progress: it does not count as being stuck in a queue
+				// breaking the way in IS progress: it does not count as being stuck in a queue, nor as a place it
+				// cannot reach (a suspicious zombie at your barricade keeps at it)
 				z.jamT = 0;
+				z.gotoT = 0;
 				z.stunned = T.STUN_TIME;
 				if (rushing) endRush(z);
 			}
@@ -1461,7 +1784,7 @@ function updateOne(refs: Ctx.AiRefs, z: ZombieState, idx: number, dt: number): b
 	}
 
 	// ---- floor trap: 40%/frame chance of a short stun (frame-rate independent) ------------------
-	if (z.stunned <= 0 && findTrap(world, z.x, z.y) !== undefined) {
+	if (refs.ai.anyTrap && z.stunned <= 0 && findTrap(world, z.x, z.y) !== undefined) {
 		if (rnd() < 1 - math.pow(0.6, dt * 30)) z.stunned = T.STUN_TIME / 4;
 	}
 
@@ -1485,42 +1808,57 @@ export function updateZombies(refs: Ctx.AiRefs, dt: number): void {
 	losBudget = T.LOS_BUDGET;
 	shoutsLeft = Alert.ALERT_SHOUTS_PER_TICK;
 	const clock = refs.clock;
-	// sight is shortened by the light, the weather and the TARGET's own Stealth skill, so it is computed
-	// once per survivor and not once per world (§4.3 treats visibility per player for the same reason)
-	const senses = refs.ai.senses;
-	senses.clear();
-	for (const p of refs.players) {
-		senses.push(
-			Sense.senseRanges(
-				{ darkness: clock.darkAlpha, night: clock.isNight, raining: clock.isRaining },
-				refs.saveOf(p).skillLevels[15] > 0,
-			),
-		);
-	}
 	// 7:00 — zombies that did not come with a night wave lose the trail (and the memory with it)
 	if (clock.morningCount !== refs.ai.seenMorning) {
 		refs.ai.seenMorning = clock.morningCount;
 		for (const z of refs.zombies) {
-			if (!z.wave) Mind.forget(z);
+			if (!z.wave) {
+				Mind.forget(z);
+				z.aware = Mind.Aware.Idle;
+				z.notice = 0;
+			}
 		}
 	}
 	collectLights(refs, dt);
+	scanTraps(refs);
+	// sight is shortened by the light and the weather and lengthened by the TARGET's own light, and its Stealth
+	// skill is its own, so it is computed once per survivor, not once per world (§4.3 does the same per player)
+	updateSenses(refs);
 	updateNoise(refs, dt);
 	updatePuddles(refs, dt);
 	updateExplosions(refs, dt);
 	updateCrowd(refs);
 	computeSeparation(refs);
-	for (let i = refs.zombies.size() - 1; i >= 0; i--) {
-		const z = refs.zombies[i];
-		if (updateOne(refs, z, i, dt)) {
-			// everything removed HERE died (the population recycles the living ones, and says so itself)
-			if (refs.onZombieGone !== undefined) refs.onZombieGone(z, true);
-			refs.zombies.remove(i);
-		}
+	const zs = refs.zombies;
+	const n = zs.size();
+	// Newest first, but starting where the last tick's rays ran out: the tick's budgets (rays, shouts) are spent in
+	// this order, and one fixed order served the newest zombies every tick while the oldest waited behind them for
+	// a ray they never got, keeping a stale "in view" (the review of 66f6373). Uncontended, it is newest first.
+	const from = refs.ai.scanFrom >= 0 && refs.ai.scanFrom < n ? refs.ai.scanFrom : n - 1;
+	let cut = -1;
+	for (let i = 0; i < n; i++) goneAt[i] = false;
+	for (let k = 0; k < n; k++) {
+		const i = (from - k + n) % n;
+		if (cut < 0 && losBudget <= 0) cut = i;
+		goneAt[i] = updateOne(refs, zs[i], i, dt);
+	}
+	refs.ai.scanFrom = cut;
+	// the dead leave after the pass, so every index above stayed the one the separation was computed for
+	for (let i = n - 1; i >= 0; i--) {
+		if (!goneAt[i]) continue;
+		const z = zs[i];
+		// everything removed HERE died (the population recycles the living ones, and says so itself)
+		if (refs.onZombieGone !== undefined) refs.onZombieGone(z, true);
+		zs.remove(i);
 	}
 }
 
-/** a zombie that spawns already hunting knows where the survivor was when it arrived, not for ever */
+/**
+ * A zombie that spawns already on the trail (obj_zombie's 10% "random detect") arrives SUSPICIOUS of where the
+ * survivor was when it spawned: it walks there and searches, and only a sighting turns it into a chase. It never
+ * homes on the live position it could not know.
+ */
 export function seedHunt(z: ZombieState, x: number, y: number): void {
-	Mind.see(z, x, y);
+	Mind.report(z, x, y);
+	z.aware = Mind.Aware.Suspicious;
 }

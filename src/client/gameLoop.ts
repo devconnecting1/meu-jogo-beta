@@ -66,6 +66,8 @@ import { FootCycle } from "./view/footsteps";
 import { circleInView, part } from "./view/drawKit";
 import { WorldView } from "./view/worldView";
 import { ageFlinches } from "./view/solidFlinch";
+import { AwarenessMarks, MarkAvoid, MarkNight } from "./view/zombieAwareness";
+import { reducedMotion } from "./ui/skin";
 
 const Players = game.GetService("Players");
 
@@ -79,6 +81,8 @@ const SERVER_ACTORS = MP_PHASE >= 2;
 
 /** nameplate sits between the night light map (Dark, 80) and the HUD (90) so it stays readable at night */
 const NAMEPLATE_Z = 85;
+/** the zombies' awareness marks: above the night overlay (they must read at night), under the nameplates */
+const AWARENESS_Z = NAMEPLATE_Z - 1;
 /** world units from the player's centre to the top of the plate: clears the body and its shadow */
 const NAMEPLATE_GAP = 14;
 
@@ -377,6 +381,12 @@ export class GameLoop {
 	private readonly playersView = new PlayersView();
 	/** what anyone within earshot just said, floating over their head; built on the first frame that can host it */
 	private chat?: ChatBubbles;
+	/** the "?" / "!" / dot over each zombie (client/view/zombieAwareness.ts), built on the first frame that can host it */
+	private awareness?: AwarenessMarks;
+	/** the bodies a mark must never cover, refilled in place: the local survivor first, then the allies */
+	private readonly markAvoid = new Array<MarkAvoid>();
+	/** the night the light map drew this frame: a mark is only as bright as the ground under its zombie (IA-05) */
+	private readonly markNight: MarkNight = { dark: 0, lights: this.lights };
 	/** the local survivor's centre handed to the bubbles, refilled in place so a frame allocates nothing */
 	private readonly selfBody = { x: 0, y: 0 };
 	/** last frame time, so render() can ease what it has to ease (update() runs every frame of a run, UI-06) */
@@ -922,9 +932,42 @@ export class GameLoop {
 		this.build.draw(renderer, cam);
 		renderer.endFrame();
 		this.drawLight(cam, view, allies);
+		this.drawAwareness(cam, view, allies);
 		this.drawNameplate(cam);
 		this.drawAllyPlates(cam, view, allies);
 		this.drawChatBubbles(cam, view, allies);
+	}
+
+	/** the zombies' awareness marks (IA-05), over the night overlay and never over a survivor */
+	private drawAwareness(cam: Camera, v: ViewRect, allies: ReadonlyArray<RemotePlayerView>): void {
+		let marks = this.awareness;
+		if (marks === undefined) {
+			const root = getCtx().darkLayer.Parent;
+			if (root === undefined || !root.IsA("GuiObject")) return;
+			marks = new AwarenessMarks(root, AWARENESS_Z);
+			this.awareness = marks;
+		}
+		const avoid = this.markAvoid;
+		const p = this.player;
+		this.putAvoid(0, p.x, p.y);
+		let n = 1;
+		for (const a of allies) {
+			this.putAvoid(n, a.x, a.y);
+			n += 1;
+		}
+		while (avoid.size() > n) avoid.pop();
+		marks.reduceMotion = reducedMotion();
+		marks.draw(cam, v, this.refs.zombies, avoid, this.lastDt, this.world, this.markNight);
+	}
+
+	private putAvoid(i: number, x: number, y: number): void {
+		const slot = this.markAvoid[i];
+		if (slot === undefined) {
+			this.markAvoid.push({ x, y });
+			return;
+		}
+		slot.x = x;
+		slot.y = y;
 	}
 
 	/** chat bubbles ride the same layer as the plates, so a survivor's name and their words scale together */
@@ -991,6 +1034,8 @@ export class GameLoop {
 		const nightVision = SurvivorLight.wearsNightVision(save);
 		this.lightMap.setColor(nightVision ? COLORS.overlayNightVision : COLORS.overlayNight);
 		const dark = this.daynight.darkAlpha * (nightVision ? SurvivorLight.NIGHT_VISION_DARK : 1);
+		// the awareness marks follow this very darkness and these very lights (drawAwareness)
+		this.markNight.dark = dark > 0.004 ? dark : 0;
 		if (dark <= 0.004) {
 			this.lightMap.hide();
 			return;
@@ -998,7 +1043,7 @@ export class GameLoop {
 		const lights = this.lights;
 		lights.clear();
 		const p = this.player;
-		if (!p.dead) {
+		if (SurvivorLight.carriesLight(p)) {
 			// what is in hand or worn, by the ONE rule the server's horde visibility uses (LUZ-04): the circle
 			// (Nocturnal, torch, night vision) and the flashlight's cone along the aim, to the unit and the degree
 			lights.push({ x: p.x, y: p.y, r: SurvivorLight.survivorLightRadius(save), inner: 0.4 });
@@ -1049,6 +1094,7 @@ export class GameLoop {
 		this.nameplate?.update(0, 0, ctx.save.level, false);
 		this.playersView.hide();
 		this.chat?.hide();
+		this.awareness?.hide();
 		ctx.darkLayer.BackgroundTransparency = 1;
 	}
 

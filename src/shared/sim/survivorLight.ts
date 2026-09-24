@@ -32,6 +32,15 @@ export const CONE_HALF_ANGLE = math.rad(EQUIP_LIGHTS[FLASHLIGHT_ID].coneDeg ?? 4
  */
 export const NIGHT_VISION_DARK = 0.85;
 
+/**
+ * Only a living survivor carries a light: a body holds no torch. The server's horde visibility (zombieBrain
+ * `collectLights`), the client's light map (gameLoop `drawLight`) and an ally's light on it (playersView
+ * `collectLights`, `downed`) all skip the dead, so a corpse lights nothing on any screen nor on the wire (MP-07).
+ */
+export function carriesLight(p: { dead: boolean }): boolean {
+	return !p.dead;
+}
+
 /** the light row of a worn gadget, or undefined */
 function lightOf(id: number): EquipLight | undefined {
 	return id >= 0 ? EQUIP_LIGHTS[id] : undefined;
@@ -58,6 +67,20 @@ export function survivorCone(save: PlayerSaveData): EquipLight | undefined {
 	const gun = lightOf(save.equipGun);
 	if (gun !== undefined && gun.coneDeg !== undefined) return gun;
 	return undefined;
+}
+
+/**
+ * The light the survivor GIVES OFF all round: their own circle (250 u) or a worn fire (the torch), whichever is
+ * bigger. Not Nocturnal and not night vision: those are eyes, not light. They widen what the survivor sees
+ * (`survivorLightRadius`), not how far off the horde makes them out (shared/sim/ai/perception.ts, IA-01).
+ */
+export function survivorGlowRadius(save: PlayerSaveData): number {
+	let r = SURVIVOR_LIGHT_R;
+	const hand = lightOf(save.equipHand);
+	if (hand !== undefined && hand.coneDeg === undefined && hand.sight !== true) r = math.max(r, hand.radius);
+	const gun = lightOf(save.equipGun);
+	if (gun !== undefined && gun.coneDeg === undefined && gun.sight !== true) r = math.max(r, gun.radius);
+	return r;
 }
 
 /** is the survivor wearing night vision (a `sight` gadget)? Their own screen sees the night brighter and green */

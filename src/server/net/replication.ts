@@ -256,7 +256,7 @@ export function playerBlockOf(sp: ServerPlayer): PlayerSnap {
  * instead of the pose would make every zombie snap round on each packet.
  */
 export function zombieBlockOf(z: ZombieState, netId: number, mid: boolean): ZombieSnap {
-	const out: ZombieSnap = { netId, x: z.x, y: z.y, angle: 0, flags: 0, type: z.type, big: false, mid };
+	const out: ZombieSnap = { netId, x: z.x, y: z.y, angle: 0, flags: 0, type: z.type, big: false, mid, aware: 0 };
 	fillZombieBlock(out, z, netId, mid);
 	return out;
 }
@@ -290,6 +290,8 @@ export function fillZombieBlock(out: ZombieSnap, z: ZombieState, netId: number, 
 	out.type = z.type;
 	out.big = (z.scale ?? 1) > 1.2;
 	out.mid = mid;
+	// what the brain decided it is doing (IA-03), drawn over its head by every client (IA-05, protocol decision 17)
+	out.aware = z.aware ?? 0;
 	out.extra = extra;
 }
 
