@@ -119,6 +119,8 @@ function showAnnouncement(ctx: GameContext, text: string, from: string): void {
 		s.Name = "PZAnnouncements";
 		s.ResetOnSpawn = false;
 		s.IgnoreGuiInset = true;
+		// the device safe area, like the HUD's and the menus' (client/bootstrap.ts): the frame the kit lays out in
+		s.ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets;
 		s.DisplayOrder = 140;
 		s.ZIndexBehavior = Enum.ZIndexBehavior.Sibling;
 		// an admin's filtered text and a display name: never captured for automatic translation (compliance F9)

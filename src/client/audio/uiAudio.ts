@@ -1,9 +1,9 @@
 /*
  * Interface audio, wired without touching a single screen.
  *
- * Every screen of this game lives under one ScreenGui, and every button of the kit carries the "Variant"
- * attribute that `widgets.buildButton` stamps on it. So instead of threading a callback through the whole
- * UI, this module watches the ScreenGui:
+ * Every screen of this game lives under two layers (`ctx.hudLayer`, `ctx.uiLayer`), and every button of the kit
+ * carries the "Variant" attribute that `widgets.buildButton` stamps on it. So instead of threading a callback
+ * through the whole UI, this module watches the two layers:
  *  - a kit button added anywhere gets a click (Activated) and a hover (MouseEnter / SelectionGained);
  *    the full-screen `InputBlocker` and the slider hit areas have no Variant attribute, so they stay silent;
  *  - a screen or dialog added to `ctx.uiLayer` is a panel opening; the last one leaving is it closing. A screen
@@ -95,8 +95,11 @@ function hook(inst: Instance): void {
 export function startUiAudio(ctx: GameContext): void {
 	if (started) return;
 	started = true;
-	for (const d of ctx.screen.GetDescendants()) hook(d);
-	ctx.screen.DescendantAdded.Connect(hook);
+	// the buttons are the HUD's and the menus' (each in its own ScreenGui, client/bootstrap.ts); the world takes no input
+	for (const host of [ctx.hudLayer, ctx.uiLayer]) {
+		for (const d of host.GetDescendants()) hook(d);
+		host.DescendantAdded.Connect(hook);
+	}
 
 	const layer = ctx.uiLayer;
 	// a screen kept built between uses (the backpack) opens and closes by visibility, not by being added / removed

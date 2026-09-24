@@ -657,7 +657,14 @@ const ctx = { phase: "lobby", save, uiLayer: undefined };
 	layer.Name = "Ui";
 	layer.Parent = gui;
 	ctx.uiLayer = layer;
-	ctx.screen = gui;
+	ctx.uiGui = gui;
+	// the town behind the menus is pinned in the world's ScreenGui, under the menus' one (client/bootstrap.ts)
+	const world = makeInstance("ScreenGui", false);
+	const backdrop = makeInstance("Frame", false);
+	backdrop.Name = "Backdrop";
+	backdrop.Parent = world;
+	ctx.backdropLayer = backdrop;
+	ctx.screen = world;
 }
 
 const calls = {
@@ -1373,8 +1380,10 @@ check(
 	`quadro ${RunService.RenderStepped.conns.length - renderBefore}, carteira ${walletListeners}, atributos ${attrConns()}`,
 );
 check(
-	"o voo sobre a cidade continua preso no fundo da camada da UI (a proxima tela de menu o mostra; so a partida o solta)",
-	Fly.activeFlyover() !== undefined && Fly.activeFlyover().layer.Parent === ctx.uiLayer,
+	"o voo sobre a cidade continua preso no fundo, na ScreenGui do mundo e nao na dos menus (a proxima tela de menu o mostra; so a partida o solta)",
+	Fly.activeFlyover() !== undefined &&
+		Fly.activeFlyover().layer.Parent === ctx.backdropLayer &&
+		!Fly.activeFlyover().layer.IsDescendantOf(ctx.uiGui),
 );
 const aliveKept = alive();
 const perCycle = [];

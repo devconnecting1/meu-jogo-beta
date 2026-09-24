@@ -982,6 +982,9 @@ export class HudConsole {
 	 */
 	update(state: HudState, save: PlayerSaveData, now: number): void {
 		const wave = math.sin(now * BLINK_RATE);
+		// Reduce Motion holds each bar in the state that carries the warning instead of blinking between two (the day
+		// clock's countdown does the same, hudSky.ts): low HP stays lit, low food stays red
+		const still = W.reducedMotion();
 		const [hpBar, foodBar, xpBar] = this.bars;
 
 		// HP: the fill blinks out when low, and lights up on a hit (the vignette is the other half of the cue)
@@ -992,7 +995,8 @@ export class HudConsole {
 			hpBar.b = state.hpMax;
 			hpBar.label.Text = `${this.tags[0]} ${hpNow} / ${state.hpMax}`;
 		}
-		this.setBar(hpBar, hpRatio, BAR.hp, state.hitFlash > HIT_HOT ? "hot" : "idle", !(hpRatio < LOW_HP && wave > 0));
+		const hpShown = !(hpRatio < LOW_HP && !still && wave > 0);
+		this.setBar(hpBar, hpRatio, BAR.hp, state.hitFlash > HIT_HOT ? "hot" : "idle", hpShown);
 
 		// food: low hunger blinks the fill red, the colour of what it is doing to you (both pass under the label)
 		const foodRatio = state.hungerMax > 0 ? state.hunger / state.hungerMax : 0;
@@ -1002,7 +1006,7 @@ export class HudConsole {
 			foodBar.b = state.hungerMax;
 			foodBar.label.Text = `${this.tags[1]} ${foodNow} / ${state.hungerMax}`;
 		}
-		this.setBar(foodBar, foodRatio, foodRatio < LOW_FOOD && wave > 0 ? BAR.hp : BAR.food, "idle", true);
+		this.setBar(foodBar, foodRatio, foodRatio < LOW_FOOD && (still || wave > 0) ? BAR.hp : BAR.food, "idle", true);
 
 		// XP, with the level written in it
 		const exp = math.max(0, math.floor(state.exp));

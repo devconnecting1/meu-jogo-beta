@@ -21,6 +21,7 @@
  * Fallback: when a texture has no asset id (skinAssets.ts) or the client fails to fetch one, every surface
  * repaints itself as the previous flat look (BackgroundColor3 + UIStroke + UICorner). The UI is never blank.
  */
+import { safeOrigin, safeSize, screenSize, topInset } from "./device";
 import { SKIN_TEXTURES, SKIN_TEXTURE_NAMES, SKIN_UNIT, SkinTextureName } from "./skinAssets";
 import { BORDER, OVER_WORLD, RADIUS, THEME, TRANSPARENCY } from "./theme";
 
@@ -37,29 +38,23 @@ export const PRESS_DROP = 2;
 
 // ---------------------------------------------------------------- safe area & scale
 
-/** height (px) covered by the Roblox top bar; our ScreenGui ignores the inset, so we keep clear of it */
-export function topInset(): number {
-	const [topLeft] = GuiService.GetGuiInset();
-	let inset = topLeft.Y;
-	const [ok, value] = pcall(() => GuiService.TopbarInset);
-	if (ok) {
-		const rect = value as Rect;
-		if (rect.Height > 0) inset = math.max(inset, rect.Max.Y);
-	}
-	return math.max(0, inset);
-}
+/** height (px) covered by the Roblox top bar in the interface's coordinates (device.ts: the one copy of it) */
+export { topInset };
 
+/**
+ * The screen the HUD and the menus are laid out on, px: the device safe area their ScreenGuis draw in (device.ts). On a
+ * screen with no cut-out it is the whole screen. The world's own size is device.ts screenSize.
+ */
 export function viewportSize(): Vector2 {
-	const cam = Workspace.CurrentCamera;
-	if (cam !== undefined && cam.ViewportSize.X > 1 && cam.ViewportSize.Y > 1) return cam.ViewportSize;
-	return new Vector2(DESIGN_W, DESIGN_H);
+	return safeSize();
 }
 
 /**
  * The Roblox top bar as the layout needs it: how tall it is, and the stretch of it its buttons leave free.
  *
  * `GuiService.TopbarInset` is "the unoccupied area between the Roblox left-most controls and the edge of the device
- * safe area", in the coordinates of a ScreenGui with IgnoreGuiInset (ours, bootstrap.ts): the buttons sit left of
+ * safe area", in the coordinates of a ScreenGui with IgnoreGuiInset -- the device safe area, where the HUD's and the
+ * menus' ScreenGuis draw (ScreenInsets.DeviceSafeInsets, bootstrap.ts): the buttons sit left of
  * `Min.X` (and right of `Max.X`, should a platform put any there), from the top of the screen down to the bar's
  * height. The rest of the bar's height is empty screen, and a window may use it (DESIGN_RULES UI-07).
  *
@@ -417,6 +412,20 @@ export function onLayoutChange(owner: Instance, fn: () => void): void {
 	fn();
 }
 
+/**
+ * Stretches `frame` -- a child of a full-size layer of the HUD or the menus, which start at the device safe area -- over
+ * the WHOLE screen, so what it holds is placed in the world's pixels (cam.worldToScreen): the coach's pointer. Kept in
+ * sync with the screen; whatever lands outside the safe area is clipped there by its ScreenGui.
+ */
+export function coverWholeScreen(frame: GuiObject): void {
+	onLayoutChange(frame, () => {
+		const o = safeOrigin();
+		const v = screenSize();
+		frame.Position = UDim2.fromOffset(-o.X, -o.Y);
+		frame.Size = UDim2.fromOffset(v.X, v.Y);
+	});
+}
+
 // ---------------------------------------------------------------- text: never outlined
 
 /*
@@ -560,12 +569,26 @@ function findBoxStroke(target: GuiObject, name: string): UIStroke | undefined {
 	return nested !== undefined && nested.IsA("UIStroke") ? nested : undefined;
 }
 
-/** every fade of the kit lands here; `motionTime` is what makes Reduce Motion cut them to an instant jump */
-function tweenTo<T extends Instance>(obj: T, time: number, props: Partial<ExtractMembers<T, Tweenable>>): Tween {
-	const info = new TweenInfo(motionTime(time), Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
+/**
+ * THE tween of the interface: every fade and move of the kit, widgets.tween, the logo and the nameplate's pop land here,
+ * and nothing else in src/ calls TweenService (`npm run test:settings` checks it). `motionTime` is what makes Reduce
+ * Motion cut every one of them to an instant jump. `reverses`: it plays back to where it started (a pop).
+ */
+export function motionTween<T extends Instance>(
+	obj: T,
+	time: number,
+	props: Partial<ExtractMembers<T, Tweenable>>,
+	reverses = false,
+): Tween {
+	const info = new TweenInfo(motionTime(time), Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, reverses);
 	const t = TweenService.Create(obj, info, props);
 	t.Play();
 	return t;
+}
+
+/** every fade of the kit lands here */
+function tweenTo<T extends Instance>(obj: T, time: number, props: Partial<ExtractMembers<T, Tweenable>>): Tween {
+	return motionTween(obj, time, props);
 }
 
 /** a missed texture fetch is often transient; this is how long we wait before asking again */
