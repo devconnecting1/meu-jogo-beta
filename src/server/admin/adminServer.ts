@@ -162,6 +162,14 @@ export interface AdminServer {
 	 * (adminId 0), the player by UserId and the counters the server wrote (MP-16: a human reviews every automatic kick).
 	 */
 	floodKick(player: Player, reason: string): void;
+	/**
+	 * (MP-26) A "Restart town" request that reached the server's rules (server/match/townServices.ts): by UserId, the
+	 * decision and why (review of 0b44458, M4 + L2 + L3). Only an ADMIN's restart is an admin action, stored like every
+	 * other. The owner's own restart and every refusal stay in this server's memory and output, never in the stored
+	 * audit keys -- they cannot push admin or auto:flood lines out -- and a refusal is logged once per UserId per
+	 * DENY_LOG_INTERVAL, like the admin remote's own refusals.
+	 */
+	townAudit(userId: number, ok: boolean, details: string, byAdmin: boolean): void;
 }
 
 interface Bucket {
@@ -231,6 +239,8 @@ export function startAdminServer(host: AdminHost): AdminServer {
 	 */
 	const autoLogged = new Set<string>();
 	const denied = new Map<number, number>();
+	/** (MP-26) UserId → os.clock() of the last Restart town refusal logged (one per DENY_LOG_INTERVAL) */
+	const townDenied = new Map<number, number>();
 	/** admin UserId → watched UserId */
 	const watching = new Map<number, number>();
 	const audit: Array<AuditRecord> = [];
@@ -1035,6 +1045,7 @@ export function startAdminServer(host: AdminHost): AdminServer {
 	Players.PlayerAdded.Connect(markAdmin);
 	for (const p of Players.GetPlayers()) markAdmin(p);
 	Players.PlayerRemoving.Connect(p => {
+		townDenied.delete(p.UserId);
 		buckets.delete(p.UserId);
 		camBuckets.delete(p.UserId);
 		strangers.delete(p.UserId);
@@ -1055,6 +1066,15 @@ export function startAdminServer(host: AdminHost): AdminServer {
 		},
 		floodKick(player: Player, reason: string): void {
 			recordAs(0, "auto:flood", player.UserId, "", reason, true, true);
+		},
+		townAudit(userId: number, ok: boolean, details: string, byAdmin: boolean): void {
+			if (!ok) {
+				const now = os.clock();
+				const last = townDenied.get(userId) ?? -math.huge;
+				if (now - last < DENY_LOG_INTERVAL) return;
+				townDenied.set(userId, now);
+			}
+			recordAs(userId, "town:restart", 0, "own town", details, ok, ok && byAdmin);
 		},
 	};
 }

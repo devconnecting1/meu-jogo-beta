@@ -522,7 +522,40 @@ class TownRng {
 	}
 }
 
-/** deterministic 0..1 hash of a position (original: random_set_seed(x + y + object_index)) */
+/**
+ * sin and cos of a SMALL angle (|a| ≤ 0.5 rad) from +, - and × alone: Horner on the Taylor series to the 13th power
+ * (the first term left out is under 1e-17 there). `math.sin` is the platform's libm, and two platforms may disagree
+ * in the last bit -- a server on Linux and a client on a phone -- which is harmless in a colour and not in a solid:
+ * the abandoned cars' collision rects are floored from these, and the server and every client must build the same
+ * solids to the unit (docs/MULTIPLAYER.md §4.5; npm run test:seed runs the generator with a perturbed libm to prove
+ * no solid reads it). Every IEEE-754 +, -, × and ÷ is exactly rounded, so this is the same number everywhere.
+ */
+export function smallSin(a: number): number {
+	const x2 = a * a;
+	return (
+		a *
+		(1 -
+			(x2 / 6) *
+				(1 -
+					(x2 / 20) *
+						(1 - (x2 / 42) * (1 - (x2 / 72) * (1 - (x2 / 110) * (1 - (x2 / 156) * (1 - x2 / 210)))))))
+	);
+}
+
+export function smallCos(a: number): number {
+	const x2 = a * a;
+	return (
+		1 -
+		(x2 / 2) *
+			(1 - (x2 / 12) * (1 - (x2 / 30) * (1 - (x2 / 56) * (1 - (x2 / 90) * (1 - (x2 / 132) * (1 - x2 / 182))))))
+	);
+}
+
+/**
+ * Deterministic 0..1 hash of a position (original: random_set_seed(x + y + object_index)). It goes through `math.sin`,
+ * so it may differ in the last bit between platforms: it only ever picks COLOURS and a canopy's radius (what each
+ * client draws), never a solid's rect, id or kind -- see `smallSin`.
+ */
 export function hash01(x: number, y: number, salt = 0): number {
 	const n = math.sin(x * 12.9898 + y * 78.233 + salt * 37.719) * 43758.5453;
 	return n - math.floor(n);
@@ -1877,9 +1910,10 @@ function parkCars(g: Gen): void {
 				const travel = v ? (high ? -math.pi / 2 : math.pi / 2) : high ? 0 : math.pi;
 				const skew = g.rng.range(0.1, 0.24) * (g.rng.chance(0.5) ? 1 : -1);
 				const heading = travel + skew + (g.rng.chance(0.2) ? math.pi : 0);
-				// collision: halfway between the car's own rect and its rotated bounding box
-				const cs = math.abs(math.cos(skew));
-				const sn = math.abs(math.sin(skew));
+				// collision: halfway between the car's own rect and its rotated bounding box. The skew is small (0.1-0.24
+				// rad) and the rect is floored from it: the same bits on every machine, never the platform's libm
+				const cs = math.abs(smallCos(skew));
+				const sn = math.abs(smallSin(skew));
 				const hl = L / 2 + ((L / 2) * cs + (W / 2) * sn - L / 2) / 2;
 				const hw = W / 2 + ((L / 2) * sn + (W / 2) * cs - W / 2) / 2;
 				const t = g.rng.range(lo + 200, hi - 200 - L);
@@ -2417,9 +2451,12 @@ function planInteriors(g: Gen): void {
 /**
  * Procedural town: avenues and streets, sidewalks, zoned lots with enterable buildings, trees, cars, bins.
  *
- * A pure function of `seed` (0: a random one). `pace`, when given, is called between two buildings' interiors -- the
- * bulk of the work -- so a server rebuilding the world can yield there (server/net/mpHost.ts, at a world reset); it
- * cannot change the town, and nothing is half-built when it runs.
+ * A pure function of `seed` (0: a random one). `pace`, when given, is called between two lots while the town is laid
+ * out and between two buildings' interiors -- the bulk of the work -- so a caller can yield there: the server
+ * rebuilding the world (server/net/mpHost.ts, at a world reset) and a client generating the lobby's town a slice per
+ * frame (client/boot/townCache.ts). It cannot change the town (it draws nothing from the town's RNG and touches no
+ * part of it), and nothing is half-built when it runs -- a building's interior is planned whole between two calls,
+ * which is also what lets another town be generated in the same VM while this one waits there (npm run test:seed).
  */
 export function generateTown(seed = 0, pace?: () => void): WorldData {
 	const w = createWorld(DESIGN.WORLD_W, DESIGN.WORLD_H);
@@ -2914,11 +2951,16 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 		}
 		binsAtEntrances(g, lot);
 		if (lot.zone === "commercial") binsBehindShops(g, lot);
+		// between two lots, too: a caller slicing the work over frames (a client's lobby, client/boot/townCache.ts)
+		// must not meet one long stretch before the first interior. `pace` draws nothing from `rng` and touches
+		// nothing of the town, so where it is called can never change the town (npm run test:seed)
+		if (g.pace !== undefined) g.pace();
 	}
 
 	// --- trees: street trees in the service strip, the rest in yards, parks and plazas ---
 	for (const lot of w.lots) {
 		streetTrees(g, lot);
+		if (g.pace !== undefined) g.pace();
 	}
 	for (const road of w.roads) {
 		if (!road.avenue) continue;
@@ -2968,7 +3010,9 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 	}
 
 	// --- cars: parallel parking, a few abandoned ---
+	if (g.pace !== undefined) g.pace();
 	parkCars(g);
+	if (g.pace !== undefined) g.pace();
 
 	// --- map border: dense forest + fence ---
 	const t = TOWN.BORDER;

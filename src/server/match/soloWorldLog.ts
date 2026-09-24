@@ -65,6 +65,10 @@ export function soloWorldLog(inner: WorldLog, host: SoloWorldLogHost): SoloWorld
 				host.delay(math.max(0, lastWrite + SOLO_WORLD_LOG_GAP_S - now), flush);
 			}
 		},
+		// memory only, never the shared document (MP-26: a keeper's restart; a solo town has no keeper, so none comes)
+		remember(entry) {
+			inner.remember(entry);
+		},
 		recent() {
 			return inner.recent();
 		},

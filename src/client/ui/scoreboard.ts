@@ -3,7 +3,7 @@
  * window vocabulary of UI-07 -- the survivor (name, and the title under it in its colour, MON-05), level, the day of
  * THIS life, the zombies put down, and whether they are up, down, or dead until dawn (MP-21).
  *
- *   ┌───────────────── Survivors · 3 / 6 ────────────── X ┐
+ *   ┌──────────── Brackenmere · Survivors · 3 / 6 ───────── X ┐
  *   │ Sort by              [Life day][Level][Put down][Name] │   <- pad and touch; the mouse clicks a header
  *   │ ┌ Survivor ─────── Lv ─ Life day ─ Put down ─ Status ┐ │
  *   │ │ Marta              12         9        137   Alive │ │
@@ -40,9 +40,10 @@
  */
 import { GameContext } from "shared/game/context";
 import { TITLES, titleFromWire } from "shared/data/titles";
+import { townNameOf } from "shared/data/townNames";
 import { MAX_PLAYERS } from "shared/net/mpConfig";
 import { LifeState } from "shared/net/protocol";
-import { RosterView, netActive, netHosted, netRoster } from "../net/netClient";
+import { RosterView, netActive, netHosted, netRoster, netTownSeed } from "../net/netClient";
 import { paintPlate } from "./plate";
 import type { PxRect } from "./hudConsole";
 import { Px, pixelIcon } from "./hudSky";
@@ -324,6 +325,8 @@ export class Scoreboard {
 	private refreshAt = -math.huge;
 	private dpad: RBXScriptConnection | undefined;
 	private shownCount = -1;
+	/** the town the title names (MP-26: its name from the seed the match runs) */
+	private shownSeed = -1;
 	private sortShown: boolean | undefined;
 	private chipText: Color3 | undefined;
 	/** what of the HUD's corner the open panel must stay under (touch: the sky and the chip, when they are on the left) */
@@ -622,10 +625,15 @@ export class Scoreboard {
 
 	private writeCount(): void {
 		const n = this.entries.size();
-		if (n !== this.shownCount) {
+		const seed = netTownSeed();
+		if (n !== this.shownCount || seed !== this.shownSeed) {
+			if (n !== this.shownCount) this.chipCount.Text = tostring(n);
 			this.shownCount = n;
-			this.chipCount.Text = tostring(n);
-			if (this.title !== undefined) this.title.Text = `${this.tr("Survivors")} · ${n} / ${MAX_PLAYERS}`;
+			this.shownSeed = seed;
+			// "Brackenmere · Survivors · 3 / 6": the town's name (a proper noun) and who is in it
+			if (this.title !== undefined) {
+				this.title.Text = `${townNameOf(seed)} · ${this.tr("Survivors")} · ${n} / ${MAX_PLAYERS}`;
+			}
 		}
 		const legend = this.opts.keyLegend();
 		if (this.chipKey.Text !== legend) this.chipKey.Text = legend;

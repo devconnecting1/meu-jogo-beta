@@ -194,6 +194,7 @@ function refused(ctx: GameContext, why: TripRefusal): void {
 	else if (why === "solo") text = tr("This is already a town of your own.");
 	else if (why === "loading") text = tr("Loading your progress...");
 	else if (why === "noOffer") text = tr("That offer has lapsed.");
+	else if (why === "joining") text = tr("A join is already under way");
 	toast(ctx, text, why === "unavailable" ? "error" : "info");
 }
 

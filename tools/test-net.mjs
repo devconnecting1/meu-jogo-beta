@@ -1241,6 +1241,41 @@ test("Fx: round trip, batching and sizes", () => {
 	eq("empty batch", P.encodeFx({ tick: 1, events: [] }).packets.length, 0);
 });
 
+test("Fx: blood with no direction stays with none (a kill sprays all round, not to +x)", () => {
+	const events = [
+		{ t: P.FxType.Blood, x: 1000, y: 2000, amount: 10, kind: P.BloodKind.Horde },
+		{ t: P.FxType.Blood, x: 1000, y: 2000, angle: 0, amount: 3, kind: P.BloodKind.Horde },
+		{ t: P.FxType.Blood, x: 1000, y: 2000, angle: 2, amount: 4, kind: P.BloodKind.Red },
+		{ t: P.FxType.Blood, x: 1000, y: 2000, amount: 4, kind: P.BloodKind.Red },
+	];
+	const res = P.encodeFx({ tick: 9, events });
+	const got = P.decodeFx(res.packets[0]).events;
+	eq("four events", got.length, 4);
+	eq("a kill: no direction", got[0].angle, undefined);
+	angNear("a hit to +x keeps its direction", got[1].angle, 0, ANG8_TOL);
+	angNear("a bite keeps its direction", got[2].angle, 2, ANG8_TOL);
+	eq("a bite with none: none", got[3].angle, undefined);
+	eq("the horde's kind survives the flag", got[0].kind, P.BloodKind.Horde);
+	eq("a survivor's too", got[3].kind, P.BloodKind.Red);
+	const one = P.encodeFx({ tick: 1, events: [events[0]] });
+	const two = P.encodeFx({ tick: 1, events: [events[1]] });
+	eq("no byte more for the flag", buffer.len(one.packets[0]), buffer.len(two.packets[0]));
+	const bytes = bytesOf(one.packets[0]);
+	bytes[bytes.length - 1] = 0x82;
+	eq("an undirected kind past the last is refused", P.decodeFx(bufOf(bytes)), undefined);
+	// the flag is the kind byte's top bit: every kind must stay below it, or a kind would read as "no direction"
+	ok(
+		Object.values(P.BloodKind).every(k => Number.isInteger(k) && k >= 0 && k < 0x80),
+		`every BloodKind stays below the 0x80 flag (${JSON.stringify(P.BloodKind)})`,
+	);
+	for (const kind of Object.values(P.BloodKind)) {
+		const back = P.decodeFx(
+			P.encodeFx({ tick: 2, events: [{ t: P.FxType.Blood, x: 5, y: 5, amount: 1, kind }] }).packets[0],
+		);
+		eq(`kind ${kind} with no direction comes back the same kind`, back.events[0].kind, kind);
+	}
+});
+
 test("Fx: malformed packets are refused", () => {
 	const pkt = P.encodeFx({ tick: 3, events: [randFxEvent(), randFxEvent()] }).packets[0];
 	const good = bytesOf(pkt);
@@ -1358,7 +1393,14 @@ function randWorldEvent(kind = rint(1, 19)) {
 			for (let i = rint(0, 6); i > 0; i--) {
 				lives.push({ userId: rbool() ? rint(1, 9000000000) : -rint(1, 8), runRev: rint(0, 10000000) });
 			}
-			return { t: kind, seed: rint(1, CFG.TOWN_SEED_MAX), endedDay: rint(1, 400), lives };
+			// MP-26 (protocol note 21): why it ended -- it fell, or its keeper restarted it
+			return {
+				t: kind,
+				seed: rint(1, CFG.TOWN_SEED_MAX),
+				endedDay: rint(1, 400),
+				cause: rint(0, P.WORLD_RESET_CAUSE_MAX),
+				lives,
+			};
 		}
 		default:
 			return {
@@ -1470,6 +1512,7 @@ function compareWorldEvent(a, b) {
 		case P.WorldEv.WorldReset:
 			eq("reset seed", b.seed, a.seed);
 			eq("reset endedDay", b.endedDay, a.endedDay);
+			eq("reset cause", b.cause, a.cause);
 			eq("reset lives", JSON.stringify(b.lives), JSON.stringify(a.lives));
 			break;
 		case P.WorldEv.InitBegin:
@@ -1519,14 +1562,21 @@ test("World: round trip of every delta", () => {
 		t: P.WorldEv.WorldReset,
 		seed: 12345,
 		endedDay: 9,
+		cause: P.WorldResetCause.Restarted,
 		lives: [
 			{ userId: 1, runRev: 4 },
 			{ userId: 2, runRev: 9 },
 		],
 	};
 	const resetBytes = buffer.len(P.encodeWorld({ tick: 0, events: [reset2] }).packets[0]);
-	eq("WorldReset with 2 lives", resetBytes, 5 + 1 + 4 + 2 + 1 + 2 * (8 + 4));
-	sizes.push(["World WorldReset (2 new lives)", `${resetBytes} B`, "seed, endedDay, lives (MP-22)"]);
+	eq("WorldReset with 2 lives", resetBytes, 5 + 1 + 4 + 2 + 1 + 1 + 2 * (8 + 4));
+	sizes.push(["World WorldReset (2 new lives)", `${resetBytes} B`, "seed, endedDay, cause, lives (MP-22, MP-26)"]);
+	// MP-26 (note 21): a cause the protocol does not have drops the event, like a bad seed
+	const raw = bytesOf(P.encodeWorld({ tick: 0, events: [reset2] }).packets[0]);
+	// the cause byte: after the 5 B header, the tag, the seed (u32) and endedDay (u16)
+	eq("the cause byte is where note 21 puts it", raw[5 + 1 + 4 + 2], P.WorldResetCause.Restarted);
+	raw[5 + 1 + 4 + 2] = P.WORLD_RESET_CAUSE_MAX + 1;
+	eq("a WorldReset with an unknown cause is refused", P.decodeWorld(bufOf(raw)), undefined);
 });
 
 test("World: the roster carries outfit and pet, and refuses looks that do not exist (MON-04)", () => {
@@ -2286,6 +2336,117 @@ const DECODERS = [
 	["decodeTimePong", P.decodeTimePong],
 	["decodeIntentMessage", P.decodeIntentMessage],
 ];
+
+test("the town's seed (MP-26): only the server says it, S→C; no client message can carry or move one", () => {
+	// 1. on the wire it exists only in two World events, which the SERVER encodes and every client decodes
+	const init = {
+		t: P.WorldEv.InitBegin,
+		tick0Time: 12.5,
+		simHz: 60,
+		mapHash: 424242,
+		seed: 99991,
+		chunk: 0,
+		chunks: 1,
+	};
+	const reset = {
+		t: P.WorldEv.WorldReset,
+		seed: 2147483646,
+		endedDay: 7,
+		cause: P.WorldResetCause.Fell,
+		lives: [{ userId: 5, runRev: 3 }],
+	};
+	const back = P.decodeWorld(P.encodeWorld({ tick: 3, events: [init, reset] }).packets[0])?.events ?? [];
+	eq("InitBegin carries the seed", back[0]?.seed, 99991);
+	eq("WorldReset carries the new seed", back[1]?.seed, 2147483646);
+	// 2. none of the decoders the server runs on a CLIENT's payload ever produces a seed, whatever the bytes
+	// (valid packets with their bytes mutated past the header: random bytes almost never get past it)
+	const c2s = {
+		decodeInput: [P.decodeInput, () => P.encodeInput(randInputPacket())],
+		decodeIntentMessage: [
+			P.decodeIntentMessage,
+			() =>
+				rint(0, 1) === 0
+					? P.encodeIntent(pick(PRESENCE_VERBS))
+					: P.encodeIntentArgs(P.IntentKind.SwitchWeapon, rint(0, 65535), 1, rint(0, 65535)),
+		],
+		decodeTimePing: [P.decodeTimePing, () => P.encodeTimePing({ seq: rint(0, 65535), clientTime: rint(0, 1e6) })],
+	};
+	let decoded = 0;
+	for (const [name, [decode, valid]] of Object.entries(c2s)) {
+		for (let i = 0; i < 4000; i++) {
+			const b = valid();
+			const len = buffer.len(b);
+			for (let m = rint(1, 3); m > 0 && len > 1; m--) buffer.writeu8(b, rint(1, len - 1), rint(0, 255));
+			const d = decode(b);
+			if (d === undefined) continue;
+			decoded += 1;
+			if (JSON.stringify(d).toLowerCase().includes("seed")) fail(`${name} produced a seed: ${JSON.stringify(d)}`);
+		}
+		checks += 1;
+	}
+	// valid ones too: a real input packet, every intent, a time ping
+	for (const d of [
+		P.decodeInput(P.encodeInput(randInputPacket())),
+		...PRESENCE_VERBS.map(k => P.decodeIntentMessage(P.encodeIntent(k))),
+		P.decodeTimePing(P.encodeTimePing({ seq: 1, clientTime: 2 })),
+	]) {
+		ok(d !== undefined && !JSON.stringify(d).toLowerCase().includes("seed"), "a valid C→S message has no seed");
+	}
+	ok(decoded > 0, `the fuzz reached the decoders (${decoded} payloads decoded, none with a seed)`);
+	// 3. the source: the Workspace attribute is written by the server's host alone (boot, and the new town of MP-22);
+	// the boot seed comes from the server's own pick or a ServerStorage pin -- never from a remote handler
+	const code = rel =>
+		readFileSync(join(SRC, rel), "utf8")
+			.replace(/\/\*[\s\S]*?\*\//g, "")
+			.replace(/^\s*\/\/.*$/gm, "");
+	const host = code("server/net/mpHost.ts");
+	eq(
+		"mpHost.ts writes WORLD_SEED_ATTRIBUTE exactly twice (boot, onSwitched)",
+		(host.match(/SetAttribute\(WORLD_SEED_ATTRIBUTE/g) ?? []).length,
+		2,
+	);
+	ok(/bootTownSeed\(ok \? pinned : undefined\)/.test(host), "the boot seed is bootTownSeed(the ServerStorage pin)");
+	ok(
+		/GetService\("ServerStorage"\)\.GetAttribute\(TOWN_SEED_PIN_ATTRIBUTE\)/.test(host),
+		"…and the pin is read from ServerStorage, which never replicates (no client can set it)",
+	);
+	const endCall = host.slice(host.indexOf("endWorld({"), host.indexOf("onSwitched:"));
+	ok(
+		endCall.length > 0 && !/\bseed:/.test(endCall),
+		"the host never hands endWorld a seed: a new town's seed is drawn inside",
+	);
+	const { readdirSync, statSync } = require("node:fs");
+	const walk = dir =>
+		readdirSync(dir).flatMap(n => {
+			const p = join(dir, n);
+			return statSync(p).isDirectory() ? walk(p) : p.endsWith(".ts") ? [p] : [];
+		});
+	const rel = p => p.slice(SRC.length + 1).replace(/\\/g, "/");
+	const writers = walk(SRC).filter(p => /SetAttribute\(\s*(WORLD_SEED_ATTRIBUTE|"pz_world_seed")/.test(code(rel(p))));
+	eq(
+		"no other file writes the town's attribute (the client least of all)",
+		writers.map(rel).join(","),
+		"server/net/mpHost.ts",
+	);
+	const handlers = walk(join(SRC, "server")).filter(p => /OnServerEvent|OnServerInvoke/.test(code(rel(p))));
+	ok(handlers.length > 0, `the server's remote handlers were found (${handlers.map(rel).join(", ")})`);
+	for (const p of handlers) {
+		ok(
+			!/\b(pickTownSeed|bootTownSeed|endWorld|restartWorld)\(/.test(code(rel(p))) ||
+				rel(p) === "server/net/mpHost.ts",
+			`${rel(p)}: no remote handler picks a seed, ends a world or restarts one`,
+		);
+	}
+	// in mpHost itself the remote handlers (Input, Intent, TimeSync) are closures that never touch `town`
+	for (const name of ["onInput(remotes", "onIntent(remotes", "onTimeSync(remotes"]) {
+		const at = host.indexOf(name);
+		const body = host.slice(at, host.indexOf("\n\t});", at));
+		ok(
+			at >= 0 && !/\btown\b|seed|endWorld|WORLD_SEED/.test(body),
+			`mpHost ${name.split("(")[0]}: never touches the town`,
+		);
+	}
+});
 
 test(`fuzz: ${FUZZ_N} random/truncated buffers per decoder never throw`, () => {
 	let decoded = 0;

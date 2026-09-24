@@ -160,7 +160,8 @@ export type WorldArtName =
 	| "bossRafflesiaFill"
 	| "bossRafflesiaRim"
 	| "itemIcons"
-	| "furniture";
+	| "furniture"
+	| "blood";
 
 export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** tile: road asphalt: grain and tar blotches (cracks are decals: a crack here would repeat every tile) */
@@ -453,6 +454,8 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	itemIcons: { id: "rbxassetid://87752240081782", w: 288, h: 244 },
 	/** atlas: interiors: 1703 cells of furniture, decoration and frames (client/view/interiorArt.ts) */
 	furniture: { id: "", w: 1024, h: 922 },
+	/** atlas: combat blood: 44 cells of drops, splats and smears, matte and wet (client/view/bloodView.ts) */
+	blood: { id: "", w: 96, h: 264 },
 };
 
 /** every texture of the world art (the item icon atlas too), for the preload pass */
@@ -602,4 +605,5 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"bossRafflesiaRim",
 	"itemIcons",
 	"furniture",
+	"blood",
 ];

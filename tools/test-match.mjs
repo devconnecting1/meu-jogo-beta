@@ -351,7 +351,14 @@ function makeMatchmakingService() {
 }
 
 let guid = 0;
-function makeGame({ studio = false, privateServerId = "", ownerId = 0, teleport = true, matchmaking = true } = {}) {
+function makeGame({
+	studio = false,
+	privateServerId = "",
+	ownerId = 0,
+	teleport = true,
+	matchmaking = true,
+	memoryStore,
+} = {}) {
 	const ReplicatedStorage = new Inst("ReplicatedStorage");
 	const Workspace = new Inst("Workspace");
 	Workspace.GetServerTimeNow = () => clockNow;
@@ -394,6 +401,8 @@ function makeGame({ studio = false, privateServerId = "", ownerId = 0, teleport 
 	if (tp !== undefined) services.TeleportService = tp;
 	const mm = matchmaking ? makeMatchmakingService() : undefined;
 	if (mm !== undefined) services.MatchmakingService = mm;
+	// the lobby's Servers list (MP-26, server/match/serverList.ts): a sorted map the test hands in, else no service
+	if (memoryStore !== undefined) services.MemoryStoreService = { GetSortedMap: () => memoryStore };
 	const closers = [];
 	globalThis.game = {
 		GetService(name) {
@@ -1822,7 +1831,13 @@ section("6) the reviews: danger (H1), the cancel loop (M1), admission in flight 
 	const written = [];
 	const timersG = [];
 	let closer;
-	const inner = { record: e => written.push(e.days), recent: () => [], status: () => "ok" };
+	const remembered = [];
+	const inner = {
+		record: e => written.push(e.days),
+		remember: e => remembered.push(e.days),
+		recent: () => [],
+		status: () => "ok",
+	};
 	const log = G.soloWorldLog(inner, {
 		clock: () => now,
 		delay: (sec, fn) => timersG.push({ at: now + sec, fn }),
@@ -1848,11 +1863,85 @@ section("6) the reviews: danger (H1), the cancel loop (M1), admission in flight 
 	log.record(world(7));
 	closer();
 	check(written.join() === "3,5,7", "a world kept at shutdown still goes out (BindToClose)");
+	log.remember(world(9));
+	check(
+		remembered.join() === "9" && written.join() === "3,5,7",
+		"remember (MP-26: a keeper's restart) goes to this server's memory only, never to the shared document",
+	);
 	const main = require("node:fs").readFileSync(join(SRC, "server/main.server.ts"), "utf8");
 	check(
 		/readKind\(\) === "solo"\s*\?\s*soloWorldLog\(startWorldLog\(\)/.test(main),
 		"the server wraps its world log this way on a solo server only (source guard)",
 	);
+
+	// MP-26 x MP-25 (the merge of cba0c18): Play solo and the lobby's Servers list both teleport from the lobby. One
+	// teleport at a time, and the list asks the same questions as the trip (a death answered where it happened, no
+	// escape from a fight)
+	{
+		const entries = new Map();
+		const sorted = {
+			SetAsync: (k, v) => {
+				entries.set(k, JSON.parse(JSON.stringify(v)));
+				return true;
+			},
+			GetAsync: k => [entries.get(k)],
+			GetRangeAsync: () => [],
+			RemoveAsync: k => {
+				entries.delete(k);
+			},
+		};
+		s = bootServer({ memoryStore: sorted });
+		s.run(12);
+		const OTHER = "00000000-aaaa-bbbb-cccc-000000000001";
+		const listed = () =>
+			entries.set(OTHER, { v: 1, kind: "public", place: 4242, seed: 777, day: 3, n: 1, max: 6, t: os.time() });
+		const town = s.env.services.ReplicatedStorage.FindFirstChild("PZTownNet").FindFirstChild("TownRequest");
+		const joinList = p => town.OnServerInvoke(p, { kind: "join", jobId: OTHER });
+		// a join from the list in flight: Play solo says "joining" and reserves nothing
+		const pA = s.join(newUser(), "lister");
+		s.run(1.5);
+		listed();
+		const jA = joinList(pA);
+		const reserves0 = s.tp.reserves;
+		s.ask(pA, { k: "solo" });
+		check(
+			jA.ok === true &&
+				s.tp.calls.some(c => c.players[0] === pA && c.instance === OTHER) &&
+				s.lastNotice(pA)?.why === "joining" &&
+				s.tp.reserves === reserves0,
+			"a join from the Servers list in flight: Play solo refused 'joining', nothing reserved",
+			JSON.stringify({ jA, notice: s.lastNotice(pA) }),
+		);
+		// a Play solo trip in flight: the list says "trip" and teleports nobody
+		const pB = s.join(newUser(), "soloist");
+		s.run(1.5);
+		s.ask(pB, { k: "solo" });
+		s.run(0.2);
+		const tripOut = s.tp.calls.some(c => c.players[0] === pB && c.code !== undefined && c.code !== "");
+		listed();
+		const jB = joinList(pB);
+		check(
+			tripOut &&
+				jB.ok === false &&
+				jB.reason === "trip" &&
+				!s.tp.calls.some(c => c.players[0] === pB && c.instance === OTHER),
+			"a Play solo trip in flight: the Servers list refuses 'trip' and teleports nobody",
+			JSON.stringify(jB),
+		);
+		// a living body kept where the horde is: the list refuses 'danger' as the trip does (H1)
+		const pC = s.join(newUser(), "runner");
+		s.run(1.5);
+		const spC = s.enter(pC);
+		s.sim.horde.zombies.push(createZombie(990003, spC.state.x + 300, spC.state.y, 1));
+		s.intent(pC, s.P.IntentKind.LeaveWorld);
+		listed();
+		const jC = joinList(pC);
+		check(
+			jC.ok === false && jC.reason === "danger" && !s.tp.calls.some(c => c.players[0] === pC),
+			"a kept LIVING body with a zombie 300 u away: the Servers list refuses 'danger' too (no free escape, H1)",
+			JSON.stringify(jC),
+		);
+	}
 });
 
 // ================================================================ 5: what reached analytics

@@ -125,6 +125,15 @@
  *       - The survivor's own hands: the wallet's `bag` (shared/game/save.ts `BagMirror`) carries `holster` 0 / 1 next
  *         to `ack`, so the client's prediction is laid over the server's answer by the nonce, like every verb's
  *         (client/net/bagPrediction.ts `rebase`). `readBag` clamps it; a bag without it reads 0, drawn. Never saved.
+ * 21. (MP-26, the town restarted by its keeper) `WorldReset` has one more byte, `cause` (u8, after `endedDay`):
+ *     WorldResetCause.Fell (0, MP-22: nobody was left standing) or Restarted (1: the private server's owner, or an
+ *     admin, asked for a new town; server/match/townRestart.ts). The client words the news by it -- a town that was
+ *     restarted did not fall. Anything above WORLD_RESET_CAUSE_MAX drops the event, like a bad seed. The town's NAME
+ *     is not on the wire: every side derives it from the seed (shared/data/townNames.ts).
+ * 22. (ART-15, the blood's direction) `Blood`'s kind byte carries BLOOD_UNDIRECTED (0x80) when the blood has no
+ *     direction -- a kill, a bite the simulation gave no angle --, and its angle byte (still sent, 0) means nothing:
+ *     the client sprays it all round. No byte more. Before, "no direction" travelled as angle 0 and every such spray
+ *     and stain went to +x. `BloodKind.Green` is now `BloodKind.Horde` (same value, 1): the horde bleeds dark red.
  */
 import {
 	NetReader,
@@ -1024,11 +1033,19 @@ export const ProjEndHow = {
 } as const;
 const PROJ_END_MAX = 4;
 
+/** whose blood: a survivor's bright red, or the horde's dark red (it was `Green`, the colour before ART-15, LEG-02) */
 export const BloodKind = {
 	Red: 0,
-	Green: 1,
+	Horde: 1,
 } as const;
+/** must stay below BLOOD_UNDIRECTED: that bit of the same byte is the "no direction" flag (test:net checks it) */
 const BLOOD_KIND_MAX = 1;
+/**
+ * Set on a Blood event's kind byte when it has no direction (a kill, a bite the simulation gave no angle): its angle
+ * byte is then 0 and means nothing, and the client sprays it all round. Without it a kill's spray and its stain were
+ * thrown to +x on every client (the angle 0 of "no angle").
+ */
+const BLOOD_UNDIRECTED = 0x80;
 
 /** pellets per ShotResult (shotgun: 5) */
 export const FX_SHOT_MAX_HITS = 16;
@@ -1086,7 +1103,8 @@ export interface FxBlood {
 	t: typeof FxType.Blood;
 	x: number;
 	y: number;
-	angle: number;
+	/** the way the blood was thrown (attacker -> target); undefined: no way, all round */
+	angle?: number;
 	/** particles, 0..255 */
 	amount: number;
 	/** BloodKind */
@@ -1209,9 +1227,9 @@ function writeFxEvent(w: NetWriter, e: FxEvent): void {
 		case FxType.Blood:
 			w.pos(e.x);
 			w.pos(e.y);
-			w.angle8(e.angle);
+			w.angle8(e.angle ?? 0);
 			w.u8(e.amount);
-			w.u8(clampInt(e.kind, 0, BLOOD_KIND_MAX));
+			w.u8(clampInt(e.kind, 0, BLOOD_KIND_MAX) + (e.angle === undefined ? BLOOD_UNDIRECTED : 0));
 			break;
 		case FxType.Debris:
 			w.pos(e.x);
@@ -1292,9 +1310,11 @@ function readFxEvent(r: NetReader): FxEvent | undefined {
 		const y = r.pos();
 		const angle = r.angle8();
 		const amount = r.u8();
-		const kind = r.u8();
+		const flags = r.u8();
+		const undirected = flags >= BLOOD_UNDIRECTED;
+		const kind = undirected ? flags - BLOOD_UNDIRECTED : flags;
 		if (kind > BLOOD_KIND_MAX) return undefined;
-		return { t: FxType.Blood, x, y, angle, amount, kind };
+		return { t: FxType.Blood, x, y, angle: undirected ? undefined : angle, amount, kind };
 	} else if (t === FxType.Debris) {
 		const x = r.pos();
 		const y = r.pos();
@@ -1435,6 +1455,12 @@ export const SOLID_HP_MAX_ENTRIES = 255;
 const MAX_SAFE_INT = 9007199254740991;
 /** UserIds one WorldReset can name (its count is a u8; a server holds far fewer players than this) */
 export const WORLD_RESET_MAX_LIVES = 255;
+/** (note 21) why a world ended: nobody was left standing (MP-22), or its keeper restarted it (MP-26) */
+export const WorldResetCause = {
+	Fell: 0,
+	Restarted: 1,
+} as const;
+export const WORLD_RESET_CAUSE_MAX = 1;
 /** largest runRev on the wire (SAVE_LIMITS.COUNTER_MAX is 10 000 000; a u32 holds it with room to spare) */
 const RUN_REV_MAX = 4294967295;
 /** (MP-23) the largest life day PlayerTally carries (a u16; the save's own ceiling is higher and is clamped) */
@@ -1674,8 +1700,8 @@ export interface WorldResetLife {
 }
 
 /**
- * (MP-22) Nobody was left alive and nobody paid a Rebirth: the world ended on `endedDay` and a new town was born from
- * `seed`, on day 1. Broadcast to every connected client, in the world or in the lobby: each one builds the new town,
+ * (MP-22) Nobody was left alive and nobody paid a Rebirth -- or (note 21) the town's keeper restarted it: the world
+ * ended on `endedDay` and a new town was born from `seed`, on day 1. Broadcast to every connected client, in the world or in the lobby: each one builds the new town,
  * and a client named in `lives` mirrors the new life the server gave it (the same reset as New game).
  */
 export interface WWorldReset {
@@ -1684,6 +1710,8 @@ export interface WWorldReset {
 	seed: number;
 	/** the world day the old town fell on (≥ 1) */
 	endedDay: number;
+	/** (note 21) WorldResetCause: it fell (MP-22), or it was restarted by its keeper (MP-26) */
+	cause: number;
 	/** the survivors whose life the server reset to day 1 (at most WORLD_RESET_MAX_LIVES) */
 	lives: Array<WorldResetLife>;
 }
@@ -1828,6 +1856,7 @@ function writeWorldEvent(w: NetWriter, e: WorldEvent): void {
 		case WorldEv.WorldReset: {
 			w.u32(clampInt(e.seed, 1, TOWN_SEED_MAX));
 			w.u16(clampInt(e.endedDay, 1, 65535));
+			w.u8(clampInt(e.cause, 0, WORLD_RESET_CAUSE_MAX));
 			const n = math.min(e.lives.size(), WORLD_RESET_MAX_LIVES);
 			w.u8(n);
 			for (let i = 0; i < n; i++) {
@@ -1975,8 +2004,11 @@ function readWorldEvent(r: NetReader): WorldEvent | undefined {
 	} else if (t === WorldEv.WorldReset) {
 		const seed = r.u32();
 		const endedDay = r.u16();
+		const cause = r.u8();
 		const n = r.u8();
-		if (!validTownSeed(seed) || endedDay < 1 || n * 12 > r.remaining()) return undefined;
+		if (!validTownSeed(seed) || endedDay < 1 || cause > WORLD_RESET_CAUSE_MAX || n * 12 > r.remaining()) {
+			return undefined;
+		}
 		const lives = new Array<WorldResetLife>();
 		for (let i = 0; i < n; i++) {
 			const userId = r.f64();
@@ -1984,7 +2016,7 @@ function readWorldEvent(r: NetReader): WorldEvent | undefined {
 			if (userId !== math.floor(userId) || math.abs(userId) > MAX_SAFE_INT) return undefined;
 			lives.push({ userId, runRev });
 		}
-		return { t: WorldEv.WorldReset, seed, endedDay, lives };
+		return { t: WorldEv.WorldReset, seed, endedDay, cause, lives };
 	}
 	return undefined;
 }
