@@ -1697,7 +1697,7 @@ section("13) the title record never stalls the save path: one attempt to read it
 // ================================================================ 14: the record never undoes a reset or a wipe
 
 /** the admin of shared/admin/config.ts, and its panel's one remote */
-const ADMIN_ID = 8013052784;
+const ADMIN_ID = 8424325451;
 function adminRequest(srv, caller, req) {
 	const net = srv.env.services.ReplicatedStorage.FindFirstChild("PZAdminNet");
 	return net.FindFirstChild("AdminRequest").OnServerInvoke(caller, req);
