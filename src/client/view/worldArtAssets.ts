@@ -123,6 +123,12 @@ export type WorldArtName =
 	| "floorCarpet"
 	| "floorKitchen"
 	| "floorBath"
+	| "windowGlassH"
+	| "windowGlassV"
+	| "windowBrokenH"
+	| "windowBrokenV"
+	| "glassShardsH"
+	| "glassShardsV"
 	| "survivorsA"
 	| "survivorsAFill"
 	| "survivorsARim"
@@ -364,6 +370,18 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	floorKitchen: { id: "rbxassetid://133105571252943", w: 16, h: 16 },
 	/** tile: bathroom / cold room: small tiles */
 	floorBath: { id: "rbxassetid://101622459905347", w: 16, h: 16 },
+	/** sprite: a window with its glass in, wall along x: frame, pane, reflection */
+	windowGlassH: { id: "", w: 20, h: 5 },
+	/** sprite: a window with its glass in, wall along y */
+	windowGlassV: { id: "", w: 5, h: 20 },
+	/** sprite: a broken window, wall along x: frame, dark sill, glass stubs */
+	windowBrokenH: { id: "", w: 20, h: 5 },
+	/** sprite: a broken window, wall along y */
+	windowBrokenV: { id: "", w: 5, h: 20 },
+	/** sprite: shards of a broken window on the ground, along a wall along x (decal) */
+	glassShardsH: { id: "", w: 16, h: 8 },
+	/** sprite: shards of a broken window, along a wall along y (decal) */
+	glassShardsV: { id: "", w: 8, h: 16 },
 	/** sheet: survivors, plain and Santa: 4 grips x 3 strides, 5 swings, 3 crawls, whole body and arms in one cell (ART-09) */
 	survivorsA: { id: "rbxassetid://99286479004899", w: 640, h: 800 },
 	/** mask: survivorsA: white silhouettes of the same cells (tint: hit flash, poison) */
@@ -525,6 +543,12 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"floorCarpet",
 	"floorKitchen",
 	"floorBath",
+	"windowGlassH",
+	"windowGlassV",
+	"windowBrokenH",
+	"windowBrokenV",
+	"glassShardsH",
+	"glassShardsV",
 	"survivorsA",
 	"survivorsAFill",
 	"survivorsARim",

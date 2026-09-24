@@ -144,8 +144,11 @@ export function seqNewer(a: number, b: number): boolean {
 
 /** whose blood: zombies (and bosses) bleed green, survivors red (LEG-02) */
 export type BloodSource = "zombie" | "player";
-/** what a debris burst is made of; the view picks the colour */
-export type DebrisMaterial = "impact" | "tree" | "car" | "structure" | "exploder" | "boss";
+/**
+ * What a debris burst is made of; the view picks the colour and the sound. "glass": a window's pane giving way
+ * (EDI-18) -- its shards and its crash.
+ */
+export type DebrisMaterial = "impact" | "tree" | "car" | "structure" | "exploder" | "boss" | "glass";
 /** kind of shot line; the view picks the colour */
 export type TracerKind = "bullet" | "electric" | "boss";
 /**

@@ -53,8 +53,15 @@ export function wireSoundOf(id: number): WorldSound | undefined {
 	return WIRE_SOUNDS[id - 1];
 }
 
-/** debris material ids on the wire (the u8 of §4.2's Debris event); 0 is the fallback, never a hole */
-const DEBRIS_IDS: ReadonlyArray<DebrisMaterial> = ["impact", "tree", "car", "structure", "exploder", "boss"];
+/**
+ * Debris material ids on the wire (the u8 of §4.2's Debris event); 0 is the fallback, never a hole. APPEND ONLY, like
+ * WIRE_SOUNDS: "glass" (EDI-18, 6) is read as "impact" by a client that predates it -- a burst of dark chips, never a
+ * wrong material.
+ */
+const DEBRIS_IDS: ReadonlyArray<DebrisMaterial> = ["impact", "tree", "car", "structure", "exploder", "boss", "glass"];
+
+/** the wire id of a window's glass giving way (server/net/replication.ts: heard in range, the DoorSet already told) */
+export const GLASS_DEBRIS = 6;
 /** tracer kind ids 1..TRACER_KIND_MAX, in the order of shared/sim/types.ts */
 const TRACER_IDS: ReadonlyArray<TracerKind> = ["bullet", "electric", "boss"];
 

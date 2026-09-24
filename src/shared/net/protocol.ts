@@ -125,6 +125,18 @@
  *       - The survivor's own hands: the wallet's `bag` (shared/game/save.ts `BagMirror`) carries `holster` 0 / 1 next
  *         to `ack`, so the client's prediction is laid over the server's answer by the nonce, like every verb's
  *         (client/net/bagPrediction.ts `rebase`). `readBag` clamps it; a bag without it reads 0, drawn. Never saved.
+ * 21. (EDI-18, the window glass) No new message and no byte more. A window's glass breaking is the `DoorSet` every
+ *     door already takes, with the window's STATIC id and `state` = Open (the open frame: shared/game/windows.ts);
+ *     GLOBAL like a door's, since it changes everybody's collision and prediction, and at most
+ *     WINDOW_BREAKS_PER_TICK a tick whoever broke them. Glass only ever breaks, so a newcomer's WorldInit carries a
+ *     DoorSet only for the windows broken SINCE the town was generated (one born broken comes from the seed); the
+ *     client's mirror lays each one on its copy of the town and a reset of the mirror puts the generated glass back.
+ *     `DoorSet` with Open cleared on a window that had glass puts it back (nothing sends that today); on one born
+ *     broken, or on anything that is neither a door nor a window, it is ignored as before. The crash is the `Debris`
+ *     Fx with the material "glass", appended as wire id 6 (fxWire.ts `GLASS_DEBRIS`): an older client reads an
+ *     unknown material as "impact". It is heard in range but, unlike a thud or a hit, not held back by the sight
+ *     filter (MP-07): the DoorSet already told everybody that pane broke. A zombie's blows on the glass are the
+ *     "structure" debris of a blow on a barricade, sight-filtered as before.
  */
 import {
 	NetReader,

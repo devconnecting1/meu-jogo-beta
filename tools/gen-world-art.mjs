@@ -1147,6 +1147,86 @@ function crack(seed) {
 	return t;
 }
 
+// ================================================================ WINDOWS (DESIGN_RULES EDI-18)
+
+/** a window in its wall seen from above, along x: 20 x 5 texels = the 80 u gap in the 20 u wall (shared/game/interiors.ts) */
+const WINDOW_TX = 20;
+const WINDOW_TY = 5;
+
+/**
+ * The frame on both faces of the wall (rows 0 and 4, the outer one lit: the light comes from the top left) and what
+ * lies between them: an INTACT pane -- glass with a diagonal streak of reflection and a darker lower edge -- or a
+ * BROKEN one: the bare sill with the jagged stubs of glass still in the frame at both ends.
+ */
+function windowPane(broken) {
+	const t = new Tex(WINDOW_TX, WINDOW_TY);
+	const frame = C.windowFrame;
+	const glass = C.glassCold;
+	t.rect(0, 0, WINDOW_TX, 1, mix(frame, WHITE, 0.15));
+	t.rect(0, WINDOW_TY - 1, WINDOW_TX, 1, mix(frame, BLACK, 0.18));
+	// the jambs: the frame's ends against the wall
+	t.rect(0, 1, 1, WINDOW_TY - 2, mix(frame, BLACK, 0.08));
+	t.rect(WINDOW_TX - 1, 1, 1, WINDOW_TY - 2, mix(frame, BLACK, 0.22));
+	if (!broken) {
+		for (let y = 1; y < WINDOW_TY - 1; y++) {
+			for (let x = 1; x < WINDOW_TX - 1; x++) {
+				const low = y === WINDOW_TY - 2 ? 0.12 : 0;
+				t.set(x, y, mix(glass, BLACK, low), 225);
+			}
+		}
+		// the reflection: two short diagonal streaks a third of the way along (top left light), one bright, one faint
+		for (const [x0, k] of [
+			[5, 0.72],
+			[8, 0.4],
+		]) {
+			for (let d = 0; d < 3; d++) t.over(x0 + d, 3 - d, WHITE, 255 * k);
+		}
+		return t;
+	}
+	// the sill between the faces, dark: the room beyond seen through the empty frame
+	const sill = mix(C.carGlass, BLACK, 0.35);
+	t.rect(1, 1, WINDOW_TX - 2, WINDOW_TY - 2, sill);
+	// what is left of the glass: jagged stubs at both ends, lit on their broken edge
+	const stubs = [
+		[1, 1],
+		[1, 2],
+		[2, 2],
+		[1, 3],
+		[2, 3],
+		[3, 3],
+		[WINDOW_TX - 2, 1],
+		[WINDOW_TX - 3, 1],
+		[WINDOW_TX - 2, 2],
+		[WINDOW_TX - 2, 3],
+	];
+	for (const [x, y] of stubs) t.set(x, y, glass, 235);
+	t.set(3, 3, mix(glass, WHITE, 0.45), 235);
+	t.set(WINDOW_TX - 3, 1, mix(glass, WHITE, 0.45), 235);
+	return t;
+}
+
+/**
+ * The glass on the ground under a broken window (a decal, COL-02): 16 x 8 texels (64 x 32 u) of sparse shards in the
+ * glass's pale blue, each with a lit edge and its dark side, densest along the wall (the top rows) and thinning out.
+ * Never white blobs and nothing round: it reads as broken glass, never as something to pick up (LEG-01, ART-04).
+ */
+function glassShards(seed) {
+	const t = new Tex(16, 8);
+	const r = rng(seed);
+	const glass = C.glassCold;
+	for (let k = 0; k < 11; k++) {
+		const y = Math.min(7, Math.floor(r() * r() * 8));
+		const x = Math.floor(r() * 16);
+		t.set(x, y, mix(glass, BLACK, r() * 0.15), 215);
+		// a longer splinter now and then, lit on its upper-left end
+		if (r() < 0.45 && x + 1 < 16) {
+			t.set(x + 1, y, mix(glass, BLACK, 0.2), 200);
+			t.set(x, y, mix(glass, WHITE, 0.35), 225);
+		}
+	}
+	return t;
+}
+
 /** a cast-iron manhole cover */
 function manhole() {
 	const t = new Tex(8, 8);
@@ -1763,6 +1843,17 @@ function build() {
 	add_("floorCarpet", "tile", carpet(16, C.floorCarpet, 47), "bedroom / office carpet: a low loop pile");
 	add_("floorKitchen", "tile", floorTiles(16, 8, C.floorKitchen, 45, true), "kitchen floor: checker tiles");
 	add_("floorBath", "tile", floorTiles(16, 4, C.floorBath, 46, false), "bathroom / cold room: small tiles");
+	// the windows' glass (EDI-18): intact with its reflection, broken with the stubs left in the frame, and the shards
+	// under a broken one -- each along x and along y (transposed: a window is never rotated, ART-08)
+	const paneH = windowPane(false);
+	const brokenH = windowPane(true);
+	const shardsH = glassShards(171);
+	add_("windowGlassH", "sprite", paneH, "a window with its glass in, wall along x: frame, pane, reflection");
+	add_("windowGlassV", "sprite", transpose(paneH), "a window with its glass in, wall along y");
+	add_("windowBrokenH", "sprite", brokenH, "a broken window, wall along x: frame, dark sill, glass stubs");
+	add_("windowBrokenV", "sprite", transpose(brokenH), "a broken window, wall along y");
+	add_("glassShardsH", "sprite", shardsH, "shards of a broken window on the ground, along a wall along x (decal)");
+	add_("glassShardsV", "sprite", transpose(shardsH), "shards of a broken window, along a wall along y (decal)");
 	// the survivors (arms baked per grip), their weapons, the horde and the pets (ART-08..ART-11)
 	for (const t of characterArt(Tex)) add_(t.name, t.kind, t.tex, t.description, { character: true });
 	// the four bosses, one sheet each (ART-14, tools/boss-art.mjs)

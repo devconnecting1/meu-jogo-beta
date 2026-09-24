@@ -560,6 +560,8 @@ function addSurvivor(server, slot, x, y, save = defaultSave()) {
 		tallyDrops: 0,
 		/** (ELE-01..08) SolidAdd and PowerSet deltas received, in order */
 		machines: [],
+		/** (EDI-18) DoorSet deltas received: a door of the map, or a window whose glass broke */
+		doorSets: [],
 	});
 	return sp;
 }
@@ -747,6 +749,11 @@ function tickServer(server, opts = {}) {
 			if (e.t === P.WorldEv.SolidAdd || e.t === P.WorldEv.PowerSet) {
 				if (slot === undefined) for (const [, c] of server.clients) c.machines.push(e);
 				else server.clients.get(slot)?.machines.push(e);
+				continue;
+			}
+			if (e.t === P.WorldEv.DoorSet) {
+				if (slot === undefined) for (const [, c] of server.clients) c.doorSets?.push(e);
+				else server.clients.get(slot)?.doorSets?.push(e);
 				continue;
 			}
 			if (e.t !== P.WorldEv.ZombieDied) continue;
@@ -2660,6 +2667,81 @@ section("(k) a weapon put away reaches the other screens as empty hands, in the 
 		buffer.len(snap.parts[0]),
 		8 + P.SNAP_PLAYER_BYTES,
 		"a survivor with empty hands is still one 12-byte record",
+	);
+}
+
+// ================================================================ (w) EDI-18: a window's glass on the wire
+
+section(
+	"(w) a pane that breaks is ONE global DoorSet; its crash is heard in the dark, the blows before it are not (EDI-18)",
+);
+// an older src (PZ_SRC) has no glass: nothing to check
+if (existsSync(join(SRC, "shared/game/windows.ts"))) {
+	/*
+	 * The town every section shares, at 23:00. Two survivors: the watcher in the middle of town, the other 1400 u away.
+	 * An intact window 400 u east of the watcher, outside every light: a zombie pounding on it is a zombie the snapshot
+	 * withholds (its blows' debris too), but the crash is a global state change already (the DoorSet), so the crash is
+	 * heard in range whatever the light.
+	 */
+	const WIN = require(join(SRC, "shared/game/windows.ts"));
+	const server = newWorldServer();
+	const cx = world.width / 2;
+	const cy = world.height / 2;
+	const panes = world.solids.filter(s => WIN.windowIntact(s));
+	// the pane nearest 400 u east of the middle, and the watcher placed 400 u west of it in the open
+	let g = panes[0];
+	for (const s of panes) {
+		const d = Math.hypot(s.x - cx - 400, s.y - cy);
+		if (d < Math.hypot(g.x - cx - 400, g.y - cy)) g = s;
+	}
+	const gx = g.x + g.w / 2;
+	const gy = g.y + g.h / 2;
+	const spot = PL.findSpawnPoint(world, { allies: [{ x: gx - 420, y: gy }] });
+	addSurvivor(server, 0, spot.x, spot.y);
+	const farBody = addSurvivor(server, 1, spot.x, spot.y + 3000);
+	for (const [, c] of server.clients) {
+		c.lag = 0;
+		c.loss = 0;
+		c.fxLog = [];
+		c.doorSets = [];
+	}
+	server.sim.clock.setClock(23);
+	for (let i = 0; i < 10; i++) tickServer(server);
+	const watcher = server.clients.get(0);
+	const far = server.clients.get(1);
+	for (const [, c] of server.clients) c.fxLog.length = 0;
+	const d = Math.hypot(gx - spot.x, gy - spot.y);
+	const dFar = Math.hypot(gx - farBody.state.x, gy - farBody.state.y);
+	info(
+		`the pane #${g.id} is ${d.toFixed(0)} u from the watcher and ${dFar.toFixed(0)} u from the other one, at 23:00`,
+	);
+	// a zombie's blows first (the thud: "structure" debris at the pane), then the pane gives way (the server's own path)
+	server.replicator.queueFx({ t: P.FxType.Debris, x: gx, y: gy, angle: 0, material: 3, count: 2 });
+	server.sim.windows.beginTick(TICK_DT);
+	checkEq(server.sim.windows.byShot(g), "broken", "the pane breaks on the server");
+	for (let i = 0; i < 2 * CFG.SNAP_NEAR_EVERY_TICKS; i++) tickServer(server);
+	const glassFor = c =>
+		c.fxLog.some(e => e.t === P.FxType.Debris && e.material === 6 && Math.hypot(e.x - gx, e.y - gy) < 2);
+	const thudFor = c =>
+		c.fxLog.some(e => e.t === P.FxType.Debris && e.material === 3 && Math.hypot(e.x - gx, e.y - gy) < 2);
+	check(
+		watcher.doorSets.some(e => e.id === g.id && e.state === P.SolidState.Open) &&
+			far.doorSets.some(e => e.id === g.id && e.state === P.SolidState.Open),
+		"every client is told the frame is open, the one far away too (global: everybody predicts against it)",
+	);
+	checkEq(watcher.doorSets.filter(e => e.id === g.id).length, 1, "once");
+	check(glassFor(watcher), "the watcher hears the glass break in the dark (the DoorSet already said so)");
+	check(!thudFor(watcher), "but is not sent the blows of a zombie it could not see (MP-07: those say where it is)");
+	check(!glassFor(far), "and nobody out of range gets the crash");
+	// a newcomer: its WorldInit names the pane
+	const late = addSurvivor(server, 2, spot.x + 100, spot.y);
+	const lateClient = server.clients.get(2);
+	lateClient.doorSets = [];
+	server.replicator.welcome(late);
+	for (let i = 0; i < CFG.SNAP_NEAR_EVERY_TICKS; i++) tickServer(server);
+	check(
+		lateClient.doorSets.some(e => e.id === g.id && e.state === P.SolidState.Open),
+		"and a newcomer's WorldInit names the pane among the windows broken since the town was generated",
 	);
 }
 

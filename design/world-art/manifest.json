@@ -878,6 +878,54 @@
 			"description": "bathroom / cold room: small tiles"
 		},
 		{
+			"name": "windowGlassH",
+			"file": "windowGlassH.png",
+			"kind": "sprite",
+			"w": 20,
+			"h": 5,
+			"description": "a window with its glass in, wall along x: frame, pane, reflection"
+		},
+		{
+			"name": "windowGlassV",
+			"file": "windowGlassV.png",
+			"kind": "sprite",
+			"w": 5,
+			"h": 20,
+			"description": "a window with its glass in, wall along y"
+		},
+		{
+			"name": "windowBrokenH",
+			"file": "windowBrokenH.png",
+			"kind": "sprite",
+			"w": 20,
+			"h": 5,
+			"description": "a broken window, wall along x: frame, dark sill, glass stubs"
+		},
+		{
+			"name": "windowBrokenV",
+			"file": "windowBrokenV.png",
+			"kind": "sprite",
+			"w": 5,
+			"h": 20,
+			"description": "a broken window, wall along y"
+		},
+		{
+			"name": "glassShardsH",
+			"file": "glassShardsH.png",
+			"kind": "sprite",
+			"w": 16,
+			"h": 8,
+			"description": "shards of a broken window on the ground, along a wall along x (decal)"
+		},
+		{
+			"name": "glassShardsV",
+			"file": "glassShardsV.png",
+			"kind": "sprite",
+			"w": 8,
+			"h": 16,
+			"description": "shards of a broken window, along a wall along y (decal)"
+		},
+		{
 			"name": "survivorsA",
 			"file": "survivorsA.png",
 			"kind": "sheet",

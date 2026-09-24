@@ -31,6 +31,10 @@
  *                it can really reach first (§3.3), MP-09 holds against ALL survivors, netIds are stable and
  *                recycled (§4.4), deaths come out once — and the client stops simulating at MP_PHASE >= 2;
  *  11. TICK      the §3.2 measurement: cost of a whole server tick with 150 zombies and 6 survivors.
+ *  12. GLASS     (EDI-18) a pane breaking is heard 420 u away and pulls the horde to the WINDOW; a zombie that sees you
+ *                through the glass pounds on it (GLASS_HITS blows, ~2 s) and climbs in; a doorway nearby wins over the
+ *                glass, the glass over a barricade; a wanderer never breaks one; on the server the break is one global
+ *                DoorSet and the flow field reads the open frame.
  *
  * Pure Node (>= 18) + the project's TypeScript (devDependency) to transpile src on the fly, with the same
  * Luau / roblox-ts shims tools/test-sim.mjs uses. `math.random` is replaced by a seeded generator, so every
@@ -2042,6 +2046,265 @@ function testTickCost() {
 	}
 }
 
+// ---------------------------------------------------------------- 12. window glass (EDI-18)
+
+const windowsMod = optional("shared/game/windows.ts");
+
+/** a pane of glass (as the generator lays one): 80 x 20 in a wall along x, or 20 x 80 along y */
+function pane(world, x, y, alongY = false) {
+	return W.addSolid(world, {
+		kind: "window",
+		x,
+		y,
+		w: alongY ? 20 : 80,
+		h: alongY ? 80 : 20,
+		hp: windowsMod.GLASS_HITS,
+		hpMax: windowsMod.GLASS_HITS,
+		destructible: false,
+		tags: "window",
+		rot: 0,
+	});
+}
+
+/**
+ * A room 400 x 400 at (1800, 1800), walls 20 thick, with a pane in the north wall (1960..2040) and -- `door` -- a
+ * doorway 96 wide beside it (2080..2176), barricaded or not.
+ */
+function glassRoom(door, barricaded = false) {
+	const world = W.createWorld(4000, 4000);
+	wall(world, 1800, 1800, 160, 20);
+	const g = pane(world, 1960, 1800);
+	if (door) {
+		wall(world, 2040, 1800, 40, 20);
+		wall(world, 2176, 1800, 24, 20);
+		if (barricaded) {
+			W.addSolid(world, {
+				kind: "barricade",
+				x: 2080,
+				y: 1800,
+				w: 96,
+				h: 20,
+				hp: 700,
+				hpMax: 700,
+				destructible: true,
+				tags: "barricade",
+				rot: 0,
+			});
+		}
+	} else {
+		wall(world, 2040, 1800, 160, 20);
+	}
+	wall(world, 1800, 2180, 400, 20);
+	wall(world, 1800, 1820, 20, 360);
+	wall(world, 2180, 1820, 20, 360);
+	return { world, g };
+}
+
+/**
+ * The survivor inside the room, a walker 500 u north of it who can see them THROUGH the glass (IA-01: glass hides
+ * nobody): what it does over `seconds`. Blows are counted off the pane's own hp.
+ */
+function breakIn(door, barricaded, seconds = 20) {
+	setSeed(SEED);
+	resetEntityIds();
+	const { world, g } = glassRoom(door, barricaded);
+	const refs = makeRefs(world, 2000, 2000);
+	refs.player.godMode = true;
+	const z = addZombie(refs, 1, 2000, 1500, Math.PI / 2);
+	let blows = 0;
+	let firstBlow = -1;
+	let broke = -1;
+	let inside = -1;
+	let hp = g.hp;
+	const bar = world.solids.find(s => s.kind === "barricade");
+	/** the noise rings heard from the pane, by their loudest radius: the blows' and the crash's */
+	const rings = new Set();
+	for (let f = 0; f < 60 * seconds; f++) {
+		zombieAI.updateZombies(refs, DT);
+		for (const s of refs.sounds ?? []) if (dist(s.x, s.y, 2000, 1810) < 20) rings.add(Math.round(s.rMax));
+		if (g.hp < hp) {
+			blows += hp - g.hp;
+			if (firstBlow < 0) firstBlow = f;
+		}
+		hp = g.hp;
+		if (broke < 0 && windowsMod.windowBroken(g)) broke = f;
+		if (inside < 0 && z.y > 1830 && z.x > 1820 && z.x < 2180) inside = f;
+	}
+	return { g, z, refs, blows, firstBlow, broke, inside, bar, rings };
+}
+
+function testGlass() {
+	console.log(
+		"\n[12] glass (EDI-18): the crash is heard, the horde goes to look, and breaks in where the field sends it",
+	);
+	const N = noiseMod;
+	const WIN = windowsMod;
+	info(
+		`glass breaking ${N.GLASS_BREAK} u · a zombie's blow on it ${N.GLASS_BANG} u · a door ${N.DOOR} u · ` +
+			`(pistol ${N.gunshotRadius(2, 10, false)}, running ${N.footstepRadius(210, false)}, a blow on a body ${N.HIT})`,
+	);
+	check(
+		N.GLASS_BREAK > N.GLASS_BANG &&
+			N.GLASS_BREAK > N.footstepRadius(210, false) &&
+			N.GLASS_BREAK < N.gunshotRadius(2, 10, false) &&
+			N.GLASS_BREAK >= 300 &&
+			N.GLASS_BREAK <= 450,
+		"the crash is louder than a blow and than running, quieter than a pistol (300-450 u)",
+	);
+	check(
+		N.gunshotRadius(2, 10, true) < N.GLASS_BREAK,
+		"a pane shot with a silenced pistol is louder AT THE PANE than at the shooter: a lure",
+	);
+
+	// (a) heard, and it says WHERE: the window, not the survivor
+	{
+		const hears = d => {
+			setSeed(SEED);
+			resetEntityIds();
+			const world = W.createWorld(4000, 4000);
+			const refs = makeRefs(world, 2000, 3600);
+			const g = pane(world, 1960, 2000);
+			const z = still(addZombie(refs, 1, 2000, 2010 - d, -Math.PI / 2));
+			const d0 = dist(z.x, z.y, 2000, 2010);
+			zombieAI.shatterWindow(refs, g);
+			run(refs, 60 * 4);
+			return { z, d0, refs, g };
+		};
+		const near = hears(380);
+		check(awareOf(near.z) !== 0, "a zombie 380 u from a pane that breaks hears it (the gold '?')");
+		check(
+			near.z.lastSeenX === 2000 &&
+				near.z.lastSeenY === 2010 &&
+				dist(near.z.x, near.z.y, 2000, 2010) < near.d0 - 100,
+			"...and walks to the WINDOW, where the noise came from -- never to the survivor",
+			`${dist(near.z.x, near.z.y, 2000, 2010).toFixed(0)} u from it after 4 s`,
+		);
+		check(awareOf(near.z) !== 3, "a noise alone never makes it chase");
+		check(awareOf(hears(480).z) === 0, "one 480 u away does not hear it");
+		check(
+			near.refs.fx.some(e => e.kind === "debris" && e.material === "glass" && e.count >= 8) &&
+				WIN.windowBroken(near.g),
+			"the pane is an open frame, with its glass on the floor (the 'glass' debris burst: shards and crash)",
+		);
+	}
+
+	// (b) the break-in: a room with only a window, the survivor inside, seen through the glass
+	{
+		const r = breakIn(false, false);
+		const secs = r.broke >= 0 && r.firstBlow >= 0 ? (r.broke - r.firstBlow) / 60 : -1;
+		info(
+			`a walker outside a closed room: first blow at ${(r.firstBlow / 60).toFixed(1)} s, the pane gave at ` +
+				`${(r.broke / 60).toFixed(1)} s after ${r.blows} blows (${secs.toFixed(1)} s of pounding), inside at ${(r.inside / 60).toFixed(1)} s`,
+		);
+		check(
+			r.blows === WIN.GLASS_HITS && WIN.windowBroken(r.g),
+			`it pounds ${WIN.GLASS_HITS} times and the glass gives`,
+		);
+		check(
+			secs >= 1.5 && secs <= 3.5,
+			"the pounding lasts 1.5-3.5 s (a stun of STUN_TIME between two blows)",
+			`${secs.toFixed(2)} s`,
+		);
+		check(r.inside > r.broke, "then it climbs in through the open frame");
+		check(
+			r.rings.has(N.GLASS_BANG) && r.rings.has(N.GLASS_BREAK),
+			"the blows are a noise ring the street hears (GLASS_BANG, as on a barricade), and the crash a louder one (GLASS_BREAK)",
+			[...r.rings].join(", "),
+		);
+	}
+
+	// (c) a door close by wins: the field prices the glass, and the horde takes the open way first
+	{
+		const r = breakIn(true, false, 12);
+		check(
+			WIN.windowIntact(r.g) && r.inside > 0,
+			"with a doorway 100 u from the pane, it walks in by the door and the glass stays whole",
+			`inside at ${(r.inside / 60).toFixed(1)} s, pane ${WIN.windowIntact(r.g) ? "intact" : "broken"}`,
+		);
+	}
+
+	// (d) a barricaded door and a pane: the glass is the weak point (WINDOW_COST + GLASS_COST < COST_SOFT)
+	{
+		const r = breakIn(true, true, 16);
+		check(
+			WIN.windowBroken(r.g) && r.bar.hp === r.bar.hpMax,
+			"with the door barricaded, it breaks the glass and never chews the planks: board the windows too",
+			`pane ${WIN.windowBroken(r.g) ? "broken" : "intact"}, barricade ${r.bar.hp}/${r.bar.hpMax}`,
+		);
+	}
+
+	// (e) a zombie that knows nothing does not break glass: a wanderer walks into the pane and turns away
+	{
+		setSeed(SEED);
+		resetEntityIds();
+		const world = W.createWorld(4000, 4000);
+		const g = pane(world, 1960, 2000);
+		wall(world, 1400, 2000, 560, 20);
+		wall(world, 2040, 2000, 560, 20);
+		const refs = makeRefs(world, 600, 3600);
+		const z = addZombie(refs, 1, 2000, 1950, Math.PI / 2);
+		z.wanderDir = Math.PI / 2;
+		z.wanderTimer = 5;
+		let touched = false;
+		run(refs, 60 * 8, () => {
+			if (z.y > 2000 - 16 - 2 && z.x > 1960 && z.x < 2040) touched = true;
+		});
+		check(
+			touched && WIN.windowIntact(g) && g.hp === WIN.GLASS_HITS,
+			"a wanderer that walks into a pane never pounds on it (only a zombie that knows where you are)",
+			touched ? "touched it" : "never reached it",
+		);
+	}
+
+	// (f) the server: a night-wave zombie breaks a pane in the authoritative world -- one global DoorSet, the flow field
+	// reads the open frame
+	if (SERVER) {
+		setSeed(SEED);
+		resetEntityIds();
+		const { world, g } = glassRoom(false);
+		const sim = new simulationMod.ServerSimulation({ world, zombies: true, interactive: true });
+		sim.horde.clock.setClock(12, 1);
+		const sp = serverPlayers.createServerPlayer(
+			{ slot: 0, userId: 1, name: "p" },
+			defaultSave(),
+			2000,
+			2000,
+			0,
+			sim.simHz,
+		);
+		sp.state.x = 2000;
+		sp.state.y = 2000;
+		sp.state.godMode = true;
+		sim.add(sp);
+		const z = createZombie(1, 2000, 1500, 1, true);
+		z.detect = true;
+		z.wave = true;
+		sim.horde.zombies.push(z);
+		sim.step();
+		const outside = sim.horde.field.pathCells(2000, 1720);
+		const sets = [];
+		for (let t = 0; t < 60 * 15 && !WIN.windowBroken(g); t++) {
+			sim.step();
+			const out = [];
+			sim.worldOut.take(out);
+			for (const p of out) if (p.ev.t === 3 && p.ev.id === g.id) sets.push(p);
+		}
+		for (let t = 0; t < 60; t++) sim.step();
+		const after = sim.horde.field.pathCells(2000, 1720);
+		check(WIN.windowBroken(g), "on the server, a wave zombie breaks the pane between it and the survivor");
+		check(
+			sets.length === 1 && sets[0].slot === mpConfig.SLOT_NONE && sets[0].ev.state === 2,
+			"...and the world's hook queued ONE global DoorSet (Open) for it",
+			`${sets.length}`,
+		);
+		check(
+			after < outside - 0.5,
+			"the flow field reads the open frame: the way through it got cheaper by GLASS_COST",
+			`${outside.toFixed(1)} -> ${after.toFixed(1)} cells`,
+		);
+	}
+}
+
 // ---------------------------------------------------------------- run
 
 const started = Date.now();
@@ -2068,6 +2331,7 @@ if (TICK_ONLY) {
 	testDeterminism();
 	if (MODERN) testBite();
 	if (SERVER) testServerHorde();
+	if (MODERN && windowsMod !== undefined) testGlass();
 }
 if (!TICK_ONLY) {
 	testCost();

@@ -8,6 +8,7 @@ import type { ZombieState } from "shared/game/entities";
 import { PLAYER_RADIUS, ZOMBIE_RADIUS } from "shared/game/physics";
 import type { PlayerState } from "shared/game/player";
 import { buildingAt, GroundItem, queryGroundItems, querySolids, Solid, WorldData } from "shared/game/world";
+import { WINDOW_REACH, windowIntact } from "shared/game/windows";
 import { rectCircleOverlap } from "./placement";
 import { vehicleBroken } from "./vehicle";
 
@@ -268,7 +269,8 @@ export function bodiesOverlapRect(
 
 /**
  * What E acts on, by priority: ground item → door / light / tree-car-bin / pump island / anything else in reach
- * (repair) → the loot of the building you stand in. A solid in reach always wins over the building: reaching through
+ * (repair) → the loot of the building you stand in → an intact window at hand (EDI-18, breaking it: last, so nothing
+ * else ever becomes a smashed pane by accident). A solid in reach always wins over the building: reaching through
  * a wall to loot is not a thing. The one exception is a parked vehicle (VEI-05), which comes after a door in reach and
  * after the loot: it can be ridden from anywhere around it, they cannot. A pump island is the target in reach whether
  * or not it holds oil (a dry one does nothing, and the hint says nothing).
@@ -281,9 +283,41 @@ export type InteractTarget =
 	| { kind: "vehicle"; solid: Solid }
 	| { kind: "pump"; solid: Solid }
 	| { kind: "solid"; solid: Solid }
-	| { kind: "search"; building: Solid };
+	| { kind: "search"; building: Solid }
+	/** a window with its glass in, right at hand: E breaks it (EDI-18), the noisy shortcut */
+	| { kind: "window"; solid: Solid };
 
-/** `skip`: ground items E passes over (see `nearestGroundItem`) */
+/** reused by every `nearestIntactWindow` (the hint asks every frame) */
+const WINDOW_SCRATCH = new Array<Solid>();
+
+/**
+ * The intact pane nearest (x, y) within WINDOW_REACH of its edge (EDI-18), or undefined. A small box: the pane has to
+ * be right there, at arm's length, from inside or from outside.
+ */
+export function nearestIntactWindow(world: WorldData, x: number, y: number): Solid | undefined {
+	const reach = WINDOW_REACH;
+	let best: Solid | undefined;
+	let bestD = reach;
+	const found = WINDOW_SCRATCH;
+	found.clear();
+	querySolids(world, x - reach - 8, y - reach - 8, x + reach + 8, y + reach + 8, found);
+	for (const s of found) {
+		if (!windowIntact(s)) continue;
+		const d = edgeDist(s, x, y);
+		if (d < bestD) {
+			bestD = d;
+			best = s;
+		}
+	}
+	found.clear();
+	return best;
+}
+
+/**
+ * `skip`: ground items E passes over (see `nearestGroundItem`). An intact window (EDI-18) comes LAST: after the ground,
+ * every usable solid and the loot of the building -- a press meant for the shelf by the window never smashes the glass,
+ * and the hint always says "E: Break window" before the press does.
+ */
 export function interactTarget(
 	world: WorldData,
 	x: number,
@@ -309,5 +343,7 @@ export function interactTarget(
 	}
 	const b = buildingToSearch(world, x, y);
 	if (b !== undefined) return { kind: "search", building: b };
+	const pane = nearestIntactWindow(world, x, y);
+	if (pane !== undefined) return { kind: "window", solid: pane };
 	return undefined;
 }

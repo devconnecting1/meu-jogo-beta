@@ -22,6 +22,12 @@ export const FEET_RATE = math.rad(10) * 30;
 export const REACTION_MAX = 9;
 /** zombies only hit constructions when a survivor is this close (par_action collision) */
 export const STRUCT_ATTACK_RANGE = 800;
+/**
+ * A chasing zombie pounds on a pane only while it walks INTO it (EDI-18): the cosine between its heading and the way
+ * through the glass at least this (60° off square). One sliding along a shop front towards the door is walking along
+ * a wall, and a row of windows is not smashed by a horde brushing past it.
+ */
+export const GLASS_INTO = 0.5;
 /** walkers stop hunting 2000 px from where they spawned unless a survivor is within 600 */
 export const LEASH_SPAWN = 2000;
 export const LEASH_PLAYER = 600;

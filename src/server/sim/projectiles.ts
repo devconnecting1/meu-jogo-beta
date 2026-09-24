@@ -26,6 +26,8 @@ import { damageCal } from "shared/engine/rng";
 import { Bullet } from "shared/game/bullets";
 import { BOSS1_SEGMENT_RADIUS, BossState, bossHitRadius, ZombieState, zombieRadius } from "shared/game/entities";
 import { PLAYER_RADIUS, blocksShots, raycast } from "shared/game/physics";
+import type { Solid } from "shared/game/world";
+import { windowIntact } from "shared/game/windows";
 import { SLOT_NONE } from "shared/net/mpConfig";
 import * as Net from "shared/net/protocol";
 import { SPEED_SCALE } from "shared/sim/types";
@@ -65,6 +67,11 @@ export interface ProjectileWorld {
 	combat?: ServerCombat;
 	/** one cosmetic event for the Fx channel (§4.1) */
 	onFx?: (event: Net.FxEvent) => void;
+	/**
+	 * (EDI-18) An arrow stopped at an intact pane: it breaks, like a bullet's (server/sim/windows.ts `byShot`), and the
+	 * arrow drops at the frame. Acid, flame and a boss's needle only splash on it: glass stops what is sprayed or spat.
+	 */
+	glass?: (s: Solid) => boolean;
 }
 
 /**
@@ -216,6 +223,7 @@ export class ServerProjectiles {
 		// one shared table (physics.ts, F4): copied before the hits below get a chance to cast rays of their own
 		const wallDist = wall.dist;
 		const wallHit = wall.solid !== undefined;
+		const pane = wall.solid !== undefined && windowIntact(wall.solid) ? wall.solid : undefined;
 		const travel = math.min(step, wallDist);
 		const nx = b.x + math.cos(b.angle) * travel;
 		const ny = b.y + math.sin(b.angle) * travel;
@@ -247,6 +255,8 @@ export class ServerProjectiles {
 			// stop just short of the wall, so the shaft is drawn in the street and not inside the bricks
 			b.x -= math.cos(b.angle) * 2;
 			b.y -= math.sin(b.angle) * 2;
+			// a pane shatters under it (EDI-18): the arrow drops at the frame
+			if (pane !== undefined) this.world.glass?.(pane);
 			return this.ground(b);
 		}
 		if (b.travel >= b.range || b.speed <= ARROW_MIN_SPEED) return this.ground(b);

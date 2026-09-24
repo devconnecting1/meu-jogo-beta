@@ -68,13 +68,14 @@ import {
 	encodeSnapshot,
 	encodeWorld,
 } from "shared/net/protocol";
-import { debrisMaterialId, toWireFx, tracerKindId } from "shared/net/fxWire";
+import { debrisMaterialId, GLASS_DEBRIS, toWireFx, tracerKindId } from "shared/net/fxWire";
 import { positionLit } from "shared/sim/ai/zombieBrain";
 import { FxEvent as SimFxEvent } from "shared/sim/types";
 import { BossState, ZombieState } from "shared/game/entities";
 import { WEAPONS } from "shared/data/weapons";
 import { blocksShots, raycast } from "shared/game/physics";
 import { Solid, WorldData, buildingAt } from "shared/game/world";
+import { hadGlass, windowBroken } from "shared/game/windows";
 import { isDoor } from "shared/sim/interactQuery";
 import { packRide, rideHeading } from "shared/sim/rideKey";
 import { carriesLight, survivorCone } from "shared/sim/survivorLight";
@@ -688,10 +689,13 @@ export class Replicator {
 			for (const st of power.initAll(this.initMachines)) this.queueFor(sp.slot, powerSetOf(st));
 			this.initMachines.clear();
 		}
-		// a door of the generated map that somebody opened: the mirror generated it closed
+		// a door of the generated map that somebody opened: the mirror generated it closed. And a window whose glass
+		// broke since the town was generated (EDI-18, protocol.ts note 21): the mirror generated its pane, so it hears the
+		// frame is open -- the same DoorSet, 6 B each, and only those (a pane born broken comes from the seed, one never
+		// broken needs nothing): a town has ~370 panes, so a whole town smashed is ~2.2 KB of one 16 KB batch
 		for (const solid of this.sim.world.solids) {
 			if (solid.placeable !== undefined) continue;
-			if (!isDoor(solid) || solid.open !== true) continue;
+			if (isDoor(solid) ? solid.open !== true : !(windowBroken(solid) && hadGlass(solid))) continue;
 			this.queueFor(sp.slot, { t: WorldEv.DoorSet, id: solid.id, state: SolidState.Open });
 		}
 		const items = this.sim.items;
@@ -1150,7 +1154,11 @@ export class Replicator {
 				if (e.t === FxType.Blood) {
 					en.sight = e.kind === BloodKind.Green;
 				} else if (e.t === FxType.Debris) {
-					en.sight = e.material !== BOSS_DEBRIS;
+					// a window's glass giving way (EDI-18) is heard in range whoever broke it: its DoorSet is global already
+					// (every client predicts against the frame), so hiding the crash in the dark would hide nothing from a
+					// modified client and a warning from an honest one. The blows before it stay sight-filtered: those show
+					// a zombie the snapshot withholds, and no delta says so
+					en.sight = e.material !== BOSS_DEBRIS && e.material !== GLASS_DEBRIS;
 				} else if (e.t === FxType.Sound) {
 					en.sight = true;
 				} else if (e.t === FxType.ProjSpawn) {

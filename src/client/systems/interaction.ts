@@ -33,6 +33,7 @@ import { itemName } from "./craftSystem";
 import { machineHint } from "./machineHints";
 import { gained, pressed, survivorAt, took } from "./pickups";
 import { fxMessage, GameRefs } from "./types";
+import { shatterWindow } from "./zombieAI";
 
 /*
  * Using the world with E: pick up, open/close, light, shake a tree, search a car/bin, drain a gas pump, repair, loot a
@@ -196,6 +197,12 @@ function rollLoot(s: Solid): void {
  */
 export const PUMP_HINT = "E: Siphon Oil";
 
+/**
+ * The pill at an intact window within reach (EDI-18, LEG-01), when nothing else E could do is: breaking the glass on
+ * purpose -- the noisy way in or out, the server's `interactTarget` "window".
+ */
+export const WINDOW_HINT = "E: Break window";
+
 function tryRepair(refs: GameRefs, s: Solid): boolean {
 	if (!canRepair(s)) return false;
 	const mat = repairMaterial(s);
@@ -291,6 +298,8 @@ function hintFor(refs: GameRefs, target: InteractTarget): string | undefined {
 	}
 	if (target.kind === "vehicle") return vehicleHint(refs, target.solid);
 	if (target.kind === "pump") return holdsLoot(target.solid) ? PUMP_HINT : undefined;
+	// EDI-18, LEG-01: the pill says what the press does -- and that it is loud (the crash the street hears)
+	if (target.kind === "window") return WINDOW_HINT;
 	if (target.kind === "solid") {
 		const s = target.solid;
 		if (!canRepair(s)) return undefined;
@@ -400,6 +409,11 @@ export class Interaction {
 		}
 		if (target.kind === "solid") {
 			tryRepair(refs, target.solid);
+			return;
+		}
+		if (target.kind === "window") {
+			// offline, this client's own world (EDI-18): where the server owns it, the press rode the command above
+			shatterWindow(refs, target.solid);
 			return;
 		}
 		const b = target.building;

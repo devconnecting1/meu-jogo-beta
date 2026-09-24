@@ -21,6 +21,7 @@ import * as Noise from "shared/sim/ai/noise";
 import * as Sense from "shared/sim/ai/perception";
 import * as T from "shared/sim/ai/zombieTuning";
 import * as Light from "shared/sim/survivorLight";
+import * as Win from "shared/game/windows";
 import { SpatialHash } from "shared/sim/ai/spatialHash";
 
 /*
@@ -365,6 +366,7 @@ function explode(refs: Ctx.AiRefs, z: ZombieState, pi: number): void {
 		if (Ctx.actorDist(p.x, p.y, z.x, z.y) < 800) Ctx.fxShake(refs, i, 7, 0.3);
 	}
 	emitSound(refs, z.x, z.y, Noise.EXPLOSION, true);
+	blastWindows(refs, z.x, z.y);
 	// better than the original: the blast also throws and hurts the zombies around it
 	for (const o of refs.zombies) {
 		if (o === z || o.hp <= 0) continue;
@@ -421,6 +423,83 @@ export function damageStructure(refs: Ctx.AiRefs, s: Solid, dmg: number): void {
 		// the way in just opened: the navigation owner has to re-rasterise that patch (§3.3 dirty tiles)
 		if (refs.onSolidChanged !== undefined) refs.onSolidChanged(s.x, s.y, s.w, s.h);
 	}
+}
+
+// --- window glass (shared/game/windows.ts, DESIGN_RULES EDI-18) --------------------------------------------
+
+/**
+ * A pane gives way, whoever broke it (a zombie's last blow, a blast; on the server also a shot, a blade, an E press:
+ * server/sim/windows.ts). The state changes through `breakWindow` (the tick's budget, the world's hook: the server's
+ * global DoorSet), and the rest happens here, once: the crash the street hears (GLASS_BREAK, AT the window), the glass
+ * on the floor and its sound (a "glass" debris burst, heard in range: its DoorSet is global anyway), and the flow field
+ * reading the open frame. False when there was no pane to break, or the tick's budget holds it one more blow.
+ */
+export function shatterWindow(refs: Ctx.AiRefs, s: Solid): boolean {
+	if (!Win.breakWindow(refs.world, s)) return false;
+	const cx = s.x + s.w / 2;
+	const cy = s.y + s.h / 2;
+	Ctx.fxDebris(refs, cx, cy, 12, "glass");
+	emitSound(refs, cx, cy, Noise.GLASS_BREAK, true);
+	if (refs.onSolidChanged !== undefined) refs.onSolidChanged(s.x, s.y, s.w, s.h);
+	return true;
+}
+
+/** the body's way through a pane, reused by `bangWindow` (never kept) */
+const across = { x: 0, y: 0 };
+
+/**
+ * A chasing zombie that the move stopped at a pane (EDI-18) pounds on it -- the barricade's rule for glass: every blow
+ * a noise ring (GLASS_BANG) and a thud, a charger's rush breaks it at once, the blow that empties it shatters it.
+ * `hit` is what stopped the move: the pane itself, or the wall beside it when the body was half in front of the jamb
+ * (then the pane it touches, the only query this costs, and only while blocked). Only a body walking INTO the glass
+ * pounds on it: one sliding along a storefront towards the door is walking along a wall. False when it did not
+ * pound (the caller's other rules for a blocked move then apply).
+ */
+function bangWindow(
+	refs: Ctx.AiRefs,
+	z: ZombieState,
+	r: number,
+	hit: Solid,
+	heading: number,
+	rushing: boolean,
+): boolean {
+	let pane: Solid | undefined = Win.windowIntact(hit) ? hit : undefined;
+	if (pane === undefined) {
+		if (hit.tags !== "bwall") return false;
+		nearSolids.clear();
+		querySolids(refs.world, z.x - r - 2, z.y - r - 2, z.x + r + 2, z.y + r + 2, nearSolids);
+		for (const s of nearSolids) {
+			if (!Win.windowIntact(s)) continue;
+			const qx = math.clamp(z.x, s.x, s.x + s.w);
+			const qy = math.clamp(z.y, s.y, s.y + s.h);
+			if ((qx - z.x) * (qx - z.x) + (qy - z.y) * (qy - z.y) <= (r + 2) * (r + 2)) pane = s;
+		}
+		if (pane === undefined) return false;
+	}
+	Win.acrossWindow(pane, z.x, z.y, across);
+	if (math.cos(heading) * across.x + math.sin(heading) * across.y < T.GLASS_INTO) return false;
+	const cx = pane.x + pane.w / 2;
+	const cy = pane.y + pane.h / 2;
+	pane.hp = rushing ? 0 : math.max(0, pane.hp - 1);
+	pane.hitShake = math.max(pane.hitShake ?? 0, 8 / 30);
+	// a thud of the frame, and the ring every blow sends down the street (as on a barricade)
+	Ctx.fxDebris(refs, cx, cy, 2, "structure");
+	emitSound(refs, cx, cy, Noise.GLASS_BANG, true);
+	// the blow that empties it breaks it; a pane the tick's budget holds is at 0 and gives at the next blow
+	if (pane.hp <= 0) shatterWindow(refs, pane);
+	return true;
+}
+
+/** an exploder's blast breaks the panes within it (P3: a blast that throws zombies does not spare the glass) */
+function blastWindows(refs: Ctx.AiRefs, x: number, y: number): void {
+	const R = T.BLAST_RADIUS;
+	seekSolids.clear();
+	querySolids(refs.world, x - R, y - R, x + R, y + R, seekSolids);
+	for (const s of seekSolids) {
+		if (!Win.windowIntact(s)) continue;
+		if (Ctx.actorDist(s.x + s.w / 2, s.y + s.h / 2, x, y) < R) shatterWindow(refs, s);
+	}
+	seekSolids.clear();
 }
 
 /** keeps `refs.ai.anyTrap` true to the world: recounted only when a solid (or an item) came or went */
@@ -1782,6 +1861,20 @@ function updateOne(refs: Ctx.AiRefs, z: ZombieState, idx: number, dt: number): b
 				z.stunned = T.STUN_TIME;
 				if (rushing) endRush(z);
 			}
+		} else if (
+			speed > 0 &&
+			(seeing || fielded) &&
+			(z.orbit ?? 0) <= 0 &&
+			(z.stunned <= 0 || rushing) &&
+			bangWindow(refs, z, r, hit, heading, rushing)
+		) {
+			// EDI-18: the pane in the way of a zombie that knows where you are -- the field routed it through the glass
+			// (GLASS_COST), or it sees you on the other side of it. Pounding on it is progress, as on a barricade, and
+			// every blow stuns it for the blow's own length
+			z.jamT = 0;
+			z.gotoT = 0;
+			z.stunned = T.STUN_TIME;
+			if (rushing) endRush(z);
 		} else if (rushing) {
 			// obj_zombie4: a rush that meets a wall ends in a crash
 			endRush(z);

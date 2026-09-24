@@ -18,7 +18,10 @@ import { TOWN } from "shared/engine/constants";
 import { Renderer, SpriteOpts } from "shared/engine/renderer";
 import type { Decor, FloorKind, Opening } from "shared/game/interiors";
 import { Solid, WorldData } from "shared/game/world";
+import { windowIntact } from "shared/game/windows";
 import { overlaps, SIDES } from "./drawKit";
+import { artId } from "./worldArt";
+import type { WorldArtName } from "./worldArtAssets";
 
 const BLACK = COLORS.shadow;
 const WHITE = COLORS.white;
@@ -46,6 +49,30 @@ const RUG_BORDER = COLORS.rug.Lerp(COLORS.goodsC, 0.35);
 /** a notice board's cork, and the reagent bottles on a lab's shelves (EDI-17) */
 const CORK = COLORS.furnWood.Lerp(COLORS.goodsC, 0.35);
 const BOTTLES: Array<Color3> = [COLORS.furnWood, COLORS.acid, COLORS.goodsB];
+
+// ---- window glass (EDI-18)
+/** an intact pane seen from above: the glass over the sill, more solid than the tint an open frame keeps */
+const PANE_ALPHA = 0.62;
+/** the streak of light on an intact pane (from inside, and on the roof's edge with the art) */
+const GLINT = COLORS.glassCold.Lerp(WHITE, 0.7);
+/** a broken window's mark on the roof's edge: the dark room seen through the empty frame, darker than glass */
+const HOLE_DARK = COLORS.carGlass.Lerp(BLACK, 0.55);
+/** the shards on the ground: this far out of the wall's face (their decal's middle), and the decal's size */
+const SHARD_OFF = 20;
+const SHARDS_LONG = 64;
+const SHARDS_WIDE = 32;
+/**
+ * Their layer: the ground's own detail with the doormats, under the blood (Z.decal) and every item and body. Not
+ * Z.decal itself: the town's sprites drawn after the fight's blood in that sub-pool would turn a blood decal's birth
+ * into a shift of every shard behind it (the pool's O(1) birth, tools/test-pool.mjs §2).
+ */
+const Z_SHARDS = Z.floorDetail + 1;
+
+/** is this window's glass in? (its solid, `Opening.glass`; a plan without one reads as the old open frame) */
+function paneIntact(o: Opening): boolean {
+	const g = o.glass;
+	return g !== undefined && windowIntact(g);
+}
 
 const O: SpriteOpts = {};
 
@@ -513,17 +540,21 @@ export class InteriorView {
 		}
 	}
 
-	/** the frames of the building's openings, seen from inside: a threshold under a doorway, a broken window */
-	drawOpenings(r: Renderer, cam: Camera, b: Solid, v: ViewRect): void {
+	/**
+	 * The frames of the building's openings, seen from inside: a threshold under a doorway, a window with its glass in
+	 * or broken (EDI-18) and, under a broken one, the glass on the floor. `art`: the town is textured (the window's
+	 * pixel art, each texture falling back to these Frames on its own, ART-01).
+	 */
+	drawOpenings(r: Renderer, cam: Camera, b: Solid, v: ViewRect, art = false): void {
 		const list = b.openings;
 		if (list === undefined) return;
 		for (const o of list) {
-			if (!overlaps(o.x - 8, o.y - 8, o.w + 16, o.h + 16, v)) continue;
-			this.drawOpening(r, cam, o);
+			if (!overlaps(o.x - 40, o.y - 40, o.w + 80, o.h + 80, v)) continue;
+			this.drawOpening(r, cam, o, art);
 		}
 	}
 
-	private drawOpening(r: Renderer, cam: Camera, o: Opening): void {
+	private drawOpening(r: Renderer, cam: Camera, o: Opening, art: boolean): void {
 		const cx = o.x + o.w / 2;
 		const cy = o.y + o.h / 2;
 		const along = o.w >= o.h;
@@ -535,7 +566,28 @@ export class InteriorView {
 			r.drawRect(cam, cx, cy, s);
 			return;
 		}
-		// a window: the frame on both faces of the wall, the sill between them, what is left of the glass
+		const intact = paneIntact(o);
+		// the glass on the floor inside a broken one (outside it is drawn with the roof on too: `drawWindowShards`)
+		if (!intact) this.drawShards(r, cam, o, -1, art);
+		// the pixel art: the frame and the pane with its reflection, or the frame and what is left of the glass
+		const name: WorldArtName = intact
+			? along
+				? "windowGlassH"
+				: "windowGlassV"
+			: along
+				? "windowBrokenH"
+				: "windowBrokenV";
+		const id = art ? artId(name) : undefined;
+		if (id !== undefined) {
+			const s = flat(o.w, o.h, WHITE, Z.structure + 1);
+			s.color = undefined;
+			s.image = id;
+			s.pixelated = true;
+			r.drawRect(cam, cx, cy, s);
+			return;
+		}
+		// a window: the frame on both faces of the wall, the sill between them, and the glass -- the pane with a streak of
+		// light on it, or what is left of it
 		const len = along ? o.w : o.h;
 		const thick = along ? o.h : o.w;
 		for (const sgn of SIDES) {
@@ -548,11 +600,57 @@ export class InteriorView {
 			);
 		}
 		const sill = flat(along ? len - 4 : thick - 8, along ? thick - 8 : len - 4, COLORS.glassCold, Z.structure);
-		sill.alpha = 0.35;
+		sill.alpha = intact ? PANE_ALPHA : 0.35;
 		r.drawRect(cam, cx, cy, sill);
+		if (intact) {
+			// the reflection: a short streak of light across the pane, a third of the way along (light from the top left)
+			const glint = flat(along ? len * 0.22 : 3, along ? 3 : len * 0.22, GLINT, Z.structure + 2);
+			glint.alpha = 0.75;
+			r.drawRect(cam, cx - (along ? len * 0.2 : 0), cy - (along ? 0 : len * 0.2), glint);
+			return;
+		}
 		const shard = flat(10, 6, COLORS.glassCold, Z.structure + 2);
 		shard.rotation = 0.6;
 		r.drawRect(cam, cx + (along ? -len / 2 + 7 : 0), cy + (along ? 0 : -len / 2 + 7), shard);
+	}
+
+	/**
+	 * The glass on the ground OUTSIDE every broken window of the building (EDI-18): drawn with the roof on too -- it lies
+	 * in the street, and it is how a survivor reads from outside which windows are open frames. A decal (COL-02, ART-04):
+	 * a few pale shards, never white, nothing that reads as loot.
+	 */
+	drawWindowShards(r: Renderer, cam: Camera, b: Solid, v: ViewRect, art = false): void {
+		const list = b.openings;
+		if (list === undefined) return;
+		for (const o of list) {
+			if (o.kind !== "window" || paneIntact(o)) continue;
+			if (!overlaps(o.x - 48, o.y - 48, o.w + 96, o.h + 96, v)) continue;
+			this.drawShards(r, cam, o, 1, art);
+		}
+	}
+
+	/** the shards of window `o` on the ground outside it (`sgn` 1) or on the floor inside (-1) */
+	private drawShards(r: Renderer, cam: Camera, o: Opening, sgn: number, art: boolean): void {
+		const along = o.w >= o.h;
+		const off = sgn * ((along ? o.h : o.w) / 2 + SHARD_OFF);
+		const cx = o.x + o.w / 2 + normalX(o.side) * off;
+		const cy = o.y + o.h / 2 + normalY(o.side) * off;
+		const id = art ? artId(along ? "glassShardsH" : "glassShardsV") : undefined;
+		if (id !== undefined) {
+			const s = flat(along ? SHARDS_LONG : SHARDS_WIDE, along ? SHARDS_WIDE : SHARDS_LONG, WHITE, Z_SHARDS);
+			s.color = undefined;
+			s.image = id;
+			s.pixelated = true;
+			r.drawRect(cam, cx, cy, s);
+			return;
+		}
+		// flat: three chips along the sill, the broken-glass decal of the plan's old drawing
+		for (let q = 0; q < 3; q++) {
+			const s = flat(8, 5, COLORS.glassCold, Z_SHARDS);
+			s.rotation = q * 1.1 + (sgn > 0 ? 0.4 : 0);
+			s.alpha = 0.9;
+			r.drawRect(cam, cx + (along ? (q - 1) * 16 : 0), cy + (along ? 0 : (q - 1) * 16), s);
+		}
 	}
 
 	/** a doormat outside every door of the building: the entrances read with the roof on */
@@ -585,9 +683,11 @@ export class InteriorView {
 	/**
 	 * On the roof's edge, over every door and window: a darker eave over a doorway and a strip of dark glass over a
 	 * window, so from the street a survivor sees where the building can be entered -- and where the horde will
-	 * climb in -- without the roof lifting (EDI-10).
+	 * climb in -- without the roof lifting (EDI-10). A BROKEN window (EDI-18) is the dark room through the empty frame,
+	 * with what is left of the glass at its two ends (and its shards on the ground below, `drawWindowShards`); an intact
+	 * one is the glass it always was, and with the town's art (`glint`) a streak of light on it.
 	 */
-	drawRoofMarks(r: Renderer, cam: Camera, b: Solid, a: number, eave: Color3, v: ViewRect): void {
+	drawRoofMarks(r: Renderer, cam: Camera, b: Solid, a: number, eave: Color3, v: ViewRect, glint = false): void {
 		const list = b.openings;
 		if (list === undefined) return;
 		for (const o of list) {
@@ -598,13 +698,35 @@ export class InteriorView {
 			const across = nx !== 0;
 			const door = o.kind === "door";
 			const depth = door ? 12 : 8;
+			const intact = door || paneIntact(o);
 			// on the outer edge of the wall, inside the roof
 			const edge = (across ? o.w : o.h) / 2 - depth / 2;
 			const cx = o.x + o.w / 2 + nx * edge;
 			const cy = o.y + o.h / 2 + ny * edge;
-			const s = flat(across ? depth : o.w, across ? o.h : depth, door ? eave : GLASS_DARK, Z.roof + 2);
+			const s = flat(
+				across ? depth : o.w,
+				across ? o.h : depth,
+				door ? eave : intact ? GLASS_DARK : HOLE_DARK,
+				Z.roof + 2,
+			);
 			s.alpha = a;
 			r.drawRect(cam, cx, cy, s);
+			if (door) continue;
+			const len = across ? o.h : o.w;
+			if (intact) {
+				if (!glint) continue;
+				// the reflection: a short streak of light a third of the way along the glass
+				const g = flat(across ? 2 : len * 0.22, across ? len * 0.22 : 2, GLINT, Z.roof + 3);
+				g.alpha = a * 0.7;
+				r.drawRect(cam, cx - (across ? 0 : len * 0.2), cy - (across ? len * 0.2 : 0), g);
+				continue;
+			}
+			// the stubs of glass left in the frame, one at each end
+			for (const sgn of SIDES) {
+				const stub = flat(across ? depth - 2 : 10, across ? 10 : depth - 2, COLORS.glassCold, Z.roof + 3);
+				stub.alpha = a;
+				r.drawRect(cam, cx + (across ? 0 : sgn * (len / 2 - 6)), cy + (across ? sgn * (len / 2 - 6) : 0), stub);
+			}
 		}
 	}
 }

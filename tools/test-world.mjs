@@ -38,6 +38,11 @@
  *   x. CONSTRUCTIONS (MP-24): the per-player cap follows the account through a leave and a rejoin; an abandoned
  *      construction rots after the grace and falls, and whoever repairs it while it rots takes it over; the piece that
  *      would close a ring around a living survivor (the builder too) is refused, a door in the same gap is not.
+ *  aa. WINDOW GLASS (EDI-18): an intact pane stops a body and a bullet and not the eyes, a broken one is EDI-10's
+ *      open frame; E through the real wire breaks it (one global DoorSet, the glass Fx), not from 60 u nor through a
+ *      wall; the hand's rate and the tick's budget hold; a pistol's ray and a dagger's arc break it; a barricade goes
+ *      into a window with glass; a pane is a way out for MP-24; the generated share; a newcomer's WorldInit names
+ *      exactly the panes broken since generation and the client's mirror ends up with the server's windows.
  *
  * MP_PHASE is NOT changed (tools/test-net.mjs pins it): the simulation is built with `interactive: true`,
  * the switch `zombies: true` already uses for the horde.
@@ -1513,13 +1518,14 @@ section("t) fortificar: barricada ou porta mirada numa janela ou num vao de pred
 	// the generated town: its buildings have doorways and windows (shared/game/interiors.ts)
 	const world = W.serverWorld(W.generateTown(DESIGN.TOWN_SEED));
 	const sim = newSim(world);
+	// a window born broken (EDI-18): its open frame is the one a body climbs today; the glass is §aa's
 	const house = world.solids.find(
 		s =>
 			s.kind === "building" &&
-			(s.openings ?? []).some(o => o.kind === "window") &&
+			(s.openings ?? []).some(o => o.kind === "window" && o.broken === true) &&
 			(s.openings ?? []).some(o => o.kind === "door" && !o.main),
 	);
-	check(house !== undefined, "a cidade tem predio com janela e porta dos fundos");
+	check(house !== undefined, "a cidade tem predio com janela (vao aberto) e porta dos fundos");
 	const NORMAL = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] };
 	/**
 	 * The CLIENT's ghost (client/systems/build.ts BuildSystem, the drawing the survivor aims with) for a survivor
@@ -1552,7 +1558,7 @@ section("t) fortificar: barricada ou porta mirada numa janela ou num vao de pred
 		sim.build.hold(slot, placeable, undefined);
 		return { p, out: sim.build.place(slot, p.state, [p.state], []) };
 	};
-	const win = house.openings.find(o => o.kind === "window");
+	const win = house.openings.find(o => o.kind === "window" && o.broken === true);
 	/**
 	 * A body `radius` wide, 40 u in from the opening, walks straight out through it (60 steps of 4 u) with the one
 	 * moveActor the server, the client's prediction and every zombie move by: how far past the opening's middle it
@@ -2506,6 +2512,406 @@ section(
 		Mirror.resetMirror(cw);
 		check(!IQ.holdsLoot(cp), "um WorldInit novo seca a bomba no espelho ate o proximo aviso");
 		Mirror.forgetMirrorIndex();
+	}
+}
+
+section(
+	"aa) o vidro das janelas (EDI-18): intacta segura corpo e bala e nao os olhos; quebra por E, lamina e tiro, com alcance, linha, ritmo e teto por tick; o fio e o WorldInit",
+);
+{
+	const WIN = require(join(SRC, "shared/game/windows.ts"));
+	const { ServerWindows, WINDOW_BREAK_BURST } = require(join(SRC, "server/sim/windows.ts"));
+	const { ServerCombat } = require(join(SRC, "server/sim/combat.ts"));
+	const { blocksSight } = require(join(SRC, "shared/sim/ai/perception.ts"));
+	const IQ = require(join(SRC, "shared/sim/interactQuery.ts"));
+	const Mirror = require(join(SRC, "client/net/worldMirror.ts"));
+	const CInter = require(join(SRC, "client/systems/interaction.ts"));
+	const { townFingerprint } = require(join(SRC, "client/boot/townCache.ts"));
+	const { stepPlayer } = require(join(SRC, "shared/sim/playerMove.ts"));
+	const { boxesIn } = require(join(SRC, "server/sim/enclosure.ts"));
+	const { WorldOut } = require(join(SRC, "server/sim/worldOut.ts"));
+	const TICK_DT = 1 / CFG.SIM_HZ;
+	const info = msg => console.log(`        ${msg}`);
+	/** a pane of glass in a wall along x at (x, y): 80 x 20 (or 20 x 80 along y), as the generator lays one */
+	const pane = (world, x, y, alongY = false) =>
+		W.addSolid(world, {
+			kind: "window",
+			x,
+			y,
+			w: alongY ? 20 : 80,
+			h: alongY ? 80 : 20,
+			hp: WIN.GLASS_HITS,
+			hpMax: WIN.GLASS_HITS,
+			destructible: false,
+			tags: "window",
+			parentId: 1,
+		});
+	const wallAt = (world, x, y, w, h) =>
+		W.addSolid(world, {
+			kind: w >= h ? "wall_h" : "wall_v",
+			x,
+			y,
+			w,
+			h,
+			hp: 999999,
+			hpMax: 999999,
+			destructible: false,
+			tags: "bwall",
+			parentId: 1,
+		});
+	/** a body walking north through the gap from 40 u south of it: how far north of the wall's middle it ends */
+	const through = (world, x, r = PH.PLAYER_RADIUS) => {
+		let px = x;
+		let py = 1050;
+		for (let i = 0; i < 60; i++) {
+			const m = PH.moveActor(world, px, py, r, 0, -4);
+			px = m.x;
+			py = m.y;
+		}
+		return 1010 - py;
+	};
+
+	// ---- the two states, on the world's own physics
+	{
+		const world = emptyWorld();
+		wallAt(world, 900, 1000, 100, 20);
+		const g = pane(world, 1000, 1000);
+		wallAt(world, 1080, 1000, 100, 20);
+		check(WIN.windowIntact(g) && W.isBlocking(g), "intacta: o vidro e solido (isBlocking)");
+		check(
+			through(world, 1040) < 0,
+			"e um corpo nao passa (moveActor, o mesmo do servidor, da predicao e da horda)",
+		);
+		check(PH.raycast(world, 1040, 1300, -Math.PI / 2, 600).solid === g, "a bala para no vidro (blocksShots)");
+		check(!blocksSight(g), "e os olhos atravessam (IA-01: vidro nao esconde ninguem)");
+		checkEq(PH.vaultFactor(world, 1040, 1010), 1, "e ninguem 'pula' um vidro inteiro: sem a lentidao do parapeito");
+		check(WIN.breakWindow(world, g), "breakWindow quebra");
+		check(
+			WIN.windowBroken(g) && !W.isBlocking(g) && g.open === true && g.hp === 0,
+			"quebrada: o vao aberto da EDI-10 (passable, open, hp 0)",
+		);
+		check(through(world, 1040) > 30, "e o corpo passa, pulando o parapeito");
+		checkEq(PH.vaultFactor(world, 1040, 1010), PH.VAULT_SLOW, "na lentidao do parapeito (VAULT_SLOW)");
+		check(!WIN.breakWindow(world, g), "e nao quebra duas vezes");
+		checkEq(g.hpMax, WIN.GLASS_HITS, "o hpMax guarda que ela nasceu com vidro (o WorldInit so manda estas)");
+	}
+
+	// ---- E, through the real wire: the pane the SERVER's query finds at the server's position
+	{
+		const world = emptyWorld();
+		const sim = newSim(world);
+		const fx = [];
+		sim.onFx = e => fx.push(e);
+		wallAt(world, 900, 1000, 100, 20);
+		const g = pane(world, 1000, 1000);
+		wallAt(world, 1080, 1000, 100, 20);
+		const p = addPlayer(sim, 0, 1040, 1040);
+		checkEq(IQ.interactTarget(world, 1040, 1040)?.kind, "window", "o alvo do E junto ao vidro e a janela");
+		{
+			const refs = { world, pendingPlace: -1, save: SAVE.defaultSave(), players: [], zombies: [] };
+			checkEq(
+				CInter.interactHint(refs, { x: 1040, y: 1040 }),
+				"E: Break window",
+				"e a pilula diz o que o E faz (LEG-01)",
+			);
+		}
+		drain(sim);
+		send(p, 1, 0, PRESS_E);
+		const seen = run(sim, 1);
+		check(WIN.windowBroken(g), "E quebrou o vidro");
+		checkEq(seen[0]?.outcome.kind, "window", "e o servidor diz o que o E fez");
+		const sets = drain(sim).filter(d => d.ev.t === P.WorldEv.DoorSet && d.ev.id === g.id);
+		checkEq(sets.length, 1, "um DoorSet da janela foi enfileirado");
+		check(
+			sets[0]?.slot === CFG.SLOT_NONE && sets[0]?.ev.state === P.SolidState.Open,
+			"para TODO MUNDO, com o vao 'aberto' (todos preveem o corpo contra ele, nota 21)",
+		);
+		check(
+			fx.some(e => e.t === P.FxType.Debris && e.material === 6 && e.count >= 8),
+			"e o vidro no chao (Fx Debris 'glass'), que o cliente toca e desenha",
+		);
+		check(IQ.interactTarget(world, 1040, 1040) === undefined, "quebrada, o E ali nao faz mais nada");
+		{
+			const refs = { world, pendingPlace: -1, save: SAVE.defaultSave(), players: [], zombies: [] };
+			checkEq(CInter.interactHint(refs, { x: 1040, y: 1040 }), undefined, "e a pilula some");
+		}
+	}
+
+	// ---- reach and line: the server's position, never through a wall
+	{
+		const world = emptyWorld();
+		const sim = newSim(world);
+		const g = pane(world, 1000, 1000);
+		const far = addPlayer(sim, 0, 1040, 1080);
+		send(far, 1, 0, PRESS_E);
+		run(sim, 1);
+		check(WIN.windowIntact(g), "a 60 u do vidro, o E nao quebra nada (nao e o alvo)");
+		checkEq(
+			sim.windows.byHand(0, far.state, g, WIN.WINDOW_REACH),
+			"range",
+			"e um pedido direto e recusado: 'range'",
+		);
+		// a wall between the survivor and the glass (a partition 6 u deep, 5 u in front of it)
+		wallAt(world, 960, 1025, 160, 6);
+		const behind = addPlayer(sim, 1, 1040, 1045);
+		checkEq(
+			sim.windows.byHand(1, behind.state, g, WIN.WINDOW_REACH),
+			"blocked",
+			"atras de uma parede, perto o bastante: 'blocked' (a linha e do servidor)",
+		);
+		check(WIN.windowIntact(g), "e o vidro continua inteiro");
+	}
+
+	// ---- the rate: by hand, WINDOW_BREAK_RATE a second after a burst of WINDOW_BREAK_BURST
+	{
+		const world = emptyWorld();
+		const sim = newSim(world);
+		const panes = [0, 1, 2, 3].map(i => pane(world, 1000 + i * 200, 1000));
+		const p = addPlayer(sim, 0, 1040, 1030);
+		const got = panes.map(g => {
+			p.state.x = g.x + 40;
+			return sim.windows.byHand(0, p.state, g, WIN.WINDOW_REACH);
+		});
+		checkEq(
+			got.join(","),
+			`${Array(WINDOW_BREAK_BURST).fill("broken").join(",")},rate`,
+			`a mao quebra ${WINDOW_BREAK_BURST} de uma vez, a seguinte espera o ritmo`,
+		);
+		run(sim, Math.ceil(sim.simHz * 0.55));
+		p.state.x = panes[3].x + 40;
+		checkEq(sim.windows.byHand(0, p.state, panes[3], WIN.WINDOW_REACH), "broken", "meio segundo depois, quebra");
+	}
+
+	// ---- the tick's budget: whatever breaks them, WINDOW_BREAKS_PER_TICK a tick
+	{
+		const world = emptyWorld();
+		const sim = newSim(world);
+		const panes = [0, 1, 2, 3, 4, 5].map(i => pane(world, 1000 + i * 200, 1000));
+		sim.windows.beginTick(TICK_DT);
+		const got = panes.map(g => sim.windows.byShot(g));
+		checkEq(
+			got.filter(s => s === "broken").length,
+			WIN.WINDOW_BREAKS_PER_TICK,
+			`no mesmo tick quebram ${WIN.WINDOW_BREAKS_PER_TICK} (o resto: 'budget')`,
+		);
+		sim.windows.beginTick(TICK_DT);
+		const rest = panes.filter(g => WIN.windowIntact(g)).map(g => sim.windows.byShot(g));
+		check(rest.length > 0 && rest.every(s => s === "broken"), "e o resto no tick seguinte");
+	}
+
+	// ---- a shot and a blade: the combat's own ray and arc (server/sim/combat.ts `glass`)
+	{
+		const world = emptyWorld();
+		const out = new WorldOut();
+		const windows = new ServerWindows({ world, out, horde: () => undefined });
+		const g = pane(world, 1000, 1000);
+		const back = W.addSolid(world, {
+			kind: "wall_h",
+			x: 960,
+			y: 700,
+			w: 160,
+			h: 20,
+			hp: 999999,
+			hpMax: 999999,
+			destructible: false,
+			tags: "bwall",
+		});
+		const shots = [];
+		const combat = new ServerCombat({
+			world,
+			targets: { zombies: () => [], bosses: () => [] },
+			random: () => 0.5,
+			hooks: {
+				glass: (s, melee, reach) => windows.byShot(s) === "broken",
+				fx: e => {
+					if (e.t === P.FxType.Shot) shots.push(e);
+				},
+			},
+		});
+		const s = SAVE.defaultSave();
+		s.invenWeapon[10] = 1;
+		s.equipWeapon = 10;
+		s.ammoNormal = 20;
+		const sp = PL.createServerPlayer({ slot: 0, userId: 1, name: "p" }, s, 1040, 1300, 0);
+		sp.state.x = 1040;
+		sp.state.y = 1300;
+		const up = -Math.PI / 2;
+		const fire = seq => {
+			const cmd = P.makeCommand(seq, 0, 0, up, P.HeldBit.Attack, P.packEdges(1, 0, 0, 0));
+			stepPlayer(world, sp.state, s, cmd, TICK_DT);
+			combat.stepPlayer(sp, cmd, seq, TICK_DT);
+		};
+		fire(1);
+		check(WIN.windowBroken(g), "um tiro de pistola de 280 u quebra o vidro (o raio e a linha e o alcance)");
+		const firstEnd = shots[0]?.hits[0]?.y ?? 0;
+		check(Math.abs(firstEnd - 1020) < 2, "e a bala para no vidro", `fim em y ${firstEnd.toFixed(0)}`);
+		for (let t = 2; t < 60 && shots.length < 2; t++) fire(t);
+		const secondEnd = shots[1]?.hits[0]?.y ?? 9999;
+		check(
+			Math.abs(secondEnd - back.y - back.h) < 2,
+			"o tiro seguinte atravessa o vao aberto",
+			`fim em y ${secondEnd}`,
+		);
+		checkEq(out.size(), 1, "e so a quebra foi para o fio (um DoorSet)");
+
+		// a blade: the dagger's arc crossing a pane 10 u from the survivor
+		const g2 = pane(world, 3000, 1000);
+		const blade = new ServerCombat({
+			world,
+			targets: { zombies: () => [], bosses: () => [] },
+			random: () => 0.5,
+			hooks: { glass: (x, melee, reach) => melee && windows.byHand(1, sp2.state, x, reach) === "broken" },
+		});
+		const s2 = SAVE.defaultSave();
+		s2.equipWeapon = 0;
+		const sp2 = PL.createServerPlayer({ slot: 1, userId: 2, name: "q" }, s2, 3040, 1030, 0);
+		sp2.state.x = 3040;
+		sp2.state.y = 1030;
+		windows.beginTick(TICK_DT);
+		for (let t = 1; t < 30 && WIN.windowIntact(g2); t++) {
+			const cmd = P.makeCommand(t, 0, 0, up, P.HeldBit.Attack, P.packEdges(t === 1 ? 1 : 0, 0, 0, 0));
+			stepPlayer(world, sp2.state, s2, cmd, TICK_DT);
+			blade.stepPlayer(sp2, cmd, t, TICK_DT);
+		}
+		check(
+			WIN.windowBroken(g2),
+			"a lamina de uma adaga quebra o vidro que o arco cruza (alcance, linha e ritmo da mao)",
+		);
+	}
+
+	// ---- EDI-13 over glass, and MP-24: a pane is a way out
+	{
+		const world = W.serverWorld(W.generateTown(DESIGN.TOWN_SEED));
+		const sim = newSim(world);
+		let win;
+		let house;
+		for (const b of world.solids) {
+			if (win !== undefined || b.kind !== "building") continue;
+			for (const o of b.openings ?? []) {
+				if (o.kind === "window" && o.broken !== true && win === undefined) {
+					win = o;
+					house = b;
+				}
+			}
+		}
+		check(win !== undefined && WIN.windowIntact(win.glass), "a cidade tem janelas com vidro", house?.tags);
+		const NORMAL = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] };
+		const n = NORMAL[win.side];
+		const q = addPlayer(sim, 0, win.x + win.w / 2 - n[0] * 64, win.y + win.h / 2 - n[1] * 64);
+		q.state.angle = Math.atan2(n[1], n[0]);
+		sim.build.hold(0, 10, undefined);
+		const placed = sim.build.place(0, q.state, [q.state], []);
+		check(
+			placed.kind === "placed" && placed.solid.x === win.x && placed.solid.w === win.w,
+			"uma barricada mirada numa janela COM vidro entra e preenche o vao (EDI-13 sobre vidro ou vao aberto)",
+			placed.kind,
+		);
+		// a room closed but for its glass: the glass is a way out, so nothing that closes the rest seals anybody in
+		const box = emptyWorld();
+		wallAt(box, 1000, 1000, 400, 20);
+		wallAt(box, 1000, 1380, 400, 20);
+		wallAt(box, 1000, 1020, 20, 360);
+		wallAt(box, 1380, 1020, 20, 150);
+		pane(box, 1380, 1170, true);
+		wallAt(box, 1380, 1250, 20, 130);
+		// the room's only doorway, 96 u in the west wall, is what a barricade would close
+		W.removeSolid(
+			box,
+			W.querySolids(box, 1001, 1100, 1019, 1101).find(s => s.kind === "wall_v"),
+		);
+		wallAt(box, 1000, 1020, 20, 160);
+		wallAt(box, 1000, 1276, 20, 104);
+		const inside = SAVE.defaultSave();
+		const body = PL.createServerPlayer({ slot: 0, userId: 1, name: "p" }, inside, 1200, 1200, 0).state;
+		body.x = 1200;
+		body.y = 1200;
+		check(
+			boxesIn(box, { x: 1000, y: 1180, w: 20, h: 96 }, true, [body]) === undefined,
+			"MP-24: fechar a porta de um comodo cujo vidro e a outra saida nao prende ninguem (vidro se quebra com E)",
+		);
+	}
+
+	// ---- the wire: a newcomer hears exactly the panes broken since the town was generated, and the mirror agrees
+	{
+		const world = W.serverWorld(W.generateTown(DESIGN.TOWN_SEED));
+		const sim = newSim(world);
+		const intact = world.solids.filter(s => WIN.windowIntact(s));
+		const born = world.solids.filter(s => WIN.windowBroken(s));
+		const all = intact.length + born.length;
+		info(
+			`a cidade ${DESIGN.TOWN_SEED}: ${all} janelas, ${born.length} nascidas quebradas (${((born.length / all) * 100).toFixed(0)}%)`,
+		);
+		check(born.length / all >= 0.2 && born.length / all <= 0.35, "20-35% das janelas nascem quebradas (EDI-18)");
+		const smashed = [intact[3], intact[40], intact[200]];
+		sim.windows.beginTick(TICK_DT);
+		for (const g of smashed) sim.windows.byShot(g);
+		drain(sim);
+		const sent = [];
+		const replicator = new Replicator(
+			sim,
+			{
+				snap: () => {},
+				fx: () => {},
+				world: (slot, packet) => sent.push({ slot, packet }),
+				worldAll: packet => sent.push({ slot: CFG.SLOT_NONE, packet }),
+			},
+			{ tick0Time: 0, mapHash: mapHashOf(world) },
+		);
+		const late = addPlayer(sim, 0, 3000, 3000);
+		replicator.welcome(late);
+		replicator.afterTick(1);
+		const got = [];
+		for (const s of sent.filter(x => x.slot === 0)) {
+			for (const e of P.decodeWorld(s.packet).events) got.push(e);
+		}
+		const windowSets = got.filter(
+			e => e.t === P.WorldEv.DoorSet && world.solids.some(s => s.id === e.id && s.kind === "window"),
+		);
+		checkEq(
+			windowSets
+				.map(e => e.id)
+				.sort((a, b) => a - b)
+				.join(","),
+			smashed
+				.map(g => g.id)
+				.sort((a, b) => a - b)
+				.join(","),
+			"o WorldInit leva um DoorSet por vidro quebrado DEPOIS da geracao, e so eles (os nascidos quebrados vem da semente)",
+		);
+		// the client: its own copy of the town, reset and laid over with that WorldInit, has every pane the server has
+		const mirror = W.generateTown(DESIGN.TOWN_SEED);
+		const printBefore = townFingerprint(mirror);
+		Mirror.forgetMirrorIndex();
+		Mirror.resetMirror(mirror);
+		for (const e of got) if (Mirror.isMirrorEvent(e)) Mirror.applyMirrorEvent(mirror, e);
+		const serverState = new Map(
+			world.solids.filter(s => s.kind === "window").map(s => [s.id, WIN.windowIntact(s)]),
+		);
+		const differ = mirror.solids.filter(s => s.kind === "window" && serverState.get(s.id) !== WIN.windowIntact(s));
+		checkEq(differ.length, 0, "e o espelho do cliente fica com cada janela como a do servidor");
+		check(
+			townFingerprint(mirror) !== printBefore,
+			"e a impressao digital da cidade muda (a do lobby nunca vai para a partida)",
+		);
+		// the mirror resets to the generated town: every pane back, the born-broken ones still open
+		Mirror.resetMirror(mirror);
+		const fresh = W.generateTown(DESIGN.TOWN_SEED);
+		const freshState = new Map(fresh.solids.filter(s => s.kind === "window").map(s => [s.id, WIN.windowIntact(s)]));
+		checkEq(
+			mirror.solids.filter(s => s.kind === "window" && freshState.get(s.id) !== WIN.windowIntact(s)).length,
+			0,
+			"um InitBegin novo devolve o espelho a cidade gerada (os vidros de volta, os nascidos quebrados abertos)",
+		);
+		Mirror.forgetMirrorIndex();
+		// the worst case: every pane smashed is one DoorSet each, 6 B -- well inside one 16 KB batch
+		const everything = {
+			tick: 1,
+			events: intact.map(g => ({ t: P.WorldEv.DoorSet, id: g.id, state: P.SolidState.Open })),
+		};
+		const enc = P.encodeWorld(everything);
+		const total = enc.packets.reduce((n, pk) => n + buffer.len(pk), 0);
+		info(`todos os ${intact.length} vidros quebrados: ${total} B de WorldInit (${enc.packets.length} pacote(s))`);
+		check(enc.packets.length === 1 && total < 16384, "a cidade inteira quebrada cabe num lote do WorldInit");
 	}
 }
 

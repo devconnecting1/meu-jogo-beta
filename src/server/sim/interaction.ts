@@ -41,8 +41,11 @@ import { ZombieState } from "shared/game/entities";
 import { FxEvent, FxType, SolidState, WorldEv } from "shared/net/protocol";
 import { wireSoundId } from "shared/net/fxWire";
 import { isMachine } from "shared/data/power";
+import { WINDOW_REACH } from "shared/game/windows";
+import * as Noise from "shared/sim/ai/noise";
 import { ServerItems } from "./items";
 import type { MachineOutcome } from "./power";
+import type { ServerWindows } from "./windows";
 import { WorldOut } from "./worldOut";
 
 /** §8.1: the reach checks get the same latency allowance as `pickup` */
@@ -91,7 +94,9 @@ export type InteractOutcome =
 	| { kind: "pump"; solid: Solid; taken: number }
 	/** an electric build did its own job (server/sim/power.ts): charged, refuelled, switched, launched a drone… */
 	| { kind: "machine"; machine: MachineOutcome }
-	| { kind: "refused"; why: "range" | "blocked" | "material" | "empty" | "cooldown" | "taken" | "full" };
+	/** a window's glass broken on purpose (EDI-18): the crash, the open frame (server/sim/windows.ts) */
+	| { kind: "window"; solid: Solid }
+	| { kind: "refused"; why: "range" | "blocked" | "material" | "empty" | "cooldown" | "taken" | "full" | "rate" };
 
 /** what E does on an electric build (server/sim/power.ts `ServerPower.act`); undefined = the ordinary E */
 export interface MachineActions {
@@ -117,6 +122,13 @@ export interface ServerInteractionOptions {
 	 * run's backpack is theirs, the achievement (Woodpile) is not. Left undefined, every run does -- what a test wants.
 	 */
 	paysRewards?: (slot: number) => boolean;
+	/** the town's window glass (EDI-18): E at an intact pane breaks it, through its reach, line and rate */
+	windows?: ServerWindows;
+	/**
+	 * A noise the horde hears (IA-02): a door turning (Noise.DOOR). Passed in, so the module stays pure; left undefined
+	 * (no horde, a test), nobody hears it.
+	 */
+	noise?: (x: number, y: number, radius: number) => void;
 }
 
 /** the world as the resolver needs to see it for one press */
@@ -139,6 +151,8 @@ export class ServerInteraction {
 	private readonly machines?: MachineActions;
 	private readonly onSolidChanged?: (x: number, y: number, w: number, h: number) => void;
 	private readonly paysRewards?: (slot: number) => boolean;
+	private readonly windows?: ServerWindows;
+	private readonly noise?: (x: number, y: number, radius: number) => void;
 	/** seconds of fire left per campfire/brazier; absent = freshly built, full (the original's `fuelOf`) */
 	private readonly fuel = new Map<Solid, number>();
 	private fireTick = 0;
@@ -160,6 +174,8 @@ export class ServerInteraction {
 		this.machines = options.machines;
 		this.onSolidChanged = options.onSolidChanged;
 		this.paysRewards = options.paysRewards;
+		this.windows = options.windows;
+		this.noise = options.noise;
 	}
 
 	/** §9.3: the run of the survivor in `slot` still earns achievements */
@@ -226,7 +242,24 @@ export class ServerInteraction {
 		if (target.kind === "mapItem") return this.mapItem(ctx, target.solid);
 		if (target.kind === "pump") return this.pump(ctx, target.solid);
 		if (target.kind === "solid") return this.repair(ctx, target.solid);
+		if (target.kind === "window") return this.window(ctx, target.solid);
 		return this.search(ctx, target.building);
+	}
+
+	// ---------------------------------------------------------------- a window's glass (EDI-18)
+
+	/**
+	 * E at an intact pane breaks it, on purpose: the pane the SERVER's query found at the server's position (the press
+	 * names nothing), within WINDOW_REACH of its edge with a clear line, at the survivor's rate (server/sim/windows.ts).
+	 */
+	private window(ctx: InteractContext, s: Solid): InteractOutcome {
+		const windows = this.windows;
+		if (windows === undefined) return { kind: "none" };
+		const got = windows.byHand(ctx.slot, ctx.state, s, WINDOW_REACH);
+		if (got === "broken") return { kind: "window", solid: s };
+		if (got === "range" || got === "blocked" || got === "rate") return { kind: "refused", why: got };
+		if (got === "budget") return { kind: "refused", why: "cooldown" };
+		return { kind: "none" };
 	}
 
 	// ---------------------------------------------------------------- one door, for everybody
@@ -248,6 +281,8 @@ export class ServerInteraction {
 		const iron = s.kind === "iron_door";
 		const sound = willOpen ? (iron ? "ironDoorOpen" : "doorOpen") : iron ? "ironDoorClose" : "doorClose";
 		this.fx?.({ t: FxType.Sound, sound: wireSoundId(sound), x: s.x + s.w / 2, y: s.y + s.h / 2, volume: 1 });
+		// ...and by the horde, as the next zombie over hears a blow (IA-02: a door is LOW, 150 u)
+		this.noise?.(s.x + s.w / 2, s.y + s.h / 2, Noise.DOOR);
 		return { kind: "door", solid: s, open: willOpen };
 	}
 
