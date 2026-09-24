@@ -48,10 +48,10 @@ const CLUSTER_TICK = 1;
 /** §3.5: a boss's HP scales with the survivors within this of the anchor when it wakes */
 const BOSS_SCALE_RANGE = 1500;
 /**
- * Half of the screen a zombie should not appear on (§3.5 "fora da tela"): a 1920 × 1080 view at zoom 1 (1 u = 1 px,
+ * Half of the screen a RELOCATED zombie should not land on (§3.5 "Limpeza"): a 1920 × 1080 view at zoom 1 (1 u = 1 px,
  * client/bootstrap.ts) around a survivor, plus a big walker's width. The original's 1120 × 630 view never showed its
- * 720–1080 px spawn ring; ours, at a player's native resolution, shows the near half of it. The server does not know
- * each client's screen, so this is the common one: a wider one still sees the ring, and the fade-in covers it.
+ * 720–1080 px ring; ours, at a player's native resolution, shows the near half of it. The server does not know each
+ * client's screen, so this is the common one: a wider one still sees the ring, and the fade-in covers it.
  */
 export const SPAWN_VIEW_HALF_W = 1000;
 export const SPAWN_VIEW_HALF_H = 580;
@@ -369,7 +369,10 @@ export class Population {
 		// MP-09: hard ceiling on what one server simulates
 		if (refs.zombies.size() >= MP09_ZOMBIE_CAP) return false;
 		const p = this.ringPlayer(refs, c, st);
-		const pos = this.ringOpen(refs, p.x, p.y, DESIGN.ZOMBIE_SPAWN_MIN, DESIGN.ZOMBIE_SPAWN_MAX, true, true);
+		// a NEW body fades in wherever the ring puts it, as the original's did: pushing spawns off the screen too would
+		// move the whole horde out to the screen's edge and slow every night down (tools/test-waves.mjs 5: three in reach
+		// of a hidden survivor 13.0 s -> 24.5 s). Only a relocation, which is a body the player already saw, avoids it
+		const pos = this.ringOpen(refs, p.x, p.y, DESIGN.ZOMBIE_SPAWN_MIN, DESIGN.ZOMBIE_SPAWN_MAX, true);
 		if (pos === undefined) return false;
 		const z = createZombie(zType, pos.x, pos.y, refs.clock.day, wave);
 		// anti-ESP (§4.3, §9.1): born at the alpha the light at (pos.x, pos.y) already gives it, not always

@@ -4105,10 +4105,27 @@ section("33) the first frame of a run is drawn where the server put the survivor
 			c.mySlot = sp0.slot;
 		}
 		drive(s, [cw, cwOld], 0.5);
-		s.nightLeft(1.5);
+		s.nightLeft(3);
 		s.kill(w);
+		// the corpse lies far from every ally, so the safe spot daybreak picks (next to an ally) is across the town
+		const PL = require(join(SRC, "server/sim/players.ts"));
+		const ally = s.sim.players().find(o => o.userId !== w.UserId).state;
+		const anchor = {
+			x: Math.min(
+				s.host.world.width - 800,
+				Math.max(800, ally.x + (ally.x < s.host.world.width / 2 ? 2600 : -2600)),
+			),
+			y: ally.y,
+		};
+		const far = PL.findSpawnPoint(s.host.world, { allies: [anchor] });
+		s.body(w).state.x = far.x;
+		s.body(w).state.y = far.y;
+		drive(s, [cw, cwOld], 1.0);
 		const corpse = { x: s.body(w).state.x, y: s.body(w).state.y };
-		drive(s, [cw, cwOld], 2.5);
+		// from here on: the stand-up alone
+		cw.drawn.length = 0;
+		cwOld.drawn.length = 0;
+		for (let i = 0; i < 6 * 60 && s.body(w)?.state.dead !== false; i++) drive(s, [cw, cwOld], 1 / 60);
 		const up = s.body(w);
 		const spot = { x: up.state.x, y: up.state.y };
 		drive(s, [cw, cwOld], 1.0);

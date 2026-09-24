@@ -64,17 +64,19 @@
  *
  * THE MAX DRAWN SPEED (h)-(k), the owner's report of 2026-09-24: "when I explore, the enemies left behind get teleported
  * to other places: I see enemies on screen going very fast from one region to another". Every drawn frame of every
- * zombie against the fastest that body ever moved on the server: at most 1.25x that times dt + 4 u, unless the frame
- * lands faded (alpha <= 0.1, a snap that starts a fade-in) or both ends are off the screen.
+ * zombie against the fastest that body ever moved on the server: at most 1.25x that times dt + 4 u (plus, on the frame
+ * that ends an extrapolation, what the extrapolation could be off: 2 x that speed x 100 ms), unless the frame lands faded
+ * (alpha <= 0.1, a snap that starts a fade-in) or both ends are off the screen.
  *   (h) 90 s exploring by day with the REAL population (spawns, recycling, relocations), 1920 x 1080, clean and WAN;
  *   (i) the same at night with the waves; (j) a re-entry in the near and the mid ring (the wire skips six samples);
  *   (k) the server moving a body 670 u under the same netId (the client's own guard).
  * Root cause: the population put a wave walker or a special left behind back on the survivor's ring under the SAME
  * netId (shared/sim/ai/population.ts `cleanup`), and every screen that still had it interpolated it across the town.
- * Before (PZ_SRC at c72aa6c): (h) 126 frames, the worst 726 u in one frame (43 591 u/s, 194x its own speed), 40
- * same-netId jumps, 61 of 166 new bodies born on screen; (j) 41 u in one frame at alpha 0.38; (k) 228 u in one frame.
- * Now: 0 fast frames everywhere, 0 jumps (a relocation is a new netId), 0 of 200 new bodies on screen, the horde as
- * big (14 and 28 at the end, before and after). Ruled out by the same runs: the netId reuse after the tomb change (a
+ * Before (PZ_SRC at c72aa6c): (h) clean 126 frames, the worst 726 u in one frame (43 591 u/s, 194x its own speed), 40
+ * same-netId jumps, 17 of the 40 moved bodies landing on screen; WAN 71 frames, 753 u in one frame; (i) 80 jumps, 29
+ * landing on screen (the dark hid most of the runs); (j) 41 u in one frame at alpha 0.38; (k) 228 u in one frame.
+ * Now: 0 fast frames everywhere, 0 jumps (a relocation is a new netId), 0 of 43 moved bodies on screen by day and 0 of
+ * 94 at night. New bodies still fade in wherever the ring puts them, as before (the waves' pacing depends on it). Ruled out by the same runs: the netId reuse after the tomb change (a
  * freed id comes back 2 s later, after the client retired the track; the lives are split per body here) and the
  * swap-remove draw order (the view writes each sprite's absolute position every frame, nothing eases per slot).
  *
@@ -283,6 +285,11 @@ function run(scn, profileName) {
 	const teleports = [];
 	let spawns = 0;
 	let spawnsInView = 0;
+	/** (h) relocations, by where the moved body landed: a new identity of a body seen before, or (before the fix) a jump */
+	const seenBodies = new WeakSet();
+	let relocLanded = 0;
+	let relocInView = 0;
+	const inView = z => Math.abs(z.x - sp.state.x) <= viewW / 2 && Math.abs(z.y - sp.state.y) <= viewH / 2;
 
 	const snaps = [];
 	const worldPackets = [];
@@ -343,16 +350,24 @@ function run(scn, profileName) {
 			if (life === undefined || life.body !== z) {
 				life = { body: z, from: tick, last: undefined, lastTick: -1, vmax: 0 };
 				list.push(life);
-				// a body the survivor's screen shows the tick it appears (a spawn, or a relocation's new identity)
-				spawns += 1;
-				if (Math.abs(z.x - sp.state.x) <= viewW / 2 && Math.abs(z.y - sp.state.y) <= viewH / 2)
-					spawnsInView += 1;
+				// a body the survivor's screen shows the tick it appears: a new one, or a moved one under its new identity
+				if (seenBodies.has(z)) {
+					relocLanded += 1;
+					if (inView(z)) relocInView += 1;
+				} else {
+					seenBodies.add(z);
+					spawns += 1;
+					if (inView(z)) spawnsInView += 1;
+				}
 			}
 			if (life.last !== undefined && life.lastTick === tick - 1) {
 				const d = Math.hypot(z.x - life.last.x, z.y - life.last.y);
 				// faster than any zombie walks: the body was MOVED under the same netId (what every client draws racing)
-				if (d > TELEPORT_TICK_U) teleports.push({ tick, netId: id, d });
-				else life.vmax = Math.max(life.vmax, d * SIM_HZ);
+				if (d > TELEPORT_TICK_U) {
+					teleports.push({ tick, netId: id, d });
+					relocLanded += 1;
+					if (inView(z)) relocInView += 1;
+				} else life.vmax = Math.max(life.vmax, d * SIM_HZ);
 			}
 			life.last = { x: z.x, y: z.y };
 			life.lastTick = tick;
@@ -653,6 +668,8 @@ function run(scn, profileName) {
 		relocations,
 		spawns,
 		spawnsInView,
+		relocLanded,
+		relocInView,
 		restarts: cl.snapshots.stats().restarts ?? 0,
 		viewW,
 		viewH,
@@ -969,10 +986,12 @@ function afterPause(res) {
  * 2026-09-24 -- is exactly a frame that breaks this with the body on screen and opaque.
  */
 const SPEED_MARGIN = 1.25;
+/** §5.1: how far past its newest sample a body is extrapolated, at most */
+const EXTRAPOLATE_S = CFG.EXTRAPOLATE_MAX_S ?? 0.1;
 const SPEED_SLACK_U = 4;
 const FADE_SNAP_ALPHA = 0.1;
 const SCREEN_MARGIN = 40;
-/** (h): at most this share of the new bodies may appear on the 1920 x 1080 screen (§3.5 "fora da tela") */
+/** (h): at most this share of the relocated bodies may land on the 1920 x 1080 screen (§3.5 "Limpeza") */
 const SPAWN_IN_VIEW_MAX_PCT = 10;
 
 function drawnSpeed(res) {
@@ -1002,7 +1021,12 @@ function drawnSpeed(res) {
 			out.frames += 1;
 			const vmax = vmaxAt(b.tick);
 			const d = Math.hypot(b.x - a.x, b.y - a.y);
-			const allowed = vmax * b.dt * SPEED_MARGIN + SPEED_SLACK_U;
+			// a frame that ends an extrapolation (§5.1: up to EXTRAPOLATE_MAX_S along the last velocity) catches up by what
+			// the guess could be off: the body going the other way at its top speed. A charger stopping mid-rush is the
+			// case (40 u in one frame at 750 u/s) -- a correction of a few frames' walk, never a run across the map
+			const ending = a.stale === true || frames[i - 2]?.stale === true;
+			const catchUp = ending ? 2 * vmax * EXTRAPOLATE_S : 0;
+			const allowed = vmax * b.dt * SPEED_MARGIN + SPEED_SLACK_U + catchUp;
 			if (vmax > 0) out.worstRatio = Math.max(out.worstRatio, d / (vmax * b.dt));
 			if (d > out.worstStep) {
 				out.worstStep = d;
@@ -1013,7 +1037,8 @@ function drawnSpeed(res) {
 				if (out.samples.length < 4) {
 					out.samples.push(
 						`#${netId} t=${b.t.toFixed(2)} s: ${d.toFixed(0)} u in one frame (${(d / b.dt).toFixed(0)} u/s, ` +
-							`it never went over ${vmax.toFixed(0)} u/s), alpha ${b.alpha.toFixed(2)}`,
+							`it never went over ${vmax.toFixed(0)} u/s), alpha ${b.alpha.toFixed(2)}, ` +
+							`stale ${frames[i - 2]?.stale === true ? 1 : 0}${a.stale ? 1 : 0}${b.stale ? 1 : 0}`,
 					);
 				}
 			}
@@ -1323,7 +1348,8 @@ for (const key of Object.keys(SCENARIOS).sort()) {
 			);
 			console.log(
 				`           servidor: ${res.relocations} realocacoes, ${res.teleports.length} saltos de um mesmo netId, ` +
-					`${res.spawns} corpos novos (${res.spawnsInView} surgiram na tela) | cliente: ${res.restarts} trilhas ` +
+					`${res.spawns} corpos novos (${res.spawnsInView} surgiram na tela), ${res.relocLanded} corpos movidos ` +
+					`(${res.relocInView} cairam na tela) | cliente: ${res.restarts} trilhas ` +
 					`recomecadas | zumbis no fim ${res.zombiesEnd}`,
 			);
 			for (const line of sp.samples) console.log(`             ${line}`);
@@ -1470,11 +1496,13 @@ for (const [tag, { sp, res, scn }] of Object.entries(speeds)) {
 	if (h !== undefined) {
 		// the walk has to exercise what it is about, or the checks above prove nothing
 		check("(h) clean: o passeio faz a populacao realocar zumbis", h.relocations >= 5, `${h.relocations}`);
-		const pct = (100 * h.spawnsInView) / Math.max(1, h.spawns);
+		// a new body fades in wherever the ring puts it, as always (the waves' pacing depends on the ring); a MOVED one is a
+		// body the player already saw, and lands off the screen
+		const pct = (100 * h.relocInView) / Math.max(1, h.relocLanded);
 		check(
-			`(h) clean: um corpo novo (spawn ou realocacao) quase nunca surge na tela 1920x1080 (<= ${SPAWN_IN_VIEW_MAX_PCT} %)`,
+			`(h) clean: um zumbi realocado quase nunca cai na tela 1920x1080 (<= ${SPAWN_IN_VIEW_MAX_PCT} %)`,
 			pct <= SPAWN_IN_VIEW_MAX_PCT,
-			`${h.spawnsInView} de ${h.spawns}, ${pct.toFixed(1)} %`,
+			`${h.relocInView} de ${h.relocLanded}, ${pct.toFixed(1)} %; corpos novos na tela: ${h.spawnsInView} de ${h.spawns}`,
 		);
 	}
 }
