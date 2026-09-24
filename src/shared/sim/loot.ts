@@ -4,7 +4,8 @@
  * (shared/data/spawns.ts BUILDING_SPAWNS and MAP_ITEM_LOOT). Before this each side had its own copy of the map-item
  * tables and its own roll, and they had drifted (QA L1).
  *
- *   rollBuildingLoot   a building's slots, rolled once and shared by whoever searches first (MP-05)
+ *   rollBuildingLoot   a building's slots, rolled once and shared by whoever searches first (MP-05), and on top of
+ *                      them the chance of a basic construction kit where one belongs (ITM-09, spawns.ts BUILDING_KITS)
  *   rollPumpLoot       a gas station's pump island: the same, from its own table (EDI-16)
  *   rollYardLoot       any container out in the open: a pump island, a market stall, a pile, a shed (EDI-21..MOB-06)
  *   isContainer        what the two sides' lazy sweeps roll: a building or a container out in the open
@@ -14,6 +15,7 @@
  * Pure: no Instances, no services; every roll goes through the shared rng (a test seeds it and replays it).
  */
 import {
+	BUILDING_KITS,
 	BUILDING_SPAWNS,
 	MAP_ITEM_LOOT,
 	MapLootEntry,
@@ -22,6 +24,7 @@ import {
 	SpawnEntry,
 	spawnRows,
 	VAULT_LOOT,
+	YARD_KITS,
 	YARD_LOOT,
 	YARD_TAGS,
 	yardLootKey,
@@ -66,9 +69,22 @@ function rollSlots(rows: Array<SpawnEntry>, slots: number): Array<LootDrop> {
 	return out;
 }
 
-/** the original's lazy loot: `slots` rolls of the building's table (an empty roll is an empty slot) */
+/**
+ * (ITM-09) The basic construction kits a container holds ON TOP of its slots (spawns.ts BUILDING_KITS, YARD_KITS): each
+ * line its own chance of one, once per fill -- never a slot's line, so the container's own loot is exactly what its
+ * table gives and the chance written in the table is the real odds.
+ */
+function rollKits(rows: Array<SpawnEntry> | undefined, out: Array<LootDrop>): Array<LootDrop> {
+	if (rows === undefined) return out;
+	for (const e of rows) {
+		if (chance(e.max * 100)) out.push({ kind: e.kind, id: e.index, count: 1 });
+	}
+	return out;
+}
+
+/** the original's lazy loot: `slots` rolls of the building's table (an empty roll is an empty slot), then its kits */
 export function rollBuildingLoot(bt: number, slots: number): Array<LootDrop> {
-	return rollSlots(buildingLootRows(bt), slots);
+	return rollKits(BUILDING_KITS[bt], rollSlots(buildingLootRows(bt), slots));
 }
 
 /** a pump island's fuel (shared/data/spawns.ts PUMP_LOOT): one slot, rolled like a building's (EDI-16) */
@@ -104,14 +120,16 @@ export function rollVaultLoot(): Array<LootDrop> {
 
 /**
  * What a container out in the open holds: a pump island its fuel (`rollPumpLoot`), a market stall, the food truck, a
- * pile of material or a shed its own table, one slot a time (`lootSlots`), rolled like a building's; the bank's vault
- * every box it has (`rollVaultLoot`).
+ * pile of material or a shed its own table, one slot a time (`lootSlots`), rolled like a building's, with its kits on
+ * top (the lumber pile's barricade, the shed's campfire and lamp: `rollKits`); the bank's vault every box it has
+ * (`rollVaultLoot`).
  */
 export function rollYardLoot(s: Solid): Array<LootDrop> {
 	if (s.tags === "pump") return rollPumpLoot();
 	if (s.tags === "vault") return rollVaultLoot();
 	const rows = yardLootRows(s);
-	return rows === undefined ? [] : rollSlots(rows, s.lootSlots ?? 1);
+	if (rows === undefined) return [];
+	return rollKits(YARD_KITS[yardLootKey(s.tags, s.variant)], rollSlots(rows, s.lootSlots ?? 1));
 }
 
 /**

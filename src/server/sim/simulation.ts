@@ -40,7 +40,7 @@ import { emitSound, reactToHit } from "shared/sim/ai/zombieBrain";
 import * as Noise from "shared/sim/ai/noise";
 import type { WeaponDef } from "shared/data/weapons";
 import { ServerBackpack } from "./backpack";
-import { ServerBuild } from "./build";
+import { PlaceOutcome, ServerBuild } from "./build";
 import { TickAccumulator } from "./heartbeat";
 import { ServerCombat } from "./combat";
 import { BackpackOutcome, ServerCraft } from "./craft";
@@ -296,6 +296,11 @@ export class ServerSimulation {
 	/** the result of a backpack intent (craft, use, equip, learn, switch), or of a pack delivered on the server */
 	onBackpack?: (sp: ServerPlayer, outcome: BackpackOutcome) => void;
 	/**
+	 * A build edge that changed the survivor's SAVE: a kit placed and spent from the backpack (ITM-09). The session layer
+	 * marks the save dirty (server/main.server.ts)
+	 */
+	onBuild?: (sp: ServerPlayer, outcome: PlaceOutcome) => void;
+	/**
 	 * The backpack verbs (server/sim/backpack.ts): queued per survivor, applied right before the command they were
 	 * made during (§2.4), acknowledged by nonce. It outlives a town (MP-22): the acks are about the connection.
 	 */
@@ -402,7 +407,7 @@ export class ServerSimulation {
 	 * What stays: the survivors in their slots, their input queues and the tick counter — the session (and the
 	 * clock epoch every client is anchored to) does not end with the town. Their BODIES belong to the old streets,
 	 * though, and are not touched here: server/sim/life.ts `restartWorld` puts every one of them somewhere in the
-	 * new town. A construction still on somebody's cursor is refunded, as leaving the world would refund it.
+	 * new town. A construction still on somebody's cursor comes off it, as leaving the world does: the kit stays theirs.
 	 *
 	 * ALL OR NOTHING (review of f851ad2, M2): the new town's systems are built into a local first, and only once
 	 * every one of them exists does anything of the old town change. A failure while building throws with this
@@ -417,7 +422,7 @@ export class ServerSimulation {
 			throw systems;
 		}
 		// from here on nothing is built, only swapped
-		for (const sp of this.roster) this.build?.remove(sp.slot, sp.save);
+		for (const sp of this.roster) this.build?.remove(sp.slot);
 		// a vehicle under somebody belonged to the old streets, like the rest of what they built (VEI-05)
 		for (const sp of this.roster) sp.state.ride = undefined;
 		// the old town stops feeding the outbox: nothing that happens to it is news any more
@@ -905,8 +910,8 @@ export class ServerSimulation {
 		this.progress?.remove(slot);
 		// a vehicle under them stays in the town, where they were (VEI-05) -- before the builds forget the slot
 		this.vehicles?.remove(sp);
-		// a construction still on the cursor is refunded, not forfeited: they paid for it
-		this.build?.remove(slot, sp.save);
+		// a construction still on the cursor comes off it: the kit stays in their backpack (ITM-09)
+		this.build?.remove(slot);
 		this.craft?.remove(slot);
 		this.interaction?.remove(slot);
 		this.windows?.remove(slot);
@@ -1221,9 +1226,18 @@ export class ServerSimulation {
 			// keep the sticky ghost tracking this tick's position before any edge consumes it
 			build.ghost(sp.slot, sp.state);
 			if (reload > 0) build.rotate(sp.slot);
-			if (action > 0) build.cancel(sp.slot, sp.save);
+			// E takes it off the cursor: the kit stays in the backpack (ITM-09), so the save does not move
+			if (action > 0) build.cancel(sp.slot);
 			if (attack > 0 && build.placing(sp.slot)) {
-				const placed = build.place(sp.slot, sp.state, this.bodies, this.horde?.zombies ?? EMPTY_ZOMBIES);
+				// the save goes along: the kit (ITM-09) is spent from the backpack in the same step it is placed
+				const placed = build.place(
+					sp.slot,
+					sp.state,
+					this.bodies,
+					this.horde?.zombies ?? EMPTY_ZOMBIES,
+					sp.save,
+				);
+				if (placed.kind === "placed" && placed.kit === true) this.onBuild?.(sp, placed);
 				// hammering a construction into place is LOUD (shared/sim/ai/noise.ts): building costs attention
 				const horde = this.horde;
 				if (placed.kind === "placed" && horde !== undefined) {

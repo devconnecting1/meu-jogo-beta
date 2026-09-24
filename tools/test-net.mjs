@@ -209,6 +209,7 @@ const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
 const { ZOMBIES } = require(join(SRC, "shared/data/zombies.ts"));
 const { ItemKind } = require(join(SRC, "shared/data/kinds.ts"));
 const { WEAPONS } = require(join(SRC, "shared/data/weapons.ts"));
+const { ETC_ITEMS } = require(join(SRC, "shared/data/etcItems.ts"));
 // the ride grid alone (shared/sim/rideKey.ts) plus the vehicle table: the protocol loads nothing heavier (VEI-05)
 const VEH = { ...require(join(SRC, "shared/sim/rideKey.ts")), ...require(join(SRC, "shared/data/buildings.ts")) };
 const COS = require(join(SRC, "shared/data/cosmetics.ts"));
@@ -2015,6 +2016,7 @@ const BACKPACK_VERBS = [
 	P.IntentKind.LearnSkill,
 	P.IntentKind.SwitchWeapon,
 	P.IntentKind.Holster,
+	P.IntentKind.Place,
 ];
 const PRESENCE_VERBS = [P.IntentKind.EnterWorld, P.IntentKind.LeaveWorld];
 /** a valid backpack intent with random fields, for the fuzz below */
@@ -2085,7 +2087,28 @@ test("Intent: presence (2 B) and backpack verbs (8 B), round trip and exact size
 		);
 	}
 	eq("Holster has no 2-byte form", P.decodeIntentMessage(bufOf([96, P.IntentKind.Holster])), undefined);
-	eq("a verb above Holster (10) is malformed", P.decodeIntentMessage(bufOf([96, 10, 1, 0, 0, 0, 1, 0])), undefined);
+	// ITM-09 (note 26): Place is the new verb 10 -- a construction kit from the backpack onto the build cursor. Its arg is
+	// a row of the ETC table (which rows are kits, whether one is owned, is the server's next question)
+	eq("Place is the new verb 10", P.IntentKind.Place, 10);
+	eq("Place range: the ETC table", P.intentArgRange(P.IntentKind.Place).join(","), `0,${ETC_ITEMS.length - 1}`);
+	eq("Place has no 2-byte form", P.decodeIntentMessage(bufOf([96, P.IntentKind.Place])), undefined);
+	for (const bad of [ETC_ITEMS.length, 255, 65535]) {
+		eq(`Place arg ${bad}: never encoded`, P.encodeIntentArgs(P.IntentKind.Place, 1, bad, 1), undefined);
+		eq(
+			`Place arg ${bad}: a hand-built one is malformed`,
+			P.decodeIntentMessage(bufOf([96, P.IntentKind.Place, 1, 0, bad & 255, bad >> 8, 1, 0])),
+			undefined,
+		);
+	}
+	{
+		const turret = P.decodeIntentMessage(P.encodeIntentArgs(P.IntentKind.Place, 300, 2, 42));
+		eq(
+			"Place round trip: 8 bytes, kind 10, atSeq, arg and nonce as sent",
+			JSON.stringify(turret),
+			JSON.stringify({ kind: 10, atSeq: 300, arg: 2, nonce: 42 }),
+		);
+	}
+	eq("a verb above Place (11) is malformed", P.decodeIntentMessage(bufOf([96, 11, 1, 0, 0, 0, 1, 0])), undefined);
 	{
 		const away = P.decodeIntentMessage(P.encodeIntentArgs(P.IntentKind.Holster, 300, P.HOLSTER_AWAY, 41));
 		eq(
@@ -2118,14 +2141,14 @@ test("Intent: hostile payloads are refused (§8.1)", () => {
 		if (len > 1) buffer.writeu8(b, 1, P.IntentKind.UseItem);
 		eq(`length ${len}`, P.decodeIntentMessage(b), undefined);
 	}
-	// every header but Intent's, every kind outside 1..9, and each form with the other form's verbs
+	// every header but Intent's, every kind outside 1..10, and each form with the other form's verbs
 	let accepted = 0;
 	for (let head = 0; head < 256; head++) {
 		for (let kind = 0; kind < 256; kind++) {
 			const short = P.decodeIntentMessage(bufOf([head, kind]));
 			const long = P.decodeIntentMessage(bufOf([head, kind, 7, 0, 1, 0, 9, 0]));
 			const shortOk = head === 96 && (kind === 1 || kind === 2);
-			const longOk = head === 96 && kind >= 3 && kind <= 9;
+			const longOk = head === 96 && kind >= 3 && kind <= 10;
 			if ((short !== undefined) !== shortOk)
 				fail(`short form head ${head} kind ${kind}: ${JSON.stringify(short)}`);
 			// arg = 1 is inside every backpack verb's range
@@ -2135,7 +2158,7 @@ test("Intent: hostile payloads are refused (§8.1)", () => {
 			checks += 2;
 		}
 	}
-	eq("exactly the 2 presence and 7 backpack verbs decode", accepted, 9);
+	eq("exactly the 2 presence and 8 backpack verbs decode", accepted, 10);
 });
 
 test("Intent gate: the §8.2 bucket, the malformed window, and presence left to mpHost", () => {
@@ -2335,6 +2358,8 @@ test("Intent gate: out of the world only a cosmetic slot moves, and only to some
 		P.IntentKind.Craft,
 		P.IntentKind.SwitchWeapon,
 		P.IntentKind.Holster,
+		// ...and ITM-09's Place: no cursor, no town to build in, in the lobby
+		P.IntentKind.Place,
 	]) {
 		eq(`verb ${kind} out of the world is refused`, G.applyOutOfWorld(save, msg(kind, 1)), false);
 	}
