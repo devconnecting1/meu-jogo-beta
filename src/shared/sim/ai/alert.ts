@@ -1,3 +1,4 @@
+//!native
 /*
  * Group alert: a zombie that spots a survivor shouts, and the ones around it come (docs/DESIGN_RULES.md P2).
  *

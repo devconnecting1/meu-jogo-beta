@@ -122,6 +122,29 @@ function install() {
 	};
 	globalThis.debug = {
 		traceback: message => `${message ?? ""}\nstack traceback:\n\t[luau-shim: no Luau stack under Node]`,
+		// the MicroProfiler labels and memory categories the server's heartbeat (server/net/mpHost.ts, F6) and the client's frame (client/gameLoop.ts, main.client.ts) set. They
+		// draw nothing under Node, but the labels are counted: `profileOpen` is how many are open right now (every
+		// heartbeat must leave it at 0, even one whose tick threw), `profileLabels` every label ever opened, and an end
+		// without a begin is counted in `profileUnbalanced` (Luau would complain)
+		profileOpen: 0,
+		profileLabels: new Set(),
+		profileUnbalanced: 0,
+		profilebegin(label) {
+			if (typeof label !== "string") throw new TypeError("debug.profilebegin expects a string label");
+			this.profileOpen += 1;
+			this.profileLabels.add(label);
+		},
+		profileend() {
+			if (this.profileOpen <= 0) this.profileUnbalanced += 1;
+			else this.profileOpen -= 1;
+		},
+		memoryCategory: undefined,
+		setmemorycategory(tag) {
+			this.memoryCategory = tag;
+		},
+		resetmemorycategory() {
+			this.memoryCategory = undefined;
+		},
 	};
 
 	class Color3 {

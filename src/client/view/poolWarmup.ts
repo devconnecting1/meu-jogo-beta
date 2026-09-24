@@ -8,17 +8,21 @@
  *
  * The counts are a 1920 x 1080 night fight -- 40 walkers, 4 survivors, 40 blood decals, 60 sparks, 12 tracers --
  * per ZIndex, as the real drawers produce them (npm run test:pool draws that fight and holds these numbers to it),
- * flat or pixel art (client/view/charArt.ts) as the uploaded sheets decide. The town itself is not reserved: it is
- * drawn at the run's first frame, behind the mount of the HUD, not in the middle of a fight. An image's
- * ImageLabel is not either: it is born with its first picture (renderer.ts: applyImage).
+ * flat or pixel art (client/view/charArt.ts) as the uploaded sheets decide. With the characters' sheets live, a
+ * character's sprite is a Frame and its ImageLabel: both are built here, the label hidden and without a picture
+ * (renderer.ts: ensureImage), so the fight creates neither. The town itself is not reserved: it is drawn at the
+ * run's first frame, behind the mount of the HUD, not in the middle of a fight.
  */
 import { Z } from "shared/engine/colors";
 import { Renderer } from "shared/engine/renderer";
 import { GameContext } from "shared/game/context";
 import { survivorArtLive, zombieArtLive } from "./charArt";
 
-/** [ZIndex, sprites, how many of them are rounded (UICorner), how many outlined (UIStroke)] */
-export type PoolLayer = readonly [number, number, number, number];
+/**
+ * [ZIndex, sprites, how many of them are rounded (UICorner), how many outlined (UIStroke), how many draw an image
+ * (their ImageLabel; 0 when left out)]
+ */
+export type PoolLayer = readonly [number, number, number, number, number?];
 
 /** what every look shares: blood on the ground, acid puddles, body shadows, tracers and sparks */
 export const FIGHT_FX: ReadonlyArray<PoolLayer> = [
@@ -37,8 +41,8 @@ export const HORDE_FLAT: ReadonlyArray<PoolLayer> = [
 	[Z.zombie + 3, 40, 40, 0],
 ];
 
-/** 40 walkers once the zombies' sheet is uploaded (charArt.drawZombieArt): one cell each */
-export const HORDE_ART: ReadonlyArray<PoolLayer> = [[Z.zombie, 40, 0, 0]];
+/** 40 walkers once the zombies' sheet is uploaded (charArt.drawZombieArt): one cell each, an image */
+export const HORDE_ART: ReadonlyArray<PoolLayer> = [[Z.zombie, 40, 0, 0, 40]];
 
 /** 4 flat survivors (survivorView.drawSurvivor, look.z = Z.player) */
 export const SURVIVORS_FLAT: ReadonlyArray<PoolLayer> = [
@@ -49,10 +53,10 @@ export const SURVIVORS_FLAT: ReadonlyArray<PoolLayer> = [
 	[Z.player + 4, 4, 4, 4],
 ];
 
-/** 4 survivors once their sheets are uploaded: the body's cell and the weapon's */
+/** 4 survivors once their sheets are uploaded: the body's cell and the weapon's, images both */
 export const SURVIVORS_ART: ReadonlyArray<PoolLayer> = [
-	[Z.player, 4, 0, 0],
-	[Z.player + 1, 4, 0, 0],
+	[Z.player, 4, 0, 0, 4],
+	[Z.player + 1, 4, 0, 0, 4],
 ];
 
 /** sprites (each with its modifiers) created per frame while warming: a 1080p fight in ~15 frames of the lobby */
@@ -74,8 +78,14 @@ export function reserveFightPool(
 ): void {
 	const k = math.clamp((viewW * viewH) / REF_AREA, 0.5, 1);
 	const add = (layers: ReadonlyArray<PoolLayer>): void => {
-		for (const [z, n, corners, strokes] of layers) {
-			r.reserve(z, math.ceil(n * k), math.ceil(corners * k), math.ceil(strokes * k));
+		for (const [z, n, corners, strokes, images] of layers) {
+			r.reserve(
+				z,
+				math.ceil(n * k),
+				math.ceil(corners * k),
+				math.ceil(strokes * k),
+				math.ceil((images ?? 0) * k),
+			);
 		}
 	};
 	add(FIGHT_FX);

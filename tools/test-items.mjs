@@ -1168,27 +1168,34 @@ section(
 			const { COLORS } = require(join(SRC, "shared/engine/colors.ts"));
 			const draw = source("client/gameLoop.ts");
 			const body = draw.slice(draw.indexOf("private drawLight("), draw.indexOf("hideWorld(): void"));
+			const shape = source("client/view/lightList.ts");
 			check(
 				/SurvivorLight\.survivorLightRadius\(save\)/.test(body) &&
 					/SurvivorLight\.survivorCone\(save\)/.test(body) &&
-					/angle: p\.angle/.test(body) &&
-					/cone: SurvivorLight\.CONE_HALF_ANGLE/.test(body) &&
+					/addSurvivorLight\(lights, p\.x, p\.y, p\.angle, radius, cone\?\.radius\)/.test(body) &&
+					/lights\.cone\(x, y, cone, FLASHLIGHT_INNER, aim, SurvivorLight\.CONE_HALF_ANGLE\)/.test(shape) &&
 					!/PLAYER_LIGHT_R/.test(draw),
 				"the client's light map draws the survivor's light by the shared rule: the circle, and the flashlight's cone along the aim",
 			);
+			const LL = require(join(SRC, "client/view/lightList.ts"));
 			check(
 				/Light\.survivorLightRadius\(save\)/.test(source("shared/sim/ai/zombieBrain.ts")) &&
 					/Light\.survivorCone\(save\)/.test(source("shared/sim/ai/zombieBrain.ts")) &&
 					/> Light\.CONE_HALF_ANGLE/.test(source("shared/sim/ai/zombieBrain.ts")),
 				"and the server's horde visibility by the same rule, cone angle included",
 			);
-			/** the lights the client pushes for a survivor at (px, py) aiming at `aim` (gameLoop drawLight's two pushes) */
+			/** the lights the client draws for a survivor at (px, py) aiming at `aim` (gameLoop drawLight, the real shape) */
 			const clientLights = (save, px, py, aim) => {
-				const out = [{ x: px, y: py, r: Light.survivorLightRadius(save), inner: 0.4 }];
-				const cone = Light.survivorCone(save);
-				if (cone !== undefined)
-					out.push({ x: px, y: py, r: cone.radius, inner: 0.35, angle: aim, cone: Light.CONE_HALF_ANGLE });
-				return out;
+				const list = new LL.LightList();
+				LL.addSurvivorLight(
+					list,
+					px,
+					py,
+					aim,
+					Light.survivorLightRadius(save),
+					Light.survivorCone(save)?.radius,
+				);
+				return list.items;
 			};
 			const hands = [
 				["bare hands", -1, -1, 0],
@@ -1336,6 +1343,75 @@ section(
 					turning.created,
 					0,
 					"600 frames of a turning flashlight (and night vision on and off): 0 Instances created",
+				);
+			}
+			{
+				// ---- LUZ-04, the allies (2026-09-24): an ally's flashlight rides the wire (PlayerFlag.Flashlight, set by the
+				// server from the rule the horde is lit by) and is drawn with the local survivor's own shape
+				const REP = require(join(SRC, "server/net/replication.ts"));
+				const { PlayersView } = require(join(SRC, "client/view/playersView.ts"));
+				const flagOf = (hand, gun, dead) => {
+					const sp = PL.createServerPlayer(
+						{ slot: 1, userId: 2, name: "a" },
+						wearing(hand, gun, 0),
+						4000,
+						4000,
+						0,
+						60,
+					);
+					sp.state.dead = dead;
+					return (REP.playerBlockOf(sp).flags & P.PlayerFlag.Flashlight) !== 0;
+				};
+				check(
+					flagOf(FLASHLIGHT, -1, false) &&
+						!flagOf(-1, -1, false) &&
+						!flagOf(TORCH, -1, false) &&
+						!flagOf(-1, NIGHT_VISION, false) &&
+						!flagOf(FLASHLIGHT, -1, true),
+					"the server sets PlayerFlag.Flashlight exactly when the rule gives the survivor a cone, and never on a body",
+				);
+				const view = new PlayersView();
+				const allyLights = (flashlight, aim, extra = {}) => {
+					const list = new LL.LightList();
+					view.collectLights(
+						[{ x: 4000, y: 4000, angle: aim, flashlight, downed: false, dead: false, ...extra }],
+						list,
+					);
+					return list.items;
+				};
+				const KEYS = ["x", "y", "r", "inner", "k", "angle", "cone"];
+				const same = (a, b) => a.length === b.length && a.every((l, i) => KEYS.every(k => l[k] === b[i][k]));
+				check(
+					same(allyLights(true, 0.7), clientLights(wearing(FLASHLIGHT, -1, 0), 4000, 4000, 0.7)) &&
+						same(allyLights(false, 0.7), clientLights(wearing(-1, -1, 0), 4000, 4000, 0.7)),
+					"on my screen an ally's light is the local survivor's shape: the circle, and the flashlight's cone along their aim when the flag says so",
+				);
+				check(
+					allyLights(true, 0, { dead: true }).length === 0 &&
+						allyLights(true, 0, { downed: true }).length === 2,
+					"a dead ally lights nothing; a downed one still holds their light (carriesLight, as on the server)",
+				);
+				// the zombies' awareness marks are dimmed by renderer.lightAt over this same list (GameLoop.markNight)
+				const { lightAt } = require(join(SRC, "shared/engine/renderer.ts"));
+				const beam = allyLights(true, 0);
+				check(
+					lightAt(beam, 4300, 4000) > 0.5 &&
+						lightAt(beam, 3700, 4000) === 0 &&
+						lightAt(allyLights(false, 0), 4300, 4000) === 0 &&
+						/lights: this\.lights\.items/.test(draw),
+					"and the zombies' marks read that very list: lit 300 u along an ally's beam, dark behind them and without it",
+				);
+				// what the wire cannot say yet: the torch, night vision and Nocturnal widen the circle on the server
+				const wider = [
+					["the torchlight", TORCH, -1, 0],
+					["night vision", -1, NIGHT_VISION, 0],
+					["Nocturnal", -1, -1, 1],
+				].filter(([, h, g, n]) => Light.survivorLightRadius(wearing(h, g, n)) !== allyLights(false, 0)[0].r);
+				knownBug(
+					"LUZ-04-ally-radius",
+					wider.length > 0,
+					"an ally's wider circle: the server lights (and sends) the zombies out to it, my map draws their 250 u -- the player record has no bit left for it (a wire change)",
+					wider.map(w => w[0]).join(", "),
 				);
 			}
 
@@ -4975,6 +5051,164 @@ section(
 		s.quit(friend);
 	},
 );
+
+section('G8. the pickup sound and the "Pick something up" lesson hear pickups, not a backpack that grew', () => {
+	// client/systems/pickups.ts, fed as the client feeds it: the E press (interaction.ts), the server's world deltas
+	// through the real mirror (worldMirror.ts), the server's bag growing bag to bag (backpackSync.ts)
+	const PK = require(join(SRC, "client/systems/pickups.ts"));
+	const Mirror = require(join(SRC, "client/net/worldMirror.ts"));
+	const world = W.createWorld(4000, 4000);
+	Mirror.forgetMirrorIndex();
+	let id = 900;
+	const drop = (x, y) => {
+		id += 1;
+		Mirror.applyMirrorEvent(world, {
+			t: P.WorldEv.ItemAdd,
+			id,
+			kind: ItemKind.Etc,
+			itemId: 23,
+			count: 1,
+			x,
+			y,
+			vx: 0,
+			vy: 0,
+		});
+		return id;
+	};
+	const gone = itemId => Mirror.applyMirrorEvent(world, { t: P.WorldEv.ItemRemove, id: itemId });
+	// a clock of this section's own (the server harness above installed its os.clock)
+	const hadOs = globalThis.os;
+	let t = 5000;
+	globalThis.os = { ...hadOs, clock: () => t };
+	const at = dt => (t += dt);
+	const heard = fn => {
+		const before = PK.pickupCount();
+		fn();
+		return PK.pickupCount() - before;
+	};
+	const cases = [
+		[
+			"my E on an item, the server takes it out of the world and my bag grows: one pickup",
+			1,
+			() => {
+				const it = drop(1000, 1000);
+				at(0.1);
+				PK.pressed("item", 1010, 1000);
+				at(0.15);
+				gone(it);
+				at(0.1);
+				PK.bagGrew();
+			},
+		],
+		[
+			"...in the other order (the bag first, then the ItemRemove): one pickup",
+			1,
+			() => {
+				const it = drop(1200, 1000);
+				PK.pressed("item", 1200, 1010);
+				at(0.2);
+				PK.bagGrew();
+				at(0.1);
+				gone(it);
+			},
+		],
+		[
+			"a Chef's / Dwarf's double coming back, or a construction handed back: the bag grows, nothing left the world",
+			0,
+			() => {
+				at(3);
+				PK.bagGrew();
+				PK.pressed("item", 1300, 1000);
+				at(0.2);
+				PK.bagGrew();
+			},
+		],
+		[
+			"a prediction undone grows only the predicted copy, which is never asked; with no press, a grown bag is nothing",
+			0,
+			() => {
+				at(3);
+				PK.bagGrew();
+				gone(drop(1400, 1000));
+			},
+		],
+		[
+			"somebody else takes the item I pressed on: it leaves the world, my bag does not grow",
+			0,
+			() => {
+				at(3);
+				const it = drop(1500, 1000);
+				PK.pressed("item", 1500, 1000);
+				at(0.1);
+				gone(it);
+			},
+		],
+		[
+			"an item that left the world far from where I pressed is not mine",
+			0,
+			() => {
+				at(3);
+				PK.pressed("item", 2000, 2000);
+				gone(drop(1600, 1000));
+				PK.bagGrew();
+			},
+		],
+		[
+			"an answer later than the window is not the press's",
+			0,
+			() => {
+				at(3);
+				const it = drop(1700, 1000);
+				PK.pressed("item", 1700, 1000);
+				at(2.5);
+				gone(it);
+				PK.bagGrew();
+			},
+		],
+	];
+	checkRows(
+		"each case counts exactly what the server did for this survivor",
+		cases.map(([name, want, fn]) => ({ name, want, fn })),
+		c => {
+			const n = heard(c.fn);
+			return n === c.want ? true : `${c.name}: ${n} pickup(s), want ${c.want}`;
+		},
+	);
+	// a search: the flag of the building I stand in goes down, and my bag grows
+	const house = W.addSolid(world, { kind: "building", tags: "house", x: 100, y: 100, w: 400, h: 400 });
+	house.id = 77;
+	Mirror.forgetMirrorIndex();
+	Mirror.applyMirrorEvent(world, { t: P.WorldEv.LootFlag, buildingId: 77, hasLoot: true });
+	at(3);
+	const searched = heard(() => {
+		PK.pressed("loot", 300, 300);
+		at(0.2);
+		Mirror.applyMirrorEvent(world, { t: P.WorldEv.LootFlag, buildingId: 77, hasLoot: false });
+		PK.bagGrew();
+	});
+	check(searched === 1, "a search: the building's flag goes down and my bag grows, one pickup", `${searched}`);
+	globalThis.os = hadOs;
+	// offline the game's own interaction takes it
+	check(heard(() => PK.took()) === 1, "offline (no MP host) the client's own pickup and search count directly");
+	// the readers and the feeders, by their source
+	const audioSrc = source("client/audio/gameAudio.ts");
+	const lesson = source("client/onboarding/objectives.ts");
+	const inter = source("client/systems/interaction.ts");
+	const sync = source("client/net/backpackSync.ts");
+	check(
+		/if \(pickups > this\.prevPickups\) audio\.play\("pickupItem"\)/.test(audioSrc) &&
+			!/inventoryCount/.test(audioSrc) &&
+			/return pickupCount\(\) > mem\.items;/.test(lesson) &&
+			!/totalItems/.test(lesson),
+		"the pickup sound and the lesson read the pickup count, not the backpack's size",
+	);
+	check(
+		/if \(target\.kind === "item"\) pressed\("item", by\.x, by\.y\)/.test(inter) &&
+			/takeItem\(refs, target\.item\);\s*took\(\);/.test(inter) &&
+			/bagTotal\(bag\) > bagTotal\(lastBag\)/.test(sync),
+		"fed by the E press, the offline pickup and the server's bag against its last one (never the predicted copy)",
+	);
+});
 
 // ---------------------------------------------------------------- verdict
 

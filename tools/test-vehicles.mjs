@@ -99,7 +99,8 @@ function rider(kind, x = 1000, y = 4000, save = fueled()) {
 /** runs `n` ticks of `cmdOf(i)` and returns the per-tick results */
 function ride(world, r, n, cmdOf) {
 	const out = [];
-	for (let i = 0; i < n; i++) out.push(stepPlayer(world, r.p, r.save, cmdOf(i), DT));
+	// stepPlayer answers in one shared table (shared/sim/playerMove.ts): keeping them means copying them
+	for (let i = 0; i < n; i++) out.push({ ...stepPlayer(world, r.p, r.save, cmdOf(i), DT) });
 	return out;
 }
 

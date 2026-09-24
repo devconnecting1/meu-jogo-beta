@@ -1,3 +1,4 @@
+//!native
 /*
  * What the server sends to each client (docs/MULTIPLAYER.md §4.1, §4.2, §4.3, §4.4, §4.5, §4.6).
  *
@@ -61,6 +62,7 @@ import { BossState, ZombieState } from "shared/game/entities";
 import { Solid, WorldData, buildingAt } from "shared/game/world";
 import { isDoor } from "shared/sim/interactQuery";
 import { packRide, rideHeading } from "shared/sim/rideKey";
+import { carriesLight, survivorCone } from "shared/sim/survivorLight";
 import {
 	ActorInterest,
 	InterestTable,
@@ -238,6 +240,9 @@ export function playerBlockOf(sp: ServerPlayer): PlayerSnap {
 	if (p.swingerActive) flags += PlayerFlag.Swinging;
 	if (p.weapon.reloading) flags += PlayerFlag.Reloading;
 	if (p.dead) flags += PlayerFlag.Dead;
+	// LUZ-04: the cone the horde's visibility lights along their aim (zombieBrain `collectLights`, by the same rule),
+	// so every screen draws it where it lights the zombies. A body carries none (`carriesLight`)
+	if (carriesLight(p) && survivorCone(sp.save) !== undefined) flags += PlayerFlag.Flashlight;
 	return {
 		slot: sp.slot,
 		x: p.x,
@@ -408,6 +413,11 @@ export class Replicator {
 	private readonly zombiePool = new Array<ZombieSnap>();
 	private readonly bossBlocks = new Array<BossSnap>();
 	private readonly fxForViewer = new Array<FxEvent>();
+	/** where each queued effect happened (`flushFx`, once per tick): x, y, and whether it has a place at all */
+	private readonly fxX = new Array<number>();
+	private readonly fxY = new Array<number>();
+	private readonly fxPlaced = new Array<boolean>();
+	private readonly fxAt = { x: 0, y: 0 };
 	/** the F3 outbox, drained once per tick */
 	private readonly interactive = new Array<PendingWorld>();
 	private readonly initSolids = new Array<Solid>();
@@ -639,6 +649,9 @@ export class Replicator {
 
 	/** call once per simulation tick, after the step */
 	afterTick(tick: number): void {
+		// the MicroProfiler's view of this layer (§12.2, F6): what it gathered, what it flushed, the snapshots
+		const prof = this.sim.profile;
+		prof?.begin("PZ.repl.collect");
 		this.collectWorldDeltas(tick);
 		this.collectFx();
 		if (tick % PROFILE_EVERY_TICKS === 0) this.collectProfiles();
@@ -651,9 +664,16 @@ export class Replicator {
 		} else if (this.tallyRound === undefined && tick % TALLY_EVERY_TICKS === 0) {
 			this.collectTallies(false);
 		}
+		prof?.end();
+		prof?.begin("PZ.repl.flush");
 		if (tick % WORLD_FLUSH_EVERY_TICKS === 0) this.flushWorld(tick);
 		this.flushFx(tick);
-		if (tick % SNAP_NEAR_EVERY_TICKS === 0) this.sendSnapshots();
+		prof?.end();
+		if (tick % SNAP_NEAR_EVERY_TICKS === 0) {
+			prof?.begin("PZ.repl.snap");
+			this.sendSnapshots();
+			prof?.end();
+		}
 	}
 
 	/**
@@ -710,10 +730,10 @@ export class Replicator {
 				continue;
 			}
 			const r2 = p.range * p.range;
-			for (const viewer of this.sim.players()) {
-				const at = interestPoint(viewer);
-				const dx = at.x - p.x;
-				const dy = at.y - p.y;
+			for (const viewer of this.sim.survivors()) {
+				// the viewer's interest point is where their body is (`interestPoint`)
+				const dx = viewer.state.x - p.x;
+				const dy = viewer.state.y - p.y;
 				if (dx * dx + dy * dy <= r2) this.queueFor(viewer.slot, p.ev);
 			}
 		}
@@ -729,7 +749,7 @@ export class Replicator {
 	 * intent, XP, an admin edit, a new run) without any of them having to remember to call it.
 	 */
 	private collectProfiles(): void {
-		for (const sp of this.sim.players()) {
+		for (const sp of this.sim.survivors()) {
 			if (refreshProfile(sp)) this.queue(profileEvent(sp));
 		}
 	}
@@ -740,14 +760,14 @@ export class Replicator {
 	 * (the round after a join) sends every survivor's, moved or not.
 	 */
 	private collectTallies(all: boolean): void {
-		for (const sp of this.sim.players()) {
+		for (const sp of this.sim.survivors()) {
 			if (refreshTally(sp) || all) this.queue(tallyEvent(sp));
 		}
 	}
 
 	/** one ZombieDied, to each client that could see that zombie in the last rounds (§4.3, §4.4) */
 	private announceZombieDeath(d: ZombieDeath): void {
-		for (const viewer of this.sim.players()) {
+		for (const viewer of this.sim.survivors()) {
 			if (this.hordeRings.ring(viewer.slot, d.netId) === Ring.Out) continue;
 			this.queueFor(viewer.slot, {
 				t: WorldEv.ZombieDied,
@@ -781,7 +801,7 @@ export class Replicator {
 				this.transport.worldAll(packet);
 				this.stats.worldPackets += 1;
 				this.stats.worldBytes += buffer.len(packet);
-				for (const sp of this.sim.players()) {
+				for (const sp of this.sim.survivors()) {
 					this.addBytes(sp.slot, buffer.len(packet) + REMOTE_OVERHEAD_BYTES);
 				}
 			}
@@ -808,18 +828,31 @@ export class Replicator {
 	 * zombie it hits arrive together), and a `Shake` only to the survivor it belongs to.
 	 */
 	private flushFx(tick: number): void {
-		if (this.fxQueue.size() === 0) return;
-		for (const viewer of this.sim.players()) {
+		const queue = this.fxQueue;
+		if (queue.size() === 0) return;
+		// where each effect happened, asked once per effect and not once per effect and viewer (F11)
+		const xs = this.fxX;
+		const ys = this.fxY;
+		const placed = this.fxPlaced;
+		xs.clear();
+		ys.clear();
+		placed.clear();
+		for (const e of queue) {
+			placed.push(fxPosition(e, this.fxAt));
+			xs.push(this.fxAt.x);
+			ys.push(this.fxAt.y);
+		}
+		for (const viewer of this.sim.survivors()) {
 			const list = this.fxForViewer;
 			list.clear();
-			for (const e of this.fxQueue) {
+			for (let i = 0; i < queue.size(); i++) {
+				const e = queue[i];
 				const slot = fxSlot(e);
 				if (slot !== SLOT_NONE) {
 					if (slot === viewer.slot) list.push(e);
 					continue;
 				}
-				const at = fxPosition(e);
-				if (at !== undefined && !this.inFxRange(viewer, at.x, at.y)) continue;
+				if (placed[i] && !this.inFxRange(viewer, xs[i], ys[i])) continue;
 				list.push(e);
 			}
 			if (list.size() === 0) continue;
@@ -852,7 +885,7 @@ export class Replicator {
 		this.snapIndex = (this.snapIndex + 1) % MAX_PLAYERS;
 		this.round += 1;
 		if (this.round % INTEREST_SWEEP_EVERY === 0) this.hordeRings.sweep(this.round, INTEREST_SWEEP_AGE);
-		const everyone = this.sim.players();
+		const everyone = this.sim.survivors();
 		// one interest point per survivor, shared by every viewer of this round (§4.3)
 		const points = interestPoints(everyone);
 		this.prepareHorde();

@@ -23,6 +23,11 @@ export const NOCTURNAL_MULT = 1.5;
 export const FLASHLIGHT_ID = 13;
 /** half the flashlight's cone, in radians: a point more than this off the aim is outside it */
 export const CONE_HALF_ANGLE = math.rad(EQUIP_LIGHTS[FLASHLIGHT_ID].coneDeg ?? 45);
+/**
+ * The flashlight's reach. On another survivor it is all the wire says of their light: `PlayerFlag.Flashlight` (the
+ * server sets it from `survivorCone`, server/net/replication.ts) is this cone along their aim.
+ */
+export const FLASHLIGHT_REACH = EQUIP_LIGHTS[FLASHLIGHT_ID].radius;
 
 /**
  * Night vision on the wearer's own screen: the night's darkness × this (15 % of it lifted everywhere), in the
@@ -34,8 +39,9 @@ export const NIGHT_VISION_DARK = 0.85;
 
 /**
  * Only a living survivor carries a light: a body holds no torch. The server's horde visibility (zombieBrain
- * `collectLights`), the client's light map (gameLoop `drawLight`) and an ally's light on it (playersView
- * `collectLights`, `downed`) all skip the dead, so a corpse lights nothing on any screen nor on the wire (MP-07).
+ * `collectLights`), the flashlight bit it replicates (server/net/replication.ts `playerBlockOf`), the client's light
+ * map (gameLoop `drawLight`) and an ally's light on it (playersView `collectLights`) all ask this, so a corpse lights
+ * nothing on any screen nor on the wire (MP-07). A downed survivor is not dead: they still hold their light.
  */
 export function carriesLight(p: { dead: boolean }): boolean {
 	return !p.dead;

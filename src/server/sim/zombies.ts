@@ -1,3 +1,4 @@
+//!native
 import * as CFG from "shared/net/mpConfig";
 import { Bullet } from "shared/game/bullets";
 import { PlayerState } from "shared/game/player";
@@ -13,6 +14,7 @@ import { BossRoster } from "./bosses";
 import { ServerPopulation } from "./population";
 import { WorldClock } from "./waves";
 import { ServerPlayer } from "./players";
+import type { SimProfiler } from "./metrics";
 
 /*
  * The authoritative horde (docs/MULTIPLAYER.md §3.1 step 2, §3.3, §3.4, §11.3 F2-2A). SERVER ONLY, and pure:
@@ -96,6 +98,13 @@ export class ZombieWorld {
 	nowMs?: () => number;
 	/** milliseconds spent in each phase of the LAST tick (all zero while `nowMs` is undefined) */
 	readonly cost = { clock: 0, population: 0, field: 0, zombies: 0, bosses: 0, book: 0 };
+	/**
+	 * MicroProfiler labels for the same phases (`PZ.horde.*`, server/sim/metrics.ts), injected like `nowMs`;
+	 * undefined labels nothing. ServerSimulation.instrument sets both.
+	 */
+	profile?: SimProfiler;
+	/** the clock reading the next `lap` measures from (a field: the step makes no closure per tick) */
+	private lapAt = 0;
 
 	private readonly players: Array<PlayerState> = [];
 	/** the slot of each entry of `players`, in the same order */
@@ -106,6 +115,7 @@ export class ZombieWorld {
 	private readonly deaths: Array<ZombieDeath> = [];
 	private readonly gone: Array<ZombieState> = [];
 	private readonly sources: Array<FlowSource> = [];
+	private readonly sourcePool: Array<FlowSource> = [];
 	/** freed netIds and the tick they may be handed out again (§4.4: not before 2 s) */
 	private readonly freeIds: Array<number> = [];
 	private readonly freeAt: Array<number> = [];
@@ -116,6 +126,13 @@ export class ZombieWorld {
 	private solidCount = -1;
 	private readonly hash = new SpatialHash();
 	private hashTick = -1;
+	/** `zombiesNear`'s hash answer (scratch: one per call, never kept) */
+	private readonly nearIdx: Array<number> = [];
+	/**
+	 * Entries in `ids`: roblox-ts compiles a Map's size() to a counting loop over the whole map, and `trackEntities`
+	 * asks it every tick with ~150 entries.
+	 */
+	private idCount = 0;
 
 	constructor(world: WorldData, clock?: WorldClock) {
 		this.world = world;
@@ -202,13 +219,26 @@ export class ZombieWorld {
 		return this.slots[index] ?? CFG.SLOT_NONE;
 	}
 
-	/** every standing survivor is a seed; §3.3 lets a downed one seed at DOWNED_SEED once F4 has them */
+	/**
+	 * Every standing survivor is a seed; §3.3 lets a downed one seed at DOWNED_SEED once F4 has them. The source
+	 * records are pooled: this runs every tick the field is idle (to ask `upToDate`), and the field copies what it
+	 * needs out of them.
+	 */
 	private collectSources(): void {
 		this.sources.clear();
 		for (let i = 0; i < this.players.size(); i++) {
 			const p = this.players[i];
 			if (p.dead) continue;
-			this.sources.push({ x: p.x, y: p.y, index: i, seed: 0 });
+			let s = this.sourcePool[this.sources.size()];
+			if (s === undefined) {
+				s = { x: 0, y: 0, index: 0, seed: 0 };
+				this.sourcePool.push(s);
+			}
+			s.x = p.x;
+			s.y = p.y;
+			s.index = i;
+			s.seed = 0;
+			this.sources.push(s);
 		}
 	}
 
@@ -216,6 +246,10 @@ export class ZombieWorld {
 	 * Keeps the chase field fresh inside its budget (§3.3): one rebuild at a time, never started more often
 	 * than FLOW_MIN_TICKS, and expanded FLOW_CELL_BUDGET cells per tick. The very first field of a world is
 	 * built in one go, so the horde is not blind for the first second of a session.
+	 *
+	 * A rebuild whose answer would be the field already in use is not started at all (`MultiFlowField.upToDate`: no
+	 * survivor changed cell, nothing was dirtied): the check runs again next tick, so the one after a survivor steps
+	 * into a new cell or a barricade goes up starts at once.
 	 */
 	private updateField(): void {
 		const count = this.world.solids.size();
@@ -228,7 +262,7 @@ export class ZombieWorld {
 		if (this.flowWait > 0) this.flowWait -= 1;
 		if (!this.field.building && this.flowWait <= 0) {
 			this.collectSources();
-			if (this.sources.size() > 0) {
+			if (this.sources.size() > 0 && !this.field.upToDate(this.sources)) {
 				this.flowWait = FLOW_MIN_TICKS;
 				this.field.startRebuild(this.world, this.sources);
 				if (!this.field.valid) this.field.step(1e9);
@@ -245,28 +279,44 @@ export class ZombieWorld {
 	 */
 	step(roster: ReadonlyArray<ServerPlayer>, dt: number, tick: number): void {
 		this.lastTick = tick;
+		const prof = this.profile;
 		const now = this.nowMs;
-		let t0 = now !== undefined ? now() : 0;
-		const lap = (into: "clock" | "population" | "field" | "zombies" | "bosses" | "book"): void => {
-			if (now === undefined) return;
-			const t1 = now();
-			this.cost[into] = t1 - t0;
-			t0 = t1;
-		};
+		this.lapAt = now !== undefined ? now() : 0;
+		prof?.begin("PZ.horde.clock");
 		this.syncPlayers(roster);
 		this.clock.step(dt);
-		lap("clock");
+		prof?.end();
+		this.lap("clock");
+		prof?.begin("PZ.horde.population");
 		this.population.update(this.refs, dt);
-		lap("population");
+		prof?.end();
+		this.lap("population");
+		prof?.begin("PZ.horde.field");
 		this.updateField();
-		lap("field");
+		prof?.end();
+		this.lap("field");
+		prof?.begin("PZ.horde.zombies");
 		Brain.updateZombies(this.refs, dt);
-		lap("zombies");
+		prof?.end();
+		this.lap("zombies");
+		prof?.begin("PZ.horde.bosses");
 		this.bossRoster.step(this.refs, dt, tick);
-		lap("bosses");
+		prof?.end();
+		this.lap("bosses");
+		prof?.begin("PZ.horde.book");
 		this.trackEntities(tick);
 		this.trim();
-		lap("book");
+		prof?.end();
+		this.lap("book");
+	}
+
+	/** the time since the previous lap goes to `into` (nothing at all while `nowMs` is undefined) */
+	private lap(into: "clock" | "population" | "field" | "zombies" | "bosses" | "book"): void {
+		const now = this.nowMs;
+		if (now === undefined) return;
+		const t1 = now();
+		this.cost[into] = t1 - this.lapAt;
+		this.lapAt = t1;
 	}
 
 	/**
@@ -277,6 +327,7 @@ export class ZombieWorld {
 		const rec = this.ids.get(z);
 		if (rec === undefined) return; // it never lived long enough to get an id: nobody was ever told about it
 		this.ids.delete(z);
+		this.idCount -= 1;
 		this.releaseNetId(rec.netId, this.lastTick);
 		this.deaths.push({
 			netId: rec.netId,
@@ -293,6 +344,7 @@ export class ZombieWorld {
 			if (rec === undefined) {
 				rec = { netId: this.takeNetId(tick), x: z.x, y: z.y, tick };
 				this.ids.set(z, rec);
+				this.idCount += 1;
 				continue;
 			}
 			rec.x = z.x;
@@ -301,7 +353,7 @@ export class ZombieWorld {
 		}
 		// one integer comparison tells whether anything vanished behind the simulation's back — an admin
 		// clearing the horde, a future system splicing the list. `retire` has already handled the rest.
-		if (this.ids.size() === this.zombies.size()) return;
+		if (this.idCount === this.zombies.size()) return;
 		this.gone.clear();
 		for (const [z, rec] of this.ids) {
 			if (rec.tick !== tick) this.gone.push(z);
@@ -309,6 +361,7 @@ export class ZombieWorld {
 		for (const z of this.gone) {
 			const rec = this.ids.get(z) as ZombieRecord;
 			this.ids.delete(z);
+			this.idCount -= 1;
 			this.releaseNetId(rec.netId, tick);
 			this.deaths.push({ netId: rec.netId, x: rec.x, y: rec.y, cause: DeathCause.Despawned });
 		}
@@ -350,7 +403,8 @@ export class ZombieWorld {
 				this.hash.insert(i, z.x, z.y);
 			}
 		}
-		const found = new Array<number>();
+		const found = this.nearIdx;
+		found.clear();
 		this.hash.within(x, y, radius, found);
 		const r2 = radius * radius;
 		for (const i of found) {
