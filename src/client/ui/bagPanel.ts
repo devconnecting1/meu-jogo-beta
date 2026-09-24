@@ -232,7 +232,8 @@ export class BagPanel {
 		const top = SECTION_CONTENT_Y;
 		this.bed = Groove(frame, "IconBed", INSET, top, BED, BED);
 		this.bed.ZIndex = z;
-		this.icon = IconView(this.bed, "ItemIcon", (BED - BIG) / 2, (BED - BIG) / 2, BIG, z + 1, maxItemFrames());
+		const at = (BED - BIG) / 2;
+		this.icon = IconView(this.bed, "ItemIcon", at, at, BIG, z + 1, maxItemFrames(), "drawn");
 		const statsX = INSET + BED + GAP;
 		const statsW = w - statsX - INSET;
 		this.statsBed = Groove(frame, "Stats", statsX, top, statsW, BED);
@@ -459,7 +460,8 @@ export class BagPanel {
 		// the small tile: the dark iron of an item the survivor has, the icon on it
 		const tile = makeFrame(frame, "Tile", 0, 0, ING_TILE, ING_TILE, THEME.card, { transparency: 1, zIndex: z });
 		paintPlate(tile, SURFACE.section, "flat", 3);
-		const icon = IconView(tile, "ItemIcon", (ING_TILE - ING_ICON) / 2, (ING_TILE - ING_ICON) / 2, ING_ICON, z + 1);
+		const at = (ING_TILE - ING_ICON) / 2;
+		const icon = IconView(tile, "ItemIcon", at, at, ING_ICON, z + 1, 0, "drawn");
 		const textX = ING_TILE + 8;
 		const textW = ING_W - GAP - textX;
 		const name = makeLabel(frame, "Name", "", textX, 2, textW, 20, TEXT.sm, THEME.foreground, {

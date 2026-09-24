@@ -327,7 +327,7 @@ export class SurvivorScreen {
 				zIndex: z,
 			});
 			const reserve = maxFrameCount(iconKeys(i === 0 ? ItemKind.Weapon : ItemKind.Equip));
-			const icon = IconView(well, "ItemIcon", 2, 2, ICON_WELL - 4, z + 1, reserve);
+			const icon = IconView(well, "ItemIcon", 2, 2, ICON_WELL - 4, z + 1, reserve, "drawn");
 			makeLabel(tile, "Slot", tr(SLOT_KEYS[i]), 50, 6, TILE_W - 58, 18, TEXT.xs, THEME.foreground, {
 				font: "label",
 				align: "left",
