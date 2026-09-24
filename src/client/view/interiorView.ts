@@ -3,8 +3,10 @@
  * of doorways and windows, and the marks that show a building's entrances and windows from outside with the roof
  * on. The plan itself is shared/game/interiors.ts; client/view/worldView.ts calls in here.
  *
- * Everything is drawn with plain Frames in the palette of shared/engine/colors.ts (ART colours, never UI tokens):
- * it looks right with no uploaded asset at all, next to the flat town or the textured one.
+ * Everything here is drawn with plain Frames in the palette of shared/engine/colors.ts (ART colours, never UI
+ * tokens): it looks right with no uploaded asset at all, next to the flat town or the textured one. With the
+ * interiors' atlas uploaded, each piece, decoration and frame is drawn by client/view/interiorArt.ts instead (the
+ * town's pixel art, ART-12), and falls back here on its own when its texture has no id (ART-01).
  *
  * Culling: an interior under a roof that is on is never drawn -- not its floors, walls, furniture, decoration or
  * frames (worldView asks `roofOpaque` first). A closed roof covers the whole footprint, so that costs nothing to
@@ -19,6 +21,7 @@ import { Renderer, SpriteOpts } from "shared/engine/renderer";
 import type { Decor, FloorKind, Opening } from "shared/game/interiors";
 import { Solid, WorldData } from "shared/game/world";
 import { overlaps, SIDES } from "./drawKit";
+import { InteriorArt } from "./interiorArt";
 
 const BLACK = COLORS.shadow;
 const WHITE = COLORS.white;
@@ -96,6 +99,13 @@ export class InteriorView {
 	/** building records by id, for the walls and furniture that name their parent (built once per world) */
 	private readonly parents = new Map<number, Solid>();
 	private parentsFor?: WorldData;
+	/** the pixel-art drawing of all of it, used where its textures have ids (ART-01) */
+	readonly art = new InteriorArt();
+
+	/** the world the frame's interiors are drawn in (worldView, once per frame): the art's plans are per world */
+	useWorld(world: WorldData): void {
+		this.art.useWorld(world);
+	}
 
 	/** the building a wall, window or piece of furniture belongs to */
 	parentOf(world: WorldData, s: Solid): Solid | undefined {
@@ -123,8 +133,20 @@ export class InteriorView {
 		r.drawRect(cam, s.x + s.w / 2, s.y + s.h / 2, o);
 	}
 
-	/** one piece of furniture: a body and a detail or two, lit from the top left like the rest of the town */
-	drawFurniture(r: Renderer, cam: Camera, s: Solid): void {
+	/**
+	 * A building's wall in the town's pixel art -- outlined as one piece with the walls it joins, the shadow at its
+	 * foot -- or false when the `wall` texture has no id (then worldView draws it as before).
+	 */
+	drawWallArt(r: Renderer, cam: Camera, s: Solid, house: boolean): boolean {
+		return this.art.wall(r, cam, s, house);
+	}
+
+	/**
+	 * One piece of furniture in a building of type `bt`: its cell of the interiors' atlas when that is uploaded,
+	 * else a body and a detail or two in Frames, lit from the top left like the rest of the town.
+	 */
+	drawFurniture(r: Renderer, cam: Camera, s: Solid, bt = 1): void {
+		if (this.art.furniture(r, cam, s, bt)) return;
 		const t = s.tags;
 		const cx = s.x + s.w / 2;
 		const cy = s.y + s.h / 2;
@@ -316,7 +338,7 @@ export class InteriorView {
 		if (list === undefined) return;
 		for (const d of list) {
 			if (!overlaps(d.x, d.y, d.w, d.h, v)) continue;
-			this.drawOneDecor(r, cam, d);
+			if (!this.art.decor(r, cam, b, d)) this.drawOneDecor(r, cam, d);
 		}
 	}
 
@@ -373,7 +395,7 @@ export class InteriorView {
 		if (list === undefined) return;
 		for (const o of list) {
 			if (!overlaps(o.x - 8, o.y - 8, o.w + 16, o.h + 16, v)) continue;
-			this.drawOpening(r, cam, o);
+			if (!this.art.opening(r, cam, o)) this.drawOpening(r, cam, o);
 		}
 	}
 

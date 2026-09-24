@@ -119,6 +119,7 @@ export type WorldArtName =
 	| "floorCarpet"
 	| "floorKitchen"
 	| "floorBath"
+	| "wallShade"
 	| "survivorsA"
 	| "survivorsAFill"
 	| "survivorsARim"
@@ -131,7 +132,8 @@ export type WorldArtName =
 	| "zombiesRim"
 	| "dogs"
 	| "birds"
-	| "itemIcons";
+	| "itemIcons"
+	| "furniture";
 
 export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** tile: road asphalt: grain and tar blotches (cracks are decals: a crack here would repeat every tile) */
@@ -340,6 +342,8 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	floorKitchen: { id: "rbxassetid://133105571252943", w: 16, h: 16 },
 	/** tile: bathroom / cold room: small tiles */
 	floorBath: { id: "rbxassetid://101622459905347", w: 16, h: 16 },
+	/** slice: the shadow at the foot of an interior wall (round every wall) */
+	wallShade: { id: "", w: 7, h: 7, slice: [3, 3, 4, 4] },
 	/** sheet: survivors, plain and Santa: 4 grips x 3 strides, 5 swings, 3 crawls, whole body and arms in one cell (ART-09) */
 	survivorsA: { id: "rbxassetid://99286479004899", w: 640, h: 800 },
 	/** mask: survivorsA: white silhouettes of the same cells (tint: hit flash, poison) */
@@ -366,6 +370,8 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	birds: { id: "rbxassetid://134554443542123", w: 768, h: 360 },
 	/** atlas: item icons: 97 icons, their dimmed copies and 11 glyphs (client/ui/itemIcon.ts) */
 	itemIcons: { id: "rbxassetid://120552233891720", w: 288, h: 244 },
+	/** atlas: interiors: 901 cells of furniture, decoration and frames (client/view/interiorArt.ts) */
+	furniture: { id: "", w: 1024, h: 512 },
 };
 
 /** every texture of the world art (the item icon atlas too), for the preload pass */
@@ -473,6 +479,7 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"floorCarpet",
 	"floorKitchen",
 	"floorBath",
+	"wallShade",
 	"survivorsA",
 	"survivorsAFill",
 	"survivorsARim",
@@ -486,4 +493,5 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"dogs",
 	"birds",
 	"itemIcons",
+	"furniture",
 ];

@@ -761,6 +761,124 @@ function interiorScenes(world, match) {
 	return out;
 }
 
+// ---------------------------------------------------------------- the rooms set (docs/art/rooms): at game zoom
+
+/**
+ * Every kind of room the plans make (shared/game/interiors.ts, EDI-08), seen from inside at the game's own zoom (1:
+ * one texel of the art is 4 x 4 px), by day and at 22:00 in the survivor's light: `--preset rooms`. One house that
+ * has all four of a home's rooms gives the four house shots; every other shot is the richest building of its type
+ * that has the room, centred on it. The survivor stands in the room (at its loot spot when it has one), a walker
+ * climbs in through the building's window nearest the room and another stands a little way off, so the legibility
+ * of the bodies on the new floors is in every picture (LEG-03).
+ */
+const ROOM_SHOTS = [
+	{ name: "house-living", title: "House: living room", types: [1, 2], room: "living" },
+	{ name: "house-kitchen", title: "House: kitchen", types: [1, 2], room: "kitchen" },
+	{ name: "house-bedroom", title: "House: bedroom", types: [1, 2], room: "bedroom" },
+	{ name: "house-bath", title: "House: bathroom", types: [1, 2], room: "bath" },
+	{ name: "house-dining", title: "House: dining room", types: [1, 2], room: "dining" },
+	{ name: "market", title: "Supermarket: sales floor", types: [7], room: "sales" },
+	{ name: "market-back", title: "Supermarket: cold room and stock", types: [7], room: "cold" },
+	{ name: "corner-market", title: "Corner market", types: [8], room: "sales" },
+	{ name: "pharmacy", title: "Pharmacy", types: [6], room: "sales" },
+	{ name: "gunshop", title: "Gun shop and its vault", types: [9], room: "secure" },
+	{ name: "cloth", title: "Clothing store", types: [10], room: "sales" },
+	{ name: "restaurant", title: "Restaurant: dining room", types: [11], room: "diner" },
+	{ name: "restaurant-kitchen", title: "Restaurant: kitchen", types: [11], room: "galley" },
+	{ name: "gas", title: "Gas station shop", types: [5], room: "sales" },
+	{ name: "gas-office", title: "Gas station: office", types: [5], room: "office" },
+	{ name: "school", title: "School: classroom", types: [3], room: "classroom" },
+	{ name: "school-corridor", title: "School: corridor and lockers", types: [3], room: "corridor" },
+	{ name: "hospital-ward", title: "Hospital: ward", types: [4], room: "ward" },
+	{ name: "hospital-treatment", title: "Hospital: treatment room", types: [4], room: "treatment" },
+	{ name: "hospital-lobby", title: "Hospital: reception", types: [4], room: "lobby" },
+];
+
+/** the house the four house shots share: the most of a home's rooms, then the most rooms, then the lowest id */
+function showHouse(buildings) {
+	const home = ["living", "kitchen", "bedroom", "bath", "dining"];
+	const score = b => {
+		const kinds = new Set((b.rooms ?? []).map(q => q.kind));
+		return home.filter(k => kinds.has(k)).length * 1000 + (b.rooms?.length ?? 0) * 10 - b.w * b.h * 1e-7;
+	};
+	const houses = buildings.filter(b => b.buildingType === 1 || b.buildingType === 2);
+	houses.sort((a, b) => score(b) - score(a) || a.id - b.id);
+	return houses[0];
+}
+
+/** the biggest rect of room kind `kind` in building `b` */
+function roomOf(b, kind) {
+	let best;
+	for (const q of b.rooms ?? []) {
+		if (q.kind !== kind) continue;
+		if (best === undefined || q.w * q.h > best.w * best.h) best = q;
+	}
+	return best;
+}
+
+function roomScenes(world) {
+	const out = [];
+	const buildings = world.solids.filter(s => s.kind === "building");
+	const house = showHouse(buildings);
+	for (const shot of ROOM_SHOTS) {
+		let b;
+		if (shot.types.includes(1)) b = house;
+		else {
+			const cands = buildings.filter(s => shot.types.includes(s.buildingType) && roomOf(s, shot.room));
+			const rich = s => (s.rooms?.length ?? 0) * 100 + (s.openings?.length ?? 0);
+			cands.sort((p, q) => rich(q) - rich(p) || p.id - q.id);
+			b = cands[0];
+		}
+		const q = b !== undefined ? roomOf(b, shot.room) : undefined;
+		if (q === undefined) continue;
+		const qx = q.x + q.w / 2;
+		const qy = q.y + q.h / 2;
+		// the survivor: at a loot spot in the room, else near its middle
+		const spot = (b.lootSpots ?? []).find(p => inRect(q, p.x, p.y)) ?? { x: qx, y: qy };
+		const survivor = freeNear(world, spot.x, spot.y) ?? spot;
+		const zombies = [];
+		let win;
+		for (const o of b.openings ?? []) {
+			if (o.kind !== "window") continue;
+			const d = Math.hypot(o.x + o.w / 2 - qx, o.y + o.h / 2 - qy);
+			if (d < 560 && (win === undefined || d < win.d)) win = { o, d };
+		}
+		if (win !== undefined) {
+			const o = win.o;
+			zombies.push({
+				x: o.x + o.w / 2,
+				y: o.y + o.h / 2,
+				type: 1,
+				angle: Math.atan2(survivor.y - o.y, survivor.x - o.x),
+			});
+		}
+		// a walker a little way off in the same room (or the next), on free floor
+		for (const [dx, dy] of [
+			[170, 90],
+			[-170, 90],
+			[170, -90],
+			[-170, -90],
+			[240, 0],
+			[-240, 0],
+		]) {
+			const p = freeNear(world, survivor.x + dx, survivor.y + dy);
+			if (p === undefined || buildingAt(world, p.x, p.y) !== b) continue;
+			if (Math.hypot(p.x - survivor.x, p.y - survivor.y) < 120) continue;
+			zombies.push({ ...p, type: 1, angle: Math.atan2(survivor.y - p.y, survivor.x - p.x) });
+			break;
+		}
+		const base = {
+			rect: sceneAround(qx, qy, W, H),
+			scale: 1,
+			inside: { x: b.x + b.w / 2, y: b.y + b.h / 2, box: { x: b.x, y: b.y, w: b.w, h: b.h } },
+			actors: { survivor: { ...survivor, angle: 0 }, zombies },
+		};
+		out.push({ name: shot.name, title: shot.title, hour: 10, ...base });
+		out.push({ name: `${shot.name}-night`, title: `${shot.title}, 22:00`, hour: 22, ...base });
+	}
+	return out;
+}
+
 // ---------------------------------------------------------------- drawing a scene into the fake tree
 
 function makeShadow(state) {
@@ -1028,6 +1146,8 @@ if (args.preset !== undefined || args.scenes !== undefined) {
 	} else if (args.preset === "interiors") {
 		const match = args.match !== undefined ? JSON.parse(readFileSync(resolve(args.match), "utf8")) : undefined;
 		wanted = interiorScenes(world, match);
+	} else if (args.preset === "rooms") {
+		wanted = roomScenes(world);
 	} else {
 		const all = scenes(world);
 		const signs = signScenes(world);
