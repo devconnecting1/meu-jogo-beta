@@ -289,6 +289,9 @@ jobs:
       - name: Analytics (onboarding funnel once and in order, economy balances, no per-kill event, under the rate cap)
         run: npm run test:analytics
 
+      - name: Where a survivor plays (the fresh-town offer, Play solo's reserved town, TeleportData, matchmaking attributes)
+        run: npm run test:match
+
       - name: World on the server (items, doors, building, loot, the outbox and its audiences; F3)
         run: npm run test:world
 

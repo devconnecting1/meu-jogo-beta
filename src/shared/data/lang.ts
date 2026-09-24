@@ -688,10 +688,35 @@ export const LANG_TABLE: Array<string> = [
 	"Your new life wakes at first light",
 	"Delivered when you enter the city",
 	"The town keeps its own day. This life and your record count yours.",
-	"Your survivor as everyone sees them, how long this life has lasted and what you carry.#Enter the city to play. The town keeps its own day, shared by everyone on this server.#When a run is over: Rebirth wakes you now for coins, waiting for daybreak is free and keeps this life, and New game starts a new life at day 1.#Outfits and pets are in the Wardrobe. Everyone sees them, and they change nothing else.",
+	"Your survivor as everyone sees them, how long this life has lasted and what you carry.#Enter the city to play. The town keeps its own day, shared by everyone on this server.#Play solo takes you to a town of your own, on the day this life has reached: nobody else can join it.#When a run is over: Rebirth wakes you now for coins, waiting for daybreak is free and keeps this life, and New game starts a new life at day 1.#Outfits and pets are in the Wardrobe. Everyone sees them, and they change nothing else.",
 	// MP-21's three ways out on the Survivor screen: Rebirth now, the free wait (the same life), New game
 	"Wait for daybreak",
 	"Rebirth wakes you now, for coins. Waiting for daybreak is free and keeps this life.#New game starts a new life at day 1, woken at first light. Level, skills, coins and packs are kept.",
+	// where a survivor plays (client/net/matchClient.ts, docs/MULTIPLAYER.md §7.4, DESIGN_RULES MP-25): Play solo on the
+	// Survivor screen, the fresh-town offer of a town far past the player's record (its title is "Town  ·  Day N"), and
+	// what the trip says while it travels or when it cannot
+	"Play solo",
+	"A town of your own, on the day this life has reached: nobody else can join it.#This life, your items and your coins come with you.",
+	"Its nights are far harder than anything you have survived yet.#Play on in a town of your own, on the day this life has reached? Nobody else can join it.#This life, your items and your coins come with you.",
+	"Stay",
+	"New town",
+	"Try again",
+	"Studio cannot teleport: Play solo works in the published game.#You stay on this local test server.",
+	"Play solo is not available on this server right now.",
+	"Wait a moment before trying again.",
+	"Already on the way to your town...",
+	"Choose Rebirth, the wait or New game first.",
+	"Your survivor is still in danger where you left the city: zombies close by, or a hit a moment ago.#Get clear of them in the city first, or wait a little.",
+	"Go back to the lobby first.",
+	"This is already a town of your own.",
+	"That offer has lapsed.",
+	"Heading to a town of your own...",
+	"Teleporting...",
+	"The teleport stumbled. Trying again...",
+	"No town of your own could be opened right now.#You are still here: try again in a moment.",
+	"The teleport did not go through.#You are still here: try again in a moment.",
+	"Roblox refused the teleport.#You are still here: try again in a moment.",
+	"You entered the city: the teleport was called off.",
 	// the Bag (client/ui/backpack.ts, DESIGN_RULES UI-11): the tabs, the keys of the details panel, its buttons and
 	// lines; "MAKES" frames a count ("MAKES ×2"), "Near you" a list ("Near you: craft desk, lit fire"), and the skill
 	// point lines follow a number ("2 skill points to spend.")

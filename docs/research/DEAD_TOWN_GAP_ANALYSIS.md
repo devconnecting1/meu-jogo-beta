@@ -305,6 +305,10 @@ Play solo, não pausar o mundo).
 | I4  | MULTIPLAYER D11, §7.3, §7.4      | Espectar e Play solo                                                                                  | Nenhum dos dois existe                                                                                                                                                                                                             |
 | I5  | MONETIZATION.md × CREATOR_HUB.md | "Assinatura — ainda não" × "Subscriptions: Não"                                                       | Sem código; só as duas frases divergem no tom (uma espera cadência, a outra recusa)                                                                                                                                                |
 
+_Estado em 2026-09-24:_ **I2** resolvida (MP-13 / MP-20: o público começa no dia 1, a cidade própria e o privado no
+dia da vida do dono, como a regra sempre disse; o tipo do servidor é lido e publicado, `shared/match/matchWire.ts`); **I3** resolvida (o cabeçalho da `MULTIPLAYER.md`); **I4** resolvida na metade
+do Play solo (MP-25, `server/match/*`) — Espectar continua não existindo (P1-7).
+
 ---
 
 ## 5. Recomendações priorizadas
@@ -352,6 +356,10 @@ Play solo, não pausar o mundo).
   paga. O CREATOR_HUB diz "Custom matchmaking — não agora": este sinal é a exceção, porque não é fila, é um atributo.
 - **Esforço:** S (atributo + sinal) a M (regra do primeiro save). Confirmar a API no Context7 antes (regra da casa).
 - **Regras:** MP-09, MP-13, MP-20.
+- **Feito (2026-09-24, MP-25):** os atributos `WorldDay` e `Survivors` e a oferta de cidade própria ao carregar,
+  com consentimento, só ao novato (recorde até o dia 5), em `max(5, recorde + 4)` (`docs/MULTIPLAYER.md` §7.4). O
+  sinal "WorldDay perto de 1" **não** foi adotado (ele mandaria também os veteranos às noites fáceis); o certo compara
+  o dia da cidade com o de quem entra e pede um atributo de jogador próprio (`docs/CREATOR_HUB.md`).
 
 ### P0-2 — Construir o Play solo
 
@@ -362,6 +370,9 @@ Play solo, não pausar o mundo).
   estranhos. Também é a resposta certa para quem sente falta da pausa (UI-06 fica como está).
 - **Esforço:** M. No Studio o teleporte não roda; testar numa experiência de teste separada (servidores-e-dados §4).
 - **Regras:** MP-14, MP-20, MP-13 (definir de novo o que é "solo/privado"), UI-10.
+- **Feito (2026-09-24, MP-25):** `ReserveServerAsync` + `TeleportAsync` com o código, o botão na tela Survivor, falhas
+  com retentativa e mensagem, TeleportData validado no destino, a cidade no dia da vida do dono (MP-13), nenhuma fuga
+  da horda (`danger`), funil NewTown (`docs/MULTIPLAYER.md` §7.4). Amigos: P1-8.
 
 ### P0-3 — Decidir os chefes e alinhar tudo
 
