@@ -43,6 +43,7 @@
  * it exactly as before (npm run test:icons).
  */
 import { ICON_ART, ICON_ART_ORDER } from "shared/engine/colors";
+import { BADGE_ICONS } from "shared/data/badgeIcons";
 import { ICON_GLYPHS, ITEM_ICONS, SKILL_KIND, iconKeys, iconOf } from "shared/data/itemIcons";
 import { ItemKind } from "shared/data/kinds";
 import { artId, onWorldArtChange } from "../view/worldArt";
@@ -171,11 +172,15 @@ function decompose(rows: Array<string>, mono: boolean): Decomposed {
 	return { n, runs, mono, box };
 }
 
-/** the runs of icon or glyph `key` (undefined: no such key) */
+/**
+ * The runs of icon or glyph `key` (undefined: no such key): an item icon, a UI glyph, or one of the pictures of what the
+ * game counts (shared/data/badgeIcons.ts: the achievements' zombies and bosses, the coin sources) -- art like the items,
+ * but not in the atlas, so always drawn with runs.
+ */
 function runsOf(key: string): Decomposed | undefined {
 	let d = cache.get(key);
 	if (d !== undefined) return d;
-	const art = ITEM_ICONS[key];
+	const art = ITEM_ICONS[key] ?? BADGE_ICONS[key];
 	const glyph = art === undefined ? ICON_GLYPHS[key] : undefined;
 	if (art === undefined && glyph === undefined) return undefined;
 	d = decompose((art ?? glyph) as Array<string>, art === undefined);

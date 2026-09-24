@@ -7,7 +7,8 @@ import { TITLES, TitleId, titleFromWire, titleToWire } from "shared/data/titles"
 import { langGet } from "shared/data/lang";
 import { invokeShopAction, onWalletChanged, requestSave, sessionReady } from "../systems/saveClient";
 import { PreviewSubject, SurvivorPreview } from "../view/cosmeticPreview";
-import { actionErrorText } from "./shop";
+import { drawingBox } from "./drawingBox";
+import { actionErrorText, fundsErrorText } from "./shop";
 import { popup, toast } from "./popup";
 import { Nameplate, profileOf } from "./nameplate";
 import { titleColor, titleText } from "./titleStyle";
@@ -188,39 +189,8 @@ interface TitleRow {
 	worn: Frame;
 }
 
-/**
- * A box for a Renderer drawing (a tile's cosmetic, the big preview). The kit lays out in Scale; the renderer draws
- * in offsets. So the drawing gets its own w x h design-unit space under a UIScale that keeps it exactly as big as
- * its holder on screen, whatever the screen. (The lobby's survivor previews use it too, client/ui/lobby.ts.)
- */
-export function drawingBox(
-	parent: Instance,
-	name: string,
-	x: number,
-	y: number,
-	w: number,
-	h: number,
-	zIndex: number,
-): Frame {
-	const holder = makeFrame(parent, name, x, y, w, h, THEME.background, { transparency: 1, zIndex });
-	const inner = new Instance("Frame");
-	inner.Name = "Scaled";
-	inner.BackgroundTransparency = 1;
-	inner.BackgroundColor3 = THEME.background;
-	inner.BorderSizePixel = 0;
-	inner.Size = UDim2.fromOffset(w, h);
-	inner.ZIndex = zIndex;
-	const scale = new Instance("UIScale");
-	scale.Parent = inner;
-	const fit = (): void => {
-		const px = holder.AbsoluteSize.X;
-		if (px > 0) scale.Scale = px / w;
-	};
-	holder.GetPropertyChangedSignal("AbsoluteSize").Connect(fit);
-	fit();
-	inner.Parent = holder;
-	return inner;
-}
+/** the box a Renderer drawing lives in: client/ui/drawingBox.ts (kept importable from here: lobby, Survivor screen) */
+export { drawingBox };
 
 export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () => void {
 	const lang = ctx.save.settings.langType;
@@ -355,7 +325,7 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 		if (root.Parent === undefined) return; // closed while the server answered
 		setButtonEnabled(btn, true);
 		if (res.ok) toast(ctx, `${tr("Purchased")}: ${tr(c.name)}`, "success");
-		else toast(ctx, actionErrorText(res.reason, lang), "error");
+		else toast(ctx, fundsErrorText(res.reason, c.price - ctx.save.money, lang), "error");
 		refresh();
 	};
 
@@ -719,10 +689,14 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 		} else {
 			note.Text = tr(slotNote(page.slot));
 		}
+		// can't afford it: the button says how many coins are missing and is disabled, as on the shop's cards (MON-06)
+		const buyText = affordable
+			? `${tr("Buy for")} ${fmtInt(c.price)} ${tr("coins")}`
+			: `${fmtInt(c.price - save.money)} ${tr("more needed")}`;
 		if (locked) {
-			action.Text = `${tr("Buy for")} ${fmtInt(c.price)} ${tr("coins")}`;
-			// can't afford it: the quiet look, still pressable -- the server answers either way, with the reason
-			setButtonVariant(action, affordable ? "default" : "outline");
+			action.Text = buyText;
+			setButtonVariant(action, "default");
+			setButtonEnabled(action, affordable);
 		} else if (state === "equipped") {
 			action.Text = tr("Unequip");
 			setButtonVariant(action, "secondary");
@@ -736,8 +710,9 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 		if (fromPack) {
 			packAction.Text = action.Text;
 			setButtonVariant(packAction, state === "equipped" ? "secondary" : "default");
-			keep.Text = `${tr("Buy for")} ${fmtInt(c.price)} ${tr("coins")}`;
-			setButtonVariant(keep, affordable ? "default" : "outline");
+			keep.Text = buyText;
+			setButtonVariant(keep, "default");
+			setButtonEnabled(keep, affordable);
 		}
 		// try it on: your current look with the selected item swapped in
 		preview.setOutfit(page.slot === EquipSlot.Outfit ? outfitLookOfEquip(c.equipId) : outfitLookOf(save));

@@ -35,6 +35,7 @@
  */
 import { BORDER, GAME, SIDEBAR, SURFACE, TEXT, THEME, TRANSPARENCY, TextRole, fontOf, roleFont, space } from "./theme";
 import { PlateState, clearPlate, paintPlate, plateUnit, reliefPx } from "./plate";
+import { PixelCoin } from "./pixelArt";
 import { registerBack } from "./backStack";
 import { inputDevice } from "./device";
 import {
@@ -1947,7 +1948,8 @@ function toastStyle(kind: ToastKind): ToastStyle {
 	// glyphColor is text on the icon chip: THEME.foreground (UI-05), never the near-black body colour
 	const base = { frame: SURFACE.frame, fg: THEME.popoverForeground, glyphColor: THEME.foreground, textSize: TEXT.sm };
 	if (kind === "success") return { ...base, icon: GAME.success, glyph: "✓" };
-	if (kind === "coin") return { ...base, icon: GAME.coin, glyph: "$" };
+	// the coin toast shows the pixel coin itself (MON-06), not a "$" on a chip: no glyph
+	if (kind === "coin") return { ...base, icon: GAME.coin, glyph: "" };
 	if (kind === "error") {
 		return { ...base, frame: THEME.destructive, icon: THEME.destructive, glyph: "!", textSize: TEXT.base };
 	}
@@ -2016,11 +2018,18 @@ export function showToast(layer: Instance, text: string, kind: ToastKind = "info
 		border: style.frame,
 		zIndex: 1002,
 	});
-	const icon = makeSurface(card, "Icon", space(4), (TOAST_H - ICON) / 2, ICON, ICON, "well", {
-		fill: style.icon,
-		border: style.icon,
-		zIndex: 1003,
-	});
+	const coin = kind === "coin";
+	const icon = coin
+		? makeFrame(card, "Icon", space(4), (TOAST_H - ICON) / 2, ICON, ICON, THEME.background, {
+				transparency: 1,
+				zIndex: 1003,
+			})
+		: makeSurface(card, "Icon", space(4), (TOAST_H - ICON) / 2, ICON, ICON, "well", {
+				fill: style.icon,
+				border: style.icon,
+				zIndex: 1003,
+			});
+	const coinPx = coin ? PixelCoin(icon, "Coin", ICON / 2, ICON / 2, ICON, 1004).frame.GetChildren() : [];
 	const glyph = makeLabel(icon, "Glyph", style.glyph, 0, 0, ICON, ICON, TEXT.sm, style.glyphColor, {
 		weight: Enum.FontWeight.Bold,
 		zIndex: 1004,
@@ -2041,13 +2050,15 @@ export function showToast(layer: Instance, text: string, kind: ToastKind = "info
 	// enter: slide in from the right + fade (transient: the only use of transparency on toasts)
 	const setFade = (t: number, time: number): void => {
 		fadeSurface(card, time, t);
-		fadeSurface(icon, time, t);
+		if (!coin) fadeSurface(icon, time, t);
+		for (const px of coinPx) if (px.IsA("Frame")) tween(px, time, { BackgroundTransparency: t });
 		fadeText(glyph, time, t);
 		fadeText(label, time, t);
 	};
 	card.Position = UDim2.fromScale(0.12, 0);
 	setSurfaceTransparency(card, 1);
-	setSurfaceTransparency(icon, 1);
+	if (!coin) setSurfaceTransparency(icon, 1);
+	for (const px of coinPx) if (px.IsA("Frame")) px.BackgroundTransparency = 1;
 	glyph.TextTransparency = 1;
 	label.TextTransparency = 1;
 	tween(card, 0.2, { Position: UDim2.fromScale(0, 0) });
@@ -2228,20 +2239,16 @@ export interface CoinPill {
 	refresh(): void;
 }
 
-/** coin icon: a chart-3 chip with a "$" in THEME.foreground (the chip carries the contrast, UI-05) */
+/**
+ * The coin (DESIGN_RULES MON-06): the round pixel coin of pixelArt.ts in the theme's coin colours, centred in a
+ * `size` square at (x, y). It used to be a "$" on an orange chip, which read as real money; every place coins appear
+ * (the coin pills, prices, the wardrobe's locked tiles, the Rebirth price, the coin toast) draws this one.
+ */
 export function CoinIcon(parent: Instance, name: string, x: number, y: number, size: number, zIndex?: number): Frame {
 	const z = zIndex ?? 2;
-	const icon = makeSurface(parent, name, x, y, size, size, "well", {
-		fill: GAME.coin,
-		border: GAME.coin,
-		zIndex: z,
-	});
-	// the glyph is text (UI-04/UI-05): always THEME.foreground, never the near-black body colour
-	makeLabel(icon, "Glyph", "$", 0, 0, size, size, size * 0.62, THEME.foreground, {
-		weight: Enum.FontWeight.ExtraBold,
-		zIndex: z + 1,
-	});
-	return icon;
+	const holder = makeFrame(parent, name, x, y, size, size, THEME.background, { transparency: 1, zIndex: z });
+	PixelCoin(holder, "Coin", size / 2, size / 2, size, z + 1);
+	return holder;
 }
 
 /** coin balance: coin chip (chart-3) + amount in foreground mono; `onClick` makes it a pressable plate */
@@ -2259,7 +2266,8 @@ export function makeCoinPill(
 		onClick !== undefined
 			? Button(parent, name, "", { x, y, w, h, variant: "outline", onClick })
 			: makeSurface(parent, name, x, y, w, h, "well");
-	const iconSize = h - space(5);
+	// the pixel coin (MON-06) takes the pill's height less its margins: a 9-pixel coin needs the room to land on whole pixels
+	const iconSize = h - space(4);
 	CoinIcon(frame, "Icon", space(3), (h - iconSize) / 2, iconSize, frame.ZIndex + 1);
 	const textX = space(3) + iconSize + space(3);
 	const amount = makeLabel(frame, "Amount", "", textX, 0, w - textX - space(4), h, h * 0.42, THEME.foreground, {

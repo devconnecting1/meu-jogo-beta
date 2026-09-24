@@ -253,7 +253,7 @@ net.onSaveAck((ack, manual) => {
 			const parts: Array<string> = [];
 			if (ack.earnedDays > 0) parts.push(`${tr("Day survived")} ×${ack.earnedDays}`);
 			if (ack.earnedBosses > 0) parts.push(`${tr("Boss defeated")} ×${ack.earnedBosses}`);
-			toast(ctx, `+${fmtInt(ack.earned)} $   ${parts.join("  ·  ")}`, "coin");
+			toast(ctx, `+${fmtInt(ack.earned)} ${tr("coins")}   ${parts.join("  ·  ")}`, "coin");
 		}
 		if (manual) {
 			if (net.savingPersistent()) toast(ctx, tr("Progress saved"), "success");

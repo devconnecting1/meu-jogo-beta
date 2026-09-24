@@ -49,6 +49,20 @@ export const PREVIEW_SCENE = { minX: -36, maxX: 84, minY: -26, maxY: 48 } as con
 export const OUTFIT_SCENE = { minX: -34, maxX: 30, minY: -24, maxY: 44 } as const;
 /** a pet's tile: the pet alone, standing at the origin (the eagle's open wings, a dog's length and tail) */
 export const PET_SCENE = { minX: -30, maxX: 30, minY: -28, maxY: 32 } as const;
+/**
+ * The shop's pet packs (client/ui/shop.ts): ONE known pet, standing still, framed on itself -- not on the room the
+ * eagle's open wings need -- so a small card still shows it big: a bird (the Pigeon's pack) and a dog (the Carolina's).
+ * tools/test-cosmetics.mjs draws each pack's pet, flat and in pixel art, and checks every sprite and texel lands inside.
+ */
+const BIRD_SCENE = { minX: -16, maxX: 16, minY: -18, maxY: 20 } as const;
+const DOG_SCENE = { minX: -24, maxX: 24, minY: -27, maxY: 29 } as const;
+
+/** the scene that frames pet `look` alone in a small picture (the shop's pet packs); any other pet: PET_SCENE */
+export function packPetScene(look: number): PreviewScene {
+	if (look === PetLook.Pigeon || look === PetLook.WhitePigeon) return BIRD_SCENE;
+	if (look === PetLook.Carolina) return DOG_SCENE;
+	return PET_SCENE;
+}
 
 /** what a preview frames: the survivor with a pet at its side (the wardrobe's big preview), or one of the two */
 export type PreviewSubject = "both" | "outfit" | "pet";
@@ -100,6 +114,11 @@ export interface SurvivorPreviewOpts {
 	scale?: number;
 	/** what is framed (default "both"): a tile shows only its outfit ("outfit") or only its pet ("pet") */
 	subject?: PreviewSubject;
+	/**
+	 * the box the camera frames, in world units (default: the subject's scene, sceneOf). A picture of ONE known pet
+	 * frames that pet (packPetScene: the shop's pet packs) instead of the room the widest pet needs
+	 */
+	scene?: PreviewScene;
 	zIndex?: number;
 	name?: string;
 }
@@ -138,7 +157,7 @@ export class SurvivorPreview {
 		this.renderer.setView(opts.w, opts.h);
 		const subject = opts.subject ?? "both";
 		this.subject = subject;
-		const fit = previewFit(opts.w, opts.h, opts.scale ?? PREVIEW_SCALE, sceneOf(subject));
+		const fit = previewFit(opts.w, opts.h, opts.scale ?? PREVIEW_SCALE, opts.scene ?? sceneOf(subject));
 		this.scale = fit.scale;
 		const cam = this.cam;
 		cam.setView(opts.w, opts.h);

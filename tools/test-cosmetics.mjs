@@ -943,6 +943,45 @@ section("6) o ladrilho do guarda-roupa: cada traje sozinho, cada pet sozinho, in
 	);
 	full.destroy();
 	petTile.destroy();
+
+	// the Shop's pet packs (MON-06): each card shows the pet itself, the wardrobe's drawing, in a bed 90 units wide and
+	// as tall as the contents and price lines (client/ui/shop.ts: 90 x 82 at the design size; a phone draws the same
+	// design space smaller, so the box never changes shape) -- the whole pet, never clipped, and never a stand-in
+	const { SHOP_PACKS } = require(join(SRC, "shared/data/shop.ts"));
+	const { ItemKind } = require(join(SRC, "shared/data/kinds.ts"));
+	const packPets = [];
+	for (const p of SHOP_PACKS) {
+		for (const it of p.items) {
+			if (it.kind === ItemKind.Equip && COS.petLookOfEquip(it.index) !== COS.PetLook.None) {
+				packPets.push([p.name, COS.petLookOfEquip(it.index)]);
+			}
+		}
+	}
+	let packWorst = 0;
+	let packWhat = "";
+	let drawn = 0;
+	for (const [name, look] of packPets) {
+		for (const [w, h] of [
+			[90, 82],
+			[60, 50],
+		]) {
+			const pic = new PV.SurvivorPreview(panel, { w, h, subject: "pet", scene: PV.packPetScene(look) });
+			pic.setPet(look);
+			pic.draw(0);
+			const out = clipOf(pic, w, h);
+			if (out > packWorst) {
+				packWorst = out;
+				packWhat = `${name} ${w}x${h}`;
+			}
+			if (spritesOf(pic.renderer).filter(isPet).length >= 5) drawn++;
+			pic.destroy();
+		}
+	}
+	check(
+		packPets.length === 2 && drawn === packPets.length * 2 && packWorst <= 0.5,
+		"loja: o pet de cada pacote de pet (Pigeon, Carolina) desenhado inteiro no cartao, sem cortar",
+		packWorst > 0 ? `saiu ${packWorst.toFixed(1)} px (${packWhat})` : `${packPets.map(p => p[0]).join(", ")}`,
+	);
 }
 
 // ================================================================ 7. the characters' pixel art
@@ -1315,6 +1354,53 @@ section("7) com a arte dos personagens (ART-08, ART-09, ART-11): os mesmos traje
 			"todo ladrilho mostra o seu cosmetico inteiro",
 			tileOut > 0 ? `saiu ${tileOut.toFixed(1)} px (${tileWhat})` : `${S} x ${S}`,
 		);
+		// the shop's pet packs, framed on their own pet (packPetScene): the texels whole in the card's picture too, and
+		// the pigeon -- small in the world -- clearly bigger than the wardrobe's framing would draw it in the same box
+		const { SHOP_PACKS } = require(join(SRC, "shared/data/shop.ts"));
+		const { ItemKind } = require(join(SRC, "shared/data/kinds.ts"));
+		let packOut = 0;
+		let packWhat = "";
+		let packs = 0;
+		for (const p of SHOP_PACKS) {
+			for (const it of p.items) {
+				const look = it.kind === ItemKind.Equip ? COS.petLookOfEquip(it.index) : COS.PetLook.None;
+				if (look === COS.PetLook.None) continue;
+				packs++;
+				for (const [w, h] of [
+					[90, 82],
+					[60, 50],
+				]) {
+					const pic = new PV.SurvivorPreview(panel, { w, h, subject: "pet", scene: PV.packPetScene(look) });
+					pic.setPet(look);
+					pic.draw(0);
+					for (const s of imagesOf(pic.renderer)) {
+						const c = cellOf(s);
+						const out = Math.max(-c.minX, -c.minY, c.maxX - w, c.maxY - h, 0);
+						if (out > packOut) {
+							packOut = out;
+							packWhat = `${p.name} ${w}x${h}`;
+						}
+					}
+					pic.destroy();
+				}
+			}
+		}
+		const framed = new PV.SurvivorPreview(panel, {
+			w: 90,
+			h: 82,
+			subject: "pet",
+			scene: PV.packPetScene(COS.PetLook.Pigeon),
+		});
+		const plain = new PV.SurvivorPreview(panel, { w: 90, h: 82, subject: "pet" });
+		check(
+			packs === 2 && packOut <= 0.5 && framed.scale > plain.scale * 1.4,
+			"loja: o pet de cada pacote, em pixel art, inteiro no cartao e maior que no enquadramento do guarda-roupa",
+			packOut > 0
+				? `saiu ${packOut.toFixed(1)} px (${packWhat})`
+				: `${framed.scale.toFixed(2)}x contra ${plain.scale.toFixed(2)}x`,
+		);
+		framed.destroy();
+		plain.destroy();
 	}
 	WA.overrideWorldArt(undefined);
 }

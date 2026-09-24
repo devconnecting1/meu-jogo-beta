@@ -86,6 +86,18 @@ const COLOR_TOKENS = [
 	["bar-food", "chart-3"],
 	/** the XP / level bar's fill: chart-2's hue and chroma, darker */
 	["bar-xp", "chart-2"],
+	// the pixel coin (docs/DESIGN_RULES MON-06): the coin colour (chart-3) with a darker rim and stamp and a lighter
+	// shine, so the round coin reads as metal and never as a "$" chip. A theme without them draws a flat chart-3 coin
+	/** the coin's rim and the stamp in its middle: chart-3's hue, darker */
+	["coin-shade", "chart-3"],
+	/** the light on the coin's upper left: chart-3 towards gold, lighter */
+	["coin-shine", "chart-3"],
+	// the achievements (docs/DESIGN_RULES UI-13): what is unlocked is gold -- the medal, its ring and its "Unlocked".
+	// A theme without them falls back to the item card's yellow
+	/** an unlocked achievement: the medal's gold, the row's ring and its word */
+	["medal", "stat-value"],
+	/** the medal's rim and the check stamped on it: the gold, darker */
+	["medal-shade", "stat-value"],
 ];
 
 /** navigation (sidebar) tokens, emitted as a separate group; keys drop the "sidebar-" prefix */

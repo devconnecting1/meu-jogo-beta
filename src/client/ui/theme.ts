@@ -246,8 +246,19 @@ export const GAME = {
 	success: TOKENS.chart1,
 	/** rare items, bosses: chart-4 */
 	rare: TOKENS.chart4,
-	/** coin icon: chart-3 (coin amounts are written in foreground) */
+	/** the coin (pixelArt.ts PixelCoin, MON-06): its face, chart-3 (coin amounts are written in foreground) */
 	coin: TOKENS.chart3,
+	/** the coin's rim and stamp: chart-3's hue, darker */
+	coinShade: TOKENS.coinShade,
+	/** the light on the coin's upper left: chart-3 towards gold, lighter */
+	coinShine: TOKENS.coinShine,
+	/**
+	 * an UNLOCKED achievement (UI-13): the medal's gold, the row's ring and its "Unlocked" -- gold means unlocked and
+	 * nothing else (numbers are STAT.value's yellow)
+	 */
+	medal: TOKENS.medal,
+	/** the medal's rim: the gold, darker */
+	medalShade: TOKENS.medalShade,
 	/** neutral information (info toasts, night): chart-2 */
 	info: TOKENS.chart2,
 	/** attention without danger (craft desk nearby, sun): chart-3 */

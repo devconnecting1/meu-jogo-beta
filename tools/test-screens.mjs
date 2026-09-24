@@ -67,6 +67,7 @@ const { showTutorial, SCHEMES } = require(join(SRC, "client/ui/tutorial.ts"));
 const { showPause } = require(join(SRC, "client/ui/pauseMenu.ts"));
 const { popup } = require(join(SRC, "client/ui/popup.ts"));
 const { showRecords } = require(join(SRC, "client/ui/records.ts"));
+const { showAchievements } = require(join(SRC, "client/ui/achievements.ts"));
 const Fly = require(join(SRC, "client/view/townFlyover.ts"));
 const skin = require(join(SRC, "client/ui/skin.ts"));
 const { THEME, TRANSPARENCY } = require(join(SRC, "client/ui/theme.ts"));
@@ -192,6 +193,23 @@ const WINDOWS = [
 		name: "Records",
 		open: () => showRecords(ctx),
 		frame: () => layer.FindFirstChild("Records")?.FindFirstChild("Body")?.FindFirstChild("Window"),
+	},
+	// the Shop and the Achievements, UI-07 windows since their polish (MON-06, UI-13): the shop's Back page and the
+	// achievements' dialog are gone
+	{
+		name: "Shop",
+		open: () =>
+			showShop(
+				ctx,
+				() => {},
+				() => {},
+			),
+		frame: () => layer.FindFirstChild("Shop")?.FindFirstChild("Body")?.FindFirstChild("Window"),
+	},
+	{
+		name: "Achievements",
+		open: () => showAchievements(ctx),
+		frame: () => layer.FindFirstChild("Achievements")?.FindFirstChild("Body")?.FindFirstChild("Window"),
 	},
 ];
 
@@ -336,16 +354,7 @@ for (const [w, h, bar, buttons, label] of SCREENS) {
 		JSON.stringify(rectOf(menu.FindFirstChild("Title"))) === JSON.stringify(logo),
 	);
 	handle.close();
-	const closeShop = showShop(
-		ctx,
-		() => {},
-		() => {},
-	);
-	flush();
-	const back = rectOf(layer.FindFirstChild("Shop").FindFirstChild("Body").FindFirstChild("Back"));
-	check(`loja, ${label}: o Back fora dos botoes`, !underButtons(back), fmt(back));
-	closeShop();
-	flush();
+	// (the shop was the other page here; it is a window now, centred in section 1)
 }
 
 // ================================================================ 3. the scale
@@ -1077,11 +1086,185 @@ function textFits(label) {
 	check("lobby.ts: fechar o lobby nao tira o voo (so a partida o solta)", !/detachFlyover\(/.test(lobbySrc));
 }
 
+// ================================================================ 7. the shop and the achievements
+
+console.log("\n7) a Loja (Packs, Earn coins) e as Conquistas: nada cortado, nada fora da janela, em toda tela\n");
+{
+	/**
+	 * Does `label`'s text fit its rect (laid out by tools/ui-layout.mjs, as the engine would) at a size its
+	 * UITextSizeConstraint allows? Multi-line text ("\n") is its longest line times its number of lines; a label that
+	 * does not wrap must fit on one line (a truncated "…" is a cut too).
+	 */
+	const fitsLaidOut = label => {
+		const r = layoutRect(label);
+		const c = label.FindFirstChildOfClass("UITextSizeConstraint");
+		const max = label.TextScaled ? (c?.MaxTextSize ?? label.TextSize) : label.TextSize;
+		const min = label.TextScaled ? (c?.MinTextSize ?? max) : max;
+		const bold = /Bold|Heavy|Black/.test(label.FontFace?.Weight?.Name ?? "");
+		const lines = String(label.Text).split("\n");
+		const longest = Math.max(...lines.map(l => Array.from(l).length));
+		for (let size = max; size >= min - 1e-9; size -= 0.5) {
+			const w = longest * size * (bold ? 0.6 : 0.55);
+			if (w > r.w + 0.5) continue;
+			if (lines.length * size * 1.05 <= r.h + 0.5) return { ok: true };
+		}
+		return { ok: false, detail: `"${String(label.Text).slice(0, 40)}" ${min}-${max} px em ${px(r.w)}x${px(r.h)}` };
+	};
+	const inside = (g, win) => {
+		const r = layoutRect(g);
+		return r.x >= win.x - 1 && r.y >= win.y - 1 && r.x + r.w <= win.x + win.w + 1 && r.y + r.h <= win.y + win.h + 1;
+	};
+	/** every text under `root` fits, and every shown piece stays inside the window (the focus ring and a thumb's Hit aside) */
+	const audit = (root, win, where, bad) => {
+		let texts = 0;
+		for (const d of root.GetDescendants()) {
+			if (!d.IsA("GuiObject") || !shownIn(d, root)) continue;
+			// the focus ring and a thumb's hit area stand outside on purpose; a drawing in a drawingBox is sized by its UIScale,
+			// which this layout leaves out (test:cosmetics checks the pet fits its bed)
+			if (d.Name === "FocusRing" || d.Name === "Hit" || d.Parent?.Name === "Hit") continue;
+			let scaled = false;
+			for (let p = d.Parent; p !== undefined && p !== root; p = p.Parent) if (p.Name === "Scaled") scaled = true;
+			if (scaled) continue;
+			if (d.ClassName === "TextLabel" && d.Text !== "" && d.AutomaticSize?.Name !== "X") {
+				texts++;
+				const fit = fitsLaidOut(d);
+				if (!fit.ok) bad.push(`${where} ${d.Parent.Name}.${d.Name}: ${fit.detail}`);
+			}
+			if (d.Size.X.Offset === 0 && d.Size.Y.Offset === 0 && !inside(d, win)) {
+				bad.push(`${where} ${d.Parent.Name}.${d.Name} fora da janela ${fmt(layoutRect(d))}`);
+			}
+		}
+		return texts;
+	};
+	const OWNER = [
+		[770, 554, 58, 160, "770 x 554 (a captura das conquistas)"],
+		[1030, 560, 58, 160, "1030 x 560 (a captura da loja)"],
+		[1920, 1080, 58, 160, "1920 x 1080"],
+		[844, 390, 36, 104, "celular 844 x 390"],
+		[1365, 567, 58, 160, "1365 x 567"],
+		[1360, 435, 58, 160, "1360 x 435"],
+	];
+	const save = ctx.save;
+	const keep = { money: save.money, achievements: [...save.achievements] };
+	save.money = 20;
+	save.achievements[0] = 1;
+	save.achievements[12] = 17;
+	save.achievements[2] = 17;
+	save.achievements[14] = 2;
+	for (const [w, h, bar, buttons, label] of OWNER) {
+		setScreen(w, h, bar, buttons);
+		const bad = [];
+		let texts = 0;
+		// the shop, both pages
+		ctx.phase = "shop";
+		const closeShop = showShop(
+			ctx,
+			() => {},
+			() => {},
+		);
+		flush();
+		const shopRoot = layer.FindFirstChild("Shop");
+		const shopWin = () => shopRoot.FindFirstChild("Body").FindFirstChild("Window");
+		layoutGame(ui, ctx);
+		texts += audit(shopWin(), layoutRect(shopWin()), "Packs", bad);
+		findIn(shopRoot, "Tabs").FindFirstChild("Tab1").Activated.Fire();
+		flush();
+		layoutGame(ui, ctx);
+		texts += audit(shopWin(), layoutRect(shopWin()), "Earn", bad);
+		// the cards: nine, in three rows, none over another, each inside the page
+		const cards = findIn(shopRoot, "Content")
+			.GetChildren()
+			.filter(c => /^Pack\d+$/.test(c.Name))
+			.map(c => layoutRect(c));
+		const overlap = (a, b) =>
+			a.x < b.x + b.w - 0.5 && b.x < a.x + a.w - 0.5 && a.y < b.y + b.h - 0.5 && b.y < a.y + a.h - 0.5;
+		const crossed = cards.some((a, i) => cards.some((b, j) => j > i && overlap(a, b)));
+		if (cards.length !== 9 || crossed) bad.push(`cartoes: ${cards.length}, sobrepostos ${crossed}`);
+		closeShop();
+		flush();
+		// the achievements, over the lobby
+		ctx.phase = "lobby";
+		const closeAch = showAchievements(ctx);
+		flush();
+		const achRoot = layer.FindFirstChild("Achievements");
+		const achWin = achRoot.FindFirstChild("Body").FindFirstChild("Window");
+		layoutGame(ui, ctx);
+		// the list scrolls: its rows are checked against the list's width, not the window's height
+		const list = findIn(achWin, "List");
+		const listR = layoutRect(list);
+		texts += audit(
+			achWin,
+			{ x: layoutRect(achWin).x, y: -1e6, w: layoutRect(achWin).w, h: 2e6 },
+			"Conquistas",
+			bad,
+		);
+		const rowsOut = list
+			.GetDescendants()
+			.filter(d => /^Ach\d+$/.test(d.Name))
+			.filter(d => {
+				const r = layoutRect(d);
+				return r.x < listR.x - 1 || r.x + r.w > listR.x + listR.w + 1;
+			});
+		if (rowsOut.length > 0) bad.push(`conquistas: ${rowsOut.length} linhas mais largas que a lista`);
+		closeAch();
+		flush();
+		check(
+			`${label}: Loja (Packs, Earn coins) e Conquistas sem texto cortado nem peca fora da janela (${texts} textos)`,
+			bad.length === 0,
+			bad.slice(0, 5).join("; "),
+		);
+	}
+	// touch: every control of the shop a thumb presses is at least 44 px (MIN_TOUCH_PX) -- the Buy buttons and the tabs
+	// through their hit areas, the door and the X
+	{
+		const UIS = service("UserInputService");
+		const was = { touch: UIS.TouchEnabled, mouse: UIS.MouseEnabled, last: UIS.GetLastInputType };
+		UIS.TouchEnabled = true;
+		UIS.MouseEnabled = false;
+		UIS.GetLastInputType = () => Enum.UserInputType.Touch;
+		setScreen(844, 390, 36, 104);
+		const closeShop = showShop(
+			ctx,
+			() => {},
+			() => {},
+		);
+		flush();
+		layoutGame(ui, ctx);
+		const shopRoot = layer.FindFirstChild("Shop");
+		const small = [];
+		const buys = findIn(shopRoot, "Content")
+			.GetChildren()
+			.filter(c => /^Pack\d+$/.test(c.Name))
+			.map(c => findIn(c, "Buy"));
+		const tabBtns = findIn(shopRoot, "Tabs")
+			.GetChildren()
+			.filter(c => /^Tab\d+$/.test(c.Name));
+		for (const b of [...buys, ...tabBtns, findIn(shopRoot, "Wardrobe", "TextButton")]) {
+			const hit = b.FindFirstChild("Hit");
+			const r = layoutRect(hit ?? b);
+			if (r.w < 43.5 || r.h < 43.5) small.push(`${b.Parent.Name}.${b.Name} ${px(r.w)}x${px(r.h)}`);
+		}
+		check(
+			"toque, celular 844 x 390: todo Buy, as abas e a porta do guarda-roupa sao alvos de >= 44 px (a area de toque do botao)",
+			small.length === 0 && buys.length === 9,
+			small.join("; ") || `${buys.length + tabBtns.length + 1} alvos`,
+		);
+		closeShop();
+		flush();
+		UIS.TouchEnabled = was.touch;
+		UIS.MouseEnabled = was.mouse;
+		UIS.GetLastInputType = was.last;
+	}
+	save.money = keep.money;
+	save.achievements = keep.achievements;
+	setScreen(1365, 567, 58, 160);
+}
+
 console.log("");
 if (failures > 0) {
 	console.error(`${failures} verificacao(oes) falharam`);
 	process.exit(1);
 }
 console.log(
-	"OK: toda janela centrada na tela inteira e longe dos botoes do Roblox; a cidade atras de toda tela de menu, sem parar e sem criar Instance; sobre a partida, o mundo",
+	"OK: toda janela centrada na tela inteira e longe dos botoes do Roblox; a cidade atras de toda tela de menu, sem parar e sem criar Instance; sobre a partida, o mundo; Loja e Conquistas sem nada cortado",
 );
