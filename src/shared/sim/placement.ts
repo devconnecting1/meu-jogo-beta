@@ -230,6 +230,7 @@ export function placementValid(
 	r: PlaceRect,
 	players: ReadonlyArray<PlayerState>,
 	zombies: ReadonlyArray<ZombieState>,
+	def?: PlaceableDef,
 ): boolean {
 	const gx = r.x;
 	const gy = r.y;
@@ -239,8 +240,9 @@ export function placementValid(
 	for (const s of querySolids(world, gx, gy, gx + w, gy + h)) {
 		// a parked vehicle is walked through, not built over: a wall on top would hide it for good
 		if (s.passable === true && s.tags !== "vehicle") continue;
-		// a window's gap is where a barricade or a door goes (EDI-13): over the glass as over an open frame (EDI-18)
-		if (s.kind === "window") continue;
+		// a window's gap is where a barricade or a door goes (EDI-13): over the glass as over an open frame (EDI-18) --
+		// and only those: a pane of glass is a wall to anything else (the review of ef98768, L3)
+		if (s.kind === "window" && def !== undefined && fortifies(def)) continue;
 		if (gx < s.x + s.w && gx + w > s.x && gy < s.y + s.h && gy + h > s.y) return false;
 	}
 	for (const pl of players) {

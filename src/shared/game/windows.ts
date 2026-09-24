@@ -1,5 +1,5 @@
 /*
- * Window glass (docs/DESIGN_RULES.md EDI-18, EDI-10; docs/MULTIPLAYER.md §4.5, protocol.ts note 21).
+ * Window glass (docs/DESIGN_RULES.md EDI-18, EDI-10; docs/MULTIPLAYER.md §4.5, protocol.ts note 22).
  *
  * A building's window is one static solid in its wall's gap (kind "window", tags "window", shared/game/interiors.ts
  * plans it, world.ts `planInteriors` lays it). It is in one of two states, and the SOLID is the state -- the same

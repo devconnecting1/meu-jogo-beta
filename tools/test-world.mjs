@@ -39,10 +39,13 @@
  *      construction rots after the grace and falls, and whoever repairs it while it rots takes it over; the piece that
  *      would close a ring around a living survivor (the builder too) is refused, a door in the same gap is not.
  *  aa. WINDOW GLASS (EDI-18): an intact pane stops a body and a bullet and not the eyes, a broken one is EDI-10's
- *      open frame; E through the real wire breaks it (one global DoorSet, the glass Fx), not from 60 u nor through a
- *      wall; the hand's rate and the tick's budget hold; a pistol's ray and a dagger's arc break it; a barricade goes
- *      into a window with glass; a pane is a way out for MP-24; the generated share; a newcomer's WorldInit names
- *      exactly the panes broken since generation and the client's mirror ends up with the server's windows.
+ *      open frame; E through the real wire breaks it (one global DoorSet, the glass Fx) only when its command says so
+ *      (HeldBit.Glass: a plain E beside the pane leaves it, an E for the glass leaves the item beside it; the client
+ *      sets the bit only under the "E: Break window" pill, on the command with the press), not from 60 u nor through a
+ *      wall (the hint's test, paneAtHand, to a point inside the pane), and each refusal is the slot's evidence; the
+ *      hand's rate and the tick's budget hold; a pistol's ray and a dagger's arc break it; a barricade goes into a
+ *      window with glass, nothing else stands on it; a pane is a way out for MP-24; the generated share; a newcomer's
+ *      WorldInit names exactly the panes broken since generation and the client's mirror ends up with the server's.
  *
  * MP_PHASE is NOT changed (tools/test-net.mjs pins it): the simulation is built with `interactive: true`,
  * the switch `zombies: true` already uses for the horde.
@@ -126,8 +129,8 @@ function addPlayer(sim, slot, x, y, save) {
  * Sends one command through the REAL wire: encode → the token bucket and the decoder of `ingestInput`.
  * `edges` is `packEdges(attackPress, attackRelease, actionPress, reload)`.
  */
-function send(sp, seq, aim, edges, now) {
-	const cmd = P.makeCommand(seq, 0, 0, aim, 0, edges);
+function send(sp, seq, aim, edges, now, held = 0) {
+	const cmd = P.makeCommand(seq, 0, 0, aim, held, edges);
 	const packet = { viewTick: 0, viewFrac: 0, cmds: [cmd] };
 	const payload = P.encodeInput(packet);
 	return PL.ingestInput(sp, payload, now ?? 0);
@@ -2606,7 +2609,10 @@ section(
 		const g = pane(world, 1000, 1000);
 		wallAt(world, 1080, 1000, 100, 20);
 		const p = addPlayer(sim, 0, 1040, 1040);
-		checkEq(IQ.interactTarget(world, 1040, 1040)?.kind, "window", "o alvo do E junto ao vidro e a janela");
+		check(
+			IQ.interactTarget(world, 1040, 1040) === undefined && IQ.nearestIntactWindow(world, 1040, 1040) === g,
+			"o vidro nunca e o alvo do E de sempre: e a sua propria intencao (nearestIntactWindow, nota 22)",
+		);
 		{
 			const refs = { world, pendingPlace: -1, save: SAVE.defaultSave(), players: [], zombies: [] };
 			checkEq(
@@ -2616,15 +2622,23 @@ section(
 			);
 		}
 		drain(sim);
+		// M1 (review of ef98768): a press without the glass bit never breaks glass, even with the pane right there
 		send(p, 1, 0, PRESS_E);
+		const plain = run(sim, 1);
+		check(
+			WIN.windowIntact(g) && plain.every(s => s.outcome.kind !== "window"),
+			"um E sem HeldBit.Glass (um E de outra coisa) nao quebra o vidro, nem com ele ao alcance",
+			plain.map(s => s.outcome.kind).join(",") || "nada",
+		);
+		send(p, 2, 0, PRESS_E, 0, P.HeldBit.Glass);
 		const seen = run(sim, 1);
-		check(WIN.windowBroken(g), "E quebrou o vidro");
+		check(WIN.windowBroken(g), "o E com HeldBit.Glass (a pilula era a janela) quebrou o vidro");
 		checkEq(seen[0]?.outcome.kind, "window", "e o servidor diz o que o E fez");
 		const sets = drain(sim).filter(d => d.ev.t === P.WorldEv.DoorSet && d.ev.id === g.id);
 		checkEq(sets.length, 1, "um DoorSet da janela foi enfileirado");
 		check(
 			sets[0]?.slot === CFG.SLOT_NONE && sets[0]?.ev.state === P.SolidState.Open,
-			"para TODO MUNDO, com o vao 'aberto' (todos preveem o corpo contra ele, nota 21)",
+			"para TODO MUNDO, com o vao 'aberto' (todos preveem o corpo contra ele, nota 22)",
 		);
 		check(
 			fx.some(e => e.t === P.FxType.Debris && e.material === 6 && e.count >= 8),
@@ -2637,15 +2651,122 @@ section(
 		}
 	}
 
+	// ---- M1 (review of ef98768): the glass is its own intent, in both directions
+	{
+		const world = emptyWorld();
+		const sim = newSim(world);
+		wallAt(world, 900, 1000, 100, 20);
+		const g = pane(world, 1000, 1000);
+		wallAt(world, 1080, 1000, 100, 20);
+		const a = addPlayer(sim, 0, 1040, 1040);
+		// a pistol on the floor right under the window, inside E's reach (a weapon: taken with E, never walked over)
+		const first = W.spawnGroundItem(world, 1, 10, 1, 1040, 1050);
+		{
+			const refs = { world, pendingPlace: -1, save: SAVE.defaultSave(), players: [], zombies: [] };
+			check(
+				CInter.interactHint(refs, { x: 1040, y: 1040 }) !== CInter.WINDOW_HINT,
+				"com um item ao alcance, a pilula e a do item: E nao e o vidro",
+			);
+		}
+		drain(sim);
+		send(a, 1, 0, PRESS_E);
+		const took = run(sim, 1);
+		check(
+			!world.items.includes(first) && WIN.windowIntact(g),
+			"o E para o item pega o item e o vidro fica inteiro",
+			took.map(s => s.outcome.kind).join(","),
+		);
+		// the same spot, an item again, and a press that SAYS glass (a client whose world had no item there yet)
+		const second = W.spawnGroundItem(world, 1, 10, 1, 1040, 1050);
+		run(sim, Math.ceil(sim.simHz * 0.25));
+		send(a, 2 + Math.ceil(sim.simHz * 0.25), 0, PRESS_E, 0, P.HeldBit.Glass);
+		const broke = run(sim, 1);
+		check(
+			WIN.windowBroken(g) && world.items.includes(second),
+			"o E que diz 'vidro' quebra o vidro e nao pega nada",
+			broke.map(s => s.outcome.kind).join(","),
+		);
+		// with no pane left at hand, a press that says glass does nothing else either: refused, counted
+		run(sim, Math.ceil(sim.simHz * 0.25));
+		const n0 = sim.windows.refusedOf(0);
+		send(a, 3 + Math.ceil(sim.simHz * 0.5), 0, PRESS_E, 0, P.HeldBit.Glass);
+		const none = run(sim, 1);
+		check(
+			world.items.includes(second) &&
+				none.length === 1 &&
+				none[0].outcome.kind === "refused" &&
+				sim.windows.refusedOf(0) === n0 + 1,
+			"sem vidro ao alcance, o E que diz 'vidro' e recusado (e contado como evidencia) e o item fica",
+			none.map(s => `${s.outcome.kind}/${s.outcome.why ?? ""}`).join(","),
+		);
+	}
+
+	// ---- M1 on the client: the glass bit is set only when the hint was the window, and rides the E press's command
+	{
+		const { CommandStream } = require(join(SRC, "client/net/commands.ts"));
+		const auth = require(join(SRC, "client/net/authority.ts"));
+		const { InputState } = require(join(SRC, "shared/engine/input.ts"));
+		const stream = new CommandStream();
+		stream.reset(0);
+		const raw = { moveX: 0, moveY: 0, magnitude: 0, aim: 0, held: P.HeldBit.Action };
+		const out = [];
+		// a 240 FPS frame builds nothing: the press and its intent wait for the next command, together
+		stream.addEdges(false, false, true, false, true);
+		stream.sample(1 / 240, raw, out);
+		stream.sample(1 / 60, raw, out);
+		stream.sample(1 / 60, raw, out);
+		const withEdge = out.filter(c => P.edgeCount(c.edges, P.EdgeShift.ActionPress) > 0);
+		check(
+			withEdge.length === 1 &&
+				(withEdge[0].held & P.HeldBit.Glass) !== 0 &&
+				out.filter(c => (c.held & P.HeldBit.Glass) !== 0).length === 1,
+			"HeldBit.Glass vai so no comando que leva o E (mesmo com um quadro sem comando no meio)",
+			`${out.length} comandos, ${withEdge.length} com o E`,
+		);
+		out.length = 0;
+		stream.addEdges(false, false, true, false, false);
+		stream.sample(1 / 60, raw, out);
+		check(out.length === 1 && (out[0].held & P.HeldBit.Glass) === 0, "e um E comum nunca o leva");
+		// the interaction: online, a press whose target is the window marks the intent; one for an item does not (the
+		// pickup feedback notes the press time with Luau's os.clock, which this suite does not otherwise need)
+		auth.setWorldAuthority({ owned: () => true, send: () => false, buildEdge: () => {}, reserveSpent: () => {} });
+		const hadOs = globalThis.os;
+		globalThis.os ??= { clock: () => performance.now() / 1000 };
+		try {
+			const world = emptyWorld();
+			wallAt(world, 900, 1000, 100, 20);
+			pane(world, 1000, 1000);
+			wallAt(world, 1080, 1000, 100, 20);
+			const input = new InputState();
+			const refs = { world, pendingPlace: -1, save: SAVE.defaultSave(), players: [], zombies: [], input, fx: [] };
+			const inter = new CInter.Interaction();
+			input.actionPressed = true;
+			inter.tryInteract(refs, { x: 1040, y: 1040 });
+			const atPane = input.actionGlass;
+			input.beginFrame();
+			W.spawnGroundItem(world, 4, 23, 5, 1040, 1050);
+			input.actionPressed = true;
+			inter.tryInteract(refs, { x: 1040, y: 1040 });
+			check(
+				atPane === true && input.actionGlass === false,
+				"no cliente, o E sob a pilula 'E: Break window' marca a intencao; o E para um item nao",
+			);
+		} finally {
+			auth.setWorldAuthority(undefined);
+			globalThis.os = hadOs;
+		}
+	}
+
 	// ---- reach and line: the server's position, never through a wall
 	{
 		const world = emptyWorld();
 		const sim = newSim(world);
 		const g = pane(world, 1000, 1000);
 		const far = addPlayer(sim, 0, 1040, 1080);
-		send(far, 1, 0, PRESS_E);
+		send(far, 1, 0, PRESS_E, 0, P.HeldBit.Glass);
 		run(sim, 1);
-		check(WIN.windowIntact(g), "a 60 u do vidro, o E nao quebra nada (nao e o alvo)");
+		check(WIN.windowIntact(g), "a 60 u do vidro, nem o E que diz 'vidro' quebra nada");
+		check(sim.windows.refusedOf(0) === 1, "e a tentativa conta como evidencia do slot (L5)");
 		checkEq(
 			sim.windows.byHand(0, far.state, g, WIN.WINDOW_REACH),
 			"range",
@@ -2659,7 +2780,28 @@ section(
 			"blocked",
 			"atras de uma parede, perto o bastante: 'blocked' (a linha e do servidor)",
 		);
+		check(
+			IQ.nearestIntactWindow(world, 1040, 1045) === undefined,
+			"e a pilula nao oferece o vidro atras da parede: o mesmo teste do servidor (L1, paneAtHand)",
+		);
 		check(WIN.windowIntact(g), "e o vidro continua inteiro");
+	}
+
+	// ---- L1: at an angle by the jamb, the line reaches a point INSIDE the pane: the wall it sits in is not in the way
+	{
+		const world = emptyWorld();
+		const sim = newSim(world);
+		wallAt(world, 900, 1000, 100, 20);
+		const g = pane(world, 1000, 1000);
+		wallAt(world, 1080, 1000, 100, 20);
+		const p = addPlayer(sim, 0, 1086, 1036);
+		checkEq(IQ.paneAtHand(world, g, 1086, 1036, WIN.WINDOW_REACH), "ok", "de viés junto ao batente: ao alcance");
+		check(IQ.nearestIntactWindow(world, 1086, 1036) === g, "a pilula oferece o vidro");
+		checkEq(
+			sim.windows.byHand(0, p.state, g, WIN.WINDOW_REACH),
+			"broken",
+			"e o servidor o quebra (hint = servidor)",
+		);
 	}
 
 	// ---- the rate: by hand, WINDOW_BREAK_RATE a second after a burst of WINDOW_BREAK_BURST
@@ -2806,6 +2948,29 @@ section(
 			"uma barricada mirada numa janela COM vidro entra e preenche o vao (EDI-13 sobre vidro ou vao aberto)",
 			placed.kind,
 		);
+		// L3 (review of ef98768): only a fortification stands on the glass -- anything else finds a wall there
+		{
+			const PLC = require(join(SRC, "shared/sim/placement.ts"));
+			const box = emptyWorld();
+			const g = pane(box, 1000, 1000);
+			const over = { x: 1010, y: 990, w: 40, h: 40 };
+			const kinds = Object.values(PLC.PLACEABLES);
+			const lamp = kinds.find(d => d.kind === "lamp");
+			const door = kinds.find(d => d.kind === "door");
+			const bar = kinds.find(d => d.kind === "barricade");
+			check(
+				!PLC.placementValid(box, over, [], [], lamp) &&
+					!PLC.placementValid(box, over, [], []) &&
+					PLC.placementValid(box, over, [], [], bar) &&
+					PLC.placementValid(box, over, [], [], door),
+				"sobre um vidro so entra barricada ou porta: um lampiao (ou um pedido sem tipo) encontra uma parede",
+			);
+			WIN.breakWindow(box, g);
+			check(
+				PLC.placementValid(box, over, [], [], lamp),
+				"(o vao aberto segue como sempre foi: passavel, EDI-10)",
+			);
+		}
 		// a room closed but for its glass: the glass is a way out, so nothing that closes the rest seals anybody in
 		const box = emptyWorld();
 		wallAt(box, 1000, 1000, 400, 20);

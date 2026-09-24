@@ -927,6 +927,81 @@ section("D6. Robotics (its maker's) makes a turret hit 1.5× harder (obj_turret:
 });
 
 section(
+	"D8. a gun turret shoots through a pane of glass: the first bullet breaks it (EDI-18, review of ef98768 L3)",
+	() => {
+		const WIN = require(join(SRC, "shared/game/windows.ts"));
+		const world = W.serverWorld(W.createWorld(4000, 4000));
+		const save = saveWith({});
+		const zombies = [];
+		const progress = new Progress({ saveOf: slot => (slot === 0 ? save : undefined) });
+		const combat = new ServerCombat({
+			world,
+			targets: { zombies: () => zombies, bosses: () => [] },
+			progress,
+			random: () => 0.5,
+		});
+		const power = new ServerPower({
+			world,
+			clock: { dayTime: 12, isRaining: false, darkAlpha: 0 },
+			saveOf: slot => (slot === 0 ? save : undefined),
+		});
+		world.onSolidAdd = (w, s) => power.note(s, true);
+		const def = PLACEABLES[ID.turret];
+		W.addSolid(world, {
+			...placedSolid(def, { x: 1000, y: 1000, w: def.w, h: def.h }, 0),
+			placeable: ID.turret,
+			owner: 0,
+		});
+		const bdef = PLACEABLES[ID.battery];
+		W.addSolid(world, {
+			...placedSolid(bdef, { x: 1000, y: 1150, w: bdef.w, h: bdef.h }, 0),
+			placeable: ID.battery,
+		});
+		power.settle(0.25);
+		// a pane of glass across the line of fire, 100 u out, and the zombie 100 u behind it
+		const pane = W.addSolid(world, {
+			kind: "window",
+			x: 1120,
+			y: 992,
+			w: 20,
+			h: 80,
+			hp: WIN.GLASS_HITS,
+			hpMax: WIN.GLASS_HITS,
+			destructible: false,
+			tags: "window",
+		});
+		const z = createZombie(1, 1032 + 200, 1032, 1);
+		z.hp = 1e6;
+		zombies.push(z);
+		const broken = [];
+		const turrets = new ServerTurrets({
+			world,
+			power,
+			zombiesNear: (x, y, r, tick, out) => {
+				for (const q of zombies) if (Math.hypot(q.x - x, q.y - y) <= r) out.push(q);
+				return out;
+			},
+			bosses: () => [],
+			damage: combat,
+			random: () => 0.5,
+			glass: s => {
+				broken.push(s);
+				return WIN.breakWindow(world, s);
+			},
+		});
+		let t = 0;
+		for (; t < SEARCH_EVERY * 4 && broken.length === 0; t++) turrets.step(t, TICK_DT);
+		check(
+			broken.length === 1 && broken[0] === pane && WIN.windowBroken(pane) && z.hp === 1e6,
+			"the turret sees the zombie through the glass and fires: the bullet stops at the pane and breaks it",
+			`${broken.length} pane(s), zombie hp ${1e6 - z.hp} lost`,
+		);
+		for (let k = 0; k < 240 && z.hp === 1e6; k++, t++) turrets.step(t, TICK_DT);
+		check(z.hp < 1e6, "and the next shot goes through the open frame into the zombie", `${1e6 - z.hp} damage`);
+	},
+);
+
+section(
 	"D7. a machine's final blow on a boss: the fighters keep their credit, its builder gets the XP only (§3.6)",
 	() => {
 		const { AchievementId } = require(join(SRC, "shared/data/achievements.ts"));

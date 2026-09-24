@@ -42,10 +42,16 @@ import {
 import { BossState, bossHitRadius, zombieRadius, ZombieState } from "shared/game/entities";
 import { blocksShots, raycast, rayCircle, segmentClear } from "shared/game/physics";
 import { Solid, WorldData } from "shared/game/world";
+import { windowIntact } from "shared/game/windows";
 import { FxEvent, FxType } from "shared/net/protocol";
 import { MachineState, ServerPower } from "./power";
 
 const DEG = math.pi / 180;
+
+/** what hides a target from a gun turret: what stops a bullet, except a pane of glass it shoots through (EDI-18) */
+function blocksGunSight(s: Solid): boolean {
+	return blocksShots(s) && !windowIntact(s);
+}
 /** a turret with nothing to shoot looks again on its own tick of every this many (10 Hz at 60 Hz) */
 export const SEARCH_EVERY = 6;
 /**
@@ -104,6 +110,11 @@ export interface ServerTurretsOptions {
 	fx?: (event: FxEvent) => void;
 	/** a shot is heard (zombieBrain's emitSound): the horde comes to look */
 	noise?: (x: number, y: number, radius: number) => void;
+	/**
+	 * (EDI-18) A gun turret's bullet stopped at an intact pane: it breaks, as a survivor's bullet does
+	 * (server/sim/windows.ts `byShot`). True when the glass broke.
+	 */
+	glass?: (s: Solid) => boolean;
 	random?: () => number;
 }
 
@@ -125,6 +136,7 @@ export class ServerTurrets {
 	private readonly damage: MachineDamage;
 	private readonly fx?: (event: FxEvent) => void;
 	private readonly noise?: (x: number, y: number, radius: number) => void;
+	private readonly glass?: (s: Solid) => boolean;
 	private readonly rnd: () => number;
 	private readonly near = new Array<ZombieState>();
 	private readonly done = new Array<ZombieState>();
@@ -144,6 +156,7 @@ export class ServerTurrets {
 		this.damage = options.damage;
 		this.fx = options.fx;
 		this.noise = options.noise;
+		this.glass = options.glass;
 		this.rnd = options.random ?? (() => math.random());
 	}
 
@@ -196,6 +209,7 @@ export class ServerTurrets {
 		range: number,
 		tick: number,
 		skip?: ReadonlyArray<ZombieState>,
+		throughGlass = false,
 	): ZombieState | undefined {
 		this.searched += 1;
 		this.stats.searches += 1;
@@ -210,8 +224,9 @@ export class ServerTurrets {
 			const dy = z.y - y;
 			const d = dx * dx + dy * dy;
 			if (d >= bestD) continue;
-			// shots fly over the survivors' own constructions (physics.blocksShots), walls and trees stop them
-			if (!segmentClear(this.world, x, y, z.x, z.y, blocksShots)) continue;
+			// shots fly over the survivors' own constructions (physics.blocksShots), walls and trees stop them; a gun sees
+			// through a pane of glass and shoots through it -- the first bullet breaks it (EDI-18), as a survivor's does
+			if (!segmentClear(this.world, x, y, z.x, z.y, throughGlass ? blocksGunSight : blocksShots)) continue;
 			best = z;
 			bestD = d;
 		}
@@ -227,7 +242,7 @@ export class ServerTurrets {
 		const fx = from.x;
 		const fy = from.y;
 		const range = st.def.role === "drone" ? TURRET_DRONE_RANGE : TURRET_RANGE;
-		const z = this.target(fx, fy, range, tick);
+		const z = this.target(fx, fy, range, tick, undefined, true);
 		const boss = z === undefined ? this.bossTarget(fx, fy, range) : undefined;
 		if (z === undefined && boss === undefined) return false;
 		const tx = z !== undefined ? z.x : (boss as BossState).x;
@@ -278,6 +293,9 @@ export class ServerTurrets {
 		} else if (hitB !== undefined) {
 			this.stats.hits += 1;
 			this.damage.machineHitBoss(credit, fx, fy, hitB, dmg, hx, hy);
+		} else if (wall.solid !== undefined && windowIntact(wall.solid)) {
+			// the bullet stopped at a pane: it breaks (EDI-18, the review of ef98768 L3), and the next shot goes through
+			this.glass?.(wall.solid);
 		}
 		this.tracer(mx, my, hx, hy, TRACER_BULLET, TRACER_LIFE, true);
 		this.noise?.(fx, fy, TURRET_NOISE);
@@ -291,7 +309,7 @@ export class ServerTurrets {
 			const dy = b.y - y;
 			const r = range + bossHitRadius(b);
 			if (dx * dx + dy * dy > r * r) continue;
-			if (!segmentClear(this.world, x, y, b.x, b.y, blocksShots)) continue;
+			if (!segmentClear(this.world, x, y, b.x, b.y, blocksGunSight)) continue;
 			return b;
 		}
 		return undefined;

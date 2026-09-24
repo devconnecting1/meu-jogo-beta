@@ -429,6 +429,14 @@ function urgentEvent(e: WorldEvent): boolean {
 	return e.t === WorldEv.InitBegin || e.t === WorldEv.WorldReset || e.t === WorldEv.PlayerLife;
 }
 
+/**
+ * A change of the world's state a client lays on its copy of the town (client/net/worldMirror.ts, and the grid's
+ * PowerSet): idempotent -- a DoorSet, an HP, an add or a removal keyed by id -- so sending one twice changes nothing
+ */
+function worldStateEvent(e: WorldEvent): boolean {
+	return (e.t >= WorldEv.SolidAdd && e.t <= WorldEv.LootFlag) || e.t === WorldEv.PowerSet;
+}
+
 /** a set of player slots (0..MAX_PLAYERS-1) in one number */
 function maskHas(mask: number, slot: number): boolean {
 	return math.floor(mask / 2 ** slot) % 2 === 1;
@@ -475,6 +483,8 @@ export class Replicator {
 	private readonly hordeRings = new ActorInterest();
 	private readonly broadcast = new Array<WorldEvent>();
 	private readonly directed = new Map<number, Array<WorldEvent>>();
+	/** slots welcomed since the last world flush: that flush's broadcast reaches them before their InitBegin (M3) */
+	private readonly welcomedSince = new Array<number>();
 	/** effects of the tick being flushed: everyone's, then the ones addressed to one survivor */
 	private readonly fxQueue = new Array<FxEvent>();
 	private snapIndex = 0;
@@ -622,6 +632,8 @@ export class Replicator {
 	 */
 	welcome(sp: ServerPlayer): void {
 		this.queueFor(sp.slot, this.initBegin());
+		// the next flush sends its broadcast BEFORE this batch: see `flushWorld` (the review of ef98768, M3)
+		if (!this.welcomedSince.includes(sp.slot)) this.welcomedSince.push(sp.slot);
 		// the hour, the day, the weather and the wave flags: a newcomer must not spend up to CLOCK_RESYNC_S
 		// seconds in the wrong half of the day (§4.6)
 		this.queueFor(sp.slot, this.sim.clock.clockEventNow(this.sim.tick));
@@ -690,7 +702,7 @@ export class Replicator {
 			this.initMachines.clear();
 		}
 		// a door of the generated map that somebody opened: the mirror generated it closed. And a window whose glass
-		// broke since the town was generated (EDI-18, protocol.ts note 21): the mirror generated its pane, so it hears the
+		// broke since the town was generated (EDI-18, protocol.ts note 22): the mirror generated its pane, so it hears the
 		// frame is open -- the same DoorSet, 6 B each, and only those (a pane born broken comes from the seed, one never
 		// broken needs nothing): a town has ~370 panes, so a whole town smashed is ~2.2 KB of one 16 KB batch
 		for (const solid of this.sim.world.solids) {
@@ -973,6 +985,19 @@ export class Replicator {
 
 	private flushWorld(tick: number): void {
 		this.urgent = false;
+		// A survivor welcomed since the last flush reads this broadcast BEFORE its own batch -- the InitBegin that opens
+		// its town, and the WorldInit built when it was welcomed -- and a client drops the world's deltas until its
+		// InitBegin. A pane broken, a door opened or a barricade built in between would be lost for it for good: the
+		// world's state changes of this broadcast go again at the end of its batch (all idempotent: a DoorSet, an add
+		// keyed by id), after its WorldInit (the review of ef98768, M3; protocol.ts note 22).
+		if (this.broadcast.size() > 0) {
+			for (const slot of this.welcomedSince) {
+				const list = this.directed.get(slot);
+				if (list === undefined) continue;
+				for (const e of this.broadcast) if (worldStateEvent(e)) list.push(e);
+			}
+		}
+		this.welcomedSince.clear();
 		if (this.broadcast.size() > 0) {
 			const res = encodeWorld({ tick, events: this.broadcast });
 			this.stats.droppedEvents += res.dropped;

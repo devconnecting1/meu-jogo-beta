@@ -121,7 +121,7 @@ export function applyMirrorEvent(world: WorldData, e: WorldEvent): void {
 		const s = ix.solids.get(e.id);
 		if (s === undefined) return;
 		if (isWindow(s)) {
-			// EDI-18 (protocol.ts note 21): a window's frame "open" is its glass broken. Glass never comes back in a live
+			// EDI-18 (protocol.ts note 22): a window's frame "open" is its glass broken. Glass never comes back in a live
 			// town; a DoorSet without Open only ever means "as generated", and only a pane generated with glass has any
 			if ((e.state & SolidState.Open) !== 0) setWindowGlass(s, false);
 			else if (hadGlass(s)) setWindowGlass(s, true);

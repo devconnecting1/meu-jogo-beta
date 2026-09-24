@@ -705,6 +705,8 @@ export class ServerSimulation {
 				damage: combat,
 				fx: event => this.onFx?.(event),
 				noise: (x, y, radius) => emitSound(horde.refs, x, y, radius, true),
+				// EDI-18: a turret's bullet breaks the pane it stops at, like a survivor's (the ray is its line)
+				glass: s => this.windows?.byShot(s) === "broken",
 			});
 		}
 		// §2.3/MP-00: from here on a survivor only ever loses hp through the server's combat. The brains still
@@ -1214,6 +1216,8 @@ export class ServerSimulation {
 			players: this.bodies,
 			zombies: this.horde?.zombies ?? EMPTY_ZOMBIES,
 			hours: gameHours(this.clock.day, this.clock.dayTime),
+			// EDI-18: the press is for a window's glass only when its command says so (protocol.ts note 22)
+			glass: (cmd.held & HeldBit.Glass) !== 0,
 		});
 		// MP-24: a repair of a construction that is rotting (its builder long gone) makes it the repairer's
 		if (outcome.kind === "repair") build.adopt(outcome.solid, sp.slot);

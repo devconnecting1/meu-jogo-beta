@@ -1203,6 +1203,8 @@ function predict(refs: GameRefs, dt: number): void {
 		input.attackReleased && !input.attackBlocked,
 		input.actionPressed,
 		input.reloadPressed,
+		// EDI-18: the press is for a window's glass only when the interaction said so (its hint named the window)
+		input.actionGlass,
 	);
 	readRawInput(ctx.cam, input, adminFlags?.frozen === true, raw);
 	sampled.clear();

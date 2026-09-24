@@ -256,7 +256,7 @@ export class ServerBuild {
 			def,
 			ghostRectSticky(def, state.x, state.y, state.angle, p.rot, p.prevX, p.prevY),
 		);
-		if (!placementValid(this.world, r, players, zombies)) return this.refuse(p, "invalid");
+		if (!placementValid(this.world, r, players, zombies, def)) return this.refuse(p, "invalid");
 		const rot = p.rot;
 		const shape = placedSolid(def, r, rot);
 		// MP-24: never the piece that closes a ring around a living survivor. What cannot close a ring is what the
@@ -315,7 +315,7 @@ export class ServerBuild {
 		}
 		if (this.total >= MAX_BUILDS_PER_SERVER) return { kind: "refused", why: "capServer" };
 		const r: PlaceRect = { x: x - def.w / 2, y: y - def.h / 2, w: def.w, h: def.h };
-		if (!placementValid(this.world, r, players, zombies)) return { kind: "refused", why: "invalid" };
+		if (!placementValid(this.world, r, players, zombies, def)) return { kind: "refused", why: "invalid" };
 		const shape = placedSolid(def, r, 0);
 		// MP-24 for an admin too: never the piece that pens a living survivor in (an admin's request is rate limited,
 		// so it is not held to SEALED_CHECKS_PER_TICK)

@@ -726,6 +726,11 @@ function tickServer(server, opts = {}) {
 			continue;
 		}
 		for (const e of batch.events) {
+			// (w) M3: the order a client reads its town's anchor and the doors in, for the clients that keep it
+			if (e.t === P.WorldEv.InitBegin || e.t === P.WorldEv.DoorSet) {
+				if (slot === undefined) for (const [, c] of server.clients) c.worldLog?.push(e);
+				else server.clients.get(slot)?.worldLog?.push(e);
+			}
 			if (
 				e.t === P.WorldEv.PlayerJoined ||
 				e.t === P.WorldEv.PlayerProfile ||
@@ -2742,6 +2747,44 @@ if (existsSync(join(SRC, "shared/game/windows.ts"))) {
 	check(
 		lateClient.doorSets.some(e => e.id === g.id && e.state === P.SolidState.Open),
 		"and a newcomer's WorldInit names the pane among the windows broken since the town was generated",
+	);
+
+	/*
+	 * M3 (the review of ef98768): a newcomer is welcomed between two heartbeats, and in the very next tick another pane
+	 * breaks. That flush sends its broadcast (the DoorSet) BEFORE the newcomer's own batch, and a client drops the
+	 * world's deltas until its InitBegin -- the pane would be lost for it for good. It must be told again after.
+	 */
+	const g2 = panes.find(s => s !== g && WIN.windowIntact(s));
+	const next = addSurvivor(server, 3, spot.x + 200, spot.y);
+	const nextClient = server.clients.get(3);
+	nextClient.worldLog = [];
+	server.replicator.welcome(next);
+	const begin = server.sim.windows.beginTick.bind(server.sim.windows);
+	let armed = true;
+	server.sim.windows.beginTick = dt => {
+		begin(dt);
+		if (armed) {
+			armed = false;
+			server.sim.windows.byShot(g2);
+		}
+	};
+	try {
+		tickServer(server);
+	} finally {
+		server.sim.windows.beginTick = begin;
+	}
+	for (let i = 0; i < CFG.SNAP_NEAR_EVERY_TICKS; i++) tickServer(server);
+	// the client's rule (client/net/netClient.ts): everything before its InitBegin is dropped, the rest laid down
+	const log = nextClient.worldLog;
+	const at = log.findIndex(e => e.t === P.WorldEv.InitBegin);
+	const before = log.slice(0, Math.max(0, at)).some(e => e.t === P.WorldEv.DoorSet && e.id === g2.id);
+	const after = log
+		.slice(at + 1)
+		.some(e => e.t === P.WorldEv.DoorSet && e.id === g2.id && e.state === P.SolidState.Open);
+	info(`the newcomer read ${log.length} anchor/door events; the pane's DoorSet before its InitBegin: ${before}`);
+	check(
+		WIN.windowBroken(g2) && at >= 0 && after,
+		"a pane broken in the tick after a newcomer's welcome reaches it AFTER its InitBegin (the broadcast went first)",
 	);
 }
 

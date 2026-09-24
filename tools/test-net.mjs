@@ -1742,7 +1742,7 @@ test("World: PowerSet carries a machine's state, and refuses what the grid never
 	eq("a truncated PowerSet", P.decodeWorld(bufOf(raw.slice(0, raw.length - 1))), undefined);
 });
 
-test("World + Fx: a window's glass rides DoorSet and the 'glass' debris, no new message (EDI-18, note 21)", () => {
+test("World + Fx: a window's glass rides DoorSet and the 'glass' debris, no new message (EDI-18, note 22)", () => {
 	const FXW = require(join(SRC, "shared/net/fxWire.ts"));
 	// a window of the generated map: a static id (a town's are < 6000), its frame "open" = the glass broken
 	const broken = { t: P.WorldEv.DoorSet, id: 4321, state: P.SolidState.Open };
@@ -1769,6 +1769,20 @@ test("World + Fx: a window's glass rides DoorSet and the 'glass' debris, no new 
 		"it comes back as glass",
 	);
 	eq("a material a build does not know falls back to impact", FXW.debrisMaterialOf(FXW.GLASS_DEBRIS + 1), "impact");
+	// C→S (the review of ef98768, M1): breaking glass with E is the command's own bit, never a guess of the server's
+	const cmd = held => ({
+		viewTick: 1,
+		viewFrac: 0,
+		cmds: [P.makeCommand(7, 0, 0, 0, held, P.packEdges(0, 0, 1, 0))],
+	});
+	const glassE = P.decodeInput(P.encodeInput(cmd(P.HeldBit.Glass)));
+	ok(
+		glassE !== undefined && (glassE.cmds[0].held & P.HeldBit.Glass) !== 0 && P.HELD_MASK === 15,
+		"an E press for the glass carries HeldBit.Glass (8) through the wire, inside HELD_MASK",
+	);
+	const forged = P.encodeInput(cmd(0));
+	buffer.writeu8(forged, 4 + 6, 16);
+	eq("a held bit above HELD_MASK is still malformed", P.decodeInput(forged), undefined);
 });
 
 test("World: WorldInit in blocks of ≤ 16 KB", () => {

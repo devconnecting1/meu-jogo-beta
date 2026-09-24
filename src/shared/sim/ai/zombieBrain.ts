@@ -477,7 +477,8 @@ function bangWindow(
 		if (pane === undefined) return false;
 	}
 	Win.acrossWindow(pane, z.x, z.y, across);
-	if (math.cos(heading) * across.x + math.sin(heading) * across.y < T.GLASS_INTO) return false;
+	// a walker has to be walking INTO the glass; a charge that meets it at any angle is a battering ram (M2)
+	if (!rushing && math.cos(heading) * across.x + math.sin(heading) * across.y < T.GLASS_INTO) return false;
 	const cx = pane.x + pane.w / 2;
 	const cy = pane.y + pane.h / 2;
 	pane.hp = rushing ? 0 : math.max(0, pane.hp - 1);
@@ -1265,6 +1266,11 @@ function thinkExploder(refs: Ctx.AiRefs, z: ZombieState, p: PlayerState, dt: num
 	}
 }
 
+/** what ends a charge before it reaches the survivor: whatever stops a body, except a pane of glass (EDI-18, M2) */
+function blocksRush(s: Solid): boolean {
+	return Phys.blocksMovement(s) && !Win.windowIntact(s);
+}
+
 function endRush(z: ZombieState): void {
 	z.rush = false;
 	z.rushReady = false;
@@ -1302,8 +1308,14 @@ function thinkCharger(
 	if (!hunting || z.stunned > 0 || (z.stagger ?? 0) > 0) return false;
 	// the long LOS ray is checked ~10×/s, not every frame
 	const losCheck = (refs.ai.frameNo + z.id) % 6 === 0;
+	// Is a WALL between it and the survivor (a night wave hunts through walls, IA-03)? Then there is no lane to find by
+	// sidestepping and no distance to keep: it walks the field round to a way in like a walker -- a door, an open frame
+	// or a pane it pounds on or charges through (EDI-18, the review of ef98768 M2). Before, a charger hunting someone
+	// inside a house slid back and forth outside the wall for ever.
+	if (losCheck) z.laneBlind = !Phys.segmentClear(refs.world, z.x, z.y, p.x, p.y, Sense.blocksSight);
 	if (z.rushReady === true && distP > T.RUSH_MIN_DIST && losCheck) {
-		if (Phys.segmentClear(refs.world, z.x, z.y, p.x, p.y, Phys.blocksMovement)) {
+		// EDI-18 (M2): a pane of glass is no wall to a charge -- the rush goes through it (`bangWindow`: at once)
+		if (Phys.segmentClear(refs.world, z.x, z.y, p.x, p.y, blocksRush)) {
 			z.rush = true;
 			z.rushReady = false;
 			z.rushFail = 0;
@@ -1314,12 +1326,17 @@ function thinkCharger(
 			z.angleSlow = z.rushDir;
 			return true;
 		}
-		z.rushFail = (z.rushFail ?? 0) + 1;
-		if ((z.rushFail ?? 0) >= T.RUSH_FAIL_MAX) {
+		if (z.laneBlind === true) {
 			z.rushFail = 0;
-			startStrafe(refs, z, T.STRAFE_TIME);
+		} else {
+			z.rushFail = (z.rushFail ?? 0) + 1;
+			if ((z.rushFail ?? 0) >= T.RUSH_FAIL_MAX) {
+				z.rushFail = 0;
+				startStrafe(refs, z, T.STRAFE_TIME);
+			}
 		}
 	}
+	if (z.laneBlind === true) return false;
 	// It keeps its distance (~110 px) with a band, not a line (LEG-05): with a single threshold it stepped out on
 	// one tick and back in on the next, for ever -- a 30 Hz shiver of 1.25 u that the 20 Hz snapshot turned into a
 	// 10 Hz wobble on every screen (tools/test-zombie-motion.mjs, 13 reversals a second). Now it backs off below the
@@ -1344,6 +1361,44 @@ function blocksJump(s: Solid): boolean {
 }
 
 /**
+ * The same for a hunting leap (EDI-18, M2): a pane of glass is no wall to a body flying at the survivor behind it --
+ * the flight crashes through it (the airborne branch of `updateOne`). A wandering jumper still treats it as a wall:
+ * nobody who does not know you are there smashes a window.
+ */
+function blocksHuntingJump(s: Solid): boolean {
+	return blocksJump(s) && !Win.windowIntact(s);
+}
+
+/**
+ * Is the flight from (x0, y0) to (x1, y1) clear for a BODY of radius `r`, not just its centre? The centre line and the
+ * two lines along its flanks (a hair inside the radius). The centre line alone let a jumper standing against a wall pick
+ * a leap that grazes it: the body hit the wall in the first frame of the flight, landed where it stood, and chose the
+ * same leap again -- a hunting jumper frozen at a building's corner (the review of ef98768, M2).
+ */
+function flightClear(
+	world: WorldData,
+	x0: number,
+	y0: number,
+	x1: number,
+	y1: number,
+	r: number,
+	filter: (s: Solid) => boolean,
+): boolean {
+	if (!Phys.segmentClear(world, x0, y0, x1, y1, filter)) return false;
+	const dx = x1 - x0;
+	const dy = y1 - y0;
+	const d = math.sqrt(dx * dx + dy * dy);
+	if (d < 1) return true;
+	const k = (r - 1) / d;
+	const ox = -dy * k;
+	const oy = dx * k;
+	return (
+		Phys.segmentClear(world, x0 + ox, y0 + oy, x1 + ox, y1 + oy, filter) &&
+		Phys.segmentClear(world, x0 - ox, y0 - oy, x1 - ox, y1 - oy, filter)
+	);
+}
+
+/**
  * Take off towards `dir`, landing only on free ground with a clear flight line (the original jumper flew
  * through walls). Better than the original in the other direction too: the leap now CLEARS cars and bins,
  * and a hunting jumper only spends it when the landing actually shortens its path (flow-field cells), so
@@ -1352,35 +1407,90 @@ function blocksJump(s: Solid): boolean {
 function startJump(refs: Ctx.AiRefs, z: ZombieState, r: number, dir: number, hunting: boolean): boolean {
 	const field = refs.field;
 	const here = hunting && field.contains(z.x, z.y) ? field.pathCells(z.x, z.y) : undefined;
+	// the best shorter hop, should no leap cut the corner by JUMP_GAIN (below)
+	let bestGain = JUMP_HOP_GAIN;
+	let bestA = 0;
+	let bestX = 0;
+	let bestY = 0;
+	let bestLen = 0;
 	for (const len of JUMP_TRIES_LEN) {
 		for (const off of JUMP_TRIES_ANG) {
 			const a = dir + off;
 			const tx = z.x + math.cos(a) * len;
 			const ty = z.y + math.sin(a) * len;
 			if (Phys.circleBlocked(refs.world, tx, ty, r) !== undefined) continue;
-			if (!Phys.segmentClear(refs.world, z.x, z.y, tx, ty, blocksJump)) continue;
+			if (!flightClear(refs.world, z.x, z.y, tx, ty, r, hunting ? blocksHuntingJump : blocksJump)) continue;
 			if (here !== undefined && here < 1e8) {
 				// only worth it when it really cuts the corner
 				if (!field.contains(tx, ty)) continue;
-				if (field.pathCells(tx, ty) > here - T.JUMP_GAIN) continue;
+				const gain = here - field.pathCells(tx, ty);
+				if (gain < T.JUMP_GAIN) {
+					if (gain > bestGain) {
+						bestGain = gain;
+						bestA = a;
+						bestX = tx;
+						bestY = ty;
+						bestLen = len;
+					}
+					continue;
+				}
 			}
-			z.jumping = true;
-			z.jumpReady = false;
-			z.jumpCd = T.JUMP_COOLDOWN;
-			z.jumpDir = a;
-			z.jumpTargetX = tx;
-			z.jumpTargetY = ty;
-			z.jumpLength = len;
-			z.jumpTravel = 0;
-			z.jumpAir = 0;
-			z.jumpHeight = 0;
-			z.reactionSpeed = 0;
-			z.angle = a;
-			z.angleSlow = a;
+			takeOff(z, a, tx, ty, len, hunting);
 			return true;
 		}
 	}
+	// No leap cuts the corner, but a hop still gets it nearer along the path: take it rather than stand. At the outside
+	// corner of a building the field turns round the corner -- often at more than the tries' 40 degrees off the heading,
+	// which points at the survivor through the wall -- and every leap gained less than JUMP_GAIN: a hunting jumper stood
+	// there for good, never reaching the door or the window beyond (the review of ef98768, M2). So the hop looks all
+	// round, a short one, and only when it is stuck (no allocation: the constant tables)
+	if (bestLen === 0 && here !== undefined && here < 1e8) {
+		for (const len of JUMP_HOP_LEN) {
+			for (let k = 1; k < 8; k++) {
+				const a = dir + (k * math.pi) / 4;
+				const tx = z.x + math.cos(a) * len;
+				const ty = z.y + math.sin(a) * len;
+				if (!field.contains(tx, ty) || Phys.circleBlocked(refs.world, tx, ty, r) !== undefined) continue;
+				if (!flightClear(refs.world, z.x, z.y, tx, ty, r, blocksHuntingJump)) continue;
+				const gain = here - field.pathCells(tx, ty);
+				if (gain > bestGain) {
+					bestGain = gain;
+					bestA = a;
+					bestX = tx;
+					bestY = ty;
+					bestLen = len;
+				}
+			}
+		}
+	}
+	if (bestLen > 0) {
+		takeOff(z, bestA, bestX, bestY, bestLen, hunting);
+		return true;
+	}
 	return false;
+}
+
+/** a hop the hunting jumper takes when no leap cuts the corner by JUMP_GAIN: at least this many cells nearer */
+const JUMP_HOP_GAIN = 0.5;
+/** ...and how long a hop it tries all round when even that fails along its heading */
+const JUMP_HOP_LEN: Array<number> = [100, 150];
+
+function takeOff(z: ZombieState, a: number, tx: number, ty: number, len: number, hunting: boolean): void {
+	z.jumping = true;
+	// a hunting leap may cross a pane of glass, and breaks it on the way (EDI-18, M2)
+	z.jumpGlass = hunting;
+	z.jumpReady = false;
+	z.jumpCd = T.JUMP_COOLDOWN;
+	z.jumpDir = a;
+	z.jumpTargetX = tx;
+	z.jumpTargetY = ty;
+	z.jumpLength = len;
+	z.jumpTravel = 0;
+	z.jumpAir = 0;
+	z.jumpHeight = 0;
+	z.reactionSpeed = 0;
+	z.angle = a;
+	z.angleSlow = a;
 }
 
 /**
@@ -1708,7 +1818,13 @@ function updateOne(refs: Ctx.AiRefs, z: ZombieState, idx: number, dt: number): b
 		const len = z.jumpLength ?? T.JUMP_LENGTH;
 		const t = math.clamp((z.jumpTravel ?? 0) / len, 0, 1);
 		z.jumpHeight = math.sin(t * math.pi) * T.JUMP_LIFT;
-		if (res.hit !== undefined || t >= 1 || (z.jumpAir ?? 0) >= T.JUMP_AIR_MAX) {
+		const hitPane =
+			res.hit !== undefined && z.jumpGlass === true && Win.windowIntact(res.hit) ? res.hit : undefined;
+		if (hitPane !== undefined && shatterWindow(refs, hitPane)) {
+			// EDI-18 (M2): a hunting leap crashes through the glass (a body in flight, like a charge: at once) -- the frame
+			// is open now, and the rest of the flight carries on through it; the crash costs it the stun of a blow
+			z.stunned = math.max(z.stunned, T.STUN_TIME);
+		} else if (res.hit !== undefined || t >= 1 || (z.jumpAir ?? 0) >= T.JUMP_AIR_MAX) {
 			z.jumping = false;
 			z.jumpHeight = 0;
 		}

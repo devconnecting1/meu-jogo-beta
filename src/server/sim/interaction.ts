@@ -27,6 +27,7 @@ import {
 	interactTarget,
 	isFire,
 	nearestGroundItem,
+	nearestIntactWindow,
 	nearestPump,
 	pumpsOf,
 	repairMaterial,
@@ -45,7 +46,7 @@ import { WINDOW_REACH } from "shared/game/windows";
 import * as Noise from "shared/sim/ai/noise";
 import { ServerItems } from "./items";
 import type { MachineOutcome } from "./power";
-import type { ServerWindows } from "./windows";
+import { ServerWindows, WINDOW_REACH_SLACK } from "./windows";
 import { WorldOut } from "./worldOut";
 
 /** §8.1: the reach checks get the same latency allowance as `pickup` */
@@ -141,6 +142,11 @@ export interface InteractContext {
 	zombies: ReadonlyArray<ZombieState>;
 	/** the world clock in game hours, `gameHours(day, dayTime)` */
 	hours: number;
+	/**
+	 * (EDI-18) The press is meant for a window's glass: its command carried `HeldBit.Glass` (protocol.ts note 22), set by
+	 * a client whose hint named the window. Such a press breaks glass and does nothing else; any other press never does.
+	 */
+	glass?: boolean;
 }
 
 export class ServerInteraction {
@@ -194,6 +200,8 @@ export class ServerInteraction {
 		const p = ctx.state;
 		if (p.dead) return { kind: "none" };
 		if ((this.pressCd.get(ctx.slot) ?? 0) > 0) return { kind: "refused", why: "cooldown" };
+		// EDI-18: the glass is its own intent -- a press that asks for it does nothing else, and no other press breaks it
+		if (ctx.glass === true) return this.window(ctx);
 		// ITM-07: an item this save has no room for is passed over, so a full stack does not hide the door, the search
 		// or the repair behind it (review of 1186a83, M1); the client's hint passes the same check
 		const target = interactTarget(this.world, p.x, p.y, noRoomIn(ctx.save));
@@ -242,20 +250,29 @@ export class ServerInteraction {
 		if (target.kind === "mapItem") return this.mapItem(ctx, target.solid);
 		if (target.kind === "pump") return this.pump(ctx, target.solid);
 		if (target.kind === "solid") return this.repair(ctx, target.solid);
-		if (target.kind === "window") return this.window(ctx, target.solid);
 		return this.search(ctx, target.building);
 	}
 
 	// ---------------------------------------------------------------- a window's glass (EDI-18)
 
 	/**
-	 * E at an intact pane breaks it, on purpose: the pane the SERVER's query found at the server's position (the press
-	 * names nothing), within WINDOW_REACH of its edge with a clear line, at the survivor's rate (server/sim/windows.ts).
+	 * An E press meant for the glass breaks the intact pane at hand: the one the SERVER's query finds at the server's
+	 * position (the press names none), within WINDOW_REACH of its edge plus the latency slack, with a clear line (the
+	 * test the client's hint asked), at the survivor's rate (server/sim/windows.ts). Nothing else: an item, a door or the
+	 * loot beside the window is left alone.
 	 */
-	private window(ctx: InteractContext, s: Solid): InteractOutcome {
+	private window(ctx: InteractContext): InteractOutcome {
 		const windows = this.windows;
 		if (windows === undefined) return { kind: "none" };
-		const got = windows.byHand(ctx.slot, ctx.state, s, WINDOW_REACH);
+		const p = ctx.state;
+		const s = nearestIntactWindow(this.world, p.x, p.y, WINDOW_REACH + WINDOW_REACH_SLACK);
+		if (s === undefined) {
+			windows.missed(ctx.slot);
+			return { kind: "refused", why: "range" };
+		}
+		// a press that reached a pane spends the cooldown, like any press that reaches something
+		this.pressCd.set(ctx.slot, PRESS_COOLDOWN_S);
+		const got = windows.byHand(ctx.slot, p, s, WINDOW_REACH);
 		if (got === "broken") return { kind: "window", solid: s };
 		if (got === "range" || got === "blocked" || got === "rate") return { kind: "refused", why: got };
 		if (got === "budget") return { kind: "refused", why: "cooldown" };

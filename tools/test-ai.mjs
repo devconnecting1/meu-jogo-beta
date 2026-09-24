@@ -34,7 +34,8 @@
  *  12. GLASS     (EDI-18) a pane breaking is heard 420 u away and pulls the horde to the WINDOW; a zombie that sees you
  *                through the glass pounds on it (GLASS_HITS blows, ~2 s) and climbs in; a doorway nearby wins over the
  *                glass, the glass over a barricade; a wanderer never breaks one; on the server the break is one global
- *                DoorSet and the flow field reads the open frame.
+ *                DoorSet and the flow field reads the open frame; and a walker, a charger (its rush through the glass)
+ *                and a jumper (its leap through it) all get into a room whose only way in is a pane, from 8 sides.
  *
  * Pure Node (>= 18) + the project's TypeScript (devDependency) to transpile src on the fly, with the same
  * Luau / roblox-ts shims tools/test-sim.mjs uses. `math.random` is replaced by a seeded generator, so every
@@ -2302,6 +2303,67 @@ function testGlass() {
 			"the flow field reads the open frame: the way through it got cheaper by GLASS_COST",
 			`${outside.toFixed(1)} -> ${after.toFixed(1)} cells`,
 		);
+	}
+
+	// (g) the review of ef98768, M2: EVERY kind gets in, from every side. The room's only way in is its pane; one wave
+	// zombie starts 520 u out, at each of 8 bearings round it, on the server. A charger used to slide back and forth
+	// outside the wall for ever (its lane blocked by the wall, it looked for a lane instead of walking round), and it
+	// could not charge through glass; a jumper stood at the building's outside corner (every leap along the field gained
+	// less than JUMP_GAIN, or grazed the wall), and could not leap through glass.
+	if (SERVER) {
+		const kinds = [
+			[1, "walker"],
+			[4, "charger"],
+			[5, "jumper"],
+		];
+		for (const [type, name] of kinds) {
+			const times = [];
+			let never = 0;
+			for (let a = 0; a < 360; a += 45) {
+				setSeed(7);
+				resetEntityIds();
+				const { world, g } = glassRoom(false);
+				const sim = new simulationMod.ServerSimulation({ world, zombies: true, interactive: true });
+				sim.horde.clock.setClock(12, 1);
+				const sp = serverPlayers.createServerPlayer(
+					{ slot: 0, userId: 1, name: "p" },
+					defaultSave(),
+					2000,
+					2000,
+					0,
+					sim.simHz,
+				);
+				sp.state.x = 2000;
+				sp.state.y = 2000;
+				sp.state.godMode = true;
+				sim.add(sp);
+				const rad = (a * Math.PI) / 180;
+				const z = createZombie(type, 2000 + Math.cos(rad) * 520, 2000 + Math.sin(rad) * 520, 1, true);
+				z.detect = true;
+				z.wave = true;
+				sim.horde.zombies.push(z);
+				let inside = -1;
+				for (let t = 0; t < sim.simHz * 45 && inside < 0; t++) {
+					// this zombie alone (the spawner fills a night)
+					for (let i = sim.horde.zombies.length - 1; i >= 0; i--) {
+						if (sim.horde.zombies[i] !== z) sim.horde.zombies.splice(i, 1);
+					}
+					sim.step();
+					sp.state.x = 2000;
+					sp.state.y = 2000;
+					if (z.x > 1820 && z.x < 2180 && z.y > 1820 && z.y < 2180) inside = t / sim.simHz;
+				}
+				if (inside < 0) never += 1;
+				else times.push(inside);
+				void g;
+			}
+			times.sort((p, q) => p - q);
+			check(
+				never === 0,
+				`a ${name} gets into a room whose only way in is a pane of glass, from all 8 sides`,
+				`${8 - never}/8 in; median ${times[Math.floor(times.length / 2)]?.toFixed(1)} s, max ${times[times.length - 1]?.toFixed(1)} s`,
+			);
+		}
 	}
 }
 
