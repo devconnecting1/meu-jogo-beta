@@ -7,7 +7,7 @@ import { DESIGN } from "shared/engine/constants";
 import { langGet } from "shared/data/lang";
 import { ShopActionReason, ShopActionRequest } from "shared/net/net";
 import { invokeShopAction, onWalletChanged, sessionReady } from "../systems/saveClient";
-import { SurvivorPreview, packPetScene } from "../view/cosmeticPreview";
+import { SurvivorPreview, packPetPicture } from "../view/cosmeticPreview";
 import { inputDevice } from "./device";
 import { drawingBox } from "./drawingBox";
 import { IconView, drawIcon, drawItemIcon } from "./itemIcon";
@@ -51,15 +51,16 @@ import * as Kit from "./window";
  *   │       enter the city.                                                          │
  *   │ ┌ First Night Kit ─────┐ ┌ Pantry Crate ──────────┐ ┌ Medic Bag ───────────┐ │
  *   │ │ [ic][ic][ic] Cotton… │ │ [ic][ic][ic] Cooked…   │ │ [ic][ic][ic] First…  │ │
- *   │ │ ● 20         [ Buy ] │ │ ● 20          [ Buy ]  │ │ ● 30  [Need 10 more] │ │
+ *   │ │ ● 20         [ Buy ] │ │ ● 20          [ Buy ]  │ │ ● 30 [10 more needed]│ │
  *   │ └──────────────────────┘ └────────────────────────┘ └──────────────────────┘ │  3 x 3
  *   └───────────────────────────────────────────────────────────────────────────────┘
  *
- * - A pack card: its name (and "Waiting ×N" when bought packs wait for the next entry into the city), what is inside
+ * - A pack card: its name (and "Pending ×N" when bought packs wait for the next entry into the city), what is inside
  *   as the Bag's own item icons (UI-11) on tiles with the count on each, the names beside them in the same order, and
- *   the price with Buy on one line. A pet pack shows the pet itself, drawn by the wardrobe's SurvivorPreview, and says
- *   the truth about it: it stays until a New game (MON-04; the Wardrobe sells the one that stays).
- * - Can't afford it: Buy is disabled and says how much is missing ("Need 10 more"), on every card alike. It used to
+ *   the price with Buy on one line. A pet pack shows the pet itself, drawn by the wardrobe's SurvivorPreview (a bird
+ *   in flight, wings spread: landed and seen from above, a pigeon is a grey oval), and says the truth about it: it
+ *   stays until a New game (MON-04; the Wardrobe sells the one that stays). Already owned for good: "Owned".
+ * - Can't afford it: Buy is disabled and says how much is missing ("10 more needed"), on every card alike. It used to
  *   turn into a hollow outline -- a style of its own that read as focus or as another kind of button.
  * - No "popular" or "best value" tag: nothing in the data says which pack is either, and a tag that invents urgency is
  *   what MON-03 forbids. The contents are fixed and declared (MON-03) -- the note line says so, and where they go.
@@ -415,14 +416,17 @@ export function showShop(ctx: GameContext, onBack: () => void, onWardrobe: () =>
 			});
 			paintPlate(bed, SURFACE.groove, "flat", 2);
 			const box = drawingBox(bed, "Pet", 3, 3, PET_W - 6, bedH - 6, z + 1);
+			const look = petLookOfEquip(petEquip);
+			const picture = packPetPicture(look);
 			const pet = new SurvivorPreview(box, {
 				w: PET_W - 6,
 				h: bedH - 6,
 				subject: "pet",
-				scene: packPetScene(petLookOfEquip(petEquip)),
+				scene: picture.scene,
+				petInFlight: picture.inFlight,
 				zIndex: box.ZIndex,
 			});
-			pet.setPet(petLookOfEquip(petEquip));
+			pet.setPet(look);
 			pet.draw(0);
 			previews.push(pet);
 			lines.push(tr(nameOf(ItemKind.Equip, petEquip)));

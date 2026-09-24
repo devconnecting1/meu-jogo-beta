@@ -960,12 +960,21 @@ section("6) o ladrilho do guarda-roupa: cada traje sozinho, cada pet sozinho, in
 	let packWorst = 0;
 	let packWhat = "";
 	let drawn = 0;
+	/** a bird's pack: the pet's width over its height in the picture (wings spread: wider than long) */
+	const birdShape = [];
 	for (const [name, look] of packPets) {
 		for (const [w, h] of [
 			[90, 82],
 			[60, 50],
 		]) {
-			const pic = new PV.SurvivorPreview(panel, { w, h, subject: "pet", scene: PV.packPetScene(look) });
+			const pp = PV.packPetPicture(look);
+			const pic = new PV.SurvivorPreview(panel, {
+				w,
+				h,
+				subject: "pet",
+				scene: pp.scene,
+				petInFlight: pp.inFlight,
+			});
 			pic.setPet(look);
 			pic.draw(0);
 			const out = clipOf(pic, w, h);
@@ -973,7 +982,14 @@ section("6) o ladrilho do guarda-roupa: cada traje sozinho, cada pet sozinho, in
 				packWorst = out;
 				packWhat = `${name} ${w}x${h}`;
 			}
-			if (spritesOf(pic.renderer).filter(isPet).length >= 5) drawn++;
+			const pet = spritesOf(pic.renderer).filter(isPet);
+			if (pet.length >= 5) drawn++;
+			if (COS.petFlies(look)) {
+				const bs = pet.map(boxOf);
+				const bw = Math.max(...bs.map(b => b.maxX)) - Math.min(...bs.map(b => b.minX));
+				const bh = Math.max(...bs.map(b => b.maxY)) - Math.min(...bs.map(b => b.minY));
+				birdShape.push(bw / bh);
+			}
 			pic.destroy();
 		}
 	}
@@ -981,6 +997,12 @@ section("6) o ladrilho do guarda-roupa: cada traje sozinho, cada pet sozinho, in
 		packPets.length === 2 && drawn === packPets.length * 2 && packWorst <= 0.5,
 		"loja: o pet de cada pacote de pet (Pigeon, Carolina) desenhado inteiro no cartao, sem cortar",
 		packWorst > 0 ? `saiu ${packWorst.toFixed(1)} px (${packWhat})` : `${packPets.map(p => p[0]).join(", ")}`,
+	);
+	// landed and seen from above, a pigeon is a grey oval (10 x 27 units); the pack shows it in flight, wings spread
+	check(
+		birdShape.length === 2 && birdShape.every(k => k > 1.1),
+		"loja: o pombo do pacote aparece voando, de asas abertas (mais largo que comprido), nao um oval cinza pousado",
+		`largura / altura ${birdShape.map(k => k.toFixed(2)).join(", ")}`,
 	);
 }
 
@@ -1354,13 +1376,17 @@ section("7) com a arte dos personagens (ART-08, ART-09, ART-11): os mesmos traje
 			"todo ladrilho mostra o seu cosmetico inteiro",
 			tileOut > 0 ? `saiu ${tileOut.toFixed(1)} px (${tileWhat})` : `${S} x ${S}`,
 		);
-		// the shop's pet packs, framed on their own pet (packPetScene): the texels whole in the card's picture too, and
-		// the pigeon -- small in the world -- clearly bigger than the wardrobe's framing would draw it in the same box
+		// the shop's pet packs, framed on their own pet (packPetPicture): the texels whole in the card's picture too, the
+		// pigeon -- small in the world -- clearly bigger than the wardrobe's framing would draw it in the same box, and
+		// in flight: its cell is a row of the sheet with the wings out, wider than long
 		const { SHOP_PACKS } = require(join(SRC, "shared/data/shop.ts"));
 		const { ItemKind } = require(join(SRC, "shared/data/kinds.ts"));
 		let packOut = 0;
 		let packWhat = "";
 		let packs = 0;
+		const birdTexels = [];
+		/** the pigeon's drawn width over the card picture's (90 units) */
+		let birdFill = 0;
 		for (const p of SHOP_PACKS) {
 			for (const it of p.items) {
 				const look = it.kind === ItemKind.Equip ? COS.petLookOfEquip(it.index) : COS.PetLook.None;
@@ -1370,7 +1396,14 @@ section("7) com a arte dos personagens (ART-08, ART-09, ART-11): os mesmos traje
 					[90, 82],
 					[60, 50],
 				]) {
-					const pic = new PV.SurvivorPreview(panel, { w, h, subject: "pet", scene: PV.packPetScene(look) });
+					const pp = PV.packPetPicture(look);
+					const pic = new PV.SurvivorPreview(panel, {
+						w,
+						h,
+						subject: "pet",
+						scene: pp.scene,
+						petInFlight: pp.inFlight,
+					});
 					pic.setPet(look);
 					pic.draw(0);
 					for (const s of imagesOf(pic.renderer)) {
@@ -1380,24 +1413,37 @@ section("7) com a arte dos personagens (ART-08, ART-09, ART-11): os mesmos traje
 							packOut = out;
 							packWhat = `${p.name} ${w}x${h}`;
 						}
+						if (COS.petFlies(look)) {
+							birdTexels.push((c.maxX - c.minX) / (c.maxY - c.minY));
+							if (w === 90) birdFill = Math.max(birdFill, (c.maxX - c.minX) / w);
+						}
 					}
 					pic.destroy();
 				}
 			}
 		}
+		const pigeon = PV.packPetPicture(COS.PetLook.Pigeon);
 		const framed = new PV.SurvivorPreview(panel, {
 			w: 90,
 			h: 82,
 			subject: "pet",
-			scene: PV.packPetScene(COS.PetLook.Pigeon),
+			scene: pigeon.scene,
+			petInFlight: pigeon.inFlight,
 		});
 		const plain = new PV.SurvivorPreview(panel, { w: 90, h: 82, subject: "pet" });
+		// the scene is framed on the spread wings (48 units), so the scale gains less than a landed pigeon's framing
+		// would; what counts is the drawing: the flying pigeon spans most of the picture's width
 		check(
-			packs === 2 && packOut <= 0.5 && framed.scale > plain.scale * 1.4,
-			"loja: o pet de cada pacote, em pixel art, inteiro no cartao e maior que no enquadramento do guarda-roupa",
+			packs === 2 && packOut <= 0.5 && framed.scale > plain.scale * 1.25 && birdFill >= 0.8,
+			"loja: o pet de cada pacote, em pixel art, inteiro no cartao, maior que no enquadramento do guarda-roupa e o pombo de ponta a ponta do quadro",
 			packOut > 0
 				? `saiu ${packOut.toFixed(1)} px (${packWhat})`
-				: `${framed.scale.toFixed(2)}x contra ${plain.scale.toFixed(2)}x`,
+				: `${framed.scale.toFixed(2)}x contra ${plain.scale.toFixed(2)}x; o pombo ocupa ${(birdFill * 100).toFixed(0)} % da largura`,
+		);
+		check(
+			birdTexels.length === 2 && birdTexels.every(k => k > 1.1),
+			"loja: em pixel art, o pombo do pacote e a celula de asas abertas (mais larga que comprida)",
+			`largura / altura ${birdTexels.map(k => k.toFixed(2)).join(", ")}`,
 		);
 		framed.destroy();
 		plain.destroy();

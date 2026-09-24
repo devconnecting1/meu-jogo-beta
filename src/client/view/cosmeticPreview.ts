@@ -50,18 +50,35 @@ export const OUTFIT_SCENE = { minX: -34, maxX: 30, minY: -24, maxY: 44 } as cons
 /** a pet's tile: the pet alone, standing at the origin (the eagle's open wings, a dog's length and tail) */
 export const PET_SCENE = { minX: -30, maxX: 30, minY: -28, maxY: 32 } as const;
 /**
- * The shop's pet packs (client/ui/shop.ts): ONE known pet, standing still, framed on itself -- not on the room the
- * eagle's open wings need -- so a small card still shows it big: a bird (the Pigeon's pack) and a dog (the Carolina's).
- * tools/test-cosmetics.mjs draws each pack's pet, flat and in pixel art, and checks every sprite and texel lands inside.
+ * A bird in flight in a pack picture (petInFlight): half-way up (petFollow's `lift`) and at the top of its wing beat
+ * (the phase), so a pigeon spreads its wings to about half their span -- the baked 0.57 row of the pixel art. Landed
+ * and seen from above, a pigeon is a grey oval; in flight it is a bird at a glance.
  */
-const BIRD_SCENE = { minX: -16, maxX: 16, minY: -18, maxY: 20 } as const;
+const FLIGHT_LIFT = 0.5;
+const FLIGHT_PHASE = math.pi / 2;
+/**
+ * The shop's pet packs (client/ui/shop.ts): ONE known pet framed on itself -- not on the room the eagle's open wings
+ * need -- so a small card still shows it big: a pigeon in flight over its shadow (the Pigeon's pack; the pixel art's
+ * spread wings are the widest, 48 units) and a dog standing (the Carolina's). tools/test-cosmetics.mjs draws each
+ * pack's pet, flat and in pixel art, and checks every sprite and texel lands inside.
+ */
+const BIRD_FLIGHT_SCENE = { minX: -25, maxX: 25, minY: -27, maxY: 11 } as const;
 const DOG_SCENE = { minX: -24, maxX: 24, minY: -27, maxY: 29 } as const;
 
-/** the scene that frames pet `look` alone in a small picture (the shop's pet packs); any other pet: PET_SCENE */
-export function packPetScene(look: number): PreviewScene {
-	if (look === PetLook.Pigeon || look === PetLook.WhitePigeon) return BIRD_SCENE;
-	if (look === PetLook.Carolina) return DOG_SCENE;
-	return PET_SCENE;
+/** how a small picture shows ONE pet (the shop's pet packs): the scene it frames, and a bird in flight */
+export interface PackPetPicture {
+	readonly scene: PreviewScene;
+	readonly inFlight: boolean;
+}
+const BIRD_PICTURE: PackPetPicture = { scene: BIRD_FLIGHT_SCENE, inFlight: true };
+const DOG_PICTURE: PackPetPicture = { scene: DOG_SCENE, inFlight: false };
+const OTHER_PICTURE: PackPetPicture = { scene: PET_SCENE, inFlight: false };
+
+/** how pet `look` is shown alone in a small picture (the shop's pet packs); a pet no pack sells: the wardrobe's tile */
+export function packPetPicture(look: number): PackPetPicture {
+	if (look === PetLook.Pigeon || look === PetLook.WhitePigeon) return BIRD_PICTURE;
+	if (look === PetLook.Carolina) return DOG_PICTURE;
+	return OTHER_PICTURE;
 }
 
 /** what a preview frames: the survivor with a pet at its side (the wardrobe's big preview), or one of the two */
@@ -116,9 +133,14 @@ export interface SurvivorPreviewOpts {
 	subject?: PreviewSubject;
 	/**
 	 * the box the camera frames, in world units (default: the subject's scene, sceneOf). A picture of ONE known pet
-	 * frames that pet (packPetScene: the shop's pet packs) instead of the room the widest pet needs
+	 * frames that pet (packPetPicture: the shop's pet packs) instead of the room the widest pet needs
 	 */
 	scene?: PreviewScene;
+	/**
+	 * a bird drawn in flight -- lifted, wings spread -- instead of landed (packPetPicture: the shop's pet packs); the
+	 * wardrobe shows it landed, as it waits beside you. Ignored for a dog
+	 */
+	petInFlight?: boolean;
 	zIndex?: number;
 	name?: string;
 }
@@ -182,6 +204,10 @@ export class SurvivorPreview {
 		pet.y = subject === "pet" ? 0 : PET_Y;
 		pet.angle = PREVIEW_FACING;
 		pet.started = true;
+		if (opts.petInFlight === true) {
+			pet.lift = FLIGHT_LIFT;
+			pet.phase = FLIGHT_PHASE;
+		}
 	}
 
 	/** OutfitLook to show (0 = the plain survivor) */
