@@ -457,6 +457,16 @@ const PAIRS = [
 		"placar: o chip de ferro com Bag e Menu (icone, contagem)",
 	],
 	["THEME.tabActiveForeground", "THEME.tabActive", MIN_TEXT, "placar: o chip aceso enquanto o placar esta aberto"],
+
+	// --- the save indicator (SAV-01, client/ui/saveIndicator.ts): a sunk well in the top bar, text and a pixel floppy on
+	// it. Small text (TEXT.sm), so 4,5:1 for every word; the floppy is a non-text mark, 3:1
+	["THEME.mutedForeground", "SURFACE.well", MIN_TEXT, 'indicador de save: "Saving..." em cinza mudo'],
+	["THEME.foreground", "SURFACE.well", MIN_TEXT, 'indicador de save: "Saved"'],
+	["THEME.destructive", "SURFACE.well", MIN_TEXT, 'indicador de save: "Progress not saved — retrying" em vermelho'],
+	["THEME.mutedForeground", "SURFACE.well", MIN_UI, "indicador de save: o disquete de pixel gravando"],
+	["GAME.success", "SURFACE.well", MIN_UI, "indicador de save: o disquete verde de gravado"],
+	["THEME.destructive", "SURFACE.well", MIN_UI, "indicador de save: o disquete vermelho da falha"],
+	["SURFACE.line", "SURFACE.well", MIN_UI, "indicador de save: a borda do chip"],
 ];
 
 /**

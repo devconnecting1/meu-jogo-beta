@@ -2318,6 +2318,235 @@ section("31) regras e mensagens de moderacao: pela lang.ts, e o ban aponta para 
 	);
 }
 
+// ---------------------------------------------------------------- SAV-01: saving is automatic
+
+section(
+	"32) SAV-01: so o servidor escolhe quando gravar -- eventos coalescidos, o piso do orcamento, nada sem mudanca",
+);
+{
+	const CAD = require(join(SRC, "server/save/saveCadence.ts"));
+	const { CRAFT_RECIPES } = require(join(SRC, "shared/data/crafts.ts"));
+	const { ItemKind: IK } = require(join(SRC, "shared/data/kinds.ts"));
+	const src = f => readFileSync(join(SRC, f), "utf8");
+
+	/**
+	 * The server's two loops over a pretend clock: `events` (s) ask for an early write (the event save), the scan runs
+	 * every EVENT_SCAN_S and starts the write that is due, and -- `autosave` -- the autosave comes every AUTOSAVE_INTERVAL
+	 * under the same gap. `changes` (s) only make the session dirty (XP, ammo: no event). The load's write happened at
+	 * `loadAt`. Answers when each write started.
+	 */
+	function simulate(events, horizon, { loadAt = -1000, autosave = false, changes = [] } = {}) {
+		const c = CAD.newCadence(loadAt);
+		const writes = [];
+		let next = 0;
+		let nextChange = 0;
+		let dirty = false;
+		const queue = [...events].sort((a, b) => a - b);
+		for (let t = 0; t <= horizon + 1e-9; t = Math.round((t + 0.05) * 100) / 100) {
+			while (next < queue.length && queue[next] <= t) {
+				CAD.scheduleSave(c, t, "level");
+				dirty = true;
+				next++;
+			}
+			while (nextChange < changes.length && changes[nextChange] <= t) {
+				dirty = true;
+				nextChange++;
+			}
+			if (autosave && t > 0 && Math.abs(t % CAD.AUTOSAVE_INTERVAL) < 1e-6) {
+				if (CAD.tooSoon(c, t)) {
+					if (dirty) CAD.scheduleSave(c, t, "auto");
+				} else if (dirty) {
+					CAD.writeStarted(c, t);
+					writes.push(t);
+					dirty = false;
+				}
+			}
+			if (Math.abs((t / CAD.EVENT_SCAN_S) % 1) < 1e-6 && CAD.saveDue(c, t)) {
+				CAD.writeStarted(c, t);
+				writes.push(t);
+				dirty = false;
+			}
+		}
+		return writes;
+	}
+	const gapsOf = w => w.slice(1).map((t, i) => t - w[i]);
+
+	// 10 events in 5 s: one write inside the burst, one more a gap later for what came after it
+	const burst = Array.from({ length: 10 }, (_, i) => i * 0.5);
+	const w1 = simulate(burst, 60);
+	check(
+		w1.filter(t => t <= 5).length === 1 && w1.length === 2 && w1[1] - w1[0] >= CAD.EVENT_SAVE_GAP,
+		`10 eventos em 5 s: 1 gravacao dentro deles (${CAD.EVENT_SAVE_DELAY} s depois do primeiro) e 1 so depois, ${CAD.EVENT_SAVE_GAP} s adiante`,
+		`gravacoes em ${w1.join(", ")} s`,
+	);
+	// a burst shorter than the delay is ONE write
+	const w2 = simulate(
+		Array.from({ length: 10 }, (_, i) => i * 0.25),
+		60,
+	);
+	check(
+		w2.length === 1,
+		`10 eventos em 2,5 s (menos que o atraso de ${CAD.EVENT_SAVE_DELAY} s): 1 gravacao`,
+		`${w2}`,
+	);
+	// a flood: an event every 0.1 s for 10 minutes (a client that spams whatever it can, a horde of level-ups)
+	const flood = Array.from({ length: 6000 }, (_, i) => i * 0.1);
+	const w3 = simulate(flood, 600, { autosave: true });
+	check(
+		w3.length <= Math.ceil(600 / CAD.EVENT_SAVE_GAP) + 1 && gapsOf(w3).every(g => g >= CAD.EVENT_SAVE_GAP - 1e-6),
+		`uma enxurrada (6000 eventos em 10 min, com o autosave): no maximo 1 gravacao a cada ${CAD.EVENT_SAVE_GAP} s`,
+		`${w3.length} gravacoes, menor intervalo ${Math.min(...gapsOf(w3)).toFixed(2)} s`,
+	);
+	// the autosave obeys the gap too: an event write 3 s before it leaves what came after for the gap's end
+	const w4 = simulate([54], 130, { autosave: true, loadAt: 0, changes: [58] });
+	checkArrayEq(
+		w4,
+		[57, 72],
+		"o autosave obedece ao mesmo intervalo: um evento gravou aos 57 s, o que mudou depois vai aos 72 s, nao aos 60",
+	);
+	// the load's own write counts: an event right after joining waits for the gap
+	const w5 = simulate([1], 40, { loadAt: 0 });
+	check(
+		w5.length === 1 && w5[0] === CAD.EVENT_SAVE_GAP,
+		"a carga (que pegou a trava) conta como gravacao: um evento 1 s depois de entrar grava aos 15 s",
+		`${w5}`,
+	);
+	check(
+		CAD.EVENT_SAVE_MIN_BUDGET >
+			Number(/const AUTOSAVE_MIN_BUDGET = (\d+);/.exec(src("server/main.server.ts"))?.[1]),
+		"o piso de orcamento dos eventos fica acima do do autosave (que guarda as entradas e saidas)",
+		`${CAD.EVENT_SAVE_MIN_BUDGET}`,
+	);
+	// the worst case, as the rule states it
+	const eventLoss = CAD.EVENT_SAVE_GAP + CAD.EVENT_SCAN_S;
+	const otherLoss = CAD.AUTOSAVE_INTERVAL + CAD.EVENT_SCAN_S;
+	console.log(
+		`        pior janela de perda numa queda sem BindToClose: ${eventLoss} s depois de um evento da lista, ` +
+			`${otherLoss} s para o resto (+ a latencia da escrita)`,
+	);
+
+	// which change of the save is an event, and which is not
+	const base = SAVE.defaultSave();
+	const marks = CAD.milestonesOf(base);
+	const moved = edit => {
+		const s = JSON.parse(JSON.stringify(base));
+		edit(s);
+		return CAD.milestoneEvent(marks, CAD.milestonesOf(s));
+	};
+	checkArrayEq(
+		[
+			moved(s => (s.level += 1)),
+			moved(s => (s.skillLevels[0] += 1)),
+			moved(s => (s.day += 1)),
+			moved(s => (s.bestDay += 1)),
+			moved(s => (s.titles[0] = 1)),
+			moved(s => (s.lifeDeaths += 1)),
+			moved(s => (s.runOver = true)),
+			moved(s => (s.runRev += 1)),
+		],
+		["level", "skill", "day", "day", "title", "death", "death", "life"],
+		"nivel, skill, dia, recorde, titulo, morte e vida nova sao eventos",
+	);
+	const dead = JSON.parse(JSON.stringify(base));
+	dead.runOver = true;
+	check(
+		CAD.milestoneEvent(CAD.milestonesOf(dead), CAD.milestonesOf(base)) === "revive",
+		"levantar (amanhecer, Rebirth) e evento",
+	);
+	checkArrayEq(
+		[
+			moved(s => (s.exp += 5)),
+			moved(s => (s.money += 5)),
+			moved(s => (s.ammoNormal += 5)),
+			moved(s => (s.settings.bgm = 0.1)),
+			moved(s => (s.zombieKills += 1)),
+			CAD.milestoneEvent(undefined, marks),
+		],
+		[undefined, undefined, undefined, undefined, undefined, undefined],
+		"XP, moedas, municao, ajustes e abates esperam o autosave; a primeira olhada so anota",
+	);
+
+	// a rare craft: a weapon or an armour made at a workbench -- not the hands' stick, ammunition, smelting, a meal, a
+	// bandage or a build
+	const rare = CRAFT_RECIPES.filter(r => CAD.isRareCraft(r.id));
+	const gear = r => r.resultKind === IK.Weapon || r.resultKind === IK.Equip;
+	const cooking = CRAFT_RECIPES.filter(r => r.needsCook === true);
+	check(
+		rare.length > 0 &&
+			rare.every(r => gear(r) && (r.needsDesk || r.needsPro) && r.craftKind !== 1) &&
+			CRAFT_RECIPES.filter(r => gear(r) && (r.needsDesk || r.needsPro)).length === rare.length &&
+			CRAFT_RECIPES.filter(r => r.needsCook || r.needsFire || r.craftKind === 1 || !gear(r)).every(
+				r => !CAD.isRareCraft(r.id),
+			),
+		"craft raro: arma ou equipamento de bancada; nunca comida, fundicao, municao, bandagem nem construcao",
+		`${rare.length} de ${CRAFT_RECIPES.length} receitas`,
+	);
+	const byHand = CRAFT_RECIPES.filter(r => gear(r) && !r.needsDesk && !r.needsPro);
+	check(
+		byHand.length > 0 && byHand.every(r => !CAD.isRareCraft(r.id)),
+		"...e o que se faz a mao com madeira e pedra (o graveto, o machado de pedra) espera o autosave",
+		`${byHand.length} receitas a mao`,
+	);
+	checkArrayEq(
+		[
+			CAD.backpackEvent({ kind: "learned", skill: 0, level: 1 }),
+			CAD.backpackEvent({ kind: "crafted", recipe: rare[0].id, count: 1, heat: undefined }),
+			CAD.backpackEvent({ kind: "crafted", recipe: cooking[0].id, count: 1, heat: "cook" }),
+			CAD.backpackEvent({ kind: "used", item: 0 }),
+			CAD.backpackEvent({ kind: "switched", weapon: 0 }),
+		],
+		["skill", "craft", undefined, undefined, undefined],
+		"da mochila: skill aprendida e craft raro pedem gravacao; o resto espera",
+	);
+
+	// no manual save, anywhere: the client never asks for a write
+	const main = src("server/main.server.ts");
+	const between = (from, to) => main.slice(main.indexOf(from), main.indexOf(to, main.indexOf(from)));
+	const reportPath =
+		between("function processReport(", "function processPending(") +
+		between(
+			"remotes.saveRequest.OnServerEvent.Connect(",
+			"// ---------------------------------------------------------------- shop",
+		);
+	check(
+		reportPath.length > 500 && !/flush\(|saveSoon\(|scheduleSave\(|UpdateAsync/.test(reportPath),
+		"o relatorio do cliente (SaveRequest) nunca grava nem pede gravacao: so marca a sessao suja",
+	);
+	// the events the server names where they happen (the others are found by `noteMilestones`, test:body 30)
+	check(
+		/Cadence\.backpackEvent\(outcome\)[^]*?saveSoon\(s, ev\)/.test(main) &&
+			/sim\.onDayCredit = [^]*?saveSoon\(s, "day"\)/.test(main) &&
+			/saveSoon\(s, req\.kind === "rebirth" \? "revive" : req\.kind === "newRun" \? "life" : "purchase"\)/.test(
+				main,
+			) &&
+			/Cadence\.noteMilestones\(s\.cadence, s\.save\)/.test(
+				between("function serveEventSaves(", "const WALLET_PUSH_S"),
+			),
+		"os eventos ligados: compra / Rebirth / New game na loja, dia na meia-noite, skill e craft raro na mochila, o resto pela olhada de 1 s",
+	);
+	check(
+		/export function createRemotes\(\)[^]*?return \{\s*loadRequest[^}]*shopAction[^}]*\};/.test(
+			src("shared/net/net.ts"),
+		) && (src("shared/net/net.ts").match(/ensureRemote\(net, /g) ?? []).length === 5,
+		"nenhum remote novo de salvar: os cinco de sempre (o SaveRequest e o relatorio)",
+	);
+	const pause = src("client/ui/pauseMenu.ts");
+	const client = src("client/main.client.ts") + src("client/systems/saveClient.ts");
+	check(
+		/key: "Back to game"/.test(pause) &&
+			!/key: "Save"|onSave\s*[?:(]|handlers\.onSave/.test(pause) &&
+			!/"manual"|manualQueued|manualInFlight|onSave\s*:/.test(client),
+		'sem o botao "Save" no menu da partida, sem o motivo "manual" e sem o handler no cliente',
+	);
+	const LANG = new Set(require(join(SRC, "shared/data/lang.ts")).LANG_TABLE);
+	check(
+		!LANG.has("Save") &&
+			!LANG.has("Progress saved") &&
+			["Saving...", "Saved", "Progress not saved — retrying", "Progress not saved"].every(k => LANG.has(k)),
+		'lang.ts: "Save" e "Progress saved" sairam; os textos do indicador estao la',
+	);
+}
+
 // ---------------------------------------------------------------- verdict
 
 console.log("");

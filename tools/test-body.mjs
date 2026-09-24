@@ -65,6 +65,12 @@
  *                           throws is not sold (refunded, then paid once) unless the body stood; a New game whose new
  *                           life throws keeps the death in the save; one body that cannot be banked at shutdown leaves
  *                           the others banked.
+ *  30. SAV-01               saving is automatic: a minute of progress reports writes nothing (only the autosave carries
+ *                           them); ten levels in five seconds are one write in the burst and one a gap (15 s) later; a
+ *                           purchase and a death are written within the delay; a leave never waits for the gap; an
+ *                           unchanged save is not rewritten (only the lock refresh); an event save waits under the budget
+ *                           floor and is not dropped; a failing DataStore is announced ("failing") and retried a gap
+ *                           later, not hammered; a lost lock is announced ("stopped") and never written over.
  *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs, plus the small fake Roblox below.
  */
@@ -782,7 +788,12 @@ section(
 			`hp ${f1(hop?.state.hp)}`,
 		);
 
-		// a new server process, and a death carried in the save
+		// a new server process, and a death carried in the save. Made here, on the way out: while the others were tested
+		// the daybreak stood this survivor up, and SAV-01's event save wrote that stand-up (a server that never wrote
+		// between a join and a leave is what used to leave the old death in the DataStore)
+		if (s.body(a) !== undefined && !s.body(a).state.dead) s.kill(a);
+		s.quit(a);
+		check(s.stored(idA)?.runOver === true, "…a survivor who leaves dead leaves a death in the DataStore");
 		const fresh = bootServer();
 		const w2 = fresh.join(newUser(), "witness");
 		fresh.immortal.add(w2);
@@ -1304,7 +1315,8 @@ section("11) the XP the server credits reaches the client: its wallet is pushed 
 	const { applyWallet, defaultSave, expMaxInit } = require(join(SRC, "shared/game/save.ts"));
 	const net = s.env.services.ReplicatedStorage.FindFirstChild("Net");
 	const acks = p => net.FindFirstChild("SaveAck").sent.filter(e => e.to === p);
-	const pushes = p => acks(p).filter(e => e.args[0]?.push === true);
+	// the WALLET pushes: SAV-01's news about a write of the save rides SaveAck too (`store`), and is section 30's
+	const pushes = p => acks(p).filter(e => e.args[0]?.push === true && e.args[0]?.store === undefined);
 	const p = s.join(newUser(), "hunter");
 	const sp = s.enter(p);
 	const save = s.save(p);
@@ -3055,6 +3067,295 @@ section("29) the admin audit log: UserIds and filtered text only, one key per se
 	} finally {
 		globalThis.string.match = savedMatch;
 		delete String.prototype.gsub;
+	}
+});
+
+// ================================================================ 30: SAV-01, saving is automatic
+
+section("30) SAV-01: no client-chosen write, coalesced event saves, the budget floor, and the player told", () => {
+	const Cad = require(join(SRC, "server/save/saveCadence.ts"));
+	const { expMaxInit } = require(join(SRC, "shared/game/save.ts"));
+	/** the save store (stores.ts reads the fake game, so only once a server has booted) */
+	let store;
+	/** the clock of every save write of `userId` from now on (answers the list, and the undo) */
+	const watch = userId => {
+		store = fakeStore(require(join(SRC, "server/save/stores.ts")).SAVE_STORE);
+		const times = [];
+		const original = store.UpdateAsync;
+		store.UpdateAsync = (k, transform) => {
+			if (k === String(userId)) times.push(clockNow);
+			return original(k, transform);
+		};
+		return [times, () => (store.UpdateAsync = original)];
+	};
+	const netOf = srv => srv.env.services.ReplicatedStorage.FindFirstChild("Net");
+	/** what the player was told about the writes of their save, in order */
+	const told = (srv, p) =>
+		netOf(srv)
+			.FindFirstChild("SaveAck")
+			.sent.filter(e => e.to === p && e.args[0]?.store !== undefined)
+			.map(e => e.args[0].store);
+	/** one level for this survivor, credited by the server exactly as combat does */
+	let killId = 930000;
+	const levelUp = (srv, sp) => srv.sim.progress.zombieKilled(++killId, expMaxInit(sp.save.level), sp.slot, 0);
+	const gaps = times => times.slice(1).map((t, i) => t - times[i]);
+
+	// (a) the client cannot pick the moment of a write: a minute of reports, every one a different state
+	{
+		const srv = bootWithAutosave();
+		const u = newUser();
+		const p = srv.join(u, "reporter");
+		const [times, undo] = watch(u);
+		try {
+			for (let i = 1; i <= 12; i++) {
+				srv.report(p, { settings: { ...srv.save(p).settings, bgm: i / 20 } });
+				srv.run(5, 0.25);
+			}
+			check(
+				times.length === 0,
+				"a minute of progress reports (12, each a new state) writes the DataStore not once",
+				`${times.length} write(s)`,
+			);
+			const remotes = netOf(srv)
+				.GetChildren()
+				.map(r => r.Name);
+			check(
+				remotes
+					.filter(n => /save/i.test(n))
+					.sort()
+					.join(",") === "SaveAck,SaveRequest",
+				"…and no remote asks for a write: SaveRequest is the progress report, SaveAck its answer",
+				remotes.join(","),
+			);
+			srv.autosave();
+			check(
+				times.length === 1 && srv.stored(u)?.settings?.bgm === srv.save(p).settings.bgm,
+				"…the next autosave carries them: one write, with the last report's settings",
+				`${times.length} write(s), bgm ${srv.stored(u)?.settings?.bgm}`,
+			);
+		} finally {
+			undo();
+		}
+	}
+
+	// (b) coalescing: ten levels in five seconds
+	{
+		const srv = bootServer();
+		const u = newUser();
+		const p = srv.join(u, "climber");
+		srv.immortal.add(p);
+		const sp = srv.enter(p);
+		// the load's own write (it took the lock) is more than a gap ago
+		srv.run(Cad.EVENT_SAVE_GAP + 1, 0.25);
+		const [times, undo] = watch(u);
+		const t0 = clockNow;
+		try {
+			for (let i = 0; i < 10; i++) {
+				levelUp(srv, sp);
+				srv.run(0.5, 0.25);
+			}
+			const inBurst = times.filter(t => t <= t0 + 5).length;
+			const first = times[0] === undefined ? undefined : times[0] - t0;
+			srv.run(Cad.EVENT_SAVE_GAP + 10, 0.25);
+			check(
+				inBurst === 1,
+				`10 level-ups in 5 s: ONE write inside the burst, ${Cad.EVENT_SAVE_DELAY} s after the first (the rest ride with it)`,
+				`${inBurst} write(s) in the burst, the first ${first?.toFixed(2)} s in`,
+			);
+			check(
+				times.length === 2 && gaps(times).every(g => g >= Cad.EVENT_SAVE_GAP),
+				`…and ONE more for what came after it, no sooner than ${Cad.EVENT_SAVE_GAP} s later: 2 writes for 10 events`,
+				`${times.length} write(s), gaps ${gaps(times)
+					.map(g => g.toFixed(1))
+					.join(", ")} s`,
+			);
+			check(
+				srv.stored(u)?.level === sp.save.level && sp.save.level === 11,
+				"…and the DataStore holds the last level",
+				`stored ${srv.stored(u)?.level}, live ${sp.save.level}`,
+			);
+			check(
+				JSON.stringify(told(srv, p)) === '["saving","saved","saving","saved"]',
+				'…and the player was told each write: "saving", then "saved" when it landed',
+				JSON.stringify(told(srv, p)),
+			);
+
+			// a purchase, a gap after the last write: on the DataStore within the delay
+			srv.run(Cad.EVENT_SAVE_GAP, 0.25);
+			sp.save.money += 500;
+			const bought = clockNow;
+			const res = srv.shop(p, { kind: "buyPack", packId: 0 });
+			srv.run(Cad.EVENT_SAVE_DELAY + 1.5, 0.25);
+			const after = times.filter(t => t > bought);
+			check(
+				res?.ok === true && after.length === 1 && after[0] - bought <= Cad.EVENT_SAVE_DELAY + 1.01,
+				`a purchase is written ${Cad.EVENT_SAVE_DELAY} s later (the scan's second at most on top)`,
+				`${JSON.stringify(res?.reason ?? res?.ok)}, ${after.map(t => (t - bought).toFixed(2)).join(", ")} s`,
+			);
+			check(
+				srv.stored(u)?.packsBought[0] === sp.save.packsBought[0] && srv.stored(u)?.money === sp.save.money,
+				"…with the pack and the coins it cost, together",
+			);
+
+			// a death, then a leave one second after the write it caused: the final save never waits for the gap
+			srv.run(Cad.EVENT_SAVE_GAP, 0.25);
+			srv.immortal.delete(p);
+			const died = clockNow;
+			srv.kill(p);
+			srv.run(Cad.EVENT_SAVE_DELAY + 1.5, 0.25);
+			const deathWrite = times.filter(t => t > died);
+			check(
+				deathWrite.length === 1 && srv.stored(u)?.runOver === true,
+				"a death is on the DataStore within the delay (runOver, the body)",
+				`${deathWrite.length} write(s), runOver ${srv.stored(u)?.runOver}`,
+			);
+			sp.save.money += 3;
+			const left = clockNow;
+			srv.quit(p);
+			check(
+				times.filter(t => t >= left).length === 1 && srv.stored(u)?.money === sp.save.money && lockFree(u),
+				"…and a leave a moment later writes at once, gap or not, and releases the lock",
+				`money ${srv.stored(u)?.money} of ${sp.save.money}`,
+			);
+		} finally {
+			undo();
+		}
+	}
+
+	// (c) nothing new, nothing written: a report of the very save the server has, then the autosave
+	{
+		const srv = bootWithAutosave();
+		const u = newUser();
+		const p = srv.join(u, "idle");
+		srv.autosave();
+		const [times, undo] = watch(u);
+		const toldBefore = told(srv, p).length;
+		try {
+			srv.report(p, {});
+			srv.autosave();
+			check(
+				times.length === 0,
+				"a report that changes nothing makes the session dirty, and the autosave writes nothing (same JSON)",
+				`${times.length} write(s)`,
+			);
+			clockNow += 150;
+			srv.autosave();
+			check(times.length === 1, "…until the lock wants its refresh (LOCK_REFRESH): then it is rewritten");
+			check(
+				toldBefore === 2 && told(srv, p).length === toldBefore,
+				"…and the player hears only of the write that carried progress (the first), not of a refresh",
+				JSON.stringify(told(srv, p)),
+			);
+		} finally {
+			undo();
+		}
+	}
+
+	// (d) the budget floor: an event save waits while the server's UpdateAsync budget is low
+	{
+		const srv = bootServer();
+		const DSS = srv.env.services.DataStoreService;
+		const u = newUser();
+		const p = srv.join(u, "patient");
+		srv.immortal.add(p);
+		const sp = srv.enter(p);
+		srv.run(Cad.EVENT_SAVE_GAP + 1, 0.25);
+		const [times, undo] = watch(u);
+		const budget = DSS.GetRequestBudgetForRequestType;
+		try {
+			DSS.GetRequestBudgetForRequestType = () => Cad.EVENT_SAVE_MIN_BUDGET - 1;
+			levelUp(srv, sp);
+			srv.run(30, 0.25);
+			check(
+				times.length === 0,
+				`an event save never runs under EVENT_SAVE_MIN_BUDGET (${Cad.EVENT_SAVE_MIN_BUDGET}): 30 s at ${Cad.EVENT_SAVE_MIN_BUDGET - 1}, no write`,
+				`${times.length} write(s)`,
+			);
+			DSS.GetRequestBudgetForRequestType = budget;
+			srv.run(1.5, 0.25);
+			check(
+				times.length === 1 && srv.stored(u)?.level === sp.save.level,
+				"…it waited, it was not dropped: the budget back, it runs within the next scan",
+				`${times.length} write(s), stored level ${srv.stored(u)?.level}`,
+			);
+		} finally {
+			DSS.GetRequestBudgetForRequestType = budget;
+			undo();
+		}
+	}
+
+	// (e) the DataStore fails: the player is told, and it is tried again a gap later, not sooner
+	{
+		const srv = bootServer();
+		const u = newUser();
+		const p = srv.join(u, "unlucky");
+		srv.immortal.add(p);
+		const sp = srv.enter(p);
+		srv.run(Cad.EVENT_SAVE_GAP + 1, 0.25);
+		const [times, undo] = watch(u);
+		try {
+			// every attempt of one write (the first and its three retries) throws
+			store.fail.update = 4;
+			levelUp(srv, sp);
+			waitedDuring(() => srv.run(Cad.EVENT_SAVE_DELAY + 1.5, 0.25));
+			const afterFail = told(srv, p);
+			check(
+				afterFail[afterFail.length - 1] === "failing" && srv.stored(u)?.level !== sp.save.level,
+				'a write that fails after its retries tells the player: "failing" (Progress not saved — retrying)',
+				JSON.stringify(afterFail),
+			);
+			const failedAt = clockNow;
+			waitedDuring(() => srv.run(Cad.EVENT_SAVE_GAP + 2, 0.25));
+			const retries = times.filter(t => t > failedAt);
+			check(
+				retries.length >= 1 && srv.stored(u)?.level === sp.save.level,
+				"…the retry lands once the DataStore is back, with the level that failed",
+				`${retries.length} attempt(s), stored level ${srv.stored(u)?.level}`,
+			);
+			check(
+				retries.length >= 1 && retries[0] - times[0] >= Cad.EVENT_SAVE_GAP - 0.01,
+				`…and a failing DataStore is not hammered: the next write starts ${Cad.EVENT_SAVE_GAP} s after the failed one did`,
+				`attempts at ${times.map(t => (t - times[0]).toFixed(1)).join(", ")} s`,
+			);
+			const last = told(srv, p);
+			check(
+				last[last.length - 1] === "saved",
+				'…and the player is told "saved" when it lands',
+				JSON.stringify(last),
+			);
+		} finally {
+			store.fail.update = 0;
+			undo();
+		}
+	}
+
+	// (f) another server took the lock: this one never writes again, and says so
+	{
+		const srv = bootServer();
+		const u = newUser();
+		const p = srv.join(u, "elsewhere");
+		srv.immortal.add(p);
+		const sp = srv.enter(p);
+		srv.run(Cad.EVENT_SAVE_GAP + 1, 0.25);
+		const doc = store.data.get(String(u));
+		doc.lock = { job: "another-server", sid: "their-session", t: Math.floor(1_700_000_000 + clockNow) };
+		store.data.set(String(u), doc);
+		levelUp(srv, sp);
+		srv.run(Cad.EVENT_SAVE_DELAY + 1.5, 0.25);
+		const said = told(srv, p);
+		check(
+			said[said.length - 1] === "stopped" && store.data.get(String(u)).lock.job === "another-server",
+			'a server that lost the lock tells the player "stopped" (Progress not saved) and writes nothing over the other',
+			JSON.stringify(said),
+		);
+		const [times, undo] = watch(u);
+		try {
+			levelUp(srv, sp);
+			srv.run(Cad.EVENT_SAVE_GAP + 5, 0.25);
+			check(times.length === 0, "…and no event save tries again from here", `${times.length} write(s)`);
+		} finally {
+			undo();
+		}
 	}
 });
 

@@ -6,8 +6,10 @@ import type { PlayerSaveData, Wallet } from "shared/game/save";
  *
  *   LoadRequest  C→S  RemoteEvent     ()                       ask for (or re-try) the session save
  *   LoadAck      S→C  RemoteEvent     (LoadResult)             sent once the save is read (and on re-requests)
- *   SaveRequest  C→S  RemoteEvent     (token, json)            progress report, JSON of PlayerSaveData
- *   SaveAck      S→C  RemoteEvent     (SaveAckPayload)         result + coins earned + wallet
+ *   SaveRequest  C→S  RemoteEvent     (token, json)            progress report, JSON of PlayerSaveData. It is NOT a
+ *                                                              request to write: the server alone decides when the
+ *                                                              DataStore is written (SAV-01, server/save/saveCadence.ts)
+ *   SaveAck      S→C  RemoteEvent     (SaveAckPayload)         result + coins earned + wallet; pushes: wallet, store
  *   ShopAction   C→S  RemoteFunction  (ShopActionRequest) → ShopActionResult
  */
 export const NET_FOLDER = "Net";
@@ -69,10 +71,24 @@ export interface SaveAckPayload {
 	wallet?: Wallet;
 	/**
 	 * Not an answer to a report: the server pushed the wallet because the simulation changed it (XP, a level,
-	 * midnight's coins). The client applies the wallet and nothing else -- no retry, no "saved" toast.
+	 * midnight's coins), or tells what happened to a write of the save (`store`). The client applies the wallet and
+	 * nothing else -- no retry, no toast.
 	 */
 	push?: boolean;
+	/** SAV-01: a push about the DataStore write of this player's save (client/ui/saveIndicator.ts) */
+	store?: StoreState;
 }
+
+/**
+ * SAV-01 (docs/DESIGN_RULES.md): what the server tells a player about the writes of their save, pushed on SaveAck.
+ * Only a write that carries something new is announced (a lock refresh of an unchanged save is not).
+ *
+ * saving   a write of new progress started
+ * saved    it landed in the DataStore
+ * failing  it failed after its retries (the DataStore is down): it is tried again, and the player is told
+ * stopped  this server lost the session lock (another server holds the player): it will never write again
+ */
+export type StoreState = "saving" | "saved" | "failing" | "stopped";
 
 export type ShopActionRequest =
 	| { kind: "buyPack"; packId: number }
