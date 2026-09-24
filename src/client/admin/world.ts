@@ -93,6 +93,10 @@ export const BUILDING_KINDS: Array<{ type: number; label: string }> = [
 	{ type: BuildingType.GunShop, label: "Gun shop" },
 	{ type: BuildingType.ClothShop, label: "Clothing shop" },
 	{ type: BuildingType.Restaurant, label: "Restaurant" },
+	{ type: BuildingType.CampusHall, label: "Campus hall" },
+	{ type: BuildingType.CampusLibrary, label: "Campus library" },
+	{ type: BuildingType.CampusLab, label: "Science lab" },
+	{ type: BuildingType.CampusDorm, label: "Dorm" },
 ];
 
 export type OverlayKind = "solids" | "actors" | "flow" | "lights" | "stats";

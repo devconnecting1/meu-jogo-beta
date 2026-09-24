@@ -150,5 +150,63 @@
 			"corners": 35,
 			"instances": 724
 		}
+	},
+	"campus": {
+		"title": "College campus, its block",
+		"rect": {
+			"x": 18064,
+			"y": 2244,
+			"w": 2080,
+			"h": 2080
+		},
+		"hour": 10,
+		"scale": 0.5,
+		"noActors": true,
+		"counts": {
+			"sprites": 322,
+			"images": 239,
+			"flat": 83,
+			"strokes": 17,
+			"corners": 26,
+			"instances": 607
+		}
+	},
+	"campus-quad": {
+		"title": "College campus, the quad",
+		"rect": {
+			"x": 18488,
+			"y": 2880,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"counts": {
+			"sprites": 146,
+			"images": 69,
+			"flat": 77,
+			"strokes": 19,
+			"corners": 41,
+			"instances": 278
+		}
+	},
+	"campus-night": {
+		"title": "College campus, the quad at 22:00",
+		"rect": {
+			"x": 18488,
+			"y": 2880,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 22,
+		"scale": 1,
+		"counts": {
+			"sprites": 146,
+			"images": 69,
+			"flat": 77,
+			"strokes": 19,
+			"corners": 41,
+			"instances": 547
+		}
 	}
 }
