@@ -41,7 +41,8 @@
  *  10. ...EVERYWHERE   what the row promises holds in the whole game: with it on, every tween the logo, the kit and the
  *                      fades create is 0 s long and the nameplate does not pop; skin.ts motionTween is the only
  *                      TweenService.Create in src/; every periodic pulse of the interface is gated by it (the HUD's
- *                      own pulses are measured frame by frame in test:hud).
+ *                      own pulses are measured frame by frame in test:hud); and in a run the camera never shakes and a
+ *                      struck tree or car holds still (BEM-08; frame by frame in test:flinch §5).
  *  11. GRAPHICS        the Segmented (Auto / High / Low) writes the field and opens on it; High and Low are the tier
  *                      the run draws with (client/view/quality.ts: the light map's strips, the particle budget), Auto
  *                      is the measured one; the game loop reads it every frame (the hysteresis itself: test:light).
@@ -1656,6 +1657,47 @@ console.log("\n10) Reduce motion em todo o jogo: todo tween sem duracao, nenhum 
 		ungated.length === 0,
 		ungated.join(", "),
 	);
+
+	// BEM-08 (research P0-2): the row says "Stills town and camera", so in a run the camera never shakes and a
+	// struck tree / car / bin / build holds still -- the setting the loop reads (skin.ts reducedMotion, live) straight into
+	// the camera and the town's drawing, as GameLoop does every frame (the frame-by-frame proof is test:flinch §5)
+	{
+		const skinMod = require(join(SRC, "client/ui/skin.ts"));
+		const { Camera } = require(join(SRC, "shared/engine/camera.ts"));
+		const { WorldView } = require(join(SRC, "client/view/worldView.ts"));
+		const offsetAfterKick = () => {
+			const cam = new Camera();
+			cam.reduceMotion = skinMod.reducedMotion();
+			cam.shake(6, 0.3);
+			cam.update(1 / 60);
+			cam.project(0, 0);
+			return Math.abs(cam.screenX - cam.viewW / 2) + Math.abs(cam.screenY - cam.viewH / 2);
+		};
+		const solidOffset = () => {
+			const town = new WorldView(() => ({ x: 0, y: 0 }));
+			town.reduceMotion = skinMod.reducedMotion();
+			town.clock = 0.37;
+			const o = town.shake({ hitShake: 0.2 });
+			return Math.abs(o.x) + Math.abs(o.y);
+		};
+		const shaking = [offsetAfterKick(), solidOffset()];
+		GuiService.ReducedMotionEnabled = true;
+		flush();
+		const still = [offsetAfterKick(), solidOffset()];
+		GuiService.ReducedMotionEnabled = false;
+		flush();
+		const loopSrc = readFileSync(join(SRC, "client/gameLoop.ts"), "utf8");
+		const rowSrc = readFileSync(join(SRC, "client/ui/settings.ts"), "utf8");
+		check(
+			'"Stills town and camera": com Reduce Motion a camera nao treme e a arvore / o carro atingido fica parado (a GameLoop le a configuracao a cada quadro)',
+			shaking.every(v => v > 0) &&
+				still.every(v => v === 0) &&
+				/ctx\.cam\.reduceMotion = reducedMotion\(\);/.test(loopSrc) &&
+				/town\.reduceMotion = reducedMotion\(\);/.test(loopSrc) &&
+				rowSrc.includes('"Set in Roblox. Stills town and camera."'),
+			`sem: ${shaking.join(", ")}; com: ${still.join(", ")}`,
+		);
+	}
 }
 
 // ================================================================ 11. Graphics

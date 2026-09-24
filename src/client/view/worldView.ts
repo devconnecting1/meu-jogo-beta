@@ -337,6 +337,8 @@ export interface MachineDrawer {
 export class WorldView {
 	/** the owner's animation clock (seconds): a struck solid's shake, a lamp's flicker */
 	clock = 0;
+	/** the player asked for reduced motion (client/ui/skin.ts `reducedMotion`, set by the loop): struck solids hold still */
+	reduceMotion = false;
 	/** the electric builds' own drawing (the match's view sets it; the lobby's town has no builds) */
 	machines?: MachineDrawer;
 	private readonly queryBuf: Array<Solid> = [];
@@ -710,7 +712,9 @@ export class WorldView {
 
 	private shake(s: Solid): { x: number; y: number } {
 		const t = s.hitShake ?? 0;
-		if (t <= 0) return { x: 0, y: 0 };
+		// Reduce Motion (BEM-08): the struck solid holds still; its flinch still counts down (solidFlinch.ts), and the
+		// hit still reads by what does not move -- the debris, the drop, the sound
+		if (t <= 0 || this.reduceMotion) return { x: 0, y: 0 };
 		const amp = 4 * math.min(1, t / 0.25);
 		return { x: math.sin(this.clock * 70) * amp, y: math.cos(this.clock * 55) * amp * 0.6 };
 	}

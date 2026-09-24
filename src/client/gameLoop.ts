@@ -501,6 +501,9 @@ export class GameLoop {
 		// system here ages it any more: without this clock the shake never ended (solidFlinch.ts)
 		if (SERVER_ACTORS) ageFlinches(dt);
 		this.daynight.update(dt);
+		// BEM-08: with Reduce Motion the camera never shakes (the kick's cues that do not move stay: the shot's line and
+		// sound, the blow's blood, the bite's flashes); read every frame, so the setting follows live
+		ctx.cam.reduceMotion = reducedMotion();
 		// shake before cam.update, particles before particles.update: same frame as before F0
 		this.playFx(ctx);
 		this.particles.update(dt);
@@ -742,6 +745,9 @@ export class GameLoop {
 		const allies = netActive() ? remotePlayers() : NO_REMOTES;
 		const town = this.worldView;
 		town.clock = this.clock;
+		// BEM-08: a struck tree, car, bin, construction or machine holds still with Reduce Motion (its flinch still counts)
+		town.reduceMotion = reducedMotion();
+		this.machines.reduceMotion = town.reduceMotion;
 		town.drawGround(renderer, cam, view, this.world);
 		this.drawDecals(renderer, cam, view);
 		const items = this.groundItems;

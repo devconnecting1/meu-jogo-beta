@@ -237,6 +237,11 @@ export class MachinesView {
 	/** the animation clock (seconds) and the server's (for the drones' orbit), set each frame */
 	private clock = 0;
 	private serverSeconds = 0;
+	/**
+	 * the player asked for reduced motion (set by the loop, like worldView's): a struck machine holds still, and so does
+	 * a running oil generator's shiver (BEM-08)
+	 */
+	reduceMotion = false;
 
 	constructor(shadow: ShadowFn) {
 		this.shadow = shadow;
@@ -354,14 +359,15 @@ export class MachinesView {
 		const t = this.clock;
 		let cx = s.x + s.w / 2;
 		let cy = s.y + s.h / 2;
-		// a struck machine shakes like any construction; a running engine shivers
+		// a struck machine shakes like any construction; a running engine shivers -- neither with Reduce Motion on (BEM-08:
+		// whether it runs still shows in `drawState`)
 		const hit = s.hitShake ?? 0;
-		if (hit > 0) {
+		if (hit > 0 && !this.reduceMotion) {
 			const amp = 4 * math.min(1, hit / 0.25);
 			cx += math.sin(t * 70) * amp;
 			cy += math.cos(t * 55) * amp * 0.6;
 		}
-		if (s.tags === "oil_generator" && working) {
+		if (s.tags === "oil_generator" && working && !this.reduceMotion) {
 			cx += math.sin(t * 41) * 0.6;
 			cy += math.cos(t * 37) * 0.4;
 		}

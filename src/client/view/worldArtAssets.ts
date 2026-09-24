@@ -456,7 +456,7 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** atlas: interiors: 1703 cells of furniture, decoration and frames (client/view/interiorArt.ts) */
 	furniture: { id: "", w: 1024, h: 922 },
 	/** atlas: combat blood: 44 cells of drops, splats and smears, matte and wet (client/view/bloodView.ts) */
-	blood: { id: "", w: 96, h: 264 },
+	blood: { id: "rbxassetid://115387837711444", w: 96, h: 264 },
 	/** atlas: the town's fixtures: 306 cells of market, street, park, backyard and building-site pieces and their ground (client/view/townPropArt.ts) */
 	townProps: { id: "", w: 1024, h: 662 },
 };

@@ -65,7 +65,7 @@ const loadListeners = new Set<(info: LoadInfo) => void>();
 const ackListeners = new Set<(ack: SaveAckPayload) => void>();
 const walletListeners = new Set<() => void>();
 const activateListeners = new Set<() => void>();
-const storeListeners = new Set<(state: StoreState) => void>();
+const storeListeners = new Set<(state: StoreState, answersDawn: boolean) => void>();
 const STORE_STATES = new Set<string>(["saving", "saved", "failing", "stopped"]);
 
 function subscribe<T>(set: Set<T>, fn: T): () => void {
@@ -82,8 +82,12 @@ export function onSaveAck(fn: (ack: SaveAckPayload) => void): () => void {
 	return subscribe(ackListeners, fn);
 }
 
-/** SAV-01: what happened to a DataStore write of this player's save, as the server tells it */
-export function onStoreState(fn: (state: StoreState) => void): () => void {
+/**
+ * SAV-01: what happened to a DataStore write of this player's save, as the server tells it; `answersDawn` (BEM-04): the
+ * push is the answer to the dawn's ask (shared/net/net.ts `SaveAckPayload.answersDawn`), the only "saved" the dawn card
+ * takes
+ */
+export function onStoreState(fn: (state: StoreState, answersDawn: boolean) => void): () => void {
 	return subscribe(storeListeners, fn);
 }
 
@@ -151,6 +155,7 @@ function parseAck(raw: unknown): SaveAckPayload | undefined {
 		wallet: r.wallet as SaveAckPayload["wallet"],
 		push: r.push === true,
 		store: typeIs(r.store, "string") && STORE_STATES.has(r.store) ? (r.store as StoreState) : undefined,
+		answersDawn: r.answersDawn === true,
 	};
 }
 
@@ -185,7 +190,8 @@ export function startNet(): void {
 			if (ack.push === true) {
 				if (ack.wallet !== undefined) applyServerWallet(ack.wallet);
 				const store = ack.store;
-				if (store !== undefined) for (const fn of storeListeners) task.spawn(fn, store);
+				const answersDawn = ack.answersDawn === true;
+				if (store !== undefined) for (const fn of storeListeners) task.spawn(fn, store, answersDawn);
 				return;
 			}
 			if (ack.wallet !== undefined) applyServerWallet(ack.wallet);

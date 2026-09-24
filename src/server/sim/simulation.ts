@@ -201,6 +201,12 @@ export class ServerSimulation {
 	 */
 	onTitleUnlocked?: (sp: ServerPlayer, titleId: number) => void;
 	/**
+	 * BEM-04 / SAV-01: daybreak found this survivor standing in the world. The session layer asks for an event save, so
+	 * the dawn card's "Progress saved" can be the truth soon after 06:00 (server/main.server.ts `saveSoon`, "dawn"), and
+	 * decides the break line (`livedNight`: alive in the world every tick since midnight).
+	 */
+	onDawn?: (sp: ServerPlayer, livedNight: boolean) => void;
+	/**
 	 * May this survivor's run earn coins? (§9.3 assisted run: an admin used world tools in it.) The
 	 * simulation has no idea who an admin is; server/main.server.ts owns that and wires this in. Left
 	 * undefined, every run pays — which is what a pure test wants.
@@ -775,6 +781,16 @@ export class ServerSimulation {
 			if (lived && this.pays(sp)) this.unlockTitle(sp, TitleId.Survivor);
 		}
 		for (const [, p] of this.presence) p.nightCredited = false;
+		// BEM-04: the night is over for everybody standing -- the moment the dawn card reports on, so the save goes soon --
+		// and whether they lived it: alive in the world every tick since midnight (the count the Survivor title reads,
+		// without its AFK part), for the break line's rule (shared/data/wellbeing.ts `breakNudgeEarned`)
+		if (this.onDawn !== undefined) {
+			for (const sp of this.roster) {
+				if (sp.state.dead) continue;
+				const p = this.presence.get(sp.userId);
+				this.onDawn(sp, p !== undefined && this.dayTicks > 0 && p.aliveTicks >= this.dayTicks);
+			}
+		}
 	}
 
 	/** `titleId` is this survivor's now: into the save once, and announced once (server/save/titles.ts) */

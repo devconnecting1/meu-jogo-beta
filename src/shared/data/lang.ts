@@ -346,7 +346,7 @@ export const LANG_TABLE: Array<string> = [
 	"HUD size",
 	"Console, hints and messages.",
 	"Reduce motion",
-	"Set in the Roblox menu. Stills the town.",
+	"Set in Roblox. Stills town and camera.",
 	// the Graphics row (client/view/quality.ts): a Segmented of the three settings
 	"Graphics",
 	"Low: simpler night, fewer particles.",
@@ -571,6 +571,42 @@ export const LANG_TABLE: Array<string> = [
 	"Nobody else is standing: this town ends now and a new one begins.",
 	// the life's strip: "Best day" is highlighted only for a record
 	"New best!",
+	// the death screen's lesson (DESIGN_RULES UI-13 / BEM-08, shared/data/deathCause.ts): the cause the server read off
+	// the body, then one tip for it after "Tip:" -- facts of this game, never a blame
+	"Killed by the horde at night.",
+	"Killed by zombies.",
+	"Starved.",
+	"Poisoned.",
+	"Killed by a boss.",
+	"You fell.",
+	"Tip:",
+	"Waves come at 19:00, 22:00 and 01:00. Get behind a door.",
+	"Your light lets them see you from farther away.",
+	"Gunfire carries a whole street. A blade stays quiet.",
+	"A steel barricade blocks their sight. Wood does not.",
+	"They search where they last saw you. Break line of sight.",
+	"A zombie that sees you shouts and wakes the ones nearby.",
+	"An empty stomach drains health. Eat before FOOD runs out.",
+	"Cook at a campfire: cooked meat fills more than raw.",
+	"Rotten meat costs health. Canned food and bread do not.",
+	"Jumpers poison on contact. Keep them at a distance.",
+	"Poison stops healing. Poison immunity halves it.",
+	"A boss is a group fight: all who help share the kill.",
+	"Heal before a boss: a First aid kit restores 50 health.",
+	// the dawn card (client/ui/dawnCard.ts, DESIGN_RULES BEM-04): the night in numbers ("12 zombies", "1 item found"),
+	// what the server saved, and -- once, after a long session -- a break
+	"Night survived",
+	"zombie",
+	"zombies",
+	"damage taken",
+	"item found",
+	"items found",
+	"Progress saved",
+	"You've played for over 90 minutes. Dawn is a good time for a break.",
+	// the level-up line (DESIGN_RULES BEM-08): what the level gave, and where it is spent ("Level 5 · +1 skill point ·
+	// Backpack › Skills": the window's own title; "Level", "Backpack" and "Skills" are listed above)
+	"skill point",
+	"skill points",
 	// UI-06: the rule said out loud -- the "How to play" tips (one key, as tutorial.ts passes it)
 	"The backpack and the menu never stop the world: open them somewhere safe.#Fire keeps the night lit and cooks what you find — 10 wood makes a campfire, no workbench needed.#Houses are looted once with E; their shelves refill after half a day.#Hunger drains all day: eat before it empties, not after.#Waves come at 19:00, 22:00 and 01:00. Be somewhere you chose.",
 	// the item card (client/ui/itemCard.ts + itemInfo.ts, DESIGN_RULES UI-08): types, stat labels, notes and the

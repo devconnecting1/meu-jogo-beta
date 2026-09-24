@@ -404,13 +404,14 @@ export function showSettings(
 			generalRefreshers,
 		);
 		// Reduce Motion is the player's Roblox setting, and the game honours it (skin.ts): the town behind the menus
-		// stands still and the fades cut. Shown as a key -- information, never a control -- that follows it live
+		// stands still, the fades cut, and in a run the camera never shakes nor a struck tree or car (BEM-08). Shown as a
+		// key -- information, never a control -- that follows it live
 		const motion = SettingRow(
 			uiList,
 			"Motion",
 			1,
 			tr("Reduce motion"),
-			form("Set in the Roblox menu. Stills the town."),
+			form("Set in Roblox. Stills town and camera."),
 		);
 		const motionKey = ValueKey(motion.value, "Value", "", { x: SETTING_CONTROL_X, anchorX: 0, minW: VALUE_KEY_W });
 		onLayoutChange(motionKey, () => setValueKey(motionKey, tr(reducedMotion() ? "On" : "Off")));

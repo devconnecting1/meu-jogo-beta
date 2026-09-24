@@ -3,6 +3,7 @@ import { carrySettings, equipSlotOf, expMaxInit, ownsEquip, ownsWeapon, resetRun
 import { BossState } from "shared/game/entities";
 import { currentWeapon, weaponReserve } from "shared/game/player";
 import { CRAFT_RECIPES } from "shared/data/crafts";
+import { DeathNote, deathKindOf } from "shared/data/deathCause";
 import { EQUIPS, EquipSlot } from "shared/data/equips";
 import { langGet } from "shared/data/lang";
 import { rebirthPrice } from "shared/data/shop";
@@ -18,11 +19,14 @@ import { stepBankAlarm } from "./audio/bankAlarm";
 import * as Boot from "./boot";
 import {
 	netActive,
+	netDeathNote,
 	netEnterWorld,
 	netHosted,
 	netLeaveWorld,
 	netOnTown,
 	netPrewarm,
+	netSelfHp,
+	netTakeBreakNudge,
 	remotePlayers,
 	TownNotice,
 } from "./net/netClient";
@@ -38,6 +42,8 @@ import {
 import { craft, craftBlocker, stationNear } from "./systems/craftSystem";
 import { chooseWeapon } from "./systems/combat";
 import { hintedItem, interactHint } from "./systems/interaction";
+import { BREAK_CARD_WAIT_S, NightTally } from "./systems/nightReport";
+import { pickupCount } from "./systems/pickups";
 import * as net from "./systems/saveClient";
 import * as Bag from "./net/backpackSync";
 import * as Match from "./net/matchClient";
@@ -130,6 +136,19 @@ let newLifeWaiting = false;
 let dawnChosen = false;
 /** the life that ended, as it was when New game replaced it: the wait for the new life still shows ITS numbers */
 let endedLife: RunSummary | undefined;
+/**
+ * UI-13 / BEM-08: why the death on screen happened -- the server's word (netClient.ts `netDeathNote`, told to this
+ * survivor alone), or offline what this client read off its own body the same way. Kept through a New game's wait (the
+ * new life's wait still says how the old one ended); forgotten when the survivor stands up.
+ */
+let deathCause: DeathNote | undefined;
+/** BEM-04: the night being counted for the dawn card (client/systems/nightReport.ts) */
+const nightTally = new NightTally();
+/**
+ * BEM-04: os.clock() the server told this survivor the break line (netClient.ts `netTakeBreakNudge`), until it is shown:
+ * on the dawn card, or on the feed after BREAK_CARD_WAIT_S without one. The client never decides the line itself.
+ */
+let breakNudgeAt: number | undefined;
 /** MP-22: worlds that ended while this client was connected; a run action that raced one is superseded by it */
 let worldResets = 0;
 /**
@@ -241,6 +260,11 @@ net.onLoad(info => {
 	if (ctx.phase !== "boot") goLobby(lobbyNav.handle !== undefined ? lobbyNav.page : "menu");
 });
 
+// BEM-04: the dawn card says "Progress saved" only on the server's answer to the dawn's ask (`answersDawn`) -- the same
+// push the corner indicator draws (SAV-01); the HUD remembers the last state, so a card that opens during an outage
+// starts from it
+net.onStoreState((state, answersDawn) => hud.dawnStoreNotice(state, answersDawn));
+
 net.onSaveAck(ack => {
 	if (ack.ok) {
 		if (ack.earned > 0) {
@@ -276,10 +300,40 @@ function trackAfter(): void {
 	}
 	if (save.level > lastLevel) {
 		if (lastLevel > 0) {
-			hud.showMessage("Level UP");
+			// BEM-08: what the level gave (one skill point a level) and where it is spent, never a bare "Level UP"
+			hud.showLevelUp(save.level, save.level - lastLevel);
 			gameAudio.levelUp();
 		}
 		lastLevel = save.level;
+	}
+}
+
+/**
+ * BEM-04: one frame of the night's numbers (client/systems/nightReport.ts); at the first light after a night this
+ * survivor lived through standing, the dawn card. The break line is the server's word (protocol note 24): on the card
+ * when it is up, else on the feed -- shown whenever it was told, never decided here. Runs every frame of a run, the
+ * dead included (a death drops the night).
+ */
+function stepNight(alive: boolean): void {
+	const refs = loop.getRefs();
+	const now = os.clock();
+	const report = nightTally.step({
+		night: refs.daynight.isNight,
+		alive: alive && ctx.phase === "playing",
+		// the server's hp when it owns the body (the self block), never the prediction's
+		hp: netSelfHp() ?? refs.player.hp,
+		kills: ctx.save.zombieKills,
+		pickups: pickupCount(),
+		now,
+	});
+	if (report !== undefined) hud.showDawnReport(report);
+	if (netTakeBreakNudge()) breakNudgeAt = now;
+	if (breakNudgeAt === undefined) return;
+	if (hud.dawnBreakLine()) {
+		breakNudgeAt = undefined;
+	} else if (now - breakNudgeAt >= BREAK_CARD_WAIT_S) {
+		hud.breakLineOnFeed();
+		breakNudgeAt = undefined;
 	}
 }
 
@@ -598,6 +652,16 @@ function openPause(): void {
 	);
 }
 
+/**
+ * UI-13: the cause the death screen shows, read every frame -- the server's word as soon as it has arrived (it may land
+ * a frame after the screen opened), else whatever was known before.
+ */
+function deathCauseNow(): DeathNote | undefined {
+	const told = netDeathNote();
+	if (told !== undefined) deathCause = told;
+	return deathCause;
+}
+
 function openDeath(): void {
 	deathShown = true;
 	pack.close();
@@ -607,6 +671,12 @@ function openDeath(): void {
 	closeDawnWait();
 	ctx.save.runOver = true;
 	net.requestSave("death");
+	// offline nobody tells this client why: it reads its own body the way the server reads the one it holds (hunger,
+	// poison, a boss within reach, else the horde), once, at the death
+	if (!netActive() && !newLifeWaiting) {
+		const refs = loop.getRefs();
+		deathCause = { kind: deathKindOf(refs.player, refs.bosses), night: refs.daynight.isNight };
+	}
 	const summary = newLifeWaiting && endedLife !== undefined ? endedLife : runSummary(ctx);
 	// `serverDriven` is the one honest test for "somebody out there will stand me back up": the hour on this
 	// screen comes from the server's clock, which is the same server that runs the revive. Without it (a
@@ -625,7 +695,12 @@ function openDeath(): void {
 		dawnWait = showDaybreakWait(
 			ctx,
 			summary,
-			{ onRebirth: doRebirth, onNewRun: newLifeWaiting ? undefined : doNewRun, onHome: goLobby },
+			{
+				onRebirth: doRebirth,
+				onNewRun: newLifeWaiting ? undefined : doNewRun,
+				onHome: goLobby,
+				cause: deathCauseNow,
+			},
 			newLifeWaiting,
 		);
 		return;
@@ -635,6 +710,7 @@ function openDeath(): void {
 		onRebirth: doRebirth,
 		onNewRun: doNewRun,
 		onHome: goLobby,
+		cause: deathCauseNow,
 	});
 }
 
@@ -674,6 +750,7 @@ function updateDawnWait(dt: number): void {
 		newLifeWaiting = false;
 		dawnChosen = false;
 		endedLife = undefined;
+		deathCause = undefined;
 		// the wait WAS the price: the run continues, so the save has to stop saying it is over
 		ctx.save.runOver = false;
 		net.requestSave("death");
@@ -702,6 +779,7 @@ function updateDawnWait(dt: number): void {
 		onRebirth: doRebirth,
 		onNewRun: newLifeWaiting ? undefined : doNewRun,
 		onHome: goLobby,
+		cause: deathCauseNow,
 	});
 }
 
@@ -724,6 +802,10 @@ function mountRun(enterWorld = true): void {
 	// ITM-08: a new body carries no use cooldown and no pending heal of the last one
 	Bag.quickUse.reset();
 	deathShown = false;
+	// a night is counted from inside the city: whatever was being counted before the menus is not this night -- nor is a
+	// break line told to the run before this one
+	nightTally.reset();
+	breakNudgeAt = undefined;
 	saveTimer = 0;
 	// F1: a run is the only reason to have a body in the world -- ask for one now, not at connect time
 	if (enterWorld) netEnterWorld();
@@ -780,6 +862,7 @@ function mountRun(enterWorld = true): void {
 		loop.update(dt);
 		debug.profileend();
 		if (alive) trackAfter();
+		stepNight(!refs.player.dead);
 		gameAudio.afterUpdate(refs, dt);
 		admin?.afterUpdate(dt);
 		// the run's autosave -- but not from behind the owner's own end-of-run screen, which has already saved
@@ -928,6 +1011,7 @@ function revive(): void {
 	newLifeWaiting = false;
 	dawnChosen = false;
 	endedLife = undefined;
+	deathCause = undefined;
 	if (!runActive) {
 		newWorld();
 		return;
@@ -1019,6 +1103,7 @@ function aliveAfterAll(res: ShopActionResult): boolean {
 	ctx.save.runOver = false;
 	newLifeWaiting = false;
 	endedLife = undefined;
+	deathCause = undefined;
 	closeDawnWait();
 	closePause();
 	for (const child of ctx.uiLayer.GetChildren()) {

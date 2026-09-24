@@ -1,4 +1,12 @@
 import { GameContext } from "shared/game/context";
+import {
+	ALL_DEATH_CAUSES,
+	ALL_DEATH_TIPS,
+	DeathKind,
+	DeathNote,
+	deathCauseLine,
+	deathTip,
+} from "shared/data/deathCause";
 import { langGet } from "shared/data/lang";
 import { rebirthPrice } from "shared/data/shop";
 import { NIGHT_REAL_SECONDS } from "shared/sim/clock";
@@ -24,9 +32,12 @@ import {
 	makeLabel,
 	makeScreen,
 	setButtonEnabled,
+	setTextSize,
 	setVisible,
 	uiScale,
 } from "../ui/widgets";
+
+const RunService = game.GetService("RunService");
 
 /*
  * The death screen (docs/DESIGN_RULES.md UI-13, MP-21, MP-22): what happened, what happens next, what you can do
@@ -41,7 +52,10 @@ import {
  *
  *   ┌──────────────── Dead until dawn ─────────────────┐   1. what happened: the title says the STATE, the line
  *   │   Everyone's first night ends this way. ...      │      under it the epitaph (the onboarding line on a first
- *   │ ┌──────────────────────────────────────────────┐ │      death, "New best" on a record)
+ *   │        Killed by the horde at night.             │      death, "New best" on a record), then the LESSON
+ *   │ Tip: Waves come at 19:00, 22:00 and 01:00. ...   │      (BEM-08): the cause the server read off the body and
+ *   │                                                  │      one tip for it (shared/data/deathCause.ts), no blame
+ *   │ ┌──────────────────────────────────────────────┐ │
  *   │ │      .  .  ☾  .  .  .  .  .  .  .  .        ☀ │ │   2. what happens next, the HERO: the night as the HUD's
  *   │ │ ─────────────────────────────────────────────│ │      sky draws it (hudSky.ts), the moon on its way to the
  *   │ │                 Daybreak in                   │ │      sunrise, and the count in the numbers' yellow, the
@@ -105,6 +119,12 @@ export interface RunSummaryHandlers {
 	onRebirth?: () => void;
 	onNewRun?: () => void;
 	onHome?: () => void;
+	/**
+	 * UI-13 / BEM-08: why this survivor died (shared/data/deathCause.ts), read every frame -- the server's word arrives
+	 * with the death, possibly a frame after the screen opened (client/net/netClient.ts `netDeathNote`). Undefined (or
+	 * no getter): the cause is not known, and the screen shows a general tip in its place.
+	 */
+	cause?: () => DeathNote | undefined;
 }
 
 /**
@@ -132,8 +152,12 @@ const PAD = space(6);
 const INNER = W - PAD * 2;
 const TITLE_SIZE = TEXT.xl3;
 const GAP = space(3);
-/** the epitaph under the header */
+/** the epitaph under the header, and each line of the lesson in the tip's voice */
 const SUB_H = 20;
+/** the cause line (TEXT.base, Bold) */
+const CAUSE_H = 22;
+/** what the lesson reads before the server has said why (or where nobody ever will) */
+const UNKNOWN_DEATH: DeathNote = { kind: DeathKind.Unknown, night: false };
 /** section -> groove inset of the hero (the HUD sky's body -> section -> groove) */
 const INSET = 8;
 const SKY_W = INNER - INSET * 2;
@@ -222,9 +246,13 @@ function findGui(root: Instance, name: string): GuiObject | undefined {
 	return undefined;
 }
 
-/** the screen both endings share, in one of its modes; `refresh` is its per-frame half */
+/**
+ * the screen both endings share, in one of its modes; `refresh` is its per-frame half, `lesson` the cause line's alone
+ * (the "over" state, which nothing refreshes)
+ */
 interface DeathScreen {
 	refresh(seconds: number, night: boolean): void;
+	lesson(): void;
 	close(): void;
 }
 
@@ -245,7 +273,21 @@ function buildDeathScreen(
 	const epitaphText = tr(epitaph(summary));
 	const subSize = math.max(TEXT.sm, fixedTextPx(TEXT.sm) / uiScale());
 	const subH = chars(epitaphText) * subSize * 0.62 > INNER ? math.ceil(subSize * 2.5) + 4 : SUB_H;
-	const heroY = top + subH + space(2);
+	// the lesson (UI-13 / BEM-08): what killed them, and one thing to try. A line each, sized once for the longest either
+	// can ever hold (a translation, or a phone's text floor, may need a second line); the first line holds the general
+	// tip while the cause is not known
+	const tipPrefix = tr("Tip:");
+	let longestTip = 0;
+	for (const t of ALL_DEATH_TIPS) longestTip = math.max(longestTip, chars(`${tipPrefix} ${tr(t)}`));
+	let longestCause = 0;
+	for (const c of ALL_DEATH_CAUSES) longestCause = math.max(longestCause, chars(tr(c)));
+	const causeSize = math.max(TEXT.base, fixedTextPx(TEXT.base) / uiScale());
+	const linesFor = (n: number, size: number, width: number, one: number): number =>
+		n * size * width > INNER ? math.ceil(size * 2.5) + 4 : one;
+	const tipH = linesFor(longestTip, subSize, 0.62, SUB_H);
+	const causeH = math.max(linesFor(longestCause, causeSize, 0.66, CAUSE_H), tipH);
+	const lessonY = top + subH + space(1);
+	const heroY = lessonY + causeH + tipH + space(2);
 	const statsY = heroY + HERO_H + GAP;
 	const noteY = statsY + STATS_H + GAP;
 	const rowY = noteY + NOTE_H + space(2.5);
@@ -263,10 +305,45 @@ function buildDeathScreen(
 	const titleLabel = win.FindFirstChild("Title") as TextLabel;
 	const z = win.ZIndex + 1;
 
-	// ---- 1. what happened: the epitaph under the state
+	// ---- 1. what happened: the epitaph under the state, then the lesson -- the cause and one tip, never a blame
 	makeLabel(win, "Epitaph", epitaphText, PAD, top, INNER, subH, TEXT.sm, THEME.mutedForeground, {
 		zIndex: z,
 	});
+	const causeLabel = makeLabel(win, "Cause", "", PAD, lessonY, INNER, causeH, TEXT.base, THEME.foreground, {
+		font: BOLD,
+		zIndex: z,
+	});
+	const tipLabel = makeLabel(win, "Tip", "", PAD, lessonY + causeH, INNER, tipH, TEXT.sm, THEME.mutedForeground, {
+		zIndex: z,
+	});
+	const regular = tipLabel.FontFace;
+	const causeOf = handlers.cause;
+	// the tip this death shows: the most basic on a first death; later ones walk the cause's list (deterministic, so the
+	// line never changes while the screen is up)
+	const turn = ctx.save.lifeDeaths + ctx.save.runRev;
+	/** -1: nothing written yet; else what the lesson shows (-2 = cause unknown) */
+	let shownLesson = -1;
+	const writeLesson = (note: DeathNote | undefined): void => {
+		const known = note !== undefined && note.kind !== DeathKind.Unknown;
+		const key = known ? note.kind * 2 + (note.night ? 1 : 0) : -2;
+		if (key === shownLesson) return;
+		shownLesson = key;
+		const tip = `${tipPrefix} ${tr(deathTip(note ?? UNKNOWN_DEATH, summary.first, turn))}`;
+		if (!known) {
+			// not known (yet): the general tip on the first line in the tip's voice, nothing under it
+			causeLabel.FontFace = regular;
+			causeLabel.TextColor3 = THEME.mutedForeground;
+			setTextSize(causeLabel, TEXT.sm);
+			causeLabel.Text = tip;
+			tipLabel.Text = "";
+			return;
+		}
+		causeLabel.FontFace = BOLD;
+		causeLabel.TextColor3 = THEME.foreground;
+		setTextSize(causeLabel, TEXT.base);
+		causeLabel.Text = tr(deathCauseLine(note));
+		tipLabel.Text = tip;
+	};
 
 	// ---- 2. what happens next: the night in the HUD sky's language, and the count
 	const hero = Section(win, "Hero", { x: PAD, y: heroY, w: INNER, h: HERO_H, zIndex: z }).frame;
@@ -489,6 +566,8 @@ function buildDeathScreen(
 
 	const refresh = (seconds: number, night: boolean): void => {
 		if (root.Parent === undefined) return;
+		// the lesson: the server's word on the cause may land a frame after the screen opened; written once when it does
+		writeLesson(causeOf?.());
 		// who is still up decides what the wait ends in: first light, or the town's fall (MP-22)
 		let others: number | undefined;
 		if (waiting && standing !== undefined) others = standing();
@@ -616,6 +695,9 @@ function buildDeathScreen(
 		refresh(seconds: number, night: boolean): void {
 			refresh(seconds, night);
 		},
+		lesson(): void {
+			if (root.Parent !== undefined) writeLesson(causeOf?.());
+		},
 		close(): void {
 			confirm?.Destroy();
 			confirm = undefined;
@@ -631,7 +713,13 @@ function buildDeathScreen(
  */
 export function showRunSummary(ctx: GameContext, summary: RunSummary, handlers: RunSummaryHandlers): () => void {
 	const screen = buildDeathScreen(ctx, summary, handlers, false, false, undefined);
-	return (): void => screen.close();
+	// UI-13: nothing refreshes this screen per frame, and the server's word on the cause may land after it opened (a slow
+	// link, a reconnect's re-send): it is read every frame while the screen is up, and written the frame it changes
+	const poll = handlers.cause !== undefined ? RunService.Heartbeat.Connect(() => screen.lesson()) : undefined;
+	return (): void => {
+		poll?.Disconnect();
+		screen.close();
+	};
 }
 
 /** the daybreak screen, while it is on screen */
