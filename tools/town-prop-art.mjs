@@ -102,6 +102,33 @@ function propMaterials(C) {
 	add("dumpster", [56, 96, 68]);
 	add("earth", [128, 100, 72], { soft: true });
 	add("slab", [184, 182, 174]);
+	// the downtown squares (MOB-07): a planter's concrete and what grows in it, the newsstand's green roof, a cafe's
+	// rattan chairs and its table, the road barrier's orange, the rubble of a cleared lot and its dust
+	add("concrete", [176, 172, 164]);
+	add("shrub", [66, 108, 60]);
+	add("flowerYellow", [222, 190, 70], { soft: true });
+	add("flowerOrange", [212, 126, 54], { soft: true });
+	add("flowerCream", [214, 206, 178], { soft: true });
+	add("kioskRoof", [62, 98, 76]);
+	add("rattan", [156, 116, 72]);
+	add("tableTop", [192, 186, 172]);
+	add("barrierOrange", [222, 112, 40]);
+	add("slabGrey", [150, 148, 140]);
+	add("dust", [140, 130, 114], { soft: true });
+	// the square's floor: the mosaic's pavers (two tones either side of the plaza's own paving, the border darker:
+	// low contrast, LEG-03), a weed, a leaf, a candle's wax, the chalk of a hopscotch (faded: drawn half through)
+	const plaza = mix(C.sidewalk, [255, 255, 255], 0.1);
+	add("paveLight", mix(plaza, [255, 255, 255], 0.14), { soft: true });
+	add("paveWarm", mix(plaza, [176, 150, 120], 0.42), { soft: true });
+	add("paveDark", mix(plaza, [70, 66, 60], 0.24), { soft: true });
+	add("weed", [92, 124, 60], { soft: true });
+	add("weedLight", [124, 152, 72], { soft: true });
+	add("dandelion", [210, 186, 64], { soft: true });
+	add("leafBrown", [128, 90, 52], { soft: true });
+	add("leafYellow", [180, 142, 66], { soft: true });
+	add("leafGreen", [104, 124, 60], { soft: true });
+	add("wax", [196, 184, 150], { soft: true });
+	m.chalkLine = { ...ramp([214, 216, 206], { soft: true }), alpha: 120 };
 	return m;
 }
 
@@ -796,6 +823,422 @@ function bag(c, L, D, look) {
 	}
 }
 
+// ---------------------------------------------------------------- the downtown squares (MOB-07)
+
+/** a thing painted along the canvas's long axis: (a along, b across) -> the texel, whichever way the canvas lies */
+function along(c, L, D) {
+	const ax = L >= D;
+	return {
+		len: ax ? L : D,
+		wide: ax ? D : L,
+		dot: (a, b, m, z, t) => (ax ? c.dot(a, b, m, z, t) : c.dot(b, a, m, z, t)),
+		box: (a, b, w, h, m, z, t) => (ax ? c.box(a, b, w, h, m, z, t) : c.box(b, a, h, w, m, z, t)),
+		shade: (a, b, w, h, t) => (ax ? c.shadeBox(a, b, w, h, t) : c.shadeBox(b, a, h, w, t)),
+	};
+}
+
+/** a square's planter: the concrete box and its rim, the soil, and what grows in it (look: flowers, a shrub, marigolds) */
+function planter(c, L, D, look, r) {
+	c.box(0, 0, L, D, "concrete", 4);
+	c.box(1, 1, L - 2, D - 2, "concrete", 5, 1);
+	c.box(2, 2, L - 4, D - 4, "soil", 3);
+	if (look === 1) {
+		// a clipped box shrub, round, standing over the rim
+		c.ellipse((L - 1) / 2, (D - 1) / 2, L / 2 - 2.6, D / 2 - 2.6, "shrub", 7);
+		for (let k = 0; k < (L * D) / 5; k++) {
+			c.shadeAt(3 + Math.floor(r() * (L - 6)), 3 + Math.floor(r() * (D - 6)), r() < 0.5 ? -1 : 1);
+		}
+		return;
+	}
+	const petal = look === 0 ? "flowerYellow" : "flowerOrange";
+	for (let y = 2; y < D - 2; y++) {
+		for (let x = 2; x < L - 2; x++) {
+			const q = r();
+			if (q < 0.5) c.dot(x, y, "shrub", 5, q < 0.2 ? -1 : 0);
+			else if (q < 0.72) c.dot(x, y, petal, 6);
+			else if (q < 0.8 && look === 0) c.dot(x, y, "flowerCream", 6);
+		}
+	}
+}
+
+/** a pedestrian lamp's lantern, up on its post (drawn upright over the post's foot, like a stop's sign): dark glass */
+function lantern(c, L, D) {
+	c.box(1, 0, L - 2, 1, "iron", 9);
+	c.box(0, 1, L, 1, "iron", 9);
+	c.box(1, 2, L - 2, D - 5, "glassDark", 8);
+	c.shadeAt(1, 3, 2);
+	c.box(0, D - 3, L, 1, "iron", 8);
+	c.box(Math.floor(L / 2) - 1, D - 2, 2, 2, "iron", 7);
+}
+
+/** a notice board's two posts and the foot of the board between them, from above */
+function boardfoot(c, L, D) {
+	c.box(0, 0, 2, D, "woodDark", 6);
+	c.box(L - 2, 0, 2, D, "woodDark", 6);
+	c.box(2, Math.floor(D / 2), L - 4, 1, "wood", 4);
+}
+
+/**
+ * The notice board standing over its posts: its little roof, the frame, the cork and the flyers pinned on it in the
+ * first days -- a photo and a few lines of print on each, some pinned over others (APO-01; ART-07: no text)
+ */
+function boardface(c, L, D, look, r) {
+	c.box(0, 0, L, 2, "shedRoof", 10);
+	c.box(1, 2, L - 2, D - 2, "woodDark", 8);
+	c.box(2, 3, L - 4, D - 5, "cork", 9);
+	const spots = [
+		[3, 4],
+		[7, 4],
+		[11, 5],
+		[4, 9],
+		[9, 9],
+		[12, 10],
+	];
+	for (const [x, y] of spots) {
+		if (x + 3 > L - 2 || y + 4 > D - 2 || r() < 0.15) continue;
+		c.box(x, y, 3, 4, "paper", 10);
+		c.box(x + 1, y + 1, 1, 1, "screen", 10);
+		c.shadeBox(x, y + 3, 3, 1, -1);
+	}
+}
+
+/**
+ * A newsstand from above: its roof of standing seams, the striped awning over the counter at its front (scalloped),
+ * the papers and magazines on the counter's edge under it
+ */
+function kiosk(c, L, D, look, r) {
+	const roof = D - 5;
+	c.box(0, 0, L, roof, "kioskRoof", 8);
+	for (let x = 3; x < L - 2; x += 4) c.shadeBox(x, 1, 1, roof - 2, -1);
+	c.box(0, 0, L, 1, "kioskRoof", 9, 1);
+	for (let x = 0; x < L; x++) {
+		const band = Math.floor(x / 3) % 2 === 0 ? "stripeG" : "canvas";
+		for (let y = roof; y < roof + 3; y++) {
+			if (y === roof + 2 && x % 3 === 2) continue;
+			c.dot(x, y, band, 7, y === roof ? 1 : 0);
+		}
+	}
+	const goods = ["paper", "goodsA", "goodsB", "paper", "goodsC"];
+	for (let x = 2; x < L - 2; x += 2) c.dot(x, D - 1, goods[Math.floor(r() * goods.length)], 4);
+}
+
+/**
+ * A cafe table and its chairs: the round top in the middle, four rattan chairs round it (look 0); two pushed back and
+ * one on its side (look 1); or the table knocked over -- its top on edge, the pedestal out -- and the chairs scattered
+ * (look 2): APO-01, they left in a hurry
+ */
+function cafe(c, L, D, look) {
+	const m = (L - 1) / 2;
+	const chair = (x, y, back) => {
+		c.box(x, y, 4, 4, "rattan", 3);
+		if (back === "top") c.box(x, y, 4, 1, "woodDark", 4);
+		else if (back === "bottom") c.box(x, y + 3, 4, 1, "woodDark", 4);
+		else if (back === "left") c.box(x, y, 1, 4, "woodDark", 4);
+		else c.box(x + 3, y, 1, 4, "woodDark", 4);
+	};
+	const tipped = (x, y) => {
+		c.box(x, y + 1, 4, 2, "rattan", 2);
+		c.box(x, y, 1, 4, "woodDark", 2);
+		c.dot(x + 3, y, "woodDark", 2);
+		c.dot(x + 3, y + 3, "woodDark", 2);
+	};
+	if (look === 2) {
+		c.box(4, 7, 12, 3, "tableTop", 4);
+		c.shadeBox(4, 9, 12, 1, -1);
+		c.box(9, 10, 2, 5, "iron", 3);
+		c.box(7, 15, 6, 1, "iron", 3);
+		chair(0, 1, "left");
+		tipped(15, 13);
+		chair(15, 1, "top");
+		tipped(1, 15);
+		return;
+	}
+	const push = look === 1 ? 1 : 0;
+	chair(Math.round(m) - 2, 0, "top");
+	chair(0, Math.round(m) - 2 + push, "left");
+	chair(L - 4, Math.round(m) - 2 - push, "right");
+	if (look === 1) tipped(Math.round(m) - 1, D - 4);
+	else chair(Math.round(m) - 2, D - 4, "bottom");
+	c.ellipse(m, m, 4.6, 4.6, "tableTop", 5);
+	c.ellipse(m - 1, m - 1, 2, 2, "tableTop", 5, 1);
+}
+
+/**
+ * A cafe's parasol over its table, from above (aerial: no baked shadow, see-through with a body under it): eight gores
+ * in the cafe's stripe and the cream canvas, each lit or in shade by how it faces the light, the ribs between them,
+ * the scalloped hem and the finial
+ */
+function parasol(c, L, D, look) {
+	const stripe = ["stripeR", "stripeB", "stripeG"][look % 3];
+	const m = (L - 1) / 2;
+	const R = L / 2 - 0.4;
+	for (let y = 0; y < D; y++) {
+		for (let x = 0; x < L; x++) {
+			const dx = x - m;
+			const dy = y - m;
+			// an octagon: the eight ribs' ends on its corners
+			const d = Math.max(Math.abs(dx), Math.abs(dy), (Math.abs(dx) + Math.abs(dy)) / 1.3);
+			if (d > R) continue;
+			// the hem's scallops: every third texel of the rim left out
+			if (d > R - 1 && (x + y) % 3 === 0) continue;
+			const a = Math.atan2(dy, dx);
+			const g = (Math.floor(((a + Math.PI) / (2 * Math.PI)) * 8) + 8) % 8;
+			// a gore facing the top left lit, the bottom right in shade
+			const mid = ((g + 0.5) / 8) * 2 * Math.PI - Math.PI;
+			const facing = -(Math.cos(mid) + Math.sin(mid)) / Math.SQRT2;
+			const tone = (facing > 0.5 ? 1 : facing < -0.5 ? -1 : 0) + (d > R - 1.2 ? -1 : 0);
+			c.dot(x, y, g % 2 === 0 ? stripe : "canvas", 6, tone);
+		}
+	}
+	// the ribs from the finial to the corners
+	for (let k = 0; k < 8; k++) {
+		const a = (k / 8) * 2 * Math.PI - Math.PI;
+		for (let t = 1.5; t < R - 0.5; t += 0.7) {
+			c.shadeAt(Math.round(m + Math.cos(a) * t), Math.round(m + Math.sin(a) * t), -1);
+		}
+	}
+	c.box(Math.floor(m), Math.floor(m), 2, 2, "iron", 7);
+}
+
+/** a heap of a cleared lot's rubble: concrete chunks with their broken faces, bricks, rebar sticking out, the dust */
+function rubble(c, L, D, look, r) {
+	const mx = (L - 1) / 2;
+	const my = (D - 1) / 2;
+	const rx = L / 2 - 0.5;
+	const ry = D / 2 - 0.5;
+	for (let y = 0; y < D; y++) {
+		for (let x = 0; x < L; x++) {
+			const t = ((x - mx) / rx) ** 2 + ((y - my) / ry) ** 2;
+			if (t > 1 || (t > 0.8 && r() < 0.4)) continue;
+			c.dot(x, y, "dust", 1 + Math.round((1 - t) * 3));
+		}
+	}
+	const n = Math.round((L * D) / 26);
+	for (let k = 0; k < n; k++) {
+		const w = 2 + Math.floor(r() * 4);
+		const h = 2 + Math.floor(r() * 3);
+		const x = Math.floor(mx - rx * 0.7 + r() * (rx * 1.4 - w));
+		const y = Math.floor(my - ry * 0.7 + r() * (ry * 1.4 - h));
+		const t = ((x + w / 2 - mx) / rx) ** 2 + ((y + h / 2 - my) / ry) ** 2;
+		const z = 3 + Math.round((1 - Math.min(1, t)) * 5);
+		const brick = look === 1 ? r() < 0.6 : r() < 0.15;
+		c.box(x, y, w, h, brick ? "brick" : r() < 0.5 ? "slabGrey" : "slab", z);
+		if (brick && w >= 3) c.shadeBox(x, y + 1, w, 1, -1);
+	}
+	if (look === 2) {
+		// the rebar sticking out of the slabs, bent
+		for (let k = 0; k < 3; k++) {
+			let x = Math.floor(mx - rx * 0.5 + r() * rx);
+			let y = Math.floor(my - ry * 0.4 + r() * ry * 0.8);
+			const dx = r() < 0.5 ? 1 : -1;
+			for (let s2 = 0; s2 < 5; s2++) {
+				c.dot(x, y, "steelBar", 9);
+				x += dx;
+				if (s2 % 2 === 1) y -= 1;
+			}
+		}
+	}
+}
+
+/** a road barrier: its two feet, the board of orange and white stripes slanting across */
+function barrier(c, L, D) {
+	c.box(1, 0, 2, D, "iron", 3);
+	c.box(L - 3, 0, 2, D, "iron", 3);
+	for (let x = 0; x < L; x++) {
+		for (let y = 1; y < D - 1; y++) c.dot(x, y, Math.floor((x + y) / 3) % 2 === 0 ? "barrierOrange" : "white", 5);
+	}
+}
+
+/**
+ * The mosaic in the middle of a square, in two paver tones either side of the plaza's own paving and a darker border
+ * (look 0: a compass rose, 1: rings, 2: a sunburst), the joints of its stones in shade -- no outline, no shadow: it is
+ * the floor (LEG-03: every tone within a few steps of the paving round it)
+ */
+function medallion(c, L, D, look) {
+	const m = (L - 1) / 2;
+	const R = L / 2 - 0.2;
+	// a course of stones this deep, ring after ring
+	const step = Math.max(4, Math.round(R / 5));
+	const star = R - 4;
+	for (let y = 0; y < D; y++) {
+		for (let x = 0; x < L; x++) {
+			const dx = x - m;
+			const dy = y - m;
+			const d = Math.hypot(dx, dy);
+			if (d > R) continue;
+			const a = Math.atan2(dy, dx);
+			const rim = R - d;
+			let mat = "paveLight";
+			let inlay = false;
+			if (rim < 2) mat = "paveDark";
+			else if (rim < 3) mat = "paveLight";
+			else if (look === 0) {
+				// the rose: four long points to the quarters and four short ones between, each split along its axis into
+				// warm stone and dark; the rose's circle of warm stone behind them; a dark stone in the middle
+				if (d < 2.2) mat = "paveDark";
+				if (Math.abs(d - star * 0.62) < 0.75) mat = "paveWarm";
+				for (let k = 0; k < 8; k++) {
+					const dir = (k / 8) * 2 * Math.PI - Math.PI;
+					const da = Math.atan2(Math.sin(a - dir), Math.cos(a - dir));
+					const len = k % 2 === 0 ? star : star * 0.6;
+					const half = (k % 2 === 0 ? 0.52 : 0.42) * (1 - d / len);
+					if (d < len && d >= 2.2 && Math.abs(da) < half) {
+						mat = da >= 0 ? "paveWarm" : "paveDark";
+						inlay = true;
+					}
+				}
+			} else if (look === 1) {
+				// the rings: courses of warm and light stone round a dark one
+				mat = ["paveDark", "paveWarm", "paveLight", "paveWarm", "paveLight", "paveWarm", "paveLight"][
+					Math.min(6, Math.floor(d / step))
+				];
+			} else if (d < step) mat = "paveLight";
+			else if (d < step + 1.5) mat = "paveDark";
+			else {
+				// the sunburst: twelve rays of warm and light stone round a light disc in a dark ring
+				mat = Math.floor(((a + Math.PI) / (2 * Math.PI)) * 12) % 2 === 0 ? "paveWarm" : "paveLight";
+			}
+			// the joints: the first texel of each course (never across the rose's inlay), and the stones of the kerb
+			const course = d > 2.5 && !inlay && Math.floor(d / step) !== Math.floor((d - 1) / step);
+			const kerb =
+				rim < 2 && (((a + Math.PI) / (2 * Math.PI)) * 24) % 1 < 1 / Math.max(1, (d * 2 * Math.PI) / 24);
+			c.dot(x, y, mat, 1, course || kerb ? -1 : 0);
+		}
+	}
+}
+
+/** a drain's grate in the paving: its concrete frame, the iron bars, the dark between them */
+function drain(c, L, D) {
+	c.box(0, 0, L, D, "concrete", 1);
+	c.box(1, 1, L - 2, D - 2, "iron", 1);
+	for (let x = 2; x < L - 2; x += 2) c.box(x, 2, 1, D - 4, "under", 1);
+}
+
+/** paving that gave: a crack running across a slab (look 0), a sunken stone (1), two stones gone and the soil showing (2) */
+function cracked(c, L, D, look, r) {
+	const A = along(c, L, D);
+	if (look === 1) {
+		const a = Math.floor(A.len / 2) - 3;
+		const b = Math.floor(A.wide / 2) - 3;
+		A.box(a, b, 6, 6, "paveDark", 1, -1);
+		A.shade(a, b, 6, 1, -1);
+		A.shade(a, b, 1, 6, -1);
+		A.shade(a, b + 5, 6, 1, 1);
+		return;
+	}
+	if (look === 2) {
+		const a = Math.floor(A.len / 2) - 6;
+		const b = Math.floor(A.wide / 2) - 2;
+		A.box(a, b, 8, 4, "soil", 1);
+		A.shade(a, b, 8, 1, -1);
+		for (let k = 0; k < 3; k++) A.dot(a + 1 + Math.floor(r() * 6), b + 1 + Math.floor(r() * 2), "weed", 2);
+		// the loose stone, lifted beside the hole
+		A.box(a + 9, b - 1, 4, 4, "paveLight", 2);
+		return;
+	}
+	// a crack from one edge across, and a branch off its middle
+	let b = Math.floor(A.wide / 2 + (r() - 0.5) * 3);
+	for (let a = 0; a < A.len; a++) {
+		A.dot(a, b, "paveDark", 1, -2);
+		const q = r();
+		if (q < 0.3 && b > 1) b--;
+		else if (q > 0.7 && b < A.wide - 2) b++;
+		if (a === Math.floor(A.len / 2)) {
+			let bb = b;
+			for (let k = 0; k < A.wide / 2 - 1; k++) {
+				bb += 1;
+				A.dot(a + k, bb, "paveDark", 1, -2);
+			}
+		}
+	}
+}
+
+/** weeds grown up in the paving's joints: small tufts (look 1 along a joint, look 2 with a dandelion) */
+function weeds(c, L, D, look, r) {
+	const tufts = look === 1 ? 0 : 3;
+	for (let k = 0; k < tufts; k++) {
+		const x = 1 + Math.floor(r() * (L - 3));
+		const y = 1 + Math.floor(r() * (D - 3));
+		c.dot(x, y, "weed", 2);
+		c.dot(x + 1, y, "weedLight", 2);
+		c.dot(x, y + 1, "weed", 2, -1);
+		if (r() < 0.5) c.dot(x - 1, y, "weedLight", 2);
+	}
+	if (look === 1) {
+		const y = Math.floor(D / 2);
+		for (let x = 0; x < L; x++)
+			if (r() < 0.7) c.dot(x, y + (r() < 0.3 ? 1 : 0), r() < 0.5 ? "weed" : "weedLight", 2);
+	}
+	if (look === 2) c.dot(Math.floor(L / 2), Math.floor(D / 2) - 1, "dandelion", 3);
+}
+
+/** leaves fallen under a tree: a few, each a texel or two, browns and yellows (look 2 still green) */
+function leaves(c, L, D, look, r) {
+	const tones =
+		look === 0
+			? ["leafBrown", "leafYellow"]
+			: look === 1
+				? ["leafYellow", "leafBrown", "leafGreen"]
+				: ["leafGreen", "leafBrown"];
+	const n = 7 + Math.floor(r() * 4);
+	for (let k = 0; k < n; k++) {
+		const x = Math.floor(r() * (L - 1));
+		const y = Math.floor(r() * (D - 1));
+		const m = tones[k % tones.length];
+		c.dot(x, y, m, 2);
+		if (r() < 0.6) c.dot(x + (r() < 0.5 ? 1 : 0), y + (r() < 0.5 ? 0 : 1), m, 2, -1);
+	}
+}
+
+/**
+ * What people left at the memorial's foot in the first days: bouquets in their paper, flowers, candles burnt down to
+ * their wicks, a framed photo -- small, flat and dull (LEG-03: nothing here reads as something to pick up)
+ */
+function vigil(c, L, D) {
+	const flowers = ["flowerYellow", "flowerCream", "flowerOrange"];
+	for (let k = 0; k < 3; k++) {
+		const x = 1 + k * 5;
+		c.box(x, 3, 2, 4, "kraft", 2);
+		c.box(x - 1, 1, 2, 2, flowers[k % 3], 3);
+		c.box(x + 1, 1, 2, 2, flowers[(k + 1) % 3], 3);
+		c.dot(x, 3, "shrub", 3);
+	}
+	for (const [x, y] of [
+		[3, 7],
+		[8, 7],
+		[12, 6],
+		[14, 3],
+	]) {
+		if (x >= L || y >= D) continue;
+		c.dot(x, y, "wax", 2);
+		c.inkAt(x, y, [120, 108, 88]);
+	}
+	c.box(L - 4, 5, 3, 3, "woodDark", 2);
+	c.dot(L - 3, 6, "screen", 2);
+}
+
+/** a hopscotch chalked on the paving and half worn off: its boxes' outlines (single, single, double, single, double, home) */
+function chalk(c, L, D) {
+	const A = along(c, L, D);
+	const w = A.wide;
+	const size = Math.floor(A.len / 7);
+	const line = (a, b, n, across) => {
+		for (let i = 0; i < n; i++) {
+			if (across) A.dot(a, b + i, "chalkLine", 1);
+			else A.dot(a + i, b, "chalkLine", 1);
+		}
+	};
+	let a = 1;
+	for (const n of [1, 1, 2, 1, 2, 1]) {
+		line(a, 1, size, false);
+		line(a, w - 2, size, false);
+		line(a, 1, w - 2, true);
+		if (n === 2) line(a, Math.floor(w / 2), size, false);
+		a += size;
+	}
+	line(a, 1, w - 2, true);
+}
+
 // ---------------------------------------------------------------- the table of fixtures
 
 /**
@@ -847,6 +1290,24 @@ const PROPS = [
 	{ tag: "dumpster", sizes: [[128, 64]], faces: FACES, looks: 1, draw: dumpster },
 	{ tag: "scaffold", sizes: [[280, 40]], faces: FACES, looks: 1, draw: scaffold },
 	{ tag: "column", sizes: [[40, 40]], faces: ["-"], looks: 1, draw: column },
+	// the downtown squares (MOB-07, shared/game/townSquares.ts's sizes)
+	{ tag: "planter", sizes: [[64, 64]], faces: ["-"], looks: 3, draw: planter },
+	{ tag: "lamppost", sizes: [[16, 16]], faces: ["-"], looks: 1, draw: lampfoot },
+	{ tag: "noticeboard", sizes: [[64, 12]], faces: FACES, looks: 1, draw: boardfoot },
+	{ tag: "kiosk", sizes: [[112, 80]], faces: FACES, looks: 1, draw: kiosk },
+	{ tag: "cafe", sizes: [[80, 80]], faces: ["-"], looks: 3, draw: cafe },
+	{ tag: "parasol", sizes: [[112, 112]], faces: ["-"], looks: 3, draw: parasol, shadow: 0, aerial: true },
+	{
+		tag: "rubble",
+		sizes: [
+			[96, 64],
+			[64, 96],
+		],
+		faces: ["-"],
+		looks: 3,
+		draw: rubble,
+	},
+	{ tag: "barrier", sizes: [[88, 24]], faces: FACES, looks: 1, draw: barrier },
 ];
 
 /** what lies flat on the ground (townLots.ts ground kinds): both orientations of each size, no outline, no shadow */
@@ -868,6 +1329,23 @@ const GROUND = [
 	},
 	{ tag: "paper", sizes: [[40, 32]], looks: 3, draw: paper },
 	{ tag: "bag", sizes: [[36, 28]], looks: 3, draw: bag },
+	// a downtown square's floor (MOB-07)
+	{
+		tag: "medallion",
+		sizes: [
+			[288, 288],
+			[192, 192],
+			[128, 128],
+		],
+		looks: 3,
+		draw: medallion,
+	},
+	{ tag: "drain", sizes: [[32, 32]], looks: 1, draw: drain },
+	{ tag: "cracked", sizes: [[64, 48]], looks: 3, draw: cracked },
+	{ tag: "weeds", sizes: [[32, 32]], looks: 3, draw: weeds },
+	{ tag: "leaves", sizes: [[48, 48]], looks: 3, draw: leaves },
+	{ tag: "vigil", sizes: [[64, 32]], looks: 1, draw: vigil },
+	{ tag: "chalk", sizes: [[160, 48]], looks: 1, draw: chalk },
 ];
 
 /** the long thin things, one cell along x and one along y, cropped to the length (world units: the longest) */
@@ -880,6 +1358,9 @@ const STRIPS = [
 const POINTS = [
 	{ key: "lamphead", L: 12, D: 36, faces: FACES, draw: lamphead },
 	{ key: "stopsign", L: 28, D: 28, faces: ["-"], draw: stopsign },
+	// a square's pedestrian lamp and its notice board (MOB-07): the lantern on the post, the board over its posts
+	{ key: "lantern", L: 20, D: 28, faces: ["-"], draw: lantern },
+	{ key: "boardface", L: 64, D: 48, faces: ["-"], draw: boardface },
 ];
 
 // ---------------------------------------------------------------- the atlas
@@ -927,10 +1408,12 @@ export function townPropArt({ C }) {
 		looks[g.tag] = g.looks;
 		faceless[g.tag] = true;
 		for (const [a, b] of g.sizes) {
-			for (const [w, h] of [
-				[a, b],
-				[b, a],
-			]) {
+			for (const [w, h] of a === b
+				? [[a, b]]
+				: [
+						[a, b],
+						[b, a],
+					]) {
 				for (let look = 0; look < g.looks; look++) {
 					paint(`${g.tag}:${w}x${h}:-:${look}`, w, h, g.draw, look, "-", 0, { outline: false });
 				}

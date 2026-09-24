@@ -1,6 +1,6 @@
 {
-	"note": "draw-call digests of each building type's first building seen from inside with no world art (tools/test-world-art.mjs --golden-interiors); noTrees: the same with the trees' drawing stubbed out (the town round the building, VEG-06)",
-	"recordedFrom": "the parks' groves on the open lawn (VEG-06, 2026-09-24) over d15fda3: the interiors are untouched, the town round the college and the library is not -- the park beside the campus has its trees in groves seated on its open lawn; with the trees' drawing stubbed out (noTrees) each of the 24 buildings is the golden before's, call for call (unchanged). The golden before it: the trees' kinds (VEG-06) over 71ff847, whose noTrees was 71ff847's call for call (recorded with PZ_SRC on 71ff847 and compared); the one before: the entrances (ART-17), re-recorded on c638602: the flat entrance outside each doorway by its type",
+	"note": "draw-call digests of each building type's first building seen from inside with no world art (tools/test-world-art.mjs --golden-interiors); noTrees: the same with the trees' drawing stubbed out (the town round the building, VEG-06), in the town without its downtown squares; noSquares: the town without its downtown squares (MOB-07), drawn whole",
+	"recordedFrom": "the downtown squares (MOB-07, 2026-09-24) over 450bbf2: the interiors are untouched, the town round eight downtown buildings is not -- a square in the view of the market, the gun shop, the hardware store, the electronics store, the bakery, the bank, the police station and the office; with the squares taken out (noSquares) each of the 24 buildings is the golden before's, call for call, and noTrees is digested on that town, unchanged. The golden before it: the parks' groves on the open lawn (VEG-06, 2026-09-24) over d15fda3: the interiors are untouched, the town round the college and the library is not -- the park beside the campus has its trees in groves seated on its open lawn; with the trees' drawing stubbed out (noTrees) each of the 24 buildings is the golden before's, call for call (unchanged). The golden before it: the trees' kinds (VEG-06) over 71ff847, whose noTrees was 71ff847's call for call (recorded with PZ_SRC on 71ff847 and compared); the one before: the entrances (ART-17), re-recorded on c638602: the flat entrance outside each doorway by its type",
 	"scenes": {
 		"type1": {
 			"building": 51,
@@ -11,6 +11,10 @@
 			"noTrees": {
 				"count": 900,
 				"sha1": "f9f110f88de0c10ea9691ba6bdf0f917a78fe6da"
+			},
+			"noSquares": {
+				"count": 956,
+				"sha1": "4fd45b8d459bce5c92b854565810bfa2a038b031"
 			}
 		},
 		"type2": {
@@ -22,6 +26,10 @@
 			"noTrees": {
 				"count": 1161,
 				"sha1": "3aa4a6526800561386265879822f5ee60e89eeeb"
+			},
+			"noSquares": {
+				"count": 1217,
+				"sha1": "40ff0ed8a03271f6543419d3f2624145117c95c5"
 			}
 		},
 		"type3": {
@@ -33,6 +41,10 @@
 			"noTrees": {
 				"count": 1743,
 				"sha1": "c84770402213dc30e9e822b12f96a649318e6d3e"
+			},
+			"noSquares": {
+				"count": 1883,
+				"sha1": "7b3e4576f930a9ffa334c38b2c3696723f6ce510"
 			}
 		},
 		"type4": {
@@ -44,6 +56,10 @@
 			"noTrees": {
 				"count": 1296,
 				"sha1": "4863ee4d07c384cea9fbcb7788786c2649cf6ae4"
+			},
+			"noSquares": {
+				"count": 1380,
+				"sha1": "1432046ecde39535ed5e68f1e8828f60d3676dde"
 			}
 		},
 		"type5": {
@@ -55,6 +71,10 @@
 			"noTrees": {
 				"count": 1398,
 				"sha1": "aacc0f8c11753241f33b1e0c83ce546958ffe700"
+			},
+			"noSquares": {
+				"count": 1610,
+				"sha1": "f344991156287d69d65de3fb1aee78fdb7282235"
 			}
 		},
 		"type6": {
@@ -66,6 +86,10 @@
 			"noTrees": {
 				"count": 1064,
 				"sha1": "4c8f0ac6a2989a72b2093281a7b65d31599fa55b"
+			},
+			"noSquares": {
+				"count": 1288,
+				"sha1": "9e9ff5c8585d42a72df3cd66a16f205fd72646b6"
 			}
 		},
 		"type7": {
@@ -77,28 +101,40 @@
 			"noTrees": {
 				"count": 1215,
 				"sha1": "555cd9c058cd9b44d3ea3cd77a74fe46a674e675"
+			},
+			"noSquares": {
+				"count": 1331,
+				"sha1": "3cf788a73e41dfb1922716d63f0e58eaea2b8eb5"
 			}
 		},
 		"type8": {
 			"building": 135,
 			"x": 6568,
 			"y": 7308,
-			"count": 1902,
-			"sha1": "6dea1195e7ac0c83c56b5d958abbb12044b881b0",
+			"count": 2042,
+			"sha1": "a9ed137ff69a7fa5211ffde4a2267d6cddf5793f",
 			"noTrees": {
 				"count": 1738,
 				"sha1": "8c22311ad05c514969cd353791aedef2c9bdef52"
+			},
+			"noSquares": {
+				"count": 1902,
+				"sha1": "6dea1195e7ac0c83c56b5d958abbb12044b881b0"
 			}
 		},
 		"type9": {
 			"building": 136,
 			"x": 7100,
 			"y": 6600,
-			"count": 1510,
-			"sha1": "440fb49ec2aec95da1b387a756d726f1cbd0dc64",
+			"count": 1622,
+			"sha1": "9128bb4f7bde93409396cf4aa333d736a27b269f",
 			"noTrees": {
 				"count": 1394,
 				"sha1": "dd3f8f9a568fff57b8ebf0b07a36c11c0f43d781"
+			},
+			"noSquares": {
+				"count": 1510,
+				"sha1": "440fb49ec2aec95da1b387a756d726f1cbd0dc64"
 			}
 		},
 		"type10": {
@@ -110,6 +146,10 @@
 			"noTrees": {
 				"count": 1462,
 				"sha1": "302255a1873dcb3d7a612756b8983f6fcf2047ec"
+			},
+			"noSquares": {
+				"count": 1622,
+				"sha1": "dbb052e79751db1916d488b5fdaa185857fae71c"
 			}
 		},
 		"type11": {
@@ -121,6 +161,10 @@
 			"noTrees": {
 				"count": 1390,
 				"sha1": "64c4b5cdbc0cbdaf47fb4efbe2cb2b5079b45cb3"
+			},
+			"noSquares": {
+				"count": 1486,
+				"sha1": "604bab267d2d59f65ceae66a72bbfcabeef7bdda"
 			}
 		},
 		"type12": {
@@ -132,6 +176,10 @@
 			"noTrees": {
 				"count": 1929,
 				"sha1": "832eb39f1ac6cda6bc88190392cd2c3b13e90e02"
+			},
+			"noSquares": {
+				"count": 2065,
+				"sha1": "78749c354f5eb8da440f2a4688343db922fed127"
 			}
 		},
 		"type13": {
@@ -143,6 +191,10 @@
 			"noTrees": {
 				"count": 1574,
 				"sha1": "91bbe12e48950594798fa670b8fd4ade3ed2f4c7"
+			},
+			"noSquares": {
+				"count": 1882,
+				"sha1": "cc1ea46948a59da2dfb1aab46bd1d7bc5fa21704"
 			}
 		},
 		"type14": {
@@ -154,6 +206,10 @@
 			"noTrees": {
 				"count": 1776,
 				"sha1": "bffc8d98060c857b06cf875c7a52c0fbe62750c0"
+			},
+			"noSquares": {
+				"count": 1952,
+				"sha1": "32772a077ceae8c6e22a2641073cbab8c54c2583"
 			}
 		},
 		"type15": {
@@ -165,17 +221,25 @@
 			"noTrees": {
 				"count": 1701,
 				"sha1": "8435a57b056587a5daa5ad47b5047ad1352653ef"
+			},
+			"noSquares": {
+				"count": 1869,
+				"sha1": "c0713989e493ec7a1b995f1200553ddc2e1140ac"
 			}
 		},
 		"type16": {
 			"building": 226,
 			"x": 8520,
 			"y": 9548,
-			"count": 1483,
-			"sha1": "c8713fa62e91058f4a600b6daab660df506985e4",
+			"count": 1602,
+			"sha1": "99509a263fb3d4eef8de59ed53a4308411f38bad",
 			"noTrees": {
 				"count": 1399,
 				"sha1": "b0637f060d8edc80c39786900fc2d8fd0a38f0da"
+			},
+			"noSquares": {
+				"count": 1483,
+				"sha1": "c8713fa62e91058f4a600b6daab660df506985e4"
 			}
 		},
 		"type17": {
@@ -187,39 +251,55 @@
 			"noTrees": {
 				"count": 1230,
 				"sha1": "6531bb75f9dda6443df5813eab21e58cf27e946b"
+			},
+			"noSquares": {
+				"count": 1494,
+				"sha1": "307425a215a8f116bf6e4463b3183e5c9a9ebfa4"
 			}
 		},
 		"type18": {
 			"building": 262,
 			"x": 10704,
 			"y": 8984,
-			"count": 1556,
-			"sha1": "7333b0c42023aa2de2053a36d0b64494a5d87a3d",
+			"count": 1648,
+			"sha1": "26c6d819dbd9b13bbc0279ad673bd59dfdc62bf7",
 			"noTrees": {
 				"count": 1384,
 				"sha1": "1e82bf47f127314ca171b58b2111f69ef2b466d4"
+			},
+			"noSquares": {
+				"count": 1556,
+				"sha1": "7333b0c42023aa2de2053a36d0b64494a5d87a3d"
 			}
 		},
 		"type19": {
 			"building": 231,
 			"x": 8440,
 			"y": 10832,
-			"count": 1715,
-			"sha1": "fb5d1d1e6d74351c7762c6da3b6d9e90fa06300e",
+			"count": 1733,
+			"sha1": "3fc533b03baa36a2d8ee814d0bb13089992917ed",
 			"noTrees": {
 				"count": 1543,
 				"sha1": "ce6367ed09d9abf56762748449018d1804dbeaac"
+			},
+			"noSquares": {
+				"count": 1715,
+				"sha1": "fb5d1d1e6d74351c7762c6da3b6d9e90fa06300e"
 			}
 		},
 		"type22": {
 			"building": 216,
 			"x": 8956,
 			"y": 7008,
-			"count": 1985,
-			"sha1": "bb783c8db787b6f8469850c331fd0b6f634b99dc",
+			"count": 2132,
+			"sha1": "2f3888894fa702e42da9a6fd499cb3d151a9c708",
 			"noTrees": {
 				"count": 1821,
 				"sha1": "ef552f35b02b2ba82dffb21e2c5381640e6e89d1"
+			},
+			"noSquares": {
+				"count": 1985,
+				"sha1": "bb783c8db787b6f8469850c331fd0b6f634b99dc"
 			}
 		},
 		"type23": {
@@ -231,6 +311,10 @@
 			"noTrees": {
 				"count": 1320,
 				"sha1": "bd2303a398193e0a4f7f440c7a7f1d3a4540e206"
+			},
+			"noSquares": {
+				"count": 1548,
+				"sha1": "1f0e69bba29d220a8a53f1a1881fb95d6e18fcac"
 			}
 		},
 		"type24": {
@@ -242,28 +326,40 @@
 			"noTrees": {
 				"count": 768,
 				"sha1": "563bcfafc8791d9ec520c17401bc33d6969efe0a"
+			},
+			"noSquares": {
+				"count": 880,
+				"sha1": "0c82bf78381fdda7ef3dc0f12455e7c8684409cd"
 			}
 		},
 		"type25": {
 			"building": 225,
 			"x": 8520,
 			"y": 8896,
-			"count": 1647,
-			"sha1": "304227f3e73dc4422d36154795544ac22d29e151",
+			"count": 1738,
+			"sha1": "7a09e7baf7d1b7d37d6396d2ff0548e98b65e015",
 			"noTrees": {
 				"count": 1543,
 				"sha1": "efb6e40cc349c44325662e4d00c0daad60eff14f"
+			},
+			"noSquares": {
+				"count": 1647,
+				"sha1": "304227f3e73dc4422d36154795544ac22d29e151"
 			}
 		},
 		"type26": {
 			"building": 230,
 			"x": 9108,
 			"y": 10840,
-			"count": 1729,
-			"sha1": "199cc0c8ccd7af169b4acf0b02e9f0576f5fef25",
+			"count": 1747,
+			"sha1": "fbc84f512ec847ce94509b13fc8a3ab5a8d6a531",
 			"noTrees": {
 				"count": 1577,
 				"sha1": "2a0e3e03001452a541b665ed39e18e1c4415930e"
+			},
+			"noSquares": {
+				"count": 1729,
+				"sha1": "199cc0c8ccd7af169b4acf0b02e9f0576f5fef25"
 			}
 		}
 	}

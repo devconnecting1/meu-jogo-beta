@@ -28,6 +28,7 @@ import type { CampusBuilding } from "./campus";
 import { buildingSeed, planBuilding } from "./interiors";
 import type { BuildingPlan, Decor, Opening, RoomRect } from "./interiors";
 import * as TL from "./townLots";
+import { furnishSquares } from "./townSquares";
 import { gridInsert, gridOf, gridRemove, newGrid, pointInSolid, querySolids, rectOverlap } from "./solidGrid";
 import { GLASS_HITS } from "./windows";
 
@@ -277,7 +278,38 @@ export type GroundKind =
 	 */
 	| "spill"
 	| "paper"
-	| "bag";
+	| "bag"
+	/**
+	 * A downtown square's floor (MOB-07, shared/game/townSquares.ts): the paving's mosaic in the middle (a compass rose,
+	 * rings, a star: two paver tones, `variant` its look), a drain's grate, a few cracked or sunken slabs, weeds in the
+	 * joints, fallen leaves under the trees, a vigil's flowers and candles at a memorial's plinth, a hopscotch chalked on
+	 * the paving -- flat, never solid (COL-02), darker and smaller than anything to pick up (LEG-03)
+	 */
+	| "medallion"
+	| "drain"
+	| "cracked"
+	| "weeds"
+	| "leaves"
+	| "vigil"
+	| "chalk"
+	/** a pocket park's planted bed (grass in a stone kerb), a cafe's timber deck, a cleared lot's bare earth (MOB-07) */
+	| "bed"
+	| "terrace"
+	| "waste";
+
+/**
+ * A downtown square's program (MOB-07, shared/game/townSquares.ts): what the town made of the paving the shops left
+ * over -- a fountain in the middle of a civic square, the memorial with its vigil, a pocket park's planted bed, a
+ * paved court of trees in their grates, a cafe's terrace, a newsstand corner, or (rarer) a lot cleared for a building
+ * that never came
+ */
+export type SquareProgram = "fountain" | "memorial" | "garden" | "grove" | "cafe" | "kiosk" | "cleared";
+
+/** A downtown square (MOB-07): the rect it was laid in, its program and its look (0..2: the mosaic, the colours) */
+export interface TownSquare extends Rect {
+	program: SquareProgram;
+	look: number;
+}
 
 /**
  * What a lot was given to besides its buildings (the everyday town, shared/game/townLots.ts): the street market
@@ -288,6 +320,8 @@ export type LotProgram = "market" | "parking" | "construction";
 
 export interface GroundRect extends Rect {
 	kind: GroundKind;
+	/** which of its kind's looks it is (a square's mosaic, MOB-07); undefined: its own pick from where it lies */
+	variant?: number;
 }
 
 /**
@@ -327,6 +361,8 @@ export interface Lot extends Rect {
 	ground: Array<GroundRect>;
 	/** a special lot's program (the street market, a parking lot, a construction site); undefined: an ordinary block */
 	program?: LotProgram;
+	/** the squares laid in what a downtown block's shops left paved and empty (MOB-07); undefined: none */
+	squares?: Array<TownSquare>;
 }
 
 export interface Road extends Rect {
@@ -1466,8 +1502,8 @@ function addCar(w: WorldData, x: number, y: number, cw: number, ch: number, head
 	});
 }
 
-function addTrash(w: WorldData, x: number, y: number): void {
-	addSolid(w, {
+function addTrash(w: WorldData, x: number, y: number): Solid {
+	return addSolid(w, {
 		kind: "car",
 		x,
 		y,
@@ -2474,6 +2510,8 @@ function townKit(g: Gen): TL.TownKit {
 		},
 		solidsIn: (x, y, w, h) => querySolids(g.w, x, y, x + w, y + h),
 		treeLattice: road => ({ pitch: g.pitch[road], phase: g.phase[road] }),
+		tree: (x, y, site) => addTree(g.w, x, y, site),
+		bin: (x, y) => addTrash(g.w, x, y),
 	};
 }
 
@@ -3559,8 +3597,12 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 	}
 	for (const lot of w.lots) TL.furnishStreets(kit, lot);
 
-	// --- the inside of every building, now that nothing else will be placed ---
+	// --- the inside of every building, now that nothing else is placed on the blocks round it ---
 	planInteriors(g);
+
+	// --- the downtown squares, last (MOB-07): in the paving the shops left empty, from their own streams -- every other
+	// solid of the town keeps its rect and its id ---
+	furnishSquares(kit, townSeed, pace);
 
 	return w;
 }

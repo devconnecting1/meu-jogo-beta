@@ -219,6 +219,22 @@ const GROUNDS = {
 			extremes(`${kind} doorstep ${look}`, img, (x, y) => x >= x0 && x < x0 + w && y >= y0 && y < y0 + h);
 		}
 	}
+	// a downtown square's floor (MOB-07): its mosaic in every look, and the planted bed a zombie crosses (the lawn above),
+	// the atlas's darkest and lightest texel of each mosaic; flat, the mosaic's disc and its ring
+	const TA = join(SRC, "client/view/townPropAtlas.ts");
+	const props = join(ART_DIR, "townProps.png");
+	if (existsSync(TA) && existsSync(props)) {
+		const { TOWN_PROP_CELLS } = require(TA);
+		const img = decodePNG(readFileSync(props));
+		for (const [key, c] of Object.entries(TOWN_PROP_CELLS)) {
+			const [tag, size, , look] = key.split(":");
+			if (tag !== "medallion" || size !== "288x288") continue;
+			const [x0, y0, w, h] = c;
+			extremes(`square mosaic ${look}`, img, (x, y) => x >= x0 && x < x0 + w && y >= y0 && y < y0 + h);
+		}
+		GROUNDS["square mosaic (flat)"] = rgb(COLORS.sidewalk.Lerp(COLORS.white, 0.2));
+		GROUNDS["square mosaic's ring (flat)"] = rgb(COLORS.sidewalk.Lerp(COLORS.shadow, 0.12));
+	}
 }
 {
 	// a fight's blood (ART-15): a mark over a zombie standing in a stain, wet (a survivor's red, the horde's dark red)

@@ -1446,8 +1446,8 @@
 			"file": "townProps.png",
 			"kind": "atlas",
 			"w": 1024,
-			"h": 662,
-			"description": "the town's fixtures: 306 cells of market, street, park, backyard and building-site pieces and their ground (client/view/townPropArt.ts)"
+			"h": 702,
+			"description": "the town's fixtures: 362 cells of market, street, park, backyard and building-site pieces and their ground (client/view/townPropArt.ts)"
 		},
 		{
 			"name": "entrances",

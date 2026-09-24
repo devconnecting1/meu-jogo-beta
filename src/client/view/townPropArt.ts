@@ -55,6 +55,11 @@ const LIFT: Record<string, number> = {
 	trampoline: 10,
 	grill: 8,
 	column: 12,
+	// the downtown squares (MOB-07; a cafe table, a heap of rubble: low, their baked contact shadow is enough)
+	planter: 6,
+	kiosk: 18,
+	noticeboard: 14,
+	barrier: 6,
 };
 /** a stack of crates stands higher than one (townLots.ts CRATE_STACKED) */
 const CRATE_STACKED = 1;
@@ -67,6 +72,21 @@ const FLAT_SHADOW_A = 0.28;
 /** a street lamp's head and a bus stop's sign, off their pole (townView.ts's flat drawing: the same spots) */
 const LAMP_OUT = 24;
 const SIGN_UP = 26;
+/** a square's lantern over its post, and its notice board over its posts (MOB-07; townView.ts: the same spots) */
+export const LANTERN_UP = 22;
+export const BOARD_UP = 30;
+/** what lies on a square's floor: drawn over the paving and its mosaic, under the bodies (LEG-03) */
+const FLOOR_DECALS: Record<string, boolean> = {
+	spill: true,
+	paper: true,
+	bag: true,
+	drain: true,
+	cracked: true,
+	weeds: true,
+	leaves: true,
+	vigil: true,
+	chalk: true,
+};
 /** a market tent that came down (townLots.ts TENT_DOWN; `variant` = stripe + 3 × state) */
 const TENT_DOWN = 3;
 
@@ -253,10 +273,18 @@ export function drawPropArt(r: Renderer, cam: Camera, s: Solid, world: WorldData
 		return true;
 	}
 	let top: Cell | undefined;
-	if (t === "streetlight" || t === "busstop") {
+	if (t === "streetlight" || t === "busstop" || t === "lamppost" || t === "noticeboard") {
 		let q = tops.get(s);
 		if (q === undefined) {
-			q = TOWN_PROP_CELLS[t === "streetlight" ? `lamphead:${s.face ?? "bottom"}` : "stopsign:-"] ?? false;
+			const key =
+				t === "streetlight"
+					? `lamphead:${s.face ?? "bottom"}`
+					: t === "busstop"
+						? "stopsign:-"
+						: t === "lamppost"
+							? "lantern:-"
+							: "boardface:-";
+			q = TOWN_PROP_CELLS[key] ?? false;
 			tops.set(s, q);
 		}
 		if (q === false) return false;
@@ -288,7 +316,8 @@ export function drawPropArt(r: Renderer, cam: Camera, s: Solid, world: WorldData
 			const ny = f === "top" ? -1 : f === "bottom" || f === undefined ? 1 : 0;
 			drawCellAt(r, cam, id, top, cx + nx * LAMP_OUT, cy + ny * LAMP_OUT, Z.roof - 1);
 		} else {
-			drawCellAt(r, cam, id, top, cx, cy - SIGN_UP, Z.roof - 1);
+			const up = t === "lamppost" ? LANTERN_UP : t === "noticeboard" ? BOARD_UP : SIGN_UP;
+			drawCellAt(r, cam, id, top, cx, cy - up, Z.roof - 1);
 		}
 	}
 	return true;
@@ -323,14 +352,16 @@ export function drawCanopyArt(r: Renderer, cam: Camera, s: Solid, shadow: Shadow
 	return true;
 }
 
-/** the everyday town's own ground (a court, a sand pit, the bank's steps, the market's litter...) from the atlas */
+/**
+ * The everyday town's own ground (a court, a sand pit, the bank's steps, the market's litter, a square's mosaic and
+ * what lies on its floor: MOB-07) from the atlas; a ground rect's `variant` picks its look (a square's mosaic)
+ */
 export function drawGroundArt(r: Renderer, cam: Camera, g: GroundRect): boolean {
 	const id = artId("townProps");
 	if (id === undefined) return false;
 	const k: string = g.kind;
-	const c = cellOf(g, k, g.w, g.h, undefined, undefined, g.x, g.y);
+	const c = cellOf(g, k, g.w, g.h, undefined, g.variant, g.x, g.y);
 	if (c === undefined) return false;
-	const litter = k === "spill" || k === "paper" || k === "bag";
-	drawCell(r, cam, id, c, g.x, g.y, litter ? Z.ground + 4 : Z.ground + 3);
+	drawCell(r, cam, id, c, g.x, g.y, FLOOR_DECALS[k] === true ? Z.ground + 4 : Z.ground + 3);
 	return true;
 }

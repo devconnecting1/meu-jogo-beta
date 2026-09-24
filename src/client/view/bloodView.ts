@@ -78,6 +78,9 @@ const SOAKS: Partial<Record<GroundKind, true>> = {
 	parking: true,
 	stall: true,
 	playground: true,
+	// a downtown square's planted bed and a cleared lot's bare earth (MOB-07)
+	bed: true,
+	waste: true,
 };
 
 /** a colour soaked into the ground: a quarter of the way to its own grey, then 16 % darker */
