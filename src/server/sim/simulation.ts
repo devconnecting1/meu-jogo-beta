@@ -440,6 +440,8 @@ export class ServerSimulation {
 				out: this.worldOut,
 				fx: event => this.onFx?.(event),
 				machines: power,
+				// a door is a way in or a wall to the horde (§3.3), exactly like a construction going up or down
+				onSolidChanged: (x, y, w, h) => this.horde?.refs.onSolidChanged?.(x, y, w, h),
 			});
 			// VEI-05: a parked vehicle is one of the constructions above; this is getting on, riding and getting off.
 			// The hooks read the combat and the horde when they RUN (both are built below, or not at all)

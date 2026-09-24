@@ -112,6 +112,8 @@ export class MultiFlowField {
 	lastCells = 0;
 	/** active tiles of the last completed field */
 	lastTiles = 0;
+	/** rebuilds started since the field was made (diagnostics: `upToDate` is what keeps this from growing at 10 Hz) */
+	rebuilds = 0;
 
 	private readonly tiles = new Map<number, Tile>();
 	private readonly pool: Array<Array<number>> = [];
@@ -127,6 +129,14 @@ export class MultiFlowField {
 	private pending = 0;
 	private bD = 0;
 	private readonly solidsBuf: Array<Solid> = [];
+	/**
+	 * What the last started rebuild was a function of (F2): 4 numbers per source -- its cell column and row, its
+	 * index and its seed -- and the `dirtyGen` it read the grid at. `upToDate` compares against them.
+	 */
+	private readonly builtKey: Array<number> = [];
+	private builtDirtyGen = -1;
+	/** bumped by every `dirtyRect` / `dirtyAll`: the grid a rebuild would read is not the one the field was built on */
+	private dirtyGen = 0;
 
 	constructor() {
 		for (let i = 0; i < BUCKETS; i++) this.buckets.push([]);
@@ -248,6 +258,7 @@ export class MultiFlowField {
 	 * (a chopped tree, a wrecked car).
 	 */
 	dirtyRect(x: number, y: number, w: number, h: number, withStatic = false): void {
+		this.dirtyGen += 1;
 		const span = TILE * CELL;
 		const tx0 = math.floor((x - INFLATE) / span);
 		const tx1 = math.floor((x + w + INFLATE) / span);
@@ -265,6 +276,7 @@ export class MultiFlowField {
 
 	/** the whole map has to be read again (the solid count moved and nobody said where) */
 	dirtyAll(withStatic = false): void {
+		this.dirtyGen += 1;
 		if (withStatic) this.staticGen += 1;
 		for (const [, t] of this.tiles) t.dirty = true;
 	}
@@ -282,6 +294,29 @@ export class MultiFlowField {
 		this.pending += 1;
 	}
 
+	/**
+	 * Would a rebuild towards `sources` give exactly the field queries already read? True when a complete field
+	 * exists, no rebuild is running, nothing was dirtied since the last one started, and every source is in the same
+	 * CELL, with the same index and seed, in the same order.
+	 *
+	 * That is exact, not a guess: a field is a pure function of those numbers and of the grid (`startRebuild` seeds a
+	 * source's cell and picks the active tiles from the cell's centre, never from the body's exact position), and the
+	 * grid only changes through `dirtyRect` / `dirtyAll`. So a group holding a barricade at night, or anyone standing
+	 * still, costs the field nothing instead of a full Dijkstra five times a second (F2).
+	 */
+	upToDate(sources: ReadonlyArray<FlowSource>): boolean {
+		if (!this.valid || this.building || this.dirtyGen !== this.builtDirtyGen) return false;
+		const key = this.builtKey;
+		if (key.size() !== sources.size() * 4) return false;
+		for (let i = 0; i < sources.size(); i++) {
+			const s = sources[i];
+			const k = i * 4;
+			if (key[k] !== math.floor(s.x / CELL) || key[k + 1] !== math.floor(s.y / CELL)) return false;
+			if (key[k + 2] !== s.index || key[k + 3] !== s.seed) return false;
+		}
+		return true;
+	}
+
 	/** Start a new field towards `sources` in the back buffers (activates and rasterises the tiles). */
 	startRebuild(world: WorldData, sources: ReadonlyArray<FlowSource>): void {
 		this.backGen += 1;
@@ -293,18 +328,34 @@ export class MultiFlowField {
 			this.building = false;
 			return;
 		}
+		// what this field is a function of (`upToDate`): read BEFORE the grids are, so a dirty rect that lands while it
+		// is being built makes the next one rebuild
+		this.rebuilds += 1;
+		this.builtDirtyGen = this.dirtyGen;
+		const key = this.builtKey;
+		key.clear();
 		for (const s of sources) {
-			const ctx = math.floor(s.x / span);
-			const cty = math.floor(s.y / span);
+			key.push(math.floor(s.x / CELL));
+			key.push(math.floor(s.y / CELL));
+			key.push(s.index);
+			key.push(s.seed);
+		}
+		for (const s of sources) {
+			// the centre of the source's cell, not the body's exact position: the field must not change while the
+			// body moves inside one cell, or `upToDate` could not skip a rebuild (the seed is the cell already)
+			const sx = (math.floor(s.x / CELL) + 0.5) * CELL;
+			const sy = (math.floor(s.y / CELL) + 0.5) * CELL;
+			const ctx = math.floor(sx / span);
+			const cty = math.floor(sy / span);
 			for (let ty = cty - reach; ty <= cty + reach; ty++) {
 				for (let tx = ctx - reach; tx <= ctx + reach; tx++) {
 					if (tx < 0 || ty < 0 || tx * span >= world.width || ty * span >= world.height) continue;
 					// the tile's NEAREST corner decides: a square of tiles would activate a third more of
 					// them than §3.3 asks for, and every one of them is 256 cells of Dijkstra
-					const nx = math.clamp(s.x, tx * span, (tx + 1) * span);
-					const ny = math.clamp(s.y, ty * span, (ty + 1) * span);
-					const ddx = s.x - nx;
-					const ddy = s.y - ny;
+					const nx = math.clamp(sx, tx * span, (tx + 1) * span);
+					const ny = math.clamp(sy, ty * span, (ty + 1) * span);
+					const ddx = sx - nx;
+					const ddy = sy - ny;
 					if (ddx * ddx + ddy * ddy > ACTIVE_RADIUS * ACTIVE_RADIUS) continue;
 					const t = this.tileAt(tx, ty);
 					if (t.backGen === gen) continue;

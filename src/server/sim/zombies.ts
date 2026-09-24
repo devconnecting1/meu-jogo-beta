@@ -107,6 +107,7 @@ export class ZombieWorld {
 	private readonly deaths: Array<ZombieDeath> = [];
 	private readonly gone: Array<ZombieState> = [];
 	private readonly sources: Array<FlowSource> = [];
+	private readonly sourcePool: Array<FlowSource> = [];
 	/** freed netIds and the tick they may be handed out again (§4.4: not before 2 s) */
 	private readonly freeIds: Array<number> = [];
 	private readonly freeAt: Array<number> = [];
@@ -203,13 +204,26 @@ export class ZombieWorld {
 		return this.slots[index] ?? CFG.SLOT_NONE;
 	}
 
-	/** every standing survivor is a seed; §3.3 lets a downed one seed at DOWNED_SEED once F4 has them */
+	/**
+	 * Every standing survivor is a seed; §3.3 lets a downed one seed at DOWNED_SEED once F4 has them. The source
+	 * records are pooled: this runs every tick the field is idle (to ask `upToDate`), and the field copies what it
+	 * needs out of them.
+	 */
 	private collectSources(): void {
 		this.sources.clear();
 		for (let i = 0; i < this.players.size(); i++) {
 			const p = this.players[i];
 			if (p.dead) continue;
-			this.sources.push({ x: p.x, y: p.y, index: i, seed: 0 });
+			let s = this.sourcePool[this.sources.size()];
+			if (s === undefined) {
+				s = { x: 0, y: 0, index: 0, seed: 0 };
+				this.sourcePool.push(s);
+			}
+			s.x = p.x;
+			s.y = p.y;
+			s.index = i;
+			s.seed = 0;
+			this.sources.push(s);
 		}
 	}
 
@@ -217,6 +231,10 @@ export class ZombieWorld {
 	 * Keeps the chase field fresh inside its budget (§3.3): one rebuild at a time, never started more often
 	 * than FLOW_MIN_TICKS, and expanded FLOW_CELL_BUDGET cells per tick. The very first field of a world is
 	 * built in one go, so the horde is not blind for the first second of a session.
+	 *
+	 * A rebuild whose answer would be the field already in use is not started at all (`MultiFlowField.upToDate`: no
+	 * survivor changed cell, nothing was dirtied): the check runs again next tick, so the one after a survivor steps
+	 * into a new cell or a barricade goes up starts at once.
 	 */
 	private updateField(): void {
 		const count = this.world.solids.size();
@@ -229,7 +247,7 @@ export class ZombieWorld {
 		if (this.flowWait > 0) this.flowWait -= 1;
 		if (!this.field.building && this.flowWait <= 0) {
 			this.collectSources();
-			if (this.sources.size() > 0) {
+			if (this.sources.size() > 0 && !this.field.upToDate(this.sources)) {
 				this.flowWait = FLOW_MIN_TICKS;
 				this.field.startRebuild(this.world, this.sources);
 				if (!this.field.valid) this.field.step(1e9);
