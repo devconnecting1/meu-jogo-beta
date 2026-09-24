@@ -8,6 +8,9 @@
  * and the material is in the backpack, exactly as the server falls back to one.
  */
 import {
+	canCharge,
+	canLaunch,
+	canRefuel,
 	machineOf,
 	OIL_REFUEL_COST,
 	powerFlying,
@@ -16,10 +19,11 @@ import {
 	powerWorking,
 	STUN_GUN_ID,
 } from "shared/data/power";
-import { ownsWeapon, PlayerSaveData } from "shared/game/save";
+import { ownsWeapon, PlayerSaveData, SAVE_LIMITS } from "shared/game/save";
 import { Solid } from "shared/game/world";
 import { MP_PHASE, WORLD_SERVER_PHASE } from "shared/net/mpConfig";
 import { countItem } from "shared/sim/inventory";
+import { canRepair } from "shared/sim/interactQuery";
 import { mirroredPower } from "./powerMirror";
 
 /** ETC index of oil */
@@ -30,18 +34,23 @@ export function machineHint(save: PlayerSaveData, s: Solid): string | undefined 
 	const def = machineOf(s);
 	if (def === undefined) return undefined;
 	const state = mirroredPower(s.id)?.state ?? 0;
+	const level = powerLevel(state);
+	// the server's rule (server/sim/interaction.ts): a machine that cannot do its job and is damaged is repaired, so
+	// the pill of a refusal gives way to the ordinary one (the repair's)
+	const refused = (text: string): string | undefined => (canRepair(s) ? undefined : text);
 	if (def.role === "battery") {
 		if (!ownsWeapon(save, STUN_GUN_ID)) return undefined;
-		return powerLevel(state) > 0 ? "E: Charge stun gun" : "Battery box empty";
+		if (save.electric >= SAVE_LIMITS.AMMO_MAX) return refused("Stun gun full");
+		return canCharge(level) ? "E: Charge stun gun" : refused("Battery box empty");
 	}
 	if (def.role === "generator") {
-		// the tank's level: a full one has nothing to take (the server then repairs, if anything)
-		if (def.source !== "oil" || powerLevel(state) >= 3) return undefined;
-		return countItem(save, 4, OIL_ITEM) >= OIL_REFUEL_COST ? "E: Refuel (5 Oil)" : "Refuel: needs 5 Oil";
+		// the tank's gauge: a full one has nothing to take (the ordinary E follows, a repair if anything)
+		if (def.source !== "oil" || !canRefuel(level)) return undefined;
+		return countItem(save, 4, OIL_ITEM) >= OIL_REFUEL_COST ? "E: Refuel (5 Oil)" : refused("Refuel: needs 5 Oil");
 	}
 	if (def.role === "drone") {
 		if (powerFlying(state)) return "E: Call back drone";
-		return powerLevel(state) > 0 ? "E: Launch drone" : "Drone charging";
+		return canLaunch(level) ? "E: Launch drone" : refused("Drone charging");
 	}
 	if (!def.switched) return undefined;
 	if (!powerOn(state)) return "E: Turn on";

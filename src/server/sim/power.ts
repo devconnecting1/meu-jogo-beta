@@ -26,9 +26,11 @@
  */
 import {
 	batteryCapacity,
+	canCharge,
+	canLaunch,
+	canRefuel,
 	DRONE_DOCK_RATE,
 	DRONE_FLIGHT_DRAW,
-	DRONE_LAUNCH_MIN,
 	DRONE_MAX_ESCORTS,
 	droneCapacity,
 	droneOffset,
@@ -49,6 +51,7 @@ import {
 	POWER_PUBLISH_MAX,
 	POWER_RESTART_MIN,
 	POWER_STEP_S,
+	powerLevel,
 	SKILL_ENGINEERING,
 	SKILL_ROBOTICS,
 	SOLAR_RAIN_FACTOR,
@@ -163,6 +166,8 @@ export class ServerPower {
 	private seconds = 0;
 	/** settles run and deltas published (the tests and §12.2 read them) */
 	readonly stats = { settles: 0, published: 0, deferred: 0 };
+	/** where the next settle starts publishing (`publishChanges`: nobody starves behind the cap) */
+	private publishFrom = 0;
 
 	constructor(options: ServerPowerOptions) {
 		this.world = options.world;
@@ -514,6 +519,7 @@ export class ServerPower {
 		if (!ownsWeapon(save, STUN_GUN_ID)) return undefined;
 		const room = SAVE_LIMITS.AMMO_MAX - save.electric;
 		if (room < 1) return { kind: "refused", solid: st.solid, why: "full" };
+		if (!canCharge(this.shownLevel(st))) return { kind: "refused", solid: st.solid, why: "empty" };
 		const amount = math.min(STUN_CHARGE_PER_PRESS, math.floor(st.store), math.floor(room));
 		if (amount < 1) return { kind: "refused", solid: st.solid, why: "empty" };
 		st.store -= amount;
@@ -524,7 +530,8 @@ export class ServerPower {
 
 	/** obj_generator_oil: 5 oil from the backpack buy 100 of tank; a full tank has nothing to take (→ repair) */
 	private refuel(st: MachineState, save: PlayerSaveData): MachineOutcome | undefined {
-		if (st.store > OIL_TANK - OIL_REFUEL_TANK) return undefined;
+		// a full gauge has nothing to take: the ordinary E follows (a repair)
+		if (!canRefuel(this.shownLevel(st))) return undefined;
 		if (countItem(save, 4, OIL_ITEM) < OIL_REFUEL_COST) {
 			return { kind: "refused", solid: st.solid, why: "material" };
 		}
@@ -541,7 +548,7 @@ export class ServerPower {
 			this.publishOne(st);
 			return { kind: "recalled", solid: st.solid };
 		}
-		if (st.store < this.capacityOf(st) * DRONE_LAUNCH_MIN) {
+		if (!canLaunch(this.shownLevel(st))) {
 			return { kind: "refused", solid: st.solid, why: "charging" };
 		}
 		if (this.escortsOf(slot) >= DRONE_MAX_ESCORTS) return { kind: "refused", solid: st.solid, why: "escorts" };
@@ -570,6 +577,11 @@ export class ServerPower {
 
 	// ---------------------------------------------------------------- what the wire hears
 
+	/** the level every client was told (what the "E: …" pill is decided from), or the one about to be told */
+	private shownLevel(st: MachineState): number {
+		return powerLevel(st.published ? st.pubState : this.stateBits(st));
+	}
+
 	/** the state bits of one machine as they would be published now */
 	stateBits(st: MachineState): number {
 		const cap = this.capacityOf(st);
@@ -597,15 +609,25 @@ export class ServerPower {
 		return true;
 	}
 
+	/**
+	 * At most POWER_PUBLISH_MAX deltas a settle. The walk starts where the last capped one stopped (the turrets' round
+	 * robin): from the head every time, a base of more than 64 changing machines would starve the ones built last, and a
+	 * drone flying home would never be told to have landed.
+	 */
 	private publishChanges(): void {
+		const n = this.list.size();
+		if (n === 0) return;
+		const start = this.publishFrom % n;
 		let sent = 0;
-		for (const st of this.list) {
+		for (let k = 0; k < n; k++) {
+			const i = (start + k) % n;
 			if (sent >= POWER_PUBLISH_MAX) {
-				// the rest keep their difference and go out at the next settle
-				this.stats.deferred += 1;
-				continue;
+				// the rest keep their difference and go out first at the next settle
+				this.publishFrom = i;
+				this.stats.deferred += n - k;
+				return;
 			}
-			if (this.publishOne(st)) sent += 1;
+			if (this.publishOne(this.list[i])) sent += 1;
 		}
 	}
 

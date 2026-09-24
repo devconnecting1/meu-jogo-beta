@@ -443,8 +443,19 @@ export class Progress {
 	 * The boss went down: EVERY participant gets the full XP, +1 boss kill and the boss coins (§3.6 — the coins
 	 * themselves are server/main.server.ts's, paid from `bossKills`). A participant either did ≥ 3 % of `hpMax`
 	 * or stayed ≥ 20 s nearby while it lived.
+	 *
+	 * `byMachine`: the final blow was a turret's or a turret drone's (server/sim/turrets.ts). Its builder or pilot is
+	 * paid the XP (§3.6, as for a zombie) and nothing else unless they took part themselves: no coins, no boss kill, no
+	 * achievement -- the machine was in the fight, they may be anywhere.
 	 */
-	bossKilled(bossId: number, exp: number, hpMax: number, killerSlot: number, bossType = -1): Array<ExpAward> {
+	bossKilled(
+		bossId: number,
+		exp: number,
+		hpMax: number,
+		killerSlot: number,
+		bossType = -1,
+		byMachine = false,
+	): Array<ExpAward> {
 		const l = this.bosses.get(bossId);
 		this.bosses.delete(bossId);
 		const out = new Array<ExpAward>();
@@ -460,10 +471,11 @@ export class Progress {
 				this.creditBoss(c.slot, bossType);
 			}
 		}
-		// the killing blow always counts, even from someone who only just arrived: they finished it
+		// the killing blow always counts, even from someone who only just arrived: they finished it -- a machine's pays
+		// its survivor the XP only
 		if (killerSlot >= 0 && !killerPaid) {
 			out.push(this.pay(killerSlot, base, true));
-			this.creditBoss(killerSlot, bossType);
+			if (!byMachine) this.creditBoss(killerSlot, bossType);
 		}
 		return out;
 	}

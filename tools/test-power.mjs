@@ -47,7 +47,7 @@ const CFG = require(join(SRC, "shared/net/mpConfig.ts"));
 const PL = require(join(SRC, "server/sim/players.ts"));
 const POW = require(join(SRC, "shared/data/power.ts"));
 const { ServerPower } = require(join(SRC, "server/sim/power.ts"));
-const { ServerTurrets, SEARCH_BUDGET, SEARCH_EVERY } = require(join(SRC, "server/sim/turrets.ts"));
+const { ServerTurrets, SEARCH_BUDGET, SEARCH_EVERY, TRACER_BUDGET } = require(join(SRC, "server/sim/turrets.ts"));
 const { ServerCombat } = require(join(SRC, "server/sim/combat.ts"));
 const { Progress } = require(join(SRC, "server/sim/progress.ts"));
 const { ServerSimulation } = require(join(SRC, "server/sim/simulation.ts"));
@@ -522,6 +522,109 @@ section("B3. the stun gun: charged at a battery box with E (100 a press), then F
 	);
 });
 
+section("B4. the pill says what the press does (LEG-01): the client's hint and the server's E, one rule", () => {
+	const { machineHint } = require(join(SRC, "client/systems/machineHints.ts"));
+	const PM = require(join(SRC, "client/systems/powerMirror.ts"));
+	const f = simFixture();
+	const save = saveWith();
+	save.invenWeapon[POW.STUN_GUN_ID] = 1;
+	const sp = f.player(0, 2000, 2000, save);
+	const box = f.place(ID.battery, 2020, 1976);
+	const stBox = f.sim.power.stateOf(box);
+	/** what the client would show, from the state the grid published, and what the press then does */
+	const pair = s => {
+		f.sim.power.settle(POW.POWER_STEP_S);
+		const st = f.sim.power.stateOf(s);
+		PM.applyPowerSet(f.world, { t: P.WorldEv.PowerSet, id: s.id, state: st.pubState, pilot: st.pubPilot });
+		const hint = machineHint(save, s);
+		const out = f.pressE(sp);
+		return { hint, out };
+	};
+	/** a hint that starts with "E: " promises a press that does the job; any other text is a refusal */
+	const agrees = ({ hint, out }) =>
+		hint === undefined
+			? out?.kind !== "machine"
+			: hint.startsWith("E: ")
+				? out?.kind === "machine" && out.machine.kind !== "refused"
+				: out?.kind === "machine" && out.machine.kind === "refused";
+	const rows = [];
+	const measure = (name, s, setup) => {
+		setup();
+		const r = pair(s);
+		rows.push({ name, ...r, ok: agrees(r) });
+	};
+	// the battery box and the stun gun
+	for (const store of [1000, 500, 15, 0]) {
+		measure(`box ${store}, gun empty`, box, () => {
+			stBox.store = store;
+			save.electric = 0;
+		});
+	}
+	measure("box full, gun full", box, () => {
+		stBox.store = 1000;
+		save.electric = SAVE.SAVE_LIMITS.AMMO_MAX;
+	});
+	save.electric = 0;
+	// the oil generator, every tank level, with and without oil
+	const gen = f.place(ID.oil, 2020, 2060);
+	sp.state.y = 2080;
+	const stGen = f.sim.power.stateOf(gen);
+	for (const tank of [1000, 800, 680, 500, 100]) {
+		for (const oil of [10, 2]) {
+			measure(`tank ${tank}, oil ${oil}`, gen, () => {
+				stGen.store = tank;
+				stGen.running = false;
+				save.oil = oil;
+			});
+		}
+	}
+	// the drone pad, every battery level
+	const pad = f.place(ID.lampDrone, 2020, 2160, 0);
+	sp.state.y = 2180;
+	const stPad = f.sim.power.stateOf(pad);
+	for (const bat of [400, 100, 10, 1]) {
+		measure(`drone ${bat}`, pad, () => {
+			stPad.pilot = SLOT_NONE;
+			stPad.working = false;
+			stPad.store = bat;
+		});
+	}
+	const bad = rows.filter(r => !r.ok);
+	check(
+		rows.length === 19 && bad.length === 0,
+		"on the battery box, the oil generator and a drone pad, at every level: the pill and the press agree",
+		bad.map(r => `${r.name}: "${r.hint}" vs ${JSON.stringify(r.out?.machine ?? r.out)}`).join(" | ") ||
+			rows.map(r => `${r.name}: ${r.hint ?? "-"}`).join("; "),
+	);
+	const full = rows.find(r => r.name === "box full, gun full");
+	check(full?.hint === "Stun gun full", "a full stun gun says so", full?.hint);
+
+	// a machine that cannot do its job and is damaged is repaired instead (its job never locks its repair out)
+	save.electric = SAVE.SAVE_LIMITS.AMMO_MAX;
+	save.invenEtc[26] = 3;
+	box.hp = box.hpMax * 0.5;
+	sp.state.y = 2000;
+	const hint = machineHint(save, box);
+	const out = f.pressE(sp);
+	check(
+		hint === undefined && out?.kind === "repair" && box.hp > box.hpMax * 0.5,
+		"a damaged box and a full gun: no refusal pill, and E repairs the box (steel)",
+		`${hint}, ${JSON.stringify(out?.kind)}, hp ${box.hp}`,
+	);
+	gen.hp = gen.hpMax * 0.5;
+	stGen.store = 300;
+	save.oil = 0;
+	sp.state.y = 2080;
+	f.sim.power.settle(POW.POWER_STEP_S);
+	const outGen = f.pressE(sp);
+	check(
+		outGen?.kind === "repair" && gen.hp > gen.hpMax * 0.5,
+		"a damaged oil generator and no oil for its tank: E repairs it",
+		`${JSON.stringify(outGen?.kind)}, hp ${gen.hp}`,
+	);
+	PM.resetPowerMirror();
+});
+
 // ================================================================ C. drones
 
 section("C1. the lamp drone: E launches it, it escorts its survivor on the shared orbit and lights the night", () => {
@@ -586,11 +689,13 @@ section("C2. drones come home: recalled with E, when their survivor leaves, or e
 	f.run(5);
 	checkNear(st.store, 150, 1, "on its pad it drinks 10 a second from the box");
 	checkNear(f.sim.power.stateOf(box).store, 950, 1, "…which the box pays");
-	st.store = 10;
+	// its gauge empty (the level every client was told, the one rule of canLaunch): it will not take off
+	st.store = 2;
+	f.sim.power.settle(POW.POWER_STEP_S);
 	const low = f.pressE(sp);
 	check(
 		low?.machine?.kind === "refused" && low.machine.why === "charging",
-		"under 10 % it will not take off",
+		"with its gauge at empty it will not take off",
 		JSON.stringify(low?.machine ?? low),
 	);
 	st.store = 300;
@@ -819,6 +924,46 @@ section("D6. Robotics (its maker's) makes a turret hit 1.5× harder (obj_turret:
 	check(skilled === 37, "built by a roboticist: 37 (25 × 1.5, rolled)", `${skilled}`);
 });
 
+section(
+	"D7. a machine's final blow on a boss: the fighters keep their credit, its builder gets the XP only (§3.6)",
+	() => {
+		const { AchievementId } = require(join(SRC, "shared/data/achievements.ts"));
+		const { createBoss } = require(join(SRC, "shared/game/entities.ts"));
+		const builder = saveWith();
+		const fighter = saveWith();
+		const saves = [builder, fighter];
+		const progress = new Progress({ saveOf: slot => saves[slot] });
+		const world = W.serverWorld(W.createWorld(4000, 4000));
+		const combat = new ServerCombat({
+			world,
+			targets: { zombies: () => [], bosses: () => [] },
+			progress,
+			random: () => 0.5,
+		});
+		// a Giant (type 3); slot 1 fought it (6 % of its hp: a participant, MP-15); slot 0 built the turret and is elsewhere
+		const b = createBoss(3, 2000, 2000);
+		progress.noteBossDamage(b.id, 1, b.hpMax * 0.06, 0);
+		const money0 = builder.money;
+		// the turret's shots, through what server/sim/turrets.ts calls: most of the boss, and the final blow
+		for (let i = 0; i < 2000 && b.hp > 0; i++) combat.machineHitBoss(0, 1800, 2000, b, 25, b.x, b.y);
+		check(b.hp <= 0, "the turret brought the Giant down", `hp ${b.hp}`);
+		check(
+			fighter.bossKills === 1 && fighter.achievements[AchievementId.GiantSlayer] === 1,
+			"the survivor who fought it keeps the boss: a boss kill and its achievement (the machine's blow names the boss type)",
+			`bossKills ${fighter.bossKills}, Giant ${fighter.achievements[AchievementId.GiantSlayer]}`,
+		);
+		check(
+			progress.statsOf(0).exp > 0 &&
+				builder.bossKills === 0 &&
+				progress.statsOf(0).bossKills === 0 &&
+				builder.money === money0 &&
+				(builder.achievements[AchievementId.GiantSlayer] ?? 0) === 0,
+			"its builder, wherever they are: the XP only -- no boss kill, no coins, no achievement (its damage made them no participant)",
+			`exp +${progress.statsOf(0).exp}, bossKills ${builder.bossKills}, coins ${builder.money - money0}`,
+		);
+	},
+);
+
 // ================================================================ E. the cost
 
 section("E1. ten turrets and a full horde: searches bounded and staggered (§3.2)", () => {
@@ -899,6 +1044,63 @@ section("E1. ten turrets and a full horde: searches bounded and staggered (§3.2
 	);
 });
 
+section(
+	"E2. electric turrets in a crowd: every jump of an arc is a search, and the tracers of a tick are capped",
+	() => {
+		const g = gridFixture();
+		for (let i = 0; i < 120; i++) {
+			g.place(ID.shock, 200 + (i % 12) * 200, 200 + Math.floor(i / 12) * 200);
+			g.place(ID.battery, 260 + (i % 12) * 200, 280 + Math.floor(i / 12) * 200);
+		}
+		g.run(0.25);
+		// three zombies beside every turret: each zap could jump twice
+		const zs = [];
+		for (let i = 0; i < 120; i++) {
+			for (let k = 0; k < 3; k++) {
+				const z = createZombie(1, 232 + (i % 12) * 200 + 60 + k * 30, 232 + Math.floor(i / 12) * 200, 1);
+				z.hp = 1e9;
+				zs.push(z);
+			}
+		}
+		const combat = new ServerCombat({ world: g.world, targets: { zombies: () => zs, bosses: () => [] } });
+		let tracers = 0;
+		let maxTracers = 0;
+		const turrets = new ServerTurrets({
+			world: g.world,
+			power: g.power,
+			zombiesNear: (x, y, r, tick, out) => {
+				for (const q of zs) if (Math.hypot(q.x - x, q.y - y) <= r) out.push(q);
+				return out;
+			},
+			bosses: () => [],
+			damage: combat,
+			fx: () => {
+				tracers += 1;
+			},
+		});
+		for (let t = 0; t < 120; t++) {
+			tracers = 0;
+			turrets.step(t, TICK_DT);
+			maxTracers = Math.max(maxTracers, tracers);
+		}
+		check(
+			turrets.stats.zaps > 0 && turrets.stats.hits > turrets.stats.zaps,
+			"the arcs jump (more hits than zaps)",
+			`${turrets.stats.zaps} zaps, ${turrets.stats.hits} hits`,
+		);
+		check(
+			turrets.stats.maxSearchesInTick <= SEARCH_BUDGET,
+			`120 electric turrets: the arcs' jumps count too, never more than ${SEARCH_BUDGET} searches in a tick`,
+			`max ${turrets.stats.maxSearchesInTick}`,
+		);
+		check(
+			maxTracers <= TRACER_BUDGET,
+			`never more than ${TRACER_BUDGET} machine tracers in a tick (the Fx any client gets from them)`,
+			`max ${maxTracers}`,
+		);
+	},
+);
+
 // ================================================================ F. stations
 
 section("F1. a working cooker is heat to cook on; a cold one is not (the cooking rule's other half)", () => {
@@ -969,6 +1171,19 @@ section("G1. the grid publishes only what changed, with the level of each store"
 			`${POW.levelOf(f, prev)}`,
 		);
 	}
+	// the lowest edge (2 %) keeps half of itself as its margin: an emptied box does go back to level 0
+	for (const [f, prev, want] of [
+		[0.015, 1, 1],
+		[0.005, 1, 0],
+		[0.025, 0, 0],
+		[0.031, 0, 1],
+	]) {
+		check(
+			POW.levelOf(f, prev) === want,
+			`levelOf(${f}, ${prev}) = ${want} (1 % each side of the 2 % edge: empty shows empty)`,
+			`${POW.levelOf(f, prev)}`,
+		);
+	}
 	// a lamp switched on with no box in reach: published ON and not working (the HUD says "E: Turn off")
 	const dark = g.place(ID.lamp, 4000, 4000);
 	g.power.act(0, { dead: false }, saveWith(), dark);
@@ -986,6 +1201,33 @@ section("G1. the grid publishes only what changed, with the level of each store"
 });
 
 // ================================================================ H. the real path: crafted and placed on the server
+
+section("G2. more than 64 changes every settle: the cap rotates, so the machines built last are told too", () => {
+	const g = gridFixture();
+	const lamps = [];
+	for (let i = 0; i < 100; i++) {
+		// each lamp with its own box, far from the others
+		const x = 400 + (i % 10) * 500;
+		const y = 400 + Math.floor(i / 10) * 500;
+		g.place(ID.battery, x + 120, y);
+		lamps.push(g.place(ID.lamp, x, y));
+	}
+	g.run(0.25);
+	g.published.length = 0;
+	// the first 80 flip every settle (more than the cap of 64, for ever); the last 20 are switched on once
+	for (const l of lamps.slice(80)) g.st(l).on = true;
+	for (let k = 0; k < 4; k++) {
+		for (const l of lamps.slice(0, 80)) g.st(l).on = !g.st(l).on;
+		g.power.settle(POW.POWER_STEP_S);
+	}
+	const told = new Set(g.published.map(p => p.id));
+	const late = lamps.slice(80).filter(l => told.has(l.id)).length;
+	check(
+		late === 20,
+		"80 lamps changing every settle do not starve the 20 built after them: all 20 told within 4 settles",
+		`${late} of 20 told`,
+	);
+});
 
 section(
 	"H1. crafted with the backpack verb and placed by the server's build: a battery box and a turret that shoots",

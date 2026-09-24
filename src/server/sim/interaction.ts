@@ -167,10 +167,13 @@ export class ServerInteraction {
 			// launch or a recall is a reliable PowerSet to every client (and a charge or a refuel moves the save)
 			if (this.toggling(s)) return { kind: "refused", why: "cooldown" };
 			const done = this.machines.act(ctx.slot, ctx.state, ctx.save, s);
-			if (done !== undefined) {
+			// a machine that cannot do its job (a box with nothing to give, no oil for the tank, a drone still charging)
+			// and is damaged is repaired instead: its job must never lock its repair out
+			if (done !== undefined && !(done.kind === "refused" && canRepair(s))) {
 				if (done.kind !== "refused") this.toggleCd.set(s, TOGGLE_COOLDOWN_S);
 				return { kind: "machine", machine: done };
 			}
+			if (done !== undefined) return this.repair(ctx, s);
 		}
 		if (target.kind === "light") return this.light(ctx, target.solid);
 		if (target.kind === "mapItem") return this.mapItem(ctx, target.solid);

@@ -705,6 +705,7 @@ export const LANG_TABLE: Array<string> = [
 	// shows the text after "E: ")
 	"Charge stun gun",
 	"Battery box empty",
+	"Stun gun full",
 	"Refuel (5 Oil)",
 	"Refuel: needs 5 Oil",
 	"Turn off (no power)",

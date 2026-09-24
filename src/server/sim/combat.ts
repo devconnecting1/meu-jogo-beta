@@ -1413,14 +1413,14 @@ export class ServerCombat {
 		y: number,
 	): void {
 		if (damage <= 0 || b.hp <= 0) return;
-		const dealt = math.min(damage, b.hp);
 		b.hp -= damage;
 		b.hitFlash = 1;
-		if (creditSlot >= 0) this.progress?.noteBossDamage(b.id, creditSlot, dealt, this.nowS);
+		// a machine's damage makes nobody a participant (§3.6, MP-15): a builder anywhere in town is not in the fight.
+		// Only its final blow is credited, and only as XP (`bossKilled` byMachine)
 		this.hooks.hitBoss?.(b, damage, x, y);
 		this.emitBlood(x, y, math.atan2(y - fromY, x - fromX), 3, Net.BloodKind.Green);
 		if (b.hp <= 0) {
-			this.progress?.bossKilled(b.id, b.exp, b.hpMax, creditSlot);
+			this.progress?.bossKilled(b.id, b.exp, b.hpMax, creditSlot, b.type, true);
 			this.history.forget(b.id);
 			this.hooks.bossKilled?.(b, creditSlot);
 		}

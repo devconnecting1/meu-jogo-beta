@@ -48,8 +48,17 @@ import { MachineState, ServerPower } from "./power";
 const DEG = math.pi / 180;
 /** a turret with nothing to shoot looks again on its own tick of every this many (10 Hz at 60 Hz) */
 export const SEARCH_EVERY = 6;
-/** the most target searches the whole server does in one tick, whatever the number of turrets */
+/**
+ * The most target searches the whole server does in one tick, whatever the number of turrets -- every search counted:
+ * a turret's look, and each jump of an electric turret's arc
+ */
 export const SEARCH_BUDGET = 12;
+/**
+ * The most machine tracers (a bullet's streak, an arc) sent in one tick, for the whole server and so for any one
+ * client: past it the shot still lands, only its streak is not drawn (§4.1: Fx is cosmetic). The search budget already
+ * keeps it near this; the cap makes the bound explicit.
+ */
+export const TRACER_BUDGET = 6;
 /** knockback of a turret's bullet: a survivor's bullet (combat.ts KNOCK_BULLET) */
 const KNOCK_BULLET = 3;
 /** how long a tracer is drawn (fxView's own bullet streak) */
@@ -122,6 +131,9 @@ export class ServerTurrets {
 	private readonly at: Point = { x: 0, y: 0 };
 	/** where the next tick's round-robin starts */
 	private cursor = 0;
+	/** searches and tracers spent in the current tick (SEARCH_BUDGET, TRACER_BUDGET) */
+	private searched = 0;
+	private traced = 0;
 	readonly stats: TurretStats = { searches: 0, shots: 0, zaps: 0, hits: 0, maxSearchesInTick: 0 };
 
 	constructor(options: ServerTurretsOptions) {
@@ -148,24 +160,30 @@ export class ServerTurrets {
 		for (const st of list) {
 			if (st.cooldown > 0) st.cooldown = math.max(0, st.cooldown - dt);
 		}
+		this.searched = 0;
+		this.traced = 0;
 		if (n === 0) return;
 		const quota = math.min(SEARCH_BUDGET, math.ceil(n / SEARCH_EVERY));
-		let searches = 0;
 		let visited = 0;
 		let i = this.cursor % n;
-		while (visited < n && searches < quota) {
+		while (visited < n && this.searched < quota) {
 			const st = list[i];
 			i = (i + 1) % n;
 			visited += 1;
 			if (st.cooldown > 0 || tick < st.nextSearch || !this.power.armedNow(st)) continue;
-			searches += 1;
-			this.stats.searches += 1;
 			const fired = st.def.weapon === "shock" ? this.zap(st, tick) : this.shoot(st, tick);
 			// nothing to shoot: look again in SEARCH_EVERY ticks, each turret on its own phase
 			if (!fired) st.nextSearch = tick + SEARCH_EVERY - ((tick + st.seq) % SEARCH_EVERY);
 		}
 		this.cursor = i;
-		if (searches > this.stats.maxSearchesInTick) this.stats.maxSearchesInTick = searches;
+		if (this.searched > this.stats.maxSearchesInTick) this.stats.maxSearchesInTick = this.searched;
+	}
+
+	/** a machine tracer, while the tick's TRACER_BUDGET lasts */
+	private tracer(x1: number, y1: number, x2: number, y2: number, kind: number, life: number): void {
+		if (this.fx === undefined || this.traced >= TRACER_BUDGET) return;
+		this.traced += 1;
+		this.fx({ t: FxType.Tracer, x1, y1, x2, y2, kind, life });
 	}
 
 	/** the nearest live zombie within `range` of (x, y) with a clear line of fire, or undefined */
@@ -176,6 +194,8 @@ export class ServerTurrets {
 		tick: number,
 		skip?: ReadonlyArray<ZombieState>,
 	): ZombieState | undefined {
+		this.searched += 1;
+		this.stats.searches += 1;
 		this.near.clear();
 		this.zombiesNear(x, y, range, tick, this.near);
 		let best: ZombieState | undefined;
@@ -256,7 +276,7 @@ export class ServerTurrets {
 			this.stats.hits += 1;
 			this.damage.machineHitBoss(credit, fx, fy, hitB, dmg, hx, hy);
 		}
-		this.fx?.({ t: FxType.Tracer, x1: mx, y1: my, x2: hx, y2: hy, kind: TRACER_BULLET, life: TRACER_LIFE });
+		this.tracer(mx, my, hx, hy, TRACER_BULLET, TRACER_LIFE);
 		this.noise?.(fx, fy, TURRET_NOISE);
 		return true;
 	}
@@ -296,18 +316,12 @@ export class ServerTurrets {
 			done.push(z);
 			this.stats.hits += 1;
 			this.damage.machineHitZombie(credit, fromX, fromY, z, this.damage.rollDamage(base), 0, SHOCK_STUN);
-			this.fx?.({
-				t: FxType.Tracer,
-				x1: fromX,
-				y1: fromY,
-				x2: z.x,
-				y2: z.y,
-				kind: TRACER_ELECTRIC,
-				life: ARC_LIFE,
-			});
+			this.tracer(fromX, fromY, z.x, z.y, TRACER_ELECTRIC, ARC_LIFE);
 			fromX = z.x;
 			fromY = z.y;
-			z = jump < SHOCK_CHAINS ? this.target(fromX, fromY, SHOCK_CHAIN_RANGE, tick, done) : undefined;
+			// each jump is a search of its own, inside the server's SEARCH_BUDGET for the tick
+			const more = jump < SHOCK_CHAINS && this.searched < SEARCH_BUDGET;
+			z = more ? this.target(fromX, fromY, SHOCK_CHAIN_RANGE, tick, done) : undefined;
 		}
 		done.clear();
 		const s: Solid = st.solid;

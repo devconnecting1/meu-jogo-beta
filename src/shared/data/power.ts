@@ -108,8 +108,6 @@ export const SHOCK_NOISE = 200;
 export const DRONE_BATTERY = 400;
 export const DRONE_FLIGHT_DRAW = 1;
 export const DRONE_DOCK_RATE = 10;
-/** it takes off only with this fraction of its battery (no launch-and-land at the edge of empty) */
-export const DRONE_LAUNCH_MIN = 0.1;
 /** at most this many drones escort one survivor (LEG-03: a swarm would hide the survivor and the zombies) */
 export const DRONE_MAX_ESCORTS = 3;
 /** obj_turret_move circles the player at 100 px; obj_lightaction_move at 300 (we keep the light closer: 180) */
@@ -247,6 +245,29 @@ const LEVEL_EDGES = [0.02, 1 / 3, 2 / 3];
 /** a level only changes once the fraction is this far inside the new band (no flicker at an edge) */
 const LEVEL_HYSTERESIS = 0.03;
 
+// ---------------------------------------------------------------- what E will do (LEG-01)
+// The server's `act` (server/sim/power.ts) and the client's "E: …" (client/systems/machineHints.ts) decide from the
+// SAME thing: the level every client was told (PowerSet bits 1-2). So the pill never promises a press the server
+// refuses, and a press never does what the pill did not say.
+
+/** a battery box gives the stun gun charge while its gauge shows some (level 1+: from 3 % rising, until under 1 %) */
+export function canCharge(level: number): boolean {
+	return level >= 1;
+}
+
+/** the oil generator takes a refuel while its tank's gauge is not full (level 0..2: under ~2/3) */
+export function canRefuel(level: number): boolean {
+	return level < POWER_LEVEL_MAX;
+}
+
+/**
+ * A drone takes off while its pad's gauge shows some charge (level 1+). The level's hysteresis is what keeps a drone
+ * that came home empty from launching and landing at the edge of empty: it shows charge again only at 3 %.
+ */
+export function canLaunch(level: number): boolean {
+	return level >= 1;
+}
+
 /** the 0..3 level of a store at fraction `f`, given the level it was published at */
 export function levelOf(f: number, previous: number): number {
 	let raw = 0;
@@ -254,9 +275,14 @@ export function levelOf(f: number, previous: number): number {
 		if (f >= LEVEL_EDGES[i]) raw = i + 1;
 	}
 	if (raw === previous || previous < 0 || previous > POWER_LEVEL_MAX) return raw;
-	// moving up: the fraction must clear the edge by the margin; moving down: fall below it by the margin
-	if (raw > previous) return f >= LEVEL_EDGES[raw - 1] + LEVEL_HYSTERESIS ? raw : previous;
-	return f < LEVEL_EDGES[previous - 1] - LEVEL_HYSTERESIS ? raw : previous;
+	// moving up: the fraction must clear the edge by the margin; moving down: fall below it by the margin -- never
+	// more than half the edge, or the lowest one (2 %) could never be left downwards and an empty box would show a bar
+	if (raw > previous) {
+		const up = LEVEL_EDGES[raw - 1];
+		return f >= up + math.min(LEVEL_HYSTERESIS, up / 2) ? raw : previous;
+	}
+	const down = LEVEL_EDGES[previous - 1];
+	return f < down - math.min(LEVEL_HYSTERESIS, down / 2) ? raw : previous;
 }
 
 // ---------------------------------------------------------------- drone flight
