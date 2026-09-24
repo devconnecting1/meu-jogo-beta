@@ -64,6 +64,13 @@
  *     theme colours per state, in the Roblox top bar right of its buttons (under the bar when it has no free stretch)
  *     and covering nothing of the HUD, taking no input; "Saved" holds then fades (Reduce Motion: it just goes), the
  *     failure stays until a write lands; 400 notices and 3000 frames create no Instance, and a still frame writes nothing.
+ *  11. the dawn card (DESIGN_RULES BEM-04, client/ui/dawnCard.ts + client/systems/nightReport.ts) and the level-up
+ *     (BEM-08): the night's tally (a death drops it, a Rebirth restarts it, half a night lived is the floor, one card
+ *     a dawn), the break line only after BREAK_NUDGE_MIN minutes and once; the card built on its first dawn, in the
+ *     banner's box (a "Good morning" gives way to it, a wave takes it), "Progress saved" only after the server's
+ *     "saved" pushed once it is up, nothing Selectable, a tap sends it away, it goes by itself (a write in flight is
+ *     waited for, capped), nothing moves, 20 dawns and 600 frames create no Instance; the level-up line says
+ *     "Level 5 · +1 skill point · Backpack › Skills"; main.client.ts wires all of it.
  *
  * Pure Node (>= 18) plus the project's TypeScript.
  */
@@ -2889,6 +2896,547 @@ console.log("\n10) uso rapido: HEAL e EAT no fim das barras de HP e FOOD, sem ab
 	}
 	hud.unmount();
 	setIconAtlas("");
+}
+
+// ---------------------------------------------------------------- 11) the dawn card and the level-up (BEM-04, BEM-08)
+
+console.log("\n11) o cartao do amanhecer (BEM-04) e o level-up que diz o que deu (BEM-08)\n");
+{
+	const NR = require(join(SRC, "client/systems/nightReport.ts"));
+	const DCard = require(join(SRC, "client/ui/dawnCard.ts"));
+	const W = require(join(SRC, "shared/data/wellbeing.ts"));
+	const NIGHT = Clock.NIGHT_REAL_SECONDS;
+
+	// (a) the tally: what a night was, and which nights earn a card
+	/** a night of `NIGHT` real seconds, frame by frame: `from` (share of the night) the survivor stands, `dies` kills them */
+	const night = ({ from = 0, dies, rises, hits = [], heals = [], kills = 0, pickups = 0 } = {}) => {
+		const t = new NR.NightTally();
+		let hp = 100;
+		let k = 0;
+		let pk = 0;
+		let report;
+		let reports = 0;
+		const frames = Math.round(NIGHT);
+		for (let s = 0; s <= frames + 2; s++) {
+			const f = s / frames;
+			const nightNow = s <= frames;
+			let alive = f >= from;
+			if (dies !== undefined && f >= dies && (rises === undefined || f < rises)) alive = false;
+			if (hits.includes(s)) hp -= 10;
+			if (heals.includes(s)) hp += 5;
+			if (s === Math.round(frames / 2)) {
+				k += kills;
+				pk += pickups;
+			}
+			const r = t.step({ night: nightNow, alive, hp, kills: k, pickups: pk, now: s });
+			if (r !== undefined) {
+				report = r;
+				reports++;
+			}
+		}
+		return { report, reports };
+	};
+	const full = night({ hits: [30, 60, 90], heals: [70], kills: 12, pickups: 7 });
+	check(
+		"uma noite inteira de pe: o cartao sai UMA vez, na primeira luz, com zumbis 12, dano 30 (a cura nao desconta) e itens 7",
+		full.reports === 1 && full.report?.zombies === 12 && full.report?.damage === 30 && full.report?.items === 7,
+		JSON.stringify(full),
+	);
+	const died = night({ dies: 0.7 });
+	const risen = night({ dies: 0.3, rises: 0.8 });
+	const late = night({ from: 0.4 });
+	const tooLate = night({ from: 0.6 });
+	check(
+		`morreu na noite: nenhum cartao; levantou com 20% da noite: nenhum; entrou com 60% dela: cartao; com 40%: nenhum (${W.MIN_NIGHT_SHARE * 100}%)`,
+		died.reports === 0 && risen.reports === 0 && late.reports === 1 && tooLate.reports === 0,
+		JSON.stringify([died.reports, risen.reports, late.reports, tooLate.reports]),
+	);
+	check(
+		`a linha da pausa e a regra do SERVIDOR (breakNudgeEarned): sessao de ${W.BREAK_NUDGE_MIN} min, a noite vivida de pe, uma vez por sessao`,
+		!W.breakNudgeEarned(W.BREAK_NUDGE_MIN * 60 - 1, true, false) &&
+			W.breakNudgeEarned(W.BREAK_NUDGE_MIN * 60, true, false) &&
+			!W.breakNudgeEarned(W.BREAK_NUDGE_MIN * 60 * 3, false, false) &&
+			!W.breakNudgeEarned(W.BREAK_NUDGE_MIN * 60 * 3, true, true) &&
+			NR.breakNudgeDue === undefined,
+	);
+
+	// (b) the card on the HUD
+	setViewport(1365, 567, 58, 160);
+	uis.TouchEnabled = false;
+	uis.MouseEnabled = true;
+	uis.GetLastInputType = () => Enum.UserInputType.MouseMovement;
+	uis.PreferredInput = undefined;
+	ctx.phase = "playing";
+	const hud = new Hud(ctx);
+	hud.mount();
+	hud.update(state());
+	const box = () => deep(hudRoot(), "DawnBox");
+	const card = () => deep(box(), "DawnCard");
+	const txt = name => deep(card(), name)?.Text;
+	const up = () => card()?.Visible === true;
+	check(
+		"antes do primeiro amanhecer o cartao nem existe: montar a HUD nao paga nada por ele (so a caixa ancorada)",
+		box() !== undefined &&
+			card() === undefined &&
+			box()
+				.GetChildren()
+				.filter(c => c.IsA("GuiObject")).length === 0,
+	);
+	hud.dawnStoreNotice("saved");
+	hud.showMessage("Good morning");
+	const bannerLabel = deep(hudRoot(), "Banner");
+	const bannerBefore = bannerLabel.Text;
+	const first = phase("cartao do amanhecer: o primeiro (constroi)", () =>
+		hud.showDawnReport({ zombies: 12, damage: 85, items: 7 }),
+	);
+	layoutGame(ui, ctx);
+	check(
+		'"Night survived" e a noite em numeros: 12 zombies, 85 damage taken, 7 items found (no amarelo dos numeros)',
+		up() &&
+			txt("Title") === "Night survived" &&
+			txt("Value1") === "12" &&
+			txt("Key1") === "zombies" &&
+			txt("Value2") === "85" &&
+			txt("Key2") === "damage taken" &&
+			txt("Value3") === "7" &&
+			txt("Key3") === "items found" &&
+			[1, 2, 3].every(i => sameColor(deep(card(), `Value${i}`).TextColor3, STAT.value)) &&
+			first.created > 0,
+		[1, 2, 3].map(i => `${txt(`Value${i}`)} ${txt(`Key${i}`)}`).join(" | "),
+	);
+	check(
+		'o "Good morning" da caixa sai na hora: o cartao E o banner da manha',
+		bannerBefore === "Good morning" && bannerLabel.TextTransparency === 1,
+	);
+	hud.showMessage("Good morning");
+	check("...e um Good morning com o cartao de pe nao e desenhado por cima", bannerLabel.TextTransparency === 1);
+	check(
+		'nada salvo e dito antes de o servidor falar DEPOIS de o cartao abrir: sem linha (o "saved" de antes nao conta)',
+		deep(card(), "Store").Visible === false && deep(card(), "Disk").Visible === false,
+	);
+	hud.dawnStoreNotice("saving");
+	const saving = [txt("Store"), deep(card(), "Store").Visible, deep(card(), "Store").TextColor3];
+	// an older write's "saved" (in flight when the dawn came: no `answersDawn`) is not this night's answer
+	hud.dawnStoreNotice("saved", false);
+	const older = txt("Store");
+	hud.dawnStoreNotice("saved", true);
+	const diskPx = deep(card(), "Disk")
+		.GetChildren()
+		.filter(f => f.ClassName === "Frame");
+	check(
+		'a "saved" sem answersDawn (uma gravacao de antes da pergunta do amanhecer) nao vira "Progress saved": o cartao segue em "Saving..."',
+		older === "Saving...",
+		older,
+	);
+	check(
+		'"Saving..." em cinza enquanto a gravacao voa; "Progress saved" com o disquete verde quando o servidor RESPONDE a pergunta do amanhecer',
+		saving[0] === "Saving..." &&
+			saving[1] === true &&
+			sameColor(saving[2], THEME.mutedForeground) &&
+			txt("Store") === "Progress saved" &&
+			sameColor(deep(card(), "Store").TextColor3, THEME.foreground) &&
+			diskPx.length > 0 &&
+			sameColor(diskPx[0].BackgroundColor3, GAME.success),
+		`${saving[0]} -> ${txt("Store")}`,
+	);
+	hud.dawnStoreNotice("failing");
+	check(
+		'uma gravacao que falhou e dita em vermelho: "Progress not saved — retrying"',
+		txt("Store") === "Progress not saved — retrying" && sameColor(deep(card(), "Store").TextColor3, STAT.penalty),
+	);
+	// L2 of the review of 440af66: a card that opens during an outage the corner indicator already shows starts from it;
+	// an older write that lands ends the outage ("Saving...": the dawn's own write is still to come); only the answer
+	// says "Progress saved"
+	{
+		hud.dawnCard().hide();
+		hud.showDawnReport({ zombies: 2, damage: 5, items: 1 });
+		const opened = [deep(card(), "Store").Visible, txt("Store")];
+		hud.dawnStoreNotice("saved", false);
+		const outageOver = txt("Store");
+		hud.dawnStoreNotice("saved", true);
+		const answered = txt("Store");
+		hud.dawnCard().hide();
+		hud.showDawnReport({ zombies: 2, damage: 5, items: 1 });
+		const clean = deep(card(), "Store").Visible === false;
+		hud.dawnStoreNotice("saved", false);
+		const stillQuiet = deep(card(), "Store").Visible === false;
+		check(
+			'aberto numa queda ja conhecida: comeca em "Progress not saved — retrying"; a gravacao velha que chega o leva a "Saving...", a resposta a "Progress saved"; sem queda, um "saved" velho nao diz nada',
+			opened[0] === true &&
+				opened[1] === "Progress not saved — retrying" &&
+				outageOver === "Saving..." &&
+				answered === "Progress saved" &&
+				clean &&
+				stillQuiet,
+			JSON.stringify({ opened, outageOver, answered, clean, stillQuiet }),
+		);
+		// the card up again for what follows (the last push was a "saved": no outage carries over)
+		hud.showDawnReport({ zombies: 12, damage: 85, items: 7 });
+	}
+	// where: the banner's own box at the top centre, never over the console
+	const cr = rectOf(card());
+	const [bannerW, feedW] = hud.messageWidths();
+	const [reach] = messageReach(1365, 567, 58, bannerW, feedW, 0.8 + 0.4 * save.settings.uiSize);
+	const inside =
+		cr.x >= reach[0] - 0.5 &&
+		cr.x + cr.w <= reach[2] + 0.5 &&
+		cr.y >= reach[1] - 0.5 &&
+		cr.y + cr.h <= reach[3] + 0.5;
+	const con = rectOf(consoleFrame());
+	const overlapR = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+	check(
+		"no lugar do banner (topo central, a caixa das mensagens), longe do console e do sobrevivente no meio da tela",
+		inside && !overlapR(cr, con) && cr.y + cr.h < 567 / 2,
+		`cartao ${Math.round(cr.x)},${Math.round(cr.y)} ${Math.round(cr.w)}x${Math.round(cr.h)}`,
+	);
+	// the pad is never taken, and nothing asks for B
+	const selectable = box()
+		.GetDescendants()
+		.filter(d => d.IsA("GuiObject") && d.Selectable === true);
+	check(
+		"nada no cartao e Selectable: o controle continua do sobrevivente (UI-09), o cartao nunca toma o foco",
+		selectable.length === 0,
+		selectable.map(d => d.Name).join(", "),
+	);
+	// it goes by itself; the server's word on the dawn's save is waited for; "Progress saved" stays a moment
+	const t0 = getClock();
+	const at = s => {
+		setClock(t0 + s);
+		hud.update(state());
+	};
+	hud.showDawnReport({ zombies: 1, damage: 0, items: 1 });
+	check(
+		'no singular: "1 zombie", "1 item found"',
+		txt("Key1") === "zombie" && txt("Key3") === "item found" && txt("Value2") === "0",
+	);
+	at(1);
+	hud.dawnStoreNotice("saved", true);
+	at(DCard.DAWN_SHOW_S - 0.1);
+	const stillUp = up();
+	at(DCard.DAWN_SHOW_S + 0.1);
+	check(
+		`com a palavra do servidor dada ("saved" em 1 s), some sozinho em ${DCard.DAWN_SHOW_S} s (nunca espera o jogador)`,
+		stillUp && !up(),
+	);
+	// L2 of the review of ca9494a: the dawn's write comes after SAV-01's delay and gap (up to ~18 s), and an unchanged
+	// save is answered "saved" without a write (server/main.server.ts `dawnAsks`): the card waits for that word
+	{
+		const tw = getClock();
+		hud.showDawnReport({ zombies: 3, damage: 10, items: 0 });
+		setClock(tw + DCard.DAWN_SHOW_S + 4);
+		hud.update(state());
+		const waiting = up() && deep(card(), "Store").Visible === false;
+		setClock(tw + 18);
+		hud.dawnStoreNotice("saved", true);
+		hud.update(state());
+		const late = up() && txt("Store") === "Progress saved";
+		setClock(tw + 18 + DCard.DAWN_SAVED_HOLD_S - 0.1);
+		hud.update(state());
+		const held = up();
+		setClock(tw + 18 + DCard.DAWN_SAVED_HOLD_S + 0.1);
+		hud.update(state());
+		check(
+			`sem palavra ainda, o cartao espera (e nao diz nada); um "saved" que chega em 18 s ainda aparece nele, ${DCard.DAWN_SAVED_HOLD_S} s, e ele vai`,
+			waiting && late && held && !up(),
+			JSON.stringify({ waiting, late, held }),
+		);
+		const tn = getClock();
+		hud.showDawnReport({ zombies: 3, damage: 10, items: 0 });
+		setClock(tn + DCard.DAWN_MAX_S - 0.1);
+		hud.update(state());
+		const before = up() && deep(card(), "Store").Visible === false;
+		setClock(tn + DCard.DAWN_MAX_S + 0.1);
+		hud.update(state());
+		check(
+			`...e se a palavra nunca vem (Studio sem DataStore), vai em ${DCard.DAWN_MAX_S} s sem ter dito nada`,
+			before && !up(),
+		);
+	}
+	hud.showDawnReport({ zombies: 3, damage: 10, items: 0 });
+	const t1 = getClock();
+	setClock(t1 + DCard.DAWN_SHOW_S - 1);
+	hud.dawnStoreNotice("saving");
+	setClock(t1 + DCard.DAWN_SHOW_S + 2);
+	hud.update(state());
+	const waited = up();
+	setClock(t1 + DCard.DAWN_SHOW_S + 3);
+	hud.dawnStoreNotice("saved", true);
+	setClock(t1 + DCard.DAWN_SHOW_S + 3 + DCard.DAWN_SAVED_HOLD_S - 0.1);
+	hud.update(state());
+	const held = up() && txt("Store") === "Progress saved";
+	setClock(t1 + DCard.DAWN_SHOW_S + 3 + DCard.DAWN_SAVED_HOLD_S + 0.1);
+	hud.update(state());
+	check(
+		`uma gravacao em voo e esperada (ate ${DCard.DAWN_MAX_S} s); "Progress saved" fica ${DCard.DAWN_SAVED_HOLD_S} s e o cartao vai`,
+		waited && held && !up(),
+	);
+	hud.showDawnReport({ zombies: 3, damage: 10, items: 0 });
+	setClock(getClock() + 1);
+	hud.dawnStoreNotice("saving");
+	setClock(getClock() + DCard.DAWN_MAX_S + 1);
+	hud.update(state());
+	check(`...mas nunca mais que ${DCard.DAWN_MAX_S} s, com ou sem resposta`, !up());
+
+	// M1 of the review of ca9494a: the card takes no click nor touch -- only its ╳ does (a thumb's size), the rest of it is
+	// the playfield's. The engine's gameProcessedEvent is true where an input lands on something that sinks it (a button
+	// that can fire, an Active GuiObject), so what sinks it at a point is computed here and handed to bootstrap's REAL
+	// InputBegan, as the engine would
+	const isButton = d => d.ClassName === "TextButton" || d.ClassName === "ImageButton" || d.ClassName === "TextBox";
+	const sinksAt = (x, y) =>
+		[ctx.hudLayer, ...ctx.hudLayer.GetDescendants()].filter(d => {
+			if (!d.IsA?.("GuiObject") || !shown(d)) return false;
+			if (!(isButton(d) ? d.Interactable !== false : d.Active === true)) return false;
+			const r = rectOf(d);
+			return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+		});
+	const cardSinks = () =>
+		[card(), ...card().GetDescendants()].filter(
+			d => d.IsA?.("GuiObject") && shown(d) && (isButton(d) ? d.Interactable !== false : d.Active === true),
+		);
+	const mouse1 = { UserInputType: Enum.UserInputType.MouseButton1, KeyCode: Enum.KeyCode.Unknown };
+	/** a left click at (x, y) through bootstrap's handler: did it fire? */
+	const clickAt = (x, y) => {
+		const gpe = sinksAt(x, y).length > 0;
+		input.beginFrame();
+		uis.InputBegan.Fire({ ...mouse1, Position: new Vector3(x, y, 0) }, gpe);
+		flush();
+		const fired = input.attackPressed === true;
+		uis.InputEnded.Fire({ ...mouse1, Position: new Vector3(x, y, 0) }, gpe);
+		flush();
+		input.beginFrame();
+		return fired;
+	};
+	hud.showDawnReport({ zombies: 3, damage: 10, items: 0 });
+	hud.dawnBreakLine();
+	layoutGame(ui, ctx);
+	{
+		const cr = rectOf(card());
+		const target = deep(card(), "Dismiss");
+		const hit = rectOf(target);
+		const cross = rectOf(deep(card(), "Cross"));
+		const inHit = (x, y) => x >= hit.x && x <= hit.x + hit.w && y >= hit.y && y <= hit.y + hit.h;
+		// points on the card's texts and body, away from the ╳'s hit
+		const points = [
+			[cr.x + cr.w * 0.1, cr.y + cr.h * 0.5],
+			[cr.x + cr.w * 0.5, cr.y + cr.h * 0.3],
+			[cr.x + cr.w * 0.5, cr.y + cr.h * 0.8],
+			[cr.x + cr.w * 0.3, cr.y + cr.h * 0.95],
+		].filter(([x, y]) => !inHit(x, y));
+		const fired = points.map(([x, y]) => clickAt(x, y));
+		const sinks = cardSinks();
+		check(
+			"um clique que comeca no cartao (texto, numeros, fundo, linha da pausa) e um tiro: nada nele prende o mouse (Active falso)",
+			points.length === 4 && fired.every(f => f) && up(),
+			`${fired.join(",")}; no cartao, prende: ${sinks.map(d => d.Name).join(", ")}`,
+		);
+		check(
+			"so o ╳ e botao: um TextButton no canto do cartao, sobre a cruz e dentro do cartao, nao Selectable, de pelo menos MIN_TOUCH_PX (44 px) de lado",
+			sinks.length === 1 &&
+				sinks[0] === target &&
+				target.ClassName === "TextButton" &&
+				target.Selectable === false &&
+				hit.w >= MIN_TOUCH_PX - 0.5 &&
+				hit.h >= MIN_TOUCH_PX - 0.5 &&
+				hit.x <= cross.x + cross.w / 2 &&
+				cross.x + cross.w / 2 <= hit.x + hit.w &&
+				hit.y <= cross.y + cross.h / 2 &&
+				cross.y + cross.h / 2 <= hit.y + hit.h &&
+				hit.x >= cr.x - 0.5 &&
+				hit.y >= cr.y - 0.5 &&
+				hit.x + hit.w <= cr.x + cr.w + 0.5 &&
+				hit.y + hit.h <= cr.y + cr.h + 0.5 &&
+				hit.w * hit.h < (cr.w * cr.h) / 4,
+			`hit ${Math.round(hit.w)}x${Math.round(hit.h)} no cartao ${Math.round(cr.w)}x${Math.round(cr.h)}`,
+		);
+		// a click on the ╳ is the button's (no shot), and it sends the card away
+		const onCross = clickAt(hit.x + hit.w / 2, hit.y + hit.h / 2);
+		target.Activated.Fire();
+		const tapped = !up() && hud.dawnCard().wasDismissed();
+		hud.showDawnReport({ zombies: 3, damage: 10, items: 0 });
+		hud.showMessage("Wave 1");
+		check(
+			"um clique no ╳ e do botao (nao atira) e manda o cartao embora; uma onda (noticia) toma a caixa dele",
+			!onCross && tapped && !up(),
+		);
+	}
+	// the break line: the server's (protocol note 24), never the client's -- on the card if it is up, else nowhere here
+	const noCard = hud.dawnBreakLine();
+	hud.showDawnReport({ zombies: 3, damage: 10, items: 0 });
+	const short = hud.dawnCard().size();
+	const noLine = deep(card(), "Break").Visible === false;
+	const onCard = hud.dawnBreakLine();
+	const tall = hud.dawnCard().size();
+	const breakShown =
+		deep(card(), "Break").Visible === true &&
+		txt("Break") === "You've played for over 90 minutes. Dawn is a good time for a break.";
+	check(
+		"a linha da pausa so quando o servidor a da: no cartao aberto (que cresce, nunca alem da caixa do banner); sem cartao, false (vai para o feed)",
+		!noCard && noLine && onCard && breakShown && tall[1] > short[1] && tall[1] <= DCard.DAWN_H,
+		`${short.join("x")} -> ${tall.join("x")}`,
+	);
+	// ...and with no card up, main.client puts it on the feed, once
+	const feedLines = () => deepAll(hudRoot(), "Line").map(l => l.GetAttribute("Text"));
+	hud.dawnCard().hide();
+	hud.breakLineOnFeed();
+	check(
+		"sem cartao, a linha vai para o feed (a mesma frase), em vez de sumir: linha contada e linha vista",
+		feedLines().includes("You've played for over 90 minutes. Dawn is a good time for a break."),
+		feedLines().join(" | "),
+	);
+	check("a caixa do cartao tem a altura da caixa do banner (o mesmo lugar)", DCard.DAWN_H === 110);
+	// no churn once built: 20 dawns, their notices and 600 frames
+	const churn = phase("cartao do amanhecer: 20 amanheceres, avisos e 600 quadros", () => {
+		for (let i = 0; i < 20; i++) {
+			hud.showDawnReport({ zombies: i, damage: i * 7, items: i % 3 });
+			if (i % 4 === 0) hud.dawnBreakLine();
+			hud.dawnStoreNotice(i % 2 === 0 ? "saving" : "saved", i % 2 === 1);
+			for (let f = 0; f < 30; f++) {
+				setClock(getClock() + 1 / 60);
+				hud.update(state());
+			}
+		}
+	});
+	check(
+		"depois de construido: 20 amanheceres, avisos e 600 quadros sem criar nem destruir Instance",
+		zero(churn),
+		cost(churn),
+	);
+	hud.showDawnReport({ zombies: 3, damage: 10, items: 0 });
+	const still = phase("cartao do amanhecer: 120 quadros de pe", () => {
+		for (let f = 0; f < 120; f++) {
+			setClock(getClock() + 1 / 60);
+			hud.update(state());
+		}
+	});
+	check("...e de pe por 120 quadros, nada criado nem destruido", zero(still) && up(), cost(still));
+	const dcSrc = readFileSync(join(SRC, "client/ui/dawnCard.ts"), "utf8");
+	check(
+		"nada se move: o cartao aparece e some (sem tween, sem pulso), entao o Reduzir Movimento nao tem o que tirar; texto sem contorno",
+		!/tween|fadeText|fadeSurface|motionTween|math\.sin/.test(dcSrc) &&
+			card()
+				.GetDescendants()
+				.every(d => d.ClassName !== "UIStroke"),
+	);
+
+	// (c) the level-up says what it gave (BEM-08)
+	hud.showLevelUp(5, 1);
+	hud.showLevelUp(7, 2);
+	const lines = deepAll(hudRoot(), "Line").map(l => [l.GetAttribute("Text"), l.FindFirstChild("Text")?.TextColor3]);
+	const one = lines.find(([t]) => t === "Level 5 · +1 skill point · Backpack › Skills");
+	const two = lines.find(([t]) => t === "Level 7 · +2 skill points · Backpack › Skills");
+	check(
+		'o level-up diz o que deu e onde gastar: "Level 5 · +1 skill point · Backpack › Skills" (e "+2 skill points"), no azul do XP',
+		one !== undefined && two !== undefined && sameColor(one[1], GAME.xp),
+		lines.map(([t]) => t).join(" | "),
+	);
+	// the run wires it all: the tally every frame (the dead too), the server's store notices, the level line
+	const mainSrc = readFileSync(join(SRC, "client/main.client.ts"), "utf8");
+	check(
+		"main.client.ts: a noite contada a cada quadro (fora do `if (alive)`), o aviso de gravacao do servidor no cartao, o level-up novo",
+		/\n\t\tstepNight\(!refs\.player\.dead\);/.test(mainSrc) &&
+			/net\.onStoreState\(\(state, answersDawn\) => hud\.dawnStoreNotice\(state, answersDawn\)\);/.test(
+				mainSrc,
+			) &&
+			/hud\.showLevelUp\(save\.level, save\.level - lastLevel\);/.test(mainSrc) &&
+			!/hud\.showMessage\("Level UP"\)/.test(mainSrc) &&
+			/nightTally\.reset\(\);\n\tbreakNudgeAt = undefined;/.test(mainSrc),
+	);
+	// L6 / L7 of the review of ca9494a: the damage is the server's hp (the self block), and the break line is only ever
+	// what the server said -- on the card, or the feed after BREAK_CARD_WAIT_S -- with no clock of the client's own
+	check(
+		"main.client.ts: o dano da noite vem do hp do servidor (netSelfHp), e a linha da pausa so do Announce do servidor (sem relogio proprio)",
+		/hp: netSelfHp\(\) \?\? refs\.player\.hp,/.test(mainSrc) &&
+			/if \(netTakeBreakNudge\(\)\) breakNudgeAt = now;/.test(mainSrc) &&
+			/if \(hud\.dawnBreakLine\(\)\) \{\n\t\tbreakNudgeAt = undefined;/.test(mainSrc) &&
+			/now - breakNudgeAt >= BREAK_CARD_WAIT_S\) \{\n\t\thud\.breakLineOnFeed\(\);/.test(mainSrc) &&
+			!/SESSION_START|breakNudgeDue|BREAK_NUDGE_MIN/.test(mainSrc),
+	);
+
+	// L1 and M1 on a phone (844 x 390, touch): the card with the break line never covers the message feed under it, and
+	// a finger that lands on the card still moves or aims
+	hud.unmount();
+	uis.TouchEnabled = true;
+	uis.MouseEnabled = false;
+	uis.GetLastInputType = () => Enum.UserInputType.Touch;
+	setViewport(844, 390, 36, 104);
+	hud.mount();
+	hud.update(state());
+	layoutGame(ui, ctx);
+	hud.showDawnReport({ zombies: 23, damage: 64, items: 9 });
+	hud.dawnBreakLine();
+	hud.showLevelUp(8, 1);
+	hud.showLevelUp(9, 1);
+	hud.update(state());
+	layoutGame(ui, ctx);
+	{
+		const cr = rectOf(card());
+		const feed = deep(hudRoot(), "Feed");
+		const feedBox = rectOf(feed);
+		const lines = deepAll(feed, "Line")
+			.filter(l => shown(l))
+			.map(rectOf);
+		const overlapR = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+		const [cw, ch] = hud.dawnCard().size();
+		const brk = rectOf(deep(card(), "Break"));
+		const rows = ch >= DCard.DAWN_H ? 2 : 1;
+		check(
+			`844x390 toque: o cartao com a linha da pausa (${rows} linha(s), ${Math.round(cw)}x${Math.round(ch)}) termina acima do feed, e nenhuma linha do feed fica sob ele`,
+			up() &&
+				ch <= DCard.DAWN_H &&
+				cr.y + cr.h <= feedBox.y + 0.5 &&
+				lines.length === 2 &&
+				lines.every(l => !overlapR(cr, l)) &&
+				brk.y + brk.h <= cr.y + cr.h + 0.5 &&
+				brk.h >= rows * 9 - 0.5,
+			`cartao y ${Math.round(cr.y)}..${Math.round(cr.y + cr.h)}, feed a partir de ${Math.round(feedBox.y)}; linha da pausa ${Math.round(brk.h)} px`,
+		);
+		// the ╳'s 44 px hit on a phone: inside the card, and clear of the corner's controls (the chip, the clock plate)
+		const hit = rectOf(deep(card(), "Dismiss"));
+		const corner = ["ChipSlot", "SkyPlate", "BagBtn", "MenuBtn"]
+			.map(n => [n, deep(hudRoot(), n)])
+			.filter(([, f]) => f !== undefined && shown(f))
+			.map(([n, f]) => [n, rectOf(f)]);
+		check(
+			"844x390 toque: o alvo do ╳ (>= 44 px) fica dentro do cartao, longe do chip do placar, do relogio, do Bag e do Menu",
+			hit.w >= MIN_TOUCH_PX - 0.5 &&
+				hit.h >= MIN_TOUCH_PX - 0.5 &&
+				hit.x >= cr.x - 0.5 &&
+				hit.y >= cr.y - 0.5 &&
+				hit.x + hit.w <= cr.x + cr.w + 0.5 &&
+				hit.y + hit.h <= cr.y + cr.h + 0.5 &&
+				corner.length >= 2 &&
+				corner.every(([, r]) => !overlapR(hit, r)),
+			`hit ${Math.round(hit.x)},${Math.round(hit.y)} ${Math.round(hit.w)}x${Math.round(hit.h)}; ${corner.map(([n]) => n).join(", ")}`,
+		);
+		const gsv = service("GuiService");
+		const none = gsv.GetInsetArea(Enum.ScreenInsets.None);
+		const core = { x: -none.Min.X, y: -none.Min.Y };
+		const L = boot.getTouchLayout();
+		/** a finger at (x, y) on the screen, through bootstrap's real handler: what did it start? */
+		const touchAt = (x, y) => {
+			const finger = {
+				UserInputType: Enum.UserInputType.Touch,
+				KeyCode: Enum.KeyCode.Unknown,
+				Position: new Vector3(x - core.x, y - core.y, 0),
+			};
+			const gpe = sinksAt(x, y).length > 0;
+			uis.InputBegan.Fire(finger, gpe);
+			flush();
+			const got = { gpe, move: input.joystickActive === true, aim: input.aimStickActive === true };
+			uis.InputEnded.Fire(finger, gpe);
+			flush();
+			return got;
+		};
+		const right = touchAt(cr.x + cr.w * 0.62, cr.y + cr.h * 0.6);
+		const left = touchAt(cr.x + cr.w * 0.3, cr.y + cr.h * 0.6);
+		check(
+			"844x390 toque: um dedo que pousa no cartao ainda mira (do lado da mira) e anda (do lado do analogico flutuante)",
+			!right.gpe && right.aim && !left.gpe && (L.floating ? left.move : true),
+			JSON.stringify({ right, left, floating: L.floating }),
+		);
+	}
+	hud.unmount();
+	flush();
 }
 
 // ---------------------------------------------------------------- report

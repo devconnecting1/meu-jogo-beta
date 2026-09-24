@@ -43,7 +43,10 @@
  *      stains and droplets create no Instance, write no ZIndex and build no Color3; a stain born into a full ring
  *      rewrites one sprite; a stain's whole life under a still camera writes only at its steps, then it is gone.
  *      (The reference fight of 1-5 draws its blood through the same view: flat circles, or cells and squares.)
- *  15. THE WEATHER (LUZ-05). A storm on a wet street, the camera running along it, with the puddles' pixel art and
+ *  15. A PANE BREAKING (EDI-18). A window of the fight's screen losing its glass writes only its shards (the ground's
+ *      detail layer, under the blood, so a blood decal's birth stays one write) and the roof's edge over it: no ZIndex,
+ *      no Instance, and nothing a frame afterwards.
+ *  16. THE WEATHER (LUZ-05). A storm on a wet street, the camera running along it, with the puddles' pixel art and
  *      without it (the flat drawing): on the pool warmed with poolWarmup's `weatherPool` no Instance and no ZIndex
  *      write; the streaks and the puddles fit that reservation; a rain draws fewer streaks than a storm, the Low tier
  *      half and Reduce Motion none; the drops sit still with Reduce Motion (the camera still: no write at all) and
@@ -741,7 +744,7 @@ section("6) warmFightPool: only behind the lobby and its menus, a few sprites a 
 	}
 	const ref = new Renderer(gui.make("Frame"), "Sprites");
 	PW.reserveFightPool(ref, 1920, 1080, false, false);
-	// and the weather a fight may happen in (LUZ-05, §15), its puddles flat as the art is here
+	// and the weather a fight may happen in (LUZ-05, §16), its puddles flat as the art is here
 	PW.reserveWeatherPool(ref, 1920, 1080, false);
 	while (ref.warm(1000) > 0);
 	check(
@@ -1595,9 +1598,62 @@ section("14) the blood's pixel art (ART-15): a stain born costs one sprite, dryi
 	WA.overrideWorldArt(undefined);
 }
 
-// ================================================================ 15. the weather (LUZ-05)
+// ================================================================ 15. window glass
 
-section("15) the weather (LUZ-05): a storm's streaks and a wet street's puddles -- no Instance after the warm-up");
+section("15) window glass (EDI-18): a pane breaking in view touches only its own layers, no ZIndex, no Instance");
+{
+	const WIN = require(join(SRC, "shared/game/windows.ts"));
+	// the windows of the reference fight's screen (the gun shop's, born broken on this seed: glass is put in to break it)
+	const panes = [];
+	for (const s of world.solids) {
+		if (s.kind !== "building" || s.openings === undefined) continue;
+		for (const o of s.openings) {
+			if (o.kind !== "window" || o.glass === undefined) continue;
+			if (Math.abs(o.x - AT.x) < 600 && Math.abs(o.y - AT.y) < 330) panes.push(o.glass);
+		}
+	}
+	check(panes.length > 0, "the reference fight's screen has windows", `${panes.length}`);
+	const pane = panes[0];
+	const generated = WIN.windowIntact(pane);
+	// the shards on the ground, and the roof's edge over the window (its strip, the glint or the stubs of glass)
+	const layers = new Set([Z.floorDetail + 1, Z.roof + 2, Z.roof + 3]);
+	for (const [label, ids] of [
+		["flat", {}],
+		["art", allIds()],
+	]) {
+		WA.overrideWorldArt(ids);
+		const S = makeFight(1280, 720);
+		// warm-up: both states drawn once
+		S.frame();
+		WIN.setWindowGlass(pane, false);
+		S.frame();
+		WIN.setWindowGlass(pane, true);
+		S.frame();
+		const brk = watch(() => {
+			WIN.setWindowGlass(pane, false);
+			S.frame();
+		});
+		check(
+			brk.created === 0 && brk.zWrites === 0 && [...brk.touched].every(f => layers.has(f.ZIndex)),
+			`${label}: the pane breaking writes only the shards and the roof's edge (Z.floorDetail + 1, Z.roof + 2..3), no ZIndex, nothing created`,
+			`${brk.writes} writes on ${brk.touched.size()} sprites: ${top(brk.byProp)}`,
+		);
+		const after = watch(() => {
+			for (let f = 0; f < 30; f++) S.frame();
+		});
+		check(
+			after.writes === 0 && after.created === 0,
+			`${label}: then the open frame costs nothing a frame (still camera)`,
+			`${after.writes} writes in 30 frames`,
+		);
+		WIN.setWindowGlass(pane, generated);
+	}
+	WA.overrideWorldArt({});
+}
+
+// ================================================================ 16. the weather (LUZ-05)
+
+section("16) the weather (LUZ-05): a storm's streaks and a wet street's puddles -- no Instance after the warm-up");
 {
 	const WV = require(join(SRC, "client/view/weatherView.ts"));
 	const { WORLD_TEXEL } = require(join(SRC, "client/view/worldArtAssets.ts"));

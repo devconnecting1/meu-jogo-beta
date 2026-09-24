@@ -98,6 +98,8 @@ function debrisSound(material: string): SoundName | undefined {
 	if (material === "tree" || material === "structure") return "debrisWood";
 	if (material === "car" || material === "boss" || material === "impact") return "debrisMetal";
 	if (material === "exploder") return "explosion";
+	// a window's pane giving way (EDI-18): the engine's glass break, the slot that waited for an event (audio-credits)
+	if (material === "glass") return "debrisGlass";
 	return undefined;
 }
 

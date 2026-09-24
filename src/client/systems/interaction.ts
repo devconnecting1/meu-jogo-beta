@@ -15,6 +15,7 @@ import {
 	isFire,
 	isPump,
 	nearestGroundItem,
+	nearestIntactWindow,
 	repairMaterial,
 } from "shared/sim/interactQuery";
 import { engineRuns, isRideable, vehicleBroken, vehicleDef, vehicleKindOfSolid } from "shared/sim/vehicle";
@@ -33,6 +34,7 @@ import { itemName } from "./craftSystem";
 import { machineHint } from "./machineHints";
 import { gained, pressed, survivorAt, took } from "./pickups";
 import { fxMessage, GameRefs } from "./types";
+import { shatterWindow } from "./zombieAI";
 
 /*
  * Using the world with E: pick up, open/close, light, shake a tree, search a car/bin, drain a gas pump, repair, loot a
@@ -196,6 +198,22 @@ function rollLoot(s: Solid): void {
  */
 export const PUMP_HINT = "E: Siphon Oil";
 
+/**
+ * The pill at an intact window at hand (EDI-18, LEG-01), when nothing else E could do is: breaking the glass on
+ * purpose -- the noisy way in or out. Only a press made while this pill shows breaks glass: the press carries the
+ * intent (`HeldBit.Glass`, protocol.ts note 23) and the server acts on nothing else.
+ */
+export const WINDOW_HINT = "E: Break window";
+
+/**
+ * The pane E would break right now (EDI-18): the intact one at hand -- `nearestIntactWindow`, the server's test --
+ * when E has nothing else to do here. The hint and the press both ask this, so the pill names exactly what the press
+ * will be sent as.
+ */
+function glassAtHand(refs: GameRefs, by: PlayerState): Solid | undefined {
+	return nearestIntactWindow(refs.world, by.x, by.y);
+}
+
 function tryRepair(refs: GameRefs, s: Solid): boolean {
 	if (!canRepair(s)) return false;
 	const mat = repairMaterial(s);
@@ -318,8 +336,11 @@ export function interactHint(refs: GameRefs, by: PlayerState = refs.player): str
 	if (refs.pendingPlace >= 0) return undefined;
 	// the server's query, full stacks passed over (ITM-07): a full stack never hides the door or the search behind it
 	const target = interactTarget(refs.world, by.x, by.y, noRoomIn(refs.save));
-	if (target === undefined) return fullHint(refs, by);
-	return hintFor(refs, target);
+	if (target !== undefined) return hintFor(refs, target);
+	// EDI-18, LEG-01: nothing else to do here, and a pane at hand -- the pill says what the press does, and that it is
+	// loud (the crash the street hears); only a press made under it breaks glass (`tryInteract`)
+	if (glassAtHand(refs, by) !== undefined) return WINDOW_HINT;
+	return fullHint(refs, by);
 }
 
 /**
@@ -344,6 +365,15 @@ export class Interaction {
 		// what the hint named and what the server will pick: full stacks passed over (ITM-07)
 		const target = interactTarget(refs.world, by.x, by.y, noRoomIn(refs.save));
 		if (target === undefined) {
+			// EDI-18: nothing else to do here and a pane at hand (the pill said "E: Break window"): this press is for the
+			// glass. Online it says so on its command (HeldBit.Glass, carried with the edge: client/net/commands.ts) and the
+			// server breaks it; offline this client's own world does
+			const pane = glassAtHand(refs, by);
+			if (pane !== undefined) {
+				if (serverOwnsWorld()) refs.input.actionGlass = true;
+				else shatterWindow(refs, pane);
+				return;
+			}
 			// only full items in reach: offline, say so where the survivor stands (online the HUD's line already does)
 			const it = serverOwnsWorld() ? undefined : nearestGroundItem(refs.world, by.x, by.y);
 			if (it !== undefined) {

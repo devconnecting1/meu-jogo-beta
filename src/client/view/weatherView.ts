@@ -24,7 +24,7 @@
  *
  * Everything is drawn through the world renderer's pool, at its own ZIndex (Z.wet, Z.rain), with this view's option
  * tables reused frame after frame: no Instance once the pool is warm (client/view/poolWarmup.ts `weatherPool`, the art
- * or the flat look), no table per sprite (tools/test-pool.mjs §15). The lightning is not drawn here: it lifts the
+ * or the flat look), no table per sprite (tools/test-pool.mjs §16). The lightning is not drawn here: it lifts the
  * night's own overlay (gameLoop drawLight, `FLASH_LIFT`), which is what makes it light the town rather than whiten
  * the screen.
  */

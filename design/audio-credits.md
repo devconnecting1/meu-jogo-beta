@@ -1,4 +1,4 @@
-# Créditos e licença do áudio — Project Z
+# Créditos e licença do áudio — Last Town
 
 Registro de **todo** som que o jogo carrega: nome lógico (`src/shared/data/sounds.ts`), asset, criador e por que
 podemos usar. Regra da casa (CON-01/CON-02 de `docs/DESIGN_RULES.md`, estendida ao áudio):
@@ -109,7 +109,7 @@ variação, limites, a volta à biblioteca) são a seção **SND** de `docs/DESI
 | `explosion`   | `rbxasset://sounds/impact_explosion_03.mp3`                              | Roblox (engine) | 2,59 s  | Zumbi-bomba e barris.                                                                        |
 | `debrisWood`  | `rbxasset://sounds/collide.wav`                                          | Roblox (engine) | 1,20 s  | Árvore, construção.                                                                          |
 | `debrisMetal` | `rbxasset://sounds/metal.ogg`                                            | Roblox (engine) | 0,60 s  | Carro, chefe, ricochete.                                                                     |
-| `debrisGlass` | `rbxasset://sounds/glassbreak.wav`                                       | Roblox (engine) | 1,58 s  | Reservado (ainda sem evento que o dispare).                                                  |
+| `debrisGlass` | `rbxasset://sounds/glassbreak.wav`                                       | Roblox (engine) | 1,58 s  | O vidro de uma janela cedendo (EDI-18: o `Debris` "glass").                                  |
 | `pickupItem`  | `rbxasset://sounds/clickfast.wav`                                        | Roblox (engine) | 0,29 s  |                                                                                              |
 | `pickupCoin`  | `rbxasset://sounds/electronicpingshort.wav`                              | Roblox (engine) | 0,72 s  |                                                                                              |
 | `craftDone`   | `rbxasset://sounds/switch3.wav`                                          | Roblox (engine) | 0,37 s  |                                                                                              |

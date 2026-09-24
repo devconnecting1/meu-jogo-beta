@@ -313,7 +313,7 @@ async function publish(live) {
 	// rojo build is what CI already does, so what goes up is exactly what CI verified
 	// place properties a script cannot set (Players.BanningEnabled) ride on the build: refuse to publish without them
 	execFileSync(process.execPath, [join(ROOT, "tools", "check-place.mjs")], { cwd: ROOT, stdio: "inherit" });
-	const out = join(ROOT, "ProjectZ-cloud.rbxl");
+	const out = join(ROOT, "LastTown-cloud.rbxl");
 	console.log("montando o lugar com o rojo...");
 	execFileSync("rojo", ["build", "-o", out], { cwd: ROOT, stdio: "inherit" });
 	const bytes = readFileSync(out);
@@ -767,8 +767,8 @@ async function uploadArt(dryRun) {
 			assetType: "Image",
 			fallbackAssetType: "Decal",
 			mime: "image/png",
-			displayName: it => `ProjectZ world ${it.name}`,
-			description: it => `Project Z town art: ${it.description} (tools/gen-world-art.mjs)`,
+			displayName: it => `LastTown world ${it.name}`,
+			description: it => `Last Town art: ${it.description} (tools/gen-world-art.mjs)`,
 			regenerate: regenerateArtModule,
 		},
 		dryRun,
@@ -830,9 +830,9 @@ async function uploadAudio(dryRun) {
 			items,
 			assetType: "Audio",
 			mime: "audio/wav",
-			displayName: it => `ProjectZ sfx ${it.name}`,
+			displayName: it => `LastTown sfx ${it.name}`,
 			description: it =>
-				`Project Z sound effects, ${it.description}: our own synthesised sounds (tools/gen-sfx.mjs)`,
+				`Last Town sound effects, ${it.description}: our own synthesised sounds (tools/gen-sfx.mjs)`,
 			regenerate: regenerateAudioModule,
 		},
 		dryRun,

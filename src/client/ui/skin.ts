@@ -1,5 +1,5 @@
 /*
- * Project Z skin engine: the "Pixel Quest relief" look of the UI kit, plus the layout scale helpers every
+ * Last Town skin engine: the "Pixel Quest relief" look of the UI kit, plus the layout scale helpers every
  * widget uses (uiScale, hairline, text sizes, border widths).
  *
  * How a surface is drawn

@@ -77,6 +77,12 @@ export interface SaveAckPayload {
 	push?: boolean;
 	/** SAV-01: a push about the DataStore write of this player's save (client/ui/saveIndicator.ts) */
 	store?: StoreState;
+	/**
+	 * BEM-04: this `store` push answers the dawn's ask -- a write of the save encoded after 06:00 landed ("saved", or the
+	 * DataStore already held the live save), or the lock went ("stopped"). The dawn card says "Progress saved" only on
+	 * one of these, never on an older write's news (server/main.server.ts `dawnAsks`). Absent on every other push.
+	 */
+	answersDawn?: boolean;
 }
 
 /**

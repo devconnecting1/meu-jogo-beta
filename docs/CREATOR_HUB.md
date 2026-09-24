@@ -1,7 +1,26 @@
 # Creator Hub: o que configurar, e por quê
 
-Decisões de configuração da experiência no Creator Hub, ancoradas no que o jogo **é**: sobrevivência zumbi
-co-op 2D top-down, servidor autoritativo, **6 jogadores** por servidor (MP-01), sem pay-to-win, ainda privado.
+Decisões de configuração da experiência no Creator Hub, ancoradas no que o jogo **é**: **Last Town**, sobrevivência
+zumbi co-op 2D top-down, servidor autoritativo, **6 jogadores** por servidor (MP-01), sem pay-to-win, ainda privado.
+
+**Nomes de armazenamento: continuam "ProjectZ" — nunca renomeie.** O jogo se chamou **Project Z** até 2026-09-24
+e os identificadores guardados nasceram com esse nome. Eles **ficam** assim, de propósito, mesmo com o jogo chamado
+Last Town:
+
+| O quê | Nome | Onde no código |
+| --- | --- | --- |
+| DataStores do jogador | `ProjectZ_Save_v2`, `ProjectZ_Save_v1`, `ProjectZ_Titles` (+ as cópias `_studio`) | `server/save/stores.ts` |
+| DataStores do servidor | `ProjectZ_AdminLog`, `ProjectZ_Worlds`, `ProjectZ_PrivateTowns` (+ `_studio`) | `server/save/stores.ts` |
+| MemoryStore (lista Servers) | `ProjectZ_Servers` | `server/match/serverList.ts` |
+| RTBF e `cloud -- erase` | as mesmas chaves acima; os seis modelos de RTBF desta página | `tools/rtbf.mjs`, `tools/cloud.mjs` |
+| Atributos entre servidor e cliente | `pz_*` (`pz_world_seed`, `pz_world_day`…), `PZAdmin`, `PZTownNet`, `PZAdminNet` | `shared/net/*`, `shared/admin/*` |
+| Analytics | nomes e campos dos eventos e funis, a config `pz_welcome_pack` | `server/analytics/events.ts`, `docs/ANALYTICS.md` |
+| Teleporte | as chaves do TeleportData | `server/match/rules.ts` |
+
+Trocar um DataStore é criar outro **vazio**: todo jogador perde o progresso (ou fica dividido entre dois stores), e
+os modelos de RTBF e o `erase` passam a apagar o lugar errado. Trocar um atributo, um evento ou uma chave de
+teleporte separa servidores e clientes de versões diferentes e quebra os painéis. O nome **do jogo** mora só em
+`GAME_NAME` (`src/shared/module.ts`) e nos textos; nenhum desses identificadores o segue.
 
 O que o Open Cloud consegue mudar está marcado `[api]` — o resto é mão no painel, e está dito onde e por quê.
 
@@ -26,26 +45,12 @@ desktop/mobile/tablet/console habilitados.
 
 ### Settings — **faça antes de publicar**
 
-- **Nome**: hoje é "Experiência sem título". O nome no repositório é **Project Z**.
-- **Descrição**: está vazia. Sugestão, escrita a partir do que o jogo realmente faz:
+- **Nome**: hoje é "Experiência sem título". O nome é **Last Town: Zombie Survival** (o jogo se chama **Last Town**;
+  decisão do dono, 2026-09-24).
+- **Descrição**: está vazia. O texto oficial está em `docs/promo/DESCRIPTION.md` (em inglês, como a página): a
+  apresentação e, embaixo, **as regras e o recurso**, que a mensagem de ban aponta. Cole os dois juntos.
 
-  > Survive the night in a town that has already fallen.
-  >
-  > Scavenge houses for food, ammo and parts. Build barricades before dusk. Then hold the line: every night
-  > the horde is bigger than the last, and the zombies see you, hear you, remember where you were and call
-  > the others.
-  >
-  > Play alone or with up to 5 survivors in the same town. Shared world, shared loot, and a downed friend can
-  > be picked back up.
-  >
-  > No pay-to-win: everything that decides whether you live through the night is earned in the game.
-  >
-  > Rules: play fair (no exploits, cheats or scripts, no abusing bugs), be kind in chat, keep personal
-  > information private, don't ruin the game for other survivors on purpose, and follow the Roblox Community
-  > Standards. Breaking a rule can get you kicked or banned; only a person bans, never the game on its own.
-  > Appeals: message us through our group: <link do grupo>.
-
-  A linha do pay-to-win não é marketing: é a regra que já governa a loja, e dizê-la na página filtra a
+  A linha do pay-to-win (no bloco das regras) não é marketing: é a regra que já governa a loja, e dizê-la na página filtra a
   expectativa certa de quem entra. **As regras e o recurso são obrigatórios** (diretrizes de ban do Roblox:
   regras que todo usuário possa ler, e um jeito de recorrer ao criador): são o mesmo texto de
   `src/shared/data/rules.ts` (no jogo em How to play › Rules), e a mensagem de ban aponta para **esta página**,
@@ -320,13 +325,13 @@ mensagem: os avisos do jogo são frases fixas (ids e contagens vão para o log),
 ## Open Cloud na CI — **faça uma vez** (a arte e o áudio sobem sozinhos)
 
 Com isto, cada push na `main` sobe as texturas novas ou alteradas, espera a moderação, commita os ids na `main` e o
-`ProjectZ-ci.rbxl` do **mesmo** run já sai com eles (`.github/workflows/ci.yml`, job `assets`; como funciona:
+`LastTown-ci.rbxl` do **mesmo** run já sai com eles (`.github/workflows/ci.yml`, job `assets`; como funciona:
 `CLAUDE.md`, "Arte (e áudio) da cidade no jogo"). Sem isto a CI só avisa ("upload pulado") e segue verde; o
 `npm run cloud -- upload-art` do PC continua funcionando como antes.
 
 1. **Uma chave só para assets.** Creator Hub → **Open Cloud → API Keys → Create API Key**
    (`create.roblox.com/dashboard/credentials`):
-    - Nome: `project-z-ci-assets`.
+    - Nome: `last-town-ci-assets` (uma chave criada antes como `project-z-ci-assets` serve igual: o nome é só um rótulo).
     - **Access Permissions**: adicione só a API **Assets**, operações **Read** e **Write** (`asset:read` +
       `asset:write`). Nada de data store, de publish, de universo: esta chave vai morar fora do seu PC.
     - **Security → Accepted IP Addresses**: `0.0.0.0/0`. Os runners do GitHub não têm IP fixo (os intervalos
@@ -340,7 +345,7 @@ Com isto, cada push na `main` sobe as texturas novas ou alteradas, espera a mode
       um grupo, crie `ROBLOX_CREATOR_GROUP_ID` com o id do grupo no lugar dele.
 3. **Forçar um run** (para subir agora o que falta, sem esperar um push): GitHub → **Actions → CI → Run
    workflow** → branch `main` → **Run workflow**. No run, o job `assets` mostra no **Summary** a tabela de cada
-   arquivo (aprovado / em análise / recusado / falhou); o `ProjectZ-ci.rbxl` está no artefato **place** do mesmo run.
+   arquivo (aprovado / em análise / recusado / falhou); o `LastTown-ci.rbxl` está no artefato **place** do mesmo run.
    Um commit `art: asset ids uploaded by CI run … [skip ci]` de `github-actions[bot]` aparece na `main`: é
    esperado (`git pull` no PC antes de mexer).
 4. **Trocar a chave** (a cada 90 dias, ou na hora se ela vazar): crie outra igual ao item 1, cole por cima do secret
@@ -381,7 +386,8 @@ O que foi conferido na documentação do Roblox (Context7, `/websites/create_rob
 
 ## Resumo do que depende de você
 
-1. **Nome e descrição** em Settings (a API ignora esses dois), **com as regras e o recurso** e o link do grupo.
+1. **Nome e descrição** em Settings (a API ignora esses dois): "Last Town: Zombie Survival" e o texto de
+   `docs/promo/DESCRIPTION.md`, **com as regras e o recurso** e o link do grupo; as thumbnails e o ícone de `docs/promo/`.
 2. **Maturity & Compliance Questionnaire**: responder como na checklist acima (Moderate, sangue irrealista
    frequente, medo leve).
 3. **RTBF**: criar os seis modelos do Data Stores Manager e a chave `ROBLOX_ERASE_API_KEY` (só data store); testar

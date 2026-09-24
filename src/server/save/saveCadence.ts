@@ -5,10 +5,11 @@
  *
  *   1. the autosave: every AUTOSAVE_INTERVAL s, for a session that changed (server/main.server.ts, the autosave loop);
  *   2. an EVENT save, soon after a moment that matters -- a purchase, a level, a skill learned, a day survived, a title,
- *      a death, a Rebirth / a daybreak stand-up, a new life, a rare craft (`SaveEvent`). Most of them are found by
- *      comparing a few numbers of the live save once a second (`milestonesOf`), so no simulation file has to know
- *      about the DataStore; a purchase, a Rebirth, a New game, the midnight's day, a skill and a craft are named where
- *      they happen (server/main.server.ts `saveSoon`);
+ *      a death, a Rebirth / a daybreak stand-up, a new life, a rare craft, and a night lived through to daybreak
+ *      (`SaveEvent`; "dawn": the dawn card says "Progress saved" only once a write landed, DESIGN_RULES BEM-04). Most of
+ *      them are found by comparing a few numbers of the live save once a second (`milestonesOf`), so no simulation file
+ *      has to know about the DataStore; a purchase, a Rebirth, a New game, the midnight's day, a skill, a craft and the
+ *      dawn are named where they happen (server/main.server.ts `saveSoon`);
  *   3. the leave and BindToClose, as before (the final write, which releases the session lock).
  *
  * What keeps it cheap and safe, all of it enforced here and tested by tools/test-save.mjs (section 32) and, through the
@@ -60,7 +61,18 @@ export const EVENT_SCAN_S = 1;
  * "auto": the autosave came inside the gap, so it is served when the gap ends.
  */
 export type SaveEvent =
-	"purchase" | "level" | "skill" | "day" | "title" | "death" | "revive" | "life" | "craft" | "retry" | "auto";
+	| "purchase"
+	| "level"
+	| "skill"
+	| "day"
+	| "title"
+	| "death"
+	| "revive"
+	| "life"
+	| "craft"
+	| "dawn"
+	| "retry"
+	| "auto";
 
 /** the numbers of a save whose change is an event of the list (compared once a second: see `milestoneEvent`) */
 export interface Milestones {

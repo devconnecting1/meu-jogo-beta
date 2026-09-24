@@ -82,7 +82,7 @@ export const SURVIVORS_ART: ReadonlyArray<PoolLayer> = [
 /**
  * The weather (LUZ-05, client/view/weatherView.ts), which a fight can happen in: a storm's streaks at 1080p, and the
  * puddles of a wet street in view (at most 7 in any 1080p view of a town) with their two drops each. Reserved apart
- * from the fight (`reserveWeatherPool`), so the fight's profile stays the fight's (tools/test-pool.mjs §5, §15).
+ * from the fight (`reserveWeatherPool`), so the fight's profile stays the fight's (tools/test-pool.mjs §5, §16).
  */
 const RAIN: PoolLayer = [Z.rain, 96, 0, 0];
 /** the puddles' pixel art: the puddle's texture and its two rings, images all */

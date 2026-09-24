@@ -6,7 +6,7 @@
  *   npm run stamp -- --build <sha>    the same, with the commit the build is made from (the CI does this before
  *                                     compiling the place it publishes, so the About row names the build tested)
  *
- * Settings › About shows it (client/ui/settings.ts), so a player's report -- or the owner testing ProjectZ-ci.rbxl --
+ * Settings › About shows it (client/ui/settings.ts), so a player's report -- or the owner testing LastTown-ci.rbxl --
  * says which build it was. The committed file always has GAME_BUILD "dev": the CI checks the committed version is the
  * one package.json says, then stamps its own copy with the commit, and that copy is never committed.
  *

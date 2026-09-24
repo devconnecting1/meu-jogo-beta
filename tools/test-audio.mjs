@@ -507,7 +507,7 @@ audio.start();
 audio.bindSettings(() => settings);
 audio.setListener(0, 0);
 frame();
-const group = bus => SoundService.FindFirstChild("ProjectZAudio")?.FindFirstChild(bus);
+const group = bus => SoundService.FindFirstChild("LastTownAudio")?.FindFirstChild(bus);
 
 section("D. o cliente toca cada um no grupo SFX, onde aconteceu; com o SFX em 0, nada; o slot vazio, nada", () => {
 	const bad = [];
@@ -1050,7 +1050,7 @@ section(
 			"...e os takes da biblioteca que entram no lugar sao buscados na mesma hora (nao tocam mudos na primeira vez)",
 		);
 		check(
-			SoundService.FindFirstChild("ProjectZAudio")?.FindFirstChild("Preload") === undefined,
+			SoundService.FindFirstChild("LastTownAudio")?.FindFirstChild("Preload") === undefined,
 			"o preload nao deixa nada para tras (a pasta temporaria e destruida)",
 			`${created - created0} Instances temporarias`,
 		);

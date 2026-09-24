@@ -1,111 +1,111 @@
 {
 	"note": "draw-call digests of each building type's first building seen from inside with no world art (tools/test-world-art.mjs --golden-interiors)",
-	"recordedFrom": "6d21f20 (the campus branch before the interiors' pixel art, main 21aab2a + EDI-17): the flat interiors, Frames only",
+	"recordedFrom": "the window glass (EDI-18, 2026-09-24) over 8277c20: a window is drawn as it is now -- intact, the pane with its streak of light; broken (born broken, or broken since), the open frame of before with its shards on the floor inside and on the ground outside, in place of the plan's old glass decoration. With every call within 64 u of a window left out, each of the 15 buildings is the golden before it, 6d21f20's flat interiors, call for call",
 	"scenes": {
 		"type1": {
 			"building": 1,
 			"x": 1272,
 			"y": 672,
-			"count": 876,
-			"sha1": "e0ddd91b6c5a4793bd84f99edecaf38d3be4dd5b"
+			"count": 897,
+			"sha1": "6574a5b63e03a1bed9fc029e4ad1671261a0c86c"
 		},
 		"type2": {
 			"building": 4,
 			"x": 656,
 			"y": 3100,
-			"count": 1046,
-			"sha1": "0de32df56d89ebcd55f3e482b2f9516ee356eeb2"
+			"count": 983,
+			"sha1": "77d564e06af5ea5cd342488b15bdee4c119da471"
 		},
 		"type3": {
 			"building": 54,
 			"x": 4996,
 			"y": 2800,
-			"count": 1561,
-			"sha1": "6946522f71c03d3f924877f8f7f687458b215b68"
+			"count": 1565,
+			"sha1": "b7612c043d958ed0fcce88f3c6f2d3d534b67ecb"
 		},
 		"type4": {
 			"building": 9,
 			"x": 864,
 			"y": 6988,
-			"count": 1715,
-			"sha1": "b7ab71390b5a5d743a5a363d550519bab849850c"
+			"count": 1778,
+			"sha1": "e45e0114672b18d473b03c42a732bbecf5b9ece0"
 		},
 		"type5": {
 			"building": 15,
 			"x": 1260,
 			"y": 9208,
-			"count": 1423,
-			"sha1": "6901c802d9a73e78c70435ce54501469a708b3cb"
+			"count": 1465,
+			"sha1": "72847d9bfd8c5eeeef585d4106d841fbd42e58b4"
 		},
 		"type6": {
 			"building": 59,
 			"x": 4624,
 			"y": 7300,
-			"count": 1845,
-			"sha1": "b703dc0f990fd77edfa20ac8733b912d44735ce0"
+			"count": 1908,
+			"sha1": "5ce125995c0dfcc979388d771f4432a5935977e0"
 		},
 		"type7": {
 			"building": 65,
 			"x": 4680,
 			"y": 8904,
-			"count": 1289,
-			"sha1": "7a20c45eb34bf2f7714cea5f4ed4e378c3f6da97"
+			"count": 1435,
+			"sha1": "17c2546715f829f0c6c38fbf1985f8f5737a34c0"
 		},
 		"type8": {
 			"building": 60,
 			"x": 5172,
 			"y": 6560,
-			"count": 1315,
-			"sha1": "d36ad0f9a0a9e1cc84d277fb2417048c0d67bd7d"
+			"count": 1357,
+			"sha1": "8ae6b6fb5a9d4bd7be3f1059074831a8e12d14ce"
 		},
 		"type9": {
 			"building": 118,
 			"x": 8488,
 			"y": 8896,
-			"count": 1868,
-			"sha1": "2d139ed210b0b3d6f068819949a99838d7e0c9ca"
+			"count": 1931,
+			"sha1": "a42666cf45a46df4f7e690535c1e75b8f7357c15"
 		},
 		"type10": {
 			"building": 82,
 			"x": 6592,
 			"y": 7300,
-			"count": 1512,
-			"sha1": "e2f272ae2301efb5ae6172f4ed7937ef175dd21f"
+			"count": 1533,
+			"sha1": "a18f970334b29a80141b230ffb81489cf7425513"
 		},
 		"type11": {
 			"building": 147,
 			"x": 10704,
 			"y": 2744,
-			"count": 1448,
-			"sha1": "83769cee059a77898097caa766cd84fbb6e81341"
+			"count": 1590,
+			"sha1": "e1058adf82940017566d3373b43b317d67db27a7"
 		},
 		"type12": {
 			"building": 1275,
 			"x": 18488,
 			"y": 2704,
-			"count": 1978,
-			"sha1": "d1b37de0ad61f841a823a9ab40669f65b12d2820"
+			"count": 2013,
+			"sha1": "ff0b1c23bdaad9d63b75697f9572d1aab4262d84"
 		},
 		"type13": {
 			"building": 1276,
 			"x": 19000,
 			"y": 2704,
 			"count": 1848,
-			"sha1": "931cb08e23c3b0131a4eb6fa5d9368e7fec24d79"
+			"sha1": "2a9ce3a6f64e4967b54fd2deed82e4b26f0a0c9c"
 		},
 		"type14": {
 			"building": 1278,
 			"x": 18488,
 			"y": 3512,
 			"count": 1679,
-			"sha1": "a0e65468d8794033c3e213fc15901eae3d9f0df5"
+			"sha1": "8efad7e183e33900684a3471745a9aa383ebb725"
 		},
 		"type15": {
 			"building": 1277,
 			"x": 19368,
 			"y": 3168,
-			"count": 1897,
-			"sha1": "7c86f1f18b7d99263f1f760d8042c387d1b8dbce"
+			"count": 1940,
+			"sha1": "cec53b89dc8d9ab18d1cdcd6dbfa96cc377d2f28"
 		}
 	}
 }

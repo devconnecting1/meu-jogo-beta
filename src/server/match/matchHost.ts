@@ -162,6 +162,8 @@ function teleportPort(): { port: TravelPort; service: TeleportService } | undefi
 			return { ok: true, code };
 		},
 		teleport(player: Player, code: string, ticket: TownTicket) {
+			// BEM-04: a leave after this is the trip's, not a break taken (the BreakNudge's `Left - Unknown`)
+			Analytics.teleporting(player);
 			const [done, err] = pcall(() => {
 				const options = new Instance("TeleportOptions");
 				options.ReservedServerAccessCode = code;

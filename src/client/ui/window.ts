@@ -1,5 +1,5 @@
 /*
- * Project Z window kit: the pieces of the reference's windows (docs/DESIGN_RULES.md UI-07), for the screens to
+ * Last Town window kit: the pieces of the reference's windows (docs/DESIGN_RULES.md UI-07), for the screens to
  * compose. The plates they stand on are plate.ts; the base kit (Button, Card, Tabs, Slider, Keycap...) is
  * widgets.ts. Every colour is a theme role (theme.ts SURFACE / THEME), every text is light and has no contour
  * (UI-04 / UI-05).

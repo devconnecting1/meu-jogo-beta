@@ -1,5 +1,5 @@
 /*
- * Project Z design system: the single source of truth for colour, type, radius and spacing in the UI.
+ * Last Town design system: the single source of truth for colour, type, radius and spacing in the UI.
  *
  * Raw tokens come from the author's tweakcn theme ("Meu tema global"), generated into themeTokens.ts by
  * `npm run theme`. This file maps them to roles:

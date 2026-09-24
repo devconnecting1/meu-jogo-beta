@@ -115,7 +115,7 @@ jogador entra com `TeleportOptions.ReservedServerAccessCode = accessCode`.
 
 **d) VIP tem uma restrição que pode surpreender.** A doc de servidores privados é explícita: *"You cannot
 enable paid access in Robux or paid access in local currency and private servers at the same time."* Se um
-dia o Project Z for um jogo pago, os servidores privados morrem junto. Também: jogadores abaixo de 13 anos
+dia o Last Town for um jogo pago, os servidores privados morrem junto. Também: jogadores abaixo de 13 anos
 podem ser restringidos por configuração de privacidade. E mudar o preço do servidor privado **cancela todas as
 assinaturas ativas**.
 
@@ -130,7 +130,7 @@ assinaturas ativas**.
 | Convite | Só por código nosso (`accessCode`) ou party | O Roblox cuida: link e lista de convidados |
 | Fora do matchmaking | Sim | Sim |
 | Trabalho de código | `server/net/teleport.ts` (F5) | Nenhum, só a detecção do modo |
-| Encaixe no Project Z | "Play solo" e "jogar com um amigo agora" | "o servidor do meu clã" |
+| Encaixe no Last Town | "Play solo" e "jogar com um amigo agora" | "o servidor do meu clã" |
 
 ---
 
@@ -218,7 +218,7 @@ para exibir no painel. Se o place for publicado com o default da plataforma, o 7
 ### 2.5 O que foi avaliado e descartado aqui
 
 - **Fila via `MemoryStoreQueue`**: a doc de memory stores lista "skill-based matchmaking" como caso de uso de
-  queue — mas isso é para o padrão lobby → partida, com pareamento explícito. No Project Z não há partida: o
+  queue — mas isso é para o padrão lobby → partida, com pareamento explícito. No Last Town não há partida: o
   mundo é persistente *por servidor* e o jogador entra e sai dele. Construir fila seria reimplementar pior o
   que a Roblox já faz. **Descartado.**
 - **`SocialService` como matchmaking**: party é "entrar com quem eu escolhi", não pareamento. Entra em §1c,
@@ -435,7 +435,7 @@ exponencial, não laço de repetição).
 
 ### 4.1 O erro: "place de testes" não separa nada
 
-`docs/MULTIPLAYER.md:829` (F5, ação manual do autor) manda "criar o place de testes 'Project Z [dev]'". A doc
+`docs/MULTIPLAYER.md:829` (F5, ação manual do autor) manda "criar o place de testes 'Last Town [dev]'". A doc
 de data stores é explícita:
 
 > "Data stores are consistent per game, so any place in a game can access and change the same data, including
@@ -560,7 +560,7 @@ brandProjectId)` (servidor) e `GetPolicyInfoForPlayerAsync(player)`, citando os 
 (`AllowedExternalLinkReferences`, `IsSubjectToChinaPolicies`, `IsPaidItemTradingAllowed`) não aparecem na
 página atual** — não vou afirmar que existem.
 
-Impacto real no Project Z:
+Impacto real no Last Town:
 
 - **Loja: 100% moeda interna.** Não há `MarketplaceService`, gamepass, developer product ou
   `PromptPurchase` em nenhum lugar de `src/` (busca vazia). `SHOP_PACKS`, `COSTUMES` e `rebirthPrice`
@@ -675,7 +675,7 @@ Some-se "habilitar servidores privados" (§1), que também é só Dashboard.
 | `TeleportPartyAsync` | Deprecado. `TeleportAsync` já aceita um array de jogadores. |
 | `TeleportToPrivateServer`, `ReserveServer` (sem `Async`), `Teleport` (cliente) | Deprecados. |
 | `game.VIPServerId` / `VIPServerOwnerId` | Deprecados — usar `PrivateServerId` / `PrivateServerOwnerId`. |
-| Fila de matchmaking própria (`MemoryStoreQueue`) | O Project Z não tem partida: o mundo é persistente por servidor. Reimplementaria pior o que a Roblox já faz. |
+| Fila de matchmaking própria (`MemoryStoreQueue`) | O Last Town não tem partida: o mundo é persistente por servidor. Reimplementaria pior o que a Roblox já faz. |
 | MemoryStore para a trava de sessão | A trava precisa ser durável; MemoryStore expira (TTL ≤ 45 dias). `UpdateAsync` no DataStore já é atômico. |
 | `MessagingService` | Nada para coordenar entre servidores com um mundo por servidor. As páginas lidas não publicam a tabela de limites — verificar antes de qualquer uso futuro. |
 | `OrderedDataStore` | Sem ranking global persistente. Recordes são pessoais. |
