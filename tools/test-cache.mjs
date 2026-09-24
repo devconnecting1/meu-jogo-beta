@@ -108,18 +108,23 @@ function sameTown(a, b) {
 /** a town and a freshly generated one share no object (the menus' copy and the match's are two towns) */
 function shareNothing(a, b) {
 	const seen = new Set();
-	const collect = x => {
-		if (typeof x !== "object" || x === null || x instanceof Color3 || seen.has(x)) return;
+	// the spatial grids share ONE empty cell (world.ts EMPTY_CELL: an insert swaps it for a fresh array, a remove from it
+	// finds nothing), so an empty array inside a grid's `cells` is that read-only sentinel, not town data
+	const sentinel = (x, key) => key === "cells" && Array.isArray(x) && x.length === 0;
+	const collect = (x, key) => {
+		if (typeof x !== "object" || x === null || x instanceof Color3 || seen.has(x) || sentinel(x, key)) return;
 		seen.add(x);
-		for (const v of Object.values(x)) collect(v);
+		const inCells = Array.isArray(x) && key === "cells";
+		for (const [k, v] of Object.entries(x)) collect(v, inCells ? "cells" : k);
 	};
 	collect(a);
 	let shared = 0;
-	const probe = (x, visited = new Set()) => {
-		if (typeof x !== "object" || x === null || x instanceof Color3 || visited.has(x)) return;
+	const probe = (x, key, visited = new Set()) => {
+		if (typeof x !== "object" || x === null || x instanceof Color3 || visited.has(x) || sentinel(x, key)) return;
 		visited.add(x);
 		if (seen.has(x)) shared++;
-		for (const v of Object.values(x)) probe(v, visited);
+		const inCells = Array.isArray(x) && key === "cells";
+		for (const [k, v] of Object.entries(x)) probe(v, inCells ? "cells" : k, visited);
 	};
 	probe(b);
 	return shared === 0;
@@ -325,7 +330,7 @@ check(
 check(
 	"o servidor continua gerando a SUA copia (boot e fim do mundo), sem o cache do cliente",
 	/generateTown\(/.test(read("server/net/mpHost.ts")) &&
-		/generateTown\(seed\)/.test(read("server/sim/worldReset.ts")) &&
+		/generateTown\(seed[,)]/.test(read("server/sim/worldReset.ts")) &&
 		!/townCache/.test(read("server/net/mpHost.ts") + read("server/sim/worldReset.ts")),
 );
 
