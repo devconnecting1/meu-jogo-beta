@@ -213,6 +213,13 @@ export interface ServerPlayer {
 	/** consecutive filled ticks since the last real command (the stall detector of `enqueue`) */
 	idleFills: number;
 	/**
+	 * The player has left -- the lobby or the server -- and the body stays behind in a fight for a few seconds (§7.2, the
+	 * combat-log guard, server/net/mpHost.ts `linger`): every tick it stands with empty hands, facing where it faced. No
+	 * queued command, no held trigger: nobody is at the controls, and a trigger held into the departure must not keep
+	 * shooting for them. Undefined/false: the controls are the player's, as always.
+	 */
+	idle?: boolean;
+	/**
 	 * The snapshot tick the client said it was drawing, for the F2 rewind (§2.3): the view of the command THIS tick
 	 * consumes (`takeCommand`), the frame that built it -- not the latest packet's, which is a queue's depth newer.
 	 * Only a consumed command sets it: on a tick that waits it is still the last consumed command's, the one whose
@@ -605,6 +612,21 @@ export function refreshTally(sp: ServerPlayer): boolean {
  * can grow, and growing it costs them `inputOverflow`, never speed.
  */
 export function takeCommand(sp: ServerPlayer): InputCommand {
+	if (sp.idle === true) {
+		// the combat-log guard's body (`idle`): nothing at the controls. The queue is dropped (a departed client's
+		// commands are not played out for it), and the command is a standing one that holds nothing
+		if (sp.queue.size() > 0) sp.queue.clear();
+		const standing: InputCommand = {
+			seq: sp.lastSeq,
+			moveAng: sp.lastCmd.moveAng,
+			moveMag: 0,
+			aim: sp.lastCmd.aim,
+			held: 0,
+			edges: 0,
+		};
+		sp.lastCmd = standing;
+		return standing;
+	}
 	const head = sp.queue[0];
 	if (head !== undefined) {
 		// the head may be ahead of lastSeq + 1: the commands in between never came, so there is nothing to wait for

@@ -40,7 +40,7 @@ import {
 } from "shared/net/shopGuard";
 import { startBackpackIntents } from "./net/backpackIntents";
 import { AdminEditOutcome, AdminLiveView, AdminServer, startAdminServer } from "./admin/adminServer";
-import { MpHost, startMpHost } from "./net/mpHost";
+import { LINGER_S, MpHost, startMpHost } from "./net/mpHost";
 import { LEGACY_STORE, ownerTag, SAVE_STORE } from "./save/stores";
 import { buyCostume } from "./save/costumes";
 import { equipTitle } from "./save/titles";
@@ -1365,18 +1365,36 @@ Players.PlayerRemoving.Connect(player => {
 	waitUntil(() => s.loaded, 60);
 	// every step is guarded (F5): none may cost the session its last write, nor skip the cleanup below
 	if (s.pending !== undefined) guarded("last report", () => processPending(s), s.key);
+	/** the last write, and the cleanup after it: once, now or when the combat-log guard lets the body go */
+	let written = false;
+	const finish = (): void => {
+		// a shutdown writes every session still here itself (BindToClose), a lingering one included
+		if (written || shuttingDown) return;
+		written = true;
+		guarded("final save", () => flush(s, true), s.key);
+		// still writing: flush stopped waiting (30 s) for an autosave that is still in flight. The final write goes after
+		// it, and the mark below stays until then
+		if (s.writing && waitUntil(() => !s.writing, 60)) guarded("final save", () => flush(s, true), s.key);
+		// only now, the last write returned (made, or given up after its retries): the `releasing` mark is what keeps
+		// this user's next session here from taking the lock under that write. Left behind, it held every later join
+		// 20-35 s
+		sessions.delete(player);
+		releasing.delete(userId);
+	};
 	// §7.2 "Desconectar": the body goes into the save — runHp, runHunger, runOver, the magazine back into the
 	// reserve — BEFORE the final write. mpHost's own PlayerRemoving handler does the same, but the two handlers
-	// run in no guaranteed order, and this write is the last one the session gets.
-	if (s.loaded) guarded("banking the body", () => mpHost?.release(player, s.save), s.key);
-	guarded("final save", () => flush(s, true), s.key);
-	// still writing: flush stopped waiting (30 s) for an autosave that is still in flight. The final write goes after
-	// it, and the mark below stays until then
-	if (s.writing && waitUntil(() => !s.writing, 60)) guarded("final save", () => flush(s, true), s.key);
-	// only now, the last write returned (made, or given up after its retries): the `releasing` mark is what keeps this
-	// user's next session here from taking the lock under that write. Left behind, it held every later join 20-35 s
-	sessions.delete(player);
-	releasing.delete(userId);
+	// run in no guaranteed order, and this write is the last one the session gets. The combat-log guard (§7.2 F4): a
+	// body in a fight stays in the street LINGER_S more and is banked only then -- the final write (and the lock's
+	// release, which another server's load is waiting on, LOCK_WAIT) waits for it, and `finish` runs from there
+	const lingers =
+		s.loaded && guarded("banking the body", () => mpHost?.release(player, s.save, finish) === true, s.key) === true;
+	if (!lingers) {
+		finish();
+		return;
+	}
+	// the backstop: a heartbeat that stopped, a host replaced -- the session's last write never waits on the body for
+	// longer than the guard itself (and `finish` runs once, whichever comes first)
+	task.delay(LINGER_S + 2, finish);
 });
 
 game.BindToClose(() => {

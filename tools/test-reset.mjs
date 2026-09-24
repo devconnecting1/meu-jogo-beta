@@ -2196,6 +2196,9 @@ section("18) an owed new life is not lost when the load step that grants it thro
  *       the world's fallen are the ones who fell with it -- the one who walked away earlier is not counted, nor owed.
  *   d6  (L3) the last one standing dies and leaves in the same heartbeat: the fall is decided at the departure, so the
  *       world ends (with somebody in the lobby) instead of looking merely empty and going on lost.
+ *   d7  the combat-log guard (§7.2 F4): the last one standing quits mid-bite while a dead one waits in the street. The
+ *       body stays in the fight LINGER_S, standing -- the world is not lost while it does -- and the window opens only
+ *       when it leaves; killed in the guard, it is one of the fallen (it died with nobody else alive).
  */
 section("19) nobody is the host: the world ends when nobody is left alive, never because the first player left", () => {
 	// d1: everybody leaves standing
@@ -2444,6 +2447,53 @@ section("19) nobody is the host: the world ends when nobody is left alive, never
 			"(d6) …and the one in the lobby walks into the new town",
 			`dead ${spL?.state.dead}, day ${s.sim.clock.day}`,
 		);
+	}
+	// d7: the combat-log guard and rule 6
+	for (const dies of [false, true]) {
+		const s = bootServer();
+		const { createZombie } = require(join(SRC, "shared/game/entities.ts"));
+		const { LINGER_S } = require(join(SRC, "server/net/mpHost.ts"));
+		const wipes = s.wipes();
+		const a = s.join(newUser(), "dead, waiting");
+		const b = s.join(newUser(), "last standing");
+		s.enter(a);
+		const spB = s.enter(b);
+		s.sim.clock.setClock(12, 4);
+		s.kill(a);
+		spB.state.hpMax = 300;
+		spB.state.hp = dies ? 4 : 300;
+		spB.state.godMode = false;
+		for (let i = 0; i < 3; i++) {
+			const z = createZombie(1, spB.state.x + 34 * Math.cos(i * 2), spB.state.y + 34 * Math.sin(i * 2), 5);
+			z.detect = true;
+			s.sim.horde.zombies.push(z);
+		}
+		s.run(0.2);
+		s.quit(b);
+		s.run(0.5);
+		const during = s.host.lives.wipeWindowOpen();
+		const lingering = s.host.lingering(b.UserId);
+		s.run(LINGER_S);
+		const after = s.host.lives.wipeWindowOpen() || wipes.length > 0;
+		const tag = dies ? "(d7, killed in the guard)" : "(d7, alive through the guard)";
+		if (!dies) {
+			check(
+				lingering && !during && after,
+				`${tag} the last one standing quits mid-bite: the body holds the world while it stays in the fight, ` +
+					"and the window opens when it goes",
+				`lingering ${lingering}, window during ${during}, after ${after}`,
+			);
+		} else {
+			s.run(31, 0.25);
+			check(
+				spB.state.dead &&
+					wipes.length === 1 &&
+					wipes[0].dead.includes(b.UserId) &&
+					wipes[0].dead.includes(a.UserId),
+				`${tag} …and killed in the guard, it is one of the world's fallen (it died with nobody else alive)`,
+				`dead ${spB.state.dead}, wipes ${wipes.length}, fallen ${JSON.stringify(wipes[0]?.dead)}`,
+			);
+		}
 	}
 });
 

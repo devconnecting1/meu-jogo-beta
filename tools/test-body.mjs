@@ -90,6 +90,11 @@
  *  34. NOBODY IS THE HOST    the first player (slot 0, a private server's owner) leaving, dying and going Home, or being
  *                           replaced by a newcomer in the same slot: the tick, the clock, the town, the snapshots, the
  *                           horde and the night's wave around the others, the roster and the scoreboard all go on.
+ *  35. THE COMBAT-LOG GUARD  (§7.2 F4, the owner's approval of 2026-09-24) a body in a fight -- hit less than 5 s ago, a
+ *                           zombie about to bite -- whose player quits or goes Home stays LINGER_S in the street with
+ *                           nobody at the controls, is bitten meanwhile and banked as it came out (dead if it died); the
+ *                           final write and the lock's release wait for it; out of any fight nothing waits; back from
+ *                           the lobby inside the guard, the same body where it stands; a shutdown banks it alive.
  *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs, plus the small fake Roblox below.
  */
@@ -4457,6 +4462,248 @@ section(
 		}
 	},
 );
+
+// ================================================================ 35: the combat-log guard
+
+/*
+ * §7.2 F4, extended to disconnects (the owner's approval, 2026-09-24): a survivor in a fight -- bitten or shot at in
+ * the last 5 s, a zombie about to bite -- who leaves (Home, or the server) does not take the body out of the fight. It
+ * stays in the street up to 5 s, with nobody at the controls, then is kept or banked as it is, alive or dead with its
+ * hp; the final write (and the lock's release another server waits on) comes after it. A shutdown banks it as it
+ * stands. Before: Home or Alt+F4 mid-bite took the body out that instant.
+ */
+section("35) the combat-log guard: a body in a fight stays 5 s behind the player who left it (§7.2 F4)", () => {
+	// each boot loads the modules again (a new server process): read them from the boot at hand
+	const mod = rel => require(join(SRC, rel));
+	const LINGER_S = 5;
+	const lockOf = userId => fakeStore(mod("server/save/stores.ts").SAVE_STORE).data.get(String(userId))?.lock;
+	/** walkers pressed against the body, hunting it: a bite is a tick or two away */
+	const biters = (s, sp, n = 2) => {
+		const { createZombie } = mod("shared/game/entities.ts");
+		const Brain = mod("shared/sim/ai/zombieBrain.ts");
+		const out = [];
+		for (let i = 0; i < n; i++) {
+			const a = (i / n) * Math.PI * 2;
+			const z = createZombie(1, sp.state.x + Math.cos(a) * 34, sp.state.y + Math.sin(a) * 34, 5);
+			z.detect = true;
+			Brain.seedHunt(z, sp.state.x, sp.state.y);
+			s.sim.horde.zombies.push(z);
+			out.push(z);
+		}
+		return out;
+	};
+	const clearHorde = s => {
+		s.sim.horde.zombies.length = 0;
+	};
+
+	// (a) quit mid-bite: the body stays, keeps being bitten, and the final write waits for it
+	{
+		const s = bootServer();
+		check(mod("server/net/mpHost.ts").LINGER_S === LINGER_S, `the guard is ${LINGER_S} s (LINGER_S)`);
+		const w = s.join(newUser(), "witness");
+		s.immortal.add(w);
+		s.enter(w);
+		const p = s.join(newUser(), "quitter");
+		const sp = s.enter(p);
+		sp.state.hpMax = 400;
+		sp.state.hp = 400;
+		s.sim.clock.setClock(12, 3);
+		clearHorde(s);
+		biters(s, sp);
+		s.run(0.4);
+		const hpAtQuit = sp.state.hp;
+		const lockBefore = lockOf(p.UserId);
+		s.quit(p);
+		s.beat();
+		check(
+			s.host.lingering(p.UserId) && s.sim.get(sp.slot) === sp && sp.idle === true,
+			"(a) quitting mid-bite: the body stays in the street, nobody at the controls",
+			`lingering ${s.host.lingering(p.UserId)}, in the world ${s.sim.get(sp.slot) === sp}`,
+		);
+		check(
+			lockOf(p.UserId) !== undefined && lockBefore !== undefined,
+			"(a) …and the session's final write (the lock's release) waits for it",
+			`lock ${JSON.stringify(lockOf(p.UserId))}`,
+		);
+		s.run(LINGER_S - 0.5);
+		check(s.host.lingering(p.UserId), "(a) …for the whole guard, not less", `${LINGER_S - 0.5} s in`);
+		const hpLate = sp.state.hp;
+		s.run(1);
+		const stored = s.stored(p.UserId);
+		check(
+			!s.host.lingering(p.UserId) && s.sim.get(sp.slot) === undefined,
+			`(a) after ${LINGER_S} s the body leaves the world`,
+		);
+		check(
+			hpLate < hpAtQuit && stored !== undefined && stored.runHp > 0 && stored.runHp < hpAtQuit,
+			"(a) …bitten meanwhile, and banked as it was: the save holds the hp it came out with",
+			`hp at the quit ${f1(hpAtQuit)}, stored ${f1(stored?.runHp)}`,
+		);
+		check(lockOf(p.UserId) === undefined, "(a) …and only then the final write released the lock");
+	}
+
+	// (b) quit with nothing near and no hit: banked at once, as always
+	{
+		const s = bootServer();
+		const p = s.join(newUser(), "calm");
+		const sp = s.enter(p);
+		clearHorde(s);
+		s.run(0.5);
+		s.quit(p);
+		check(
+			!s.host.lingering(p.UserId) && s.sim.get(sp.slot) === undefined && lockOf(p.UserId) === undefined,
+			"(b) out of any fight: the body leaves and the final write is made at once, as before",
+		);
+	}
+
+	// (c) quit mid-bite and die in the guard: the death is written
+	{
+		const s = bootServer();
+		const w = s.join(newUser(), "witness");
+		s.immortal.add(w);
+		s.enter(w);
+		const p = s.join(newUser(), "doomed");
+		const sp = s.enter(p);
+		s.sim.clock.setClock(12, 3);
+		clearHorde(s);
+		biters(s, sp, 4);
+		s.run(0.3);
+		sp.state.hp = 3;
+		s.quit(p);
+		const died = s.runUntil(() => sp.state.dead, LINGER_S);
+		s.run(0.2);
+		const stored = s.stored(p.UserId);
+		check(
+			died >= 0 && stored?.runOver === true && lockOf(p.UserId) === undefined,
+			"(c) a body that dies in the guard is written dead (runOver), and the lock released right after",
+			`died after ${f1(died)} s, runOver ${stored?.runOver}`,
+		);
+	}
+
+	// (d) hit less than 5 s ago, nothing near any more: the guard holds too
+	{
+		const s = bootServer();
+		const w = s.join(newUser(), "witness");
+		s.immortal.add(w);
+		s.enter(w);
+		const p = s.join(newUser(), "shot at");
+		const sp = s.enter(p);
+		clearHorde(s);
+		s.run(0.2);
+		s.sim.combat.damageActor(sp.slot, sp.state, sp.save, 5, true);
+		s.run(2);
+		s.quit(p);
+		check(s.host.lingering(p.UserId), "(d) hit 2 s ago with nothing near now: the body still stays behind");
+		s.run(LINGER_S + 0.2);
+		check(!s.host.lingering(p.UserId) && lockOf(p.UserId) === undefined, "(d) …and goes, written, after it");
+	}
+
+	// (e) Home mid-bite: the same guard, the body kept afterwards; the trigger held into it fires nothing
+	{
+		const s = bootServer();
+		const w = s.join(newUser(), "witness");
+		s.immortal.add(w);
+		s.enter(w);
+		const p = s.join(newUser(), "home");
+		const save = s.save(p);
+		save.invenWeapon[10] = 1;
+		save.equipWeapon = 10;
+		save.ammoNormal = 60;
+		const sp = s.enter(p);
+		sp.state.hpMax = 400;
+		sp.state.hp = 400;
+		clearHorde(s);
+		biters(s, sp);
+		// the trigger held down in the last commands before Home (walking, too): the fill of a dry queue repeats both
+		const P = s.P;
+		const net = s.env.services.ReplicatedStorage.FindFirstChild("Net");
+		for (let seq = 1; seq <= 6; seq++) {
+			const cmds = [];
+			for (let k = 0; k < 3 && seq - k >= 1; k++) cmds.push(P.makeCommand(seq - k, 1, 0, 0, 1, 0));
+			net.FindFirstChild("Input").OnServerEvent.Fire(p, P.encodeInput({ viewTick: 0, viewFrac: 0, cmds }));
+			s.beat();
+		}
+		s.run(0.2);
+		const heldBefore = sp.lastCmd.held;
+		s.exit(p);
+		const hpHome = sp.state.hp;
+		check(
+			s.host.lingering(p.UserId) && s.host.playerOf(p) === undefined && s.host.keptInDanger(p),
+			"(e) Home mid-bite: the body stays behind (and no trip to a town of one's own starts from it: keptInDanger)",
+		);
+		s.run(LINGER_S + 0.3);
+		const kept = s.host.lives.keptBody(p.UserId);
+		check(
+			!s.host.lingering(p.UserId) && kept === sp.state && kept.hp < hpHome,
+			"(e) …and is kept when the guard ends, with the bites it took",
+			`hp at Home ${f1(hpHome)}, kept ${f1(kept?.hp)}`,
+		);
+		check(
+			heldBefore === 1 && sp.lastCmd.held === 0 && sp.lastCmd.moveMag === 0,
+			"(e) …and nobody is at its controls: the trigger held into the departure is let go, the body stands",
+			`held ${heldBefore} before Home, ${sp.lastCmd.held} in the guard; moving ${sp.lastCmd.moveMag}`,
+		);
+	}
+
+	// (f) Home mid-bite, then back in before the guard ends: the same body, where it stands
+	{
+		const s = bootServer();
+		const w = s.join(newUser(), "witness");
+		s.immortal.add(w);
+		s.enter(w);
+		const p = s.join(newUser(), "back");
+		const sp = s.enter(p);
+		sp.state.hpMax = 400;
+		sp.state.hp = 400;
+		clearHorde(s);
+		biters(s, sp);
+		s.run(0.2);
+		s.exit(p);
+		s.run(1.5);
+		const where = { x: sp.state.x, y: sp.state.y, hp: sp.state.hp };
+		s.intent(p, s.P.IntentKind.EnterWorld);
+		s.run(1.1);
+		const again = s.body(p);
+		check(
+			again !== undefined &&
+				again.state === sp.state &&
+				!s.host.lingering(p.UserId) &&
+				Math.hypot(again.state.x - where.x, again.state.y - where.y) < 30 &&
+				again.state.hp <= where.hp &&
+				!s.sim.spawnShielded(again),
+			"(f) back from the lobby inside the guard: the same body, where it stands, no heal and no spawn shield",
+			again === undefined ? "no body" : `hp ${f1(where.hp)} -> ${f1(again.state.hp)}`,
+		);
+	}
+
+	// (g) a shutdown in the guard: banked as it stands, and the BindToClose writes it
+	{
+		const s = bootServer();
+		const w = s.join(newUser(), "witness");
+		s.immortal.add(w);
+		s.enter(w);
+		const p = s.join(newUser(), "shutdown");
+		const sp = s.enter(p);
+		sp.state.hpMax = 400;
+		sp.state.hp = 400;
+		clearHorde(s);
+		biters(s, sp);
+		s.run(0.4);
+		s.quit(p);
+		s.run(1);
+		const hp = sp.state.hp;
+		s.shutdown();
+		const stored = s.stored(p.UserId);
+		check(
+			!s.host.lingering(p.UserId) &&
+				stored !== undefined &&
+				Math.abs(stored.runHp - hp) < 1 &&
+				stored.runOver === false,
+			"(g) a shutdown in the guard banks the body as it stands (alive), and the BindToClose writes it",
+			`hp ${f1(hp)}, stored ${f1(stored?.runHp)}, runOver ${stored?.runOver}`,
+		);
+	}
+});
 
 // ================================================================
 

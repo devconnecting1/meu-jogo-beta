@@ -45,6 +45,8 @@ import { SHOP_FLOOD_CALLS } from "shared/net/shopGuard";
 import { PlayerSaveData } from "shared/game/save";
 import type { SimMetrics } from "shared/admin/protocol";
 import { WorldData, generateTown } from "shared/game/world";
+import { zombieRadius } from "shared/game/entities";
+import { PLAYER_RADIUS } from "shared/game/physics";
 import {
 	MpRemotes,
 	createMpRemotes,
@@ -83,6 +85,18 @@ const Workspace = game.GetService("Workspace");
 
 /** a survivor hit this recently (os.clock seconds) is still in the fight: no trip to another town (`keptInDanger`) */
 export const KEPT_HURT_S = 10;
+/**
+ * §7.2 (F4), the combat-log guard (the owner's approval, 2026-09-24): a body in a fight that its player takes out of
+ * the world -- to the lobby, or off the server -- stays where it is for this long, vulnerable, with nobody at the
+ * controls (`ServerPlayer.idle`), and only then is kept or banked, alive or dead with the hp it has left.
+ */
+export const LINGER_S = 5;
+/** "in a fight": hit (bitten, shot at by a boss, blown up) less than this long ago... */
+export const LINGER_HURT_S = 5;
+/** ...or a zombie this close past contact, about to bite (the bite's own reach is 3-16 u past contact, zombieBrain) */
+export const LINGER_BITE_MARGIN = 24;
+/** ...or a boss this close (its sweep, its bite and its beam all reach past a zombie's) */
+export const LINGER_BOSS_RANGE = 250;
 /** how often the host looks for players whose save has just finished loading (seconds) */
 const ADMIT_INTERVAL = 0.5;
 /** how often the §12.2 metrics are published (seconds) */
@@ -206,8 +220,15 @@ export interface MpHost {
 	 * The player is leaving the server: out of the world, and the body banked into `save` (§7.2) — runHp,
 	 * runHunger, runOver, the magazine back into the reserve. Idempotent. server/main.server.ts calls it BEFORE its
 	 * final flush, because the two PlayerRemoving handlers run in no guaranteed order.
+	 *
+	 * The combat-log guard (§7.2 F4, LINGER_S): a body in a fight stays in the world a few seconds more with nobody at
+	 * the controls, and is banked only then. `onBanked` is the caller's final write: true means the body is lingering and
+	 * `onBanked` runs when it has been banked (from the heartbeat; a shutdown banks it at once and never calls it -- the
+	 * BindToClose writes every session); false means it was banked now and the caller writes as always.
 	 */
-	release(player: Player, save?: PlayerSaveData): void;
+	release(player: Player, save?: PlayerSaveData, onBanked?: () => void): boolean;
+	/** the combat-log guard: is this user's body still in the world with nobody at the controls? (LINGER_S) */
+	lingering(userId: number): boolean;
 	/** the live body into `save`, without moving it (the autosave); true when the save changed */
 	settle(player: Player, save: PlayerSaveData): boolean;
 	/**
@@ -296,6 +317,22 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	let townEntered = false;
 	/** os.clock() of the last hit each survivor took in the city, by UserId (`keptInDanger`; a rejoin keeps it) */
 	const hurtAt = new Map<number, number>();
+	/**
+	 * The combat-log guard (§7.2 F4): the bodies whose player left in a fight, by UserId, still in the world with nobody
+	 * at the controls until `until` (os.clock). "leave": back to the lobby, the session stays; "disconnect": off the
+	 * server, and the session's final write (`onBanked`) waits for the body to be banked into `save`.
+	 */
+	const lingers = new Map<
+		number,
+		{
+			userId: number;
+			slot: number;
+			until: number;
+			kind: "leave" | "disconnect";
+			save?: PlayerSaveData;
+			onBanked?: () => void;
+		}
+	>();
 	const remotes = createMpRemotes();
 	const sim = new ServerSimulation({ world });
 	const links = new Map<Player, Link>();
@@ -446,6 +483,9 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		// held by where the survivor plays (a trip in flight, a town whose day is not settled): the next pass tries again
 		const mayEnter = options.mayEnter;
 		if (mayEnter !== undefined && !mayEnter(player)) return;
+		// back from the lobby while the body still stands in the fight it was left in (the combat-log guard): it is
+		// theirs again, where it stands -- out of the linger first, then resumed like any kept body (rule 3, no shield)
+		if (lingers.has(player.UserId)) endLinger(player.UserId, true);
 		const sp = lives.enter({ userId: player.UserId, name: player.DisplayName }, save);
 		if (sp === undefined) return; // server full: try again next pass
 		townEntered = true;
@@ -464,19 +504,96 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	/**
 	 * Leaves the WORLD without leaving the server: the body goes away (and is KEPT, exactly as it was), the slot
 	 * is freed and the other survivors are told, but the player stays connected with their save and can come back
-	 * through PLAY.
+	 * through PLAY. A body in a fight stays behind first (`linger`), and is kept when that ends. True: it lingers.
 	 */
-	function leaveWorld(link: Link): void {
+	function leaveWorld(link: Link): boolean {
 		const slot = link.slot;
-		if (slot === undefined) return;
+		if (slot === undefined) return false;
 		link.slot = undefined;
 		bySlot.delete(slot);
-		lives.leave(link.player.UserId);
+		const userId = link.player.UserId;
+		const sp = sim.get(slot);
+		if (sp !== undefined && !stopped && inFight(sp, os.clock())) {
+			linger(userId, sp, "leave");
+			return true;
+		}
+		lives.leave(userId);
+		return false;
 	}
 
-	function release(player: Player, save?: PlayerSaveData): void {
+	/**
+	 * The combat-log guard (§7.2 F4, the owner's approval of 2026-09-24): a survivor in a fight -- hit less than
+	 * LINGER_HURT_S ago, a zombie about to bite, a boss close by -- who leaves the world (Home) or the server (quits,
+	 * disconnects) does not take the body out of the fight with them. It stays LINGER_S in the street, vulnerable, with
+	 * nobody at the controls (`ServerPlayer.idle`): the horde goes on biting, and a death in it is a death. Then it is
+	 * kept or banked as it is, alive or dead with its hp. Before, Home or Alt+F4 in the middle of a bite took the body
+	 * out at once, and another server's safe spawn (or the lobby) was the escape the fight had no answer to.
+	 */
+	function inFight(sp: ServerPlayer, now: number): boolean {
+		const p = sp.state;
+		if (p.dead) return false;
+		const hit = hurtAt.get(sp.userId);
+		if (hit !== undefined && now - hit < LINGER_HURT_S) return true;
+		const horde = sim.horde;
+		if (horde === undefined) return false;
+		for (const z of horde.zombies) {
+			if (z.hp <= 0) continue;
+			const reach = zombieRadius(z) + PLAYER_RADIUS + LINGER_BITE_MARGIN;
+			const dx = z.x - p.x;
+			const dy = z.y - p.y;
+			if (dx * dx + dy * dy < reach * reach) return true;
+		}
+		for (const b of horde.bossRoster.list) {
+			if (b.dead) continue;
+			const dx = b.x - p.x;
+			const dy = b.y - p.y;
+			if (dx * dx + dy * dy < LINGER_BOSS_RANGE * LINGER_BOSS_RANGE) return true;
+		}
+		return false;
+	}
+
+	/** the body stays behind with nobody at the controls (`inFight`); `stepLingers` ends it */
+	function linger(userId: number, sp: ServerPlayer, kind: "leave" | "disconnect"): void {
+		sp.idle = true;
+		lingers.set(userId, { userId, slot: sp.slot, until: os.clock() + LINGER_S, kind });
+		print(`[${GAME_NAME}] ${sp.name} left in a fight: the body stays ${LINGER_S} s (${kind})`);
+	}
+
+	/**
+	 * A lingering body's time is up (or it died, or a shutdown, or its player walked back in): out of the world as it
+	 * is -- kept for the lobby, or banked for the final write, which runs now (`onBanked`). `write` false: a shutdown,
+	 * whose BindToClose writes every session itself.
+	 */
+	function endLinger(userId: number, write: boolean): void {
+		const lg = lingers.get(userId);
+		if (lg === undefined) return;
+		lingers.delete(userId);
+		const sp = sim.get(lg.slot);
+		if (sp !== undefined) sp.idle = undefined;
+		lives.leave(userId);
+		if (lg.kind !== "disconnect") return;
+		lives.disconnect(userId, lg.save);
+		// the same user is back on the server already (a rejoin while the body lingered): their record is connected
+		for (const [other] of links) if (other.UserId === userId) lives.connect(userId);
+		const onBanked = lg.onBanked;
+		if (write && onBanked !== undefined) task.spawn(onBanked);
+	}
+
+	/** once per heartbeat, BEFORE rule 6 counts anybody: the lingering bodies whose time is up, or that died */
+	function stepLingers(now: number): void {
+		if (lingers.size() === 0) return;
+		const done = new Array<number>();
+		for (const [userId, lg] of lingers) {
+			const sp = sim.get(lg.slot);
+			if (sp === undefined || sp.state.dead || now >= lg.until) done.push(userId);
+		}
+		for (const userId of done) endLinger(userId, true);
+	}
+
+	function release(player: Player, save?: PlayerSaveData, onBanked?: () => void): boolean {
 		const link = links.get(player);
 		links.delete(player);
+		const userId = player.UserId;
 		const bank =
 			save ?? options.saveOf(player) ?? (link?.slot !== undefined ? sim.get(link.slot)?.save : undefined);
 		if (link !== undefined) {
@@ -488,8 +605,19 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		// handler below calls it again (or first) — whichever runs second finds nothing left to do. Keyed by UserId,
 		// so a removal that arrives after the same user already rejoined (main.server.ts may wait up to 60 s for a
 		// load) must leave the new session's body alone.
-		if (supersededBy(player)) return;
-		lives.disconnect(player.UserId, bank);
+		if (supersededBy(player)) return false;
+		// the combat-log guard: the body is still in the fight (it stayed at Home, or just now), so the departure is
+		// banked -- and the final write made -- when it comes out of it (`endLinger`). Whichever PlayerRemoving handler
+		// comes second adds what it has: the session's save and its final write
+		const lg = lingers.get(userId);
+		if (lg !== undefined && !stopped) {
+			lg.kind = "disconnect";
+			if (save !== undefined || lg.save === undefined) lg.save = bank;
+			if (onBanked !== undefined) lg.onBanked = onBanked;
+			return true;
+		}
+		lives.disconnect(userId, bank);
+		return false;
 	}
 
 	// ------------------------------------------------------------ C→S (§8.1, §8.2)
@@ -773,12 +901,21 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		// town's construction, not time the world lived (ServerSimulation.restartWorld, `advance`)
 		const ran = sim.advance(dt);
 		if (ran > 0) sim.sample(((os.clock() - started) * 1000) / ran);
-		// who is being hit right now (the server's hit flash lasts a second after every hit): `keptInDanger`
+		// who is being hit right now (the server's hit flash lasts a second after every hit): `keptInDanger`. When it was
+		// hit is read from the flash itself (1 at the hit, down 1 a second), so a window counts from the hit (the guard)
 		for (const [player, link] of links) {
 			if (link.slot === undefined) continue;
 			const hit = sim.get(link.slot);
-			if (hit !== undefined && (hit.state.hitFlash ?? 0) > 0) hurtAt.set(player.UserId, now);
+			const flash = hit !== undefined ? (hit.state.hitFlash ?? 0) : 0;
+			if (flash > 0) hurtAt.set(player.UserId, now - math.max(0, 1 - flash));
 		}
+		// the combat-log guard: a lingering body is hit too, and its time runs out -- banked BEFORE rule 6 counts it
+		for (const [userId, lg] of lingers) {
+			const hit = sim.get(lg.slot);
+			const flash = hit !== undefined ? (hit.state.hitFlash ?? 0) : 0;
+			if (flash > 0) hurtAt.set(userId, now - math.max(0, 1 - flash));
+		}
+		stepLingers(now);
 		// the night the dead are waiting out ran in the same real seconds the sim just did (MP-21)
 		lives.step(dt);
 		if (now - metricAt >= METRIC_INTERVAL) {
@@ -850,6 +987,8 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			return link !== undefined && (link.wantsWorld || link.slot !== undefined);
 		},
 		keptInDanger(player) {
+			// the body is still standing in the fight it was left in (the combat-log guard): that is danger by definition
+			if (lingers.has(player.UserId)) return true;
 			const body = lives.keptBody(player.UserId);
 			if (body === undefined || body.dead) return false;
 			const hit = hurtAt.get(player.UserId);
@@ -887,8 +1026,11 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		newLife(player, save) {
 			lives.newLife(player.UserId, save);
 		},
-		release(player, save) {
-			release(player, save);
+		release(player, save, onBanked) {
+			return release(player, save, onBanked);
+		},
+		lingering(userId) {
+			return lingers.has(userId);
 		},
 		settle(player, save) {
 			return lives.settle(player.UserId, save);
@@ -940,7 +1082,15 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			addedConn.Disconnect();
 			removingConn.Disconnect();
 			// §7.2 "Servidor desligando": the simulation has stopped, so every body — in the world or kept in the
-			// lobby — is banked into its save before server/main.server.ts writes them all
+			// lobby — is banked into its save before server/main.server.ts writes them all. A body the combat-log guard
+			// was holding in a fight is banked as it stands (the shutdown is the server's doing, not the player's), and its
+			// session is written by the BindToClose with every other one
+			const held = new Array<number>();
+			for (const [userId] of lingers) held.push(userId);
+			for (const userId of held) {
+				const [ok, err] = xpcall(() => endLinger(userId, false), tickTrace);
+				if (!ok) warn(`[${GAME_NAME}] banking a body at shutdown failed: ${tostring(err)}`);
+			}
 			const everyone = new Array<Player>();
 			for (const [player] of links) everyone.push(player);
 			for (const player of everyone) {

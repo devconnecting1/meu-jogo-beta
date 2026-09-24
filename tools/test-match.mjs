@@ -36,7 +36,7 @@
  *                       owner's day read at boot whoever loads first, on day 1 when that read fails and a guest loads
  *                       first, and an unreadable guest settles nothing.
  *   6. THE REVIEWS      of f25727a: a living body kept in danger (a zombie near, a hit a moment ago) cannot buy a trip
- *                       (H1); a trip the player called off keeps its place in the gate (M1); nobody is admitted into
+ *                       (H1), nor one still standing in the fight it was left in (the combat-log guard, §7.2); a trip the player called off keeps its place in the gate (M1); nobody is admitted into
  *                       the city while their trip is in flight (M2); no second offer on a rejoin, a read-only load is
  *                       looked at again after its retry (joined as the real client joins), a repeated refusal is one
  *                       counted row, a solo town writes the shared world log at most once per gap (LOW 1, 2, 4, 5).
@@ -1588,6 +1588,10 @@ section("6) the reviews: danger (H1), the cancel loop (M1), admission in flight 
 		`hit, left, asked 3 s later: 'danger' (a hit less than ${KEPT_HURT_S} s ago)`,
 	);
 	s.run(KEPT_HURT_S);
+	// the hit made that Home a guarded one (§7.2 F4, the combat-log guard): the body stood 5 s more in the street, and the
+	// horde closed in on it meanwhile (742-871 u in this run) -- which is danger for a kept body too. Nobody is in the
+	// world, so nothing spawns again: with those gone, "nothing near" is what this step asks about
+	s.sim.horde.zombies.length = 0;
 	s.ask(p2, { k: "solo" });
 	s.run(0.2);
 	check(
@@ -1606,6 +1610,32 @@ section("6) the reviews: danger (H1), the cancel loop (M1), admission in flight 
 		"a trip asked in the clear goes on after its Flooded wait even if a zombie wandered by the frozen body meanwhile",
 		JSON.stringify(s.notices(p2).slice(-3)),
 	);
+
+	// the combat-log guard (§7.2 F4): Home mid-bite leaves the body in the street LINGER_S, and a trip asked from the
+	// lobby meanwhile is refused -- a body standing in the fight it was left in is danger by definition
+	{
+		const { LINGER_S } = require(join(SRC, "server/net/mpHost.ts"));
+		s = bootServer();
+		s.run(12);
+		const ug = newUser();
+		const pg = s.join(ug, "home mid-bite");
+		s.run(1.5);
+		const spg = s.enter(pg);
+		spg.state.hpMax = 500;
+		spg.state.hp = 500;
+		const zg = createZombie(990003, spg.state.x + 36, spg.state.y, 1);
+		zg.detect = true;
+		s.sim.horde.zombies.push(zg);
+		s.run(0.2);
+		s.intent(pg, s.P.IntentKind.LeaveWorld);
+		s.run(0.1);
+		s.ask(pg, { k: "solo" });
+		check(
+			s.host.lingering(ug) && s.lastNotice(pg)?.why === "danger" && !s.tp.calls.some(c => c.players[0] === pg),
+			`Home mid-bite: the body stays ${LINGER_S} s in the fight (combat-log guard), and Play solo is refused 'danger'`,
+			JSON.stringify(s.lastNotice(pg)),
+		);
+	}
 
 	// M1: the cancel loop (Leave, Play solo, Enter while the reservation yields) keeps the gate's count
 	s = bootServer();
