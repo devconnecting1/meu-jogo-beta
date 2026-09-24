@@ -6,7 +6,7 @@
 
 ## Regras de conteúdo
 
-- Antes de mexer em mapa, sprites, spawns ou UI, siga `docs/DESIGN_RULES.md` (bíblia de ambientação). Regras `[auto]` são checadas por `npm run validate:world`.
+- Antes de mexer em mapa, sprites, spawns ou UI, siga `docs/DESIGN_RULES.md` (bíblia de ambientação). Regras `[auto]` são checadas por `npm run validate:world` (na CI também em 120 cidades por push, job `world-sweep`, e em 600 cidades novas por noite, `.github/workflows/world-sweep.yml`: um run vermelho lista as sementes que falharam).
 - O nosso tem que ser melhor que o original e fazer sentido: copie o que o Dead Town faz bem, corrija o que ele faz mal e documente as exceções.
 - UI: cores, fontes e raios só via tema (`design/tweakcn-theme.json` → `npm run theme` → `src/client/ui/themeTokens.ts`). Não rode `npx shadcn` aqui.
 - Textos do jogo em inglês via `src/shared/data/lang.ts`.

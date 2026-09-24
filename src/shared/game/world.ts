@@ -1364,8 +1364,11 @@ interface YardGrid {
 
 const CELL = 32;
 
-/** rasterised (cheap in Luau): each solid (+32) and reserved zone blocks the cells it overlaps */
-function yardGrid(g: Gen, lot: Lot): YardGrid {
+/**
+ * rasterised (cheap in Luau): each solid (+32) and reserved zone blocks the cells it overlaps, and each of `extra`
+ * (a building not placed yet, `civicLeavesYard`)
+ */
+function yardGrid(g: Gen, lot: Lot, extra?: Array<Rect>): YardGrid {
 	const y = lot.yard;
 	const x0 = y.x + 8;
 	const y0 = y.y + 8;
@@ -1387,6 +1390,7 @@ function yardGrid(g: Gen, lot: Lot): YardGrid {
 		block(s.x - P, s.y - P, s.x + s.w + P, s.y + s.h + P);
 	}
 	for (const r of g.placer.reserved.query(y.x, y.y, y.w, y.h, [])) block(r.x, r.y, r.x + r.w, r.y + r.h);
+	if (extra !== undefined) for (const r of extra) block(r.x, r.y, r.x + r.w, r.y + r.h);
 	for (const c of g.placer.bossClear) {
 		if (!circleHitsRect(c, y.x, y.y, y.w, y.h)) continue;
 		for (let j = 0; j < rows; j++) {
@@ -1668,12 +1672,30 @@ function placeGas(g: Gen, lot: Lot, e1: LotEdge, e2: LotEdge, atA: boolean): boo
 
 /** School / hospital on its own lot, with a school yard or a parking lot beside it. */
 function placeCivic(g: Gen, lot: Lot, def: BuildingDef, edges: Array<LotEdge>): boolean {
+	// a face that leaves room for the school yard (or the hospital's parking lot or bay) first, then any face (EDI-02:
+	// seed 767563920's school took the first face and left a strip 4 u too shallow for its yard)
+	for (const needYard of [true, false]) {
+		const placed = placeCivicOn(g, lot, def, edges, needYard);
+		if (placed !== undefined) return placed;
+	}
+	return false;
+}
+
+/** `placeCivic` over the faces, keeping to those that leave room for a yard when `needYard`; undefined: none took it */
+function placeCivicOn(
+	g: Gen,
+	lot: Lot,
+	def: BuildingDef,
+	edges: Array<LotEdge>,
+	needYard: boolean,
+): boolean | undefined {
 	for (const e of edges) {
 		const span = yardSpan(lot, e);
 		const len = span.b - span.a;
 		if (def.w > len - TOWN.SIDE_YARD * 2) continue;
 		// off-centre towards one corner, leaving the widest free strip on the other side
 		const u = snap8(g.rng.chance(0.5) ? span.a + TOWN.SIDE_YARD : span.b - TOWN.SIDE_YARD - def.w);
+		if (needYard && !civicLeavesYard(g, lot, e, def, u)) continue;
 		if (tryFront(g, lot, e, def, u, TOWN.SETBACK + 16, true, 0) === undefined) continue;
 		// hospital: a parking lot if one fits; otherwise (and for schools) a paved yard
 		const grid = yardGrid(g, lot);
@@ -1691,6 +1713,38 @@ function placeCivic(g: Gen, lot: Lot, def: BuildingDef, edges: Array<LotEdge>): 
 			cutsOf(g, best.e).push({ a: mid - 52, b: mid + 52, kind: "walk" });
 		}
 		return true;
+	}
+	return undefined;
+}
+
+/**
+ * Would civic building `def` on edge `e` at `u` -- the way round `tryFront` would take it, the first that fits --
+ * leave the free stretch `placeCivicOn` lays its yard on (288 × 224 at least, opening onto a street)? Read off the
+ * lot's yard grid as it would be with the building's box and its door's approach in it. Draws nothing.
+ */
+function civicLeavesYard(g: Gen, lot: Lot, e: LotEdge, def: BuildingDef, u: number): boolean {
+	const span = yardSpan(lot, e);
+	const depthMax = yardDepth(lot, e);
+	const setback = TOWN.SETBACK + 16;
+	const longFirst = def.w >= def.h;
+	for (const flip of [!longFirst, longFirst]) {
+		const along = flip ? def.h : def.w;
+		const depth = flip ? def.w : def.h;
+		if (u + along > span.b - TOWN.SIDE_YARD) continue;
+		if (setback + depth > depthMax - TOWN.SIDE_YARD) continue;
+		const front = TOWN.SIDEWALK + setback;
+		const r = edgeRect(e, u, u + along, front, front + depth);
+		if (!g.placer.canPlace(r.x, r.y, r.w, r.h, TOWN.BUILDING_GAP)) continue;
+		// the box as `yardGrid` blocks a solid (32 u round it), and the approach `addBuilding` reserves before the
+		// door -- in the middle of the face: a civic building's door does not wander
+		const P = 32;
+		const doorU = math.floor(u + along / 2);
+		const half = TOWN.DOOR_W / 2 + 24;
+		const grid = yardGrid(g, lot, [
+			{ x: r.x - P, y: r.y - P, w: r.w + P * 2, h: r.h + P * 2 },
+			edgeRect(e, doorU - half, doorU + half, 0, front + 110),
+		]);
+		return bestFrontRect(lot, grid, 288, 224) !== undefined;
 	}
 	return false;
 }
@@ -2697,6 +2751,10 @@ function campusBins(g: Gen, doors: Array<{ e: LotEdge; u: number }>, rng: Campus
 			if (inCut(g, e, u - s / 2, u + s / 2, 8)) continue;
 			const r = edgeRect(e, u - s / 2, u + s / 2, TOWN.VERGE / 2 - s / 2, TOWN.VERGE / 2 + s / 2);
 			if (querySolids(g.w, r.x - 8, r.y - 8, r.x + r.w + 8, r.y + r.h + 8).size() > 0) continue;
+			// out of the boss plazas, like every bin `canPlace` lays (INT-01; seed 827849897: a bin in boss 3's)
+			let plaza = false;
+			for (const c of g.placer.bossClear) if (circleHitsRect(c, r.x, r.y, r.w, r.h)) plaza = true;
+			if (plaza) continue;
 			addTrash(g.w, r.x, r.y);
 			break;
 		}
@@ -3301,7 +3359,11 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 		}
 		const gasPrimary = gasLots.includes(lot);
 		if (gasPrimary) gasPending -= 1;
-		if (gasPrimary || (gasSpare.includes(lot) && gasPlaced + gasPending < GAS_STATIONS)) {
+		// a spare stands down on a block the market or the public parking lot already took whole (EDI-21, MOB-05): the
+		// special lots are picked among the blocks that are not a primary station's, and a spare is not one of those
+		// (seeds 2010567813 and 1521880358: a station built on the market's block, on the parking lot)
+		const gasSpareFree = gasSpare.includes(lot) && lot.program === undefined;
+		if (gasPrimary || (gasSpareFree && gasPlaced + gasPending < GAS_STATIONS)) {
 			let done = false;
 			for (const e1 of edges) {
 				if (done) break;
