@@ -11,6 +11,7 @@ import { Bullet } from "shared/game/bullets";
 import { BOSS1_SEGMENT_RADIUS, bossHitRadius, BossState, ZombieState, zombieRadius } from "shared/game/entities";
 import { addPuddle, emitSound, reactToHit } from "./zombieAI";
 import { hitMapItem } from "./interaction";
+import { took } from "./pickups";
 import { fxBlood, fxDebris, fxShake, fxTracer, GameRefs, SPEED_SCALE } from "./types";
 import { isHitscan, predictedSpread, WeaponFx } from "../predict/weaponFx";
 import { IntentKind } from "shared/net/intentWire";
@@ -783,7 +784,11 @@ export class Combat {
 			const pick = DESIGN.ITEM_GET_DISTANCE + 20;
 			if ((b.age ?? 0) >= ARROW_PICKUP_DELAY && dx * dx + dy * dy < pick * pick) {
 				// with admin infinite ammo the shot cost nothing: picking it up must not create an arrow
-				if (p.infiniteAmmo !== true) refs.save.ammoArrow += 1;
+				if (p.infiniteAmmo !== true) {
+					refs.save.ammoArrow += 1;
+					// heard, and counted by the "Pick something up" lesson, as any pickup (./pickups.ts)
+					took();
+				}
 				return true;
 			}
 			b.life -= dt;

@@ -123,10 +123,11 @@ interface Bucket {
 	cursor: number;
 	/** sprites [0, shown) may be visible on screen (in use last frame) */
 	shown: number;
-	/** how many sprites `reserve` asked for ahead of need, and how many of those come rounded / outlined */
+	/** how many sprites `reserve` asked for ahead of need, and how many of those come rounded / outlined / with an image */
 	want: number;
 	wantCorner: number;
 	wantStroke: number;
+	wantImage: number;
 }
 
 const DEFAULT_COLOR = Color3.fromRGB(200, 200, 200);
@@ -161,8 +162,9 @@ const ORIGIN = UDim2.fromOffset(0, 0);
  * its slot draws one, kept (hidden) afterwards like the UIStroke, so an image sprite keeps its bucket's draw
  * order (a separate pool of ImageLabels would tie with the Frames at equal ZIndex) and costs no churn.
  *
- * Growth: `reserve()` + `warm()` build a bucket's sprites ahead of need, a few per frame behind the menus, so
- * the frame a horde first walks in does not create hundreds of Instances at once.
+ * Growth: `reserve()` + `warm()` build a bucket's sprites ahead of need (their UICorner, UIStroke and ImageLabel
+ * included), a few per frame behind the menus, so the frame a horde first walks in does not create hundreds of
+ * Instances at once.
  */
 export class Renderer {
 	readonly layer: Frame;
@@ -236,15 +238,17 @@ export class Renderer {
 	}
 
 	/**
-	 * Asks for `n` sprites at ZIndex `z` to exist before they are needed, `corners` of them with a UICorner and
-	 * `strokes` with a (disabled) UIStroke, as that layer draws them. Creates nothing: `warm()` does, a few per
-	 * call. Asking again raises the target, never lowers it; a pool never shrinks.
+	 * Asks for `n` sprites at ZIndex `z` to exist before they are needed, `corners` of them with a UICorner,
+	 * `strokes` with a (disabled) UIStroke and `images` with their (hidden) ImageLabel, as that layer draws them.
+	 * Creates nothing: `warm()` does, a few per call. Asking again raises the target, never lowers it; a pool never
+	 * shrinks.
 	 */
-	reserve(z: number, n: number, corners = 0, strokes = 0): void {
+	reserve(z: number, n: number, corners = 0, strokes = 0, images = 0): void {
 		const b = this.bucket(z);
 		b.want = math.max(b.want, n);
 		b.wantCorner = math.max(b.wantCorner, math.min(corners, b.want));
 		b.wantStroke = math.max(b.wantStroke, math.min(strokes, b.want));
+		b.wantImage = math.max(b.wantImage, math.min(images, b.want));
 	}
 
 	/**
@@ -263,7 +267,13 @@ export class Renderer {
 				let sp: Sprite | undefined = sprites[i];
 				const corner = i < b.wantCorner;
 				const stroke = i < b.wantStroke;
-				if (sp !== undefined && (!corner || sp.corner !== undefined) && (!stroke || sp.stroke !== undefined)) {
+				const image = i < b.wantImage;
+				if (
+					sp !== undefined &&
+					(!corner || sp.corner !== undefined) &&
+					(!stroke || sp.stroke !== undefined) &&
+					(!image || sp.img !== undefined)
+				) {
 					continue;
 				}
 				if (left <= 0) {
@@ -276,6 +286,7 @@ export class Renderer {
 				}
 				if (corner && sp.corner === undefined) this.ensureCorner(sp);
 				if (stroke && sp.stroke === undefined) this.ensureStroke(sp);
+				if (image && sp.img === undefined) this.ensureImage(sp);
 				left--;
 			}
 		}
@@ -415,42 +426,7 @@ export class Renderer {
 	 * image and only hidden afterwards (like the UIStroke), with every property behind the same write cache.
 	 */
 	private applyImage(sp: Sprite, id: string, opts: SpriteOpts, zoom: number, transp: number): void {
-		let im = sp.img;
-		if (im === undefined) {
-			const label = new Instance("ImageLabel");
-			label.Name = "I";
-			label.BackgroundTransparency = 1;
-			label.BorderSizePixel = 0;
-			label.Size = FILL;
-			label.Position = ORIGIN;
-			label.ScaleType = Enum.ScaleType.Stretch;
-			label.ResampleMode = Enum.ResamplerMode.Pixelated;
-			label.Visible = false;
-			label.Parent = sp.frame;
-			im = {
-				label,
-				on: false,
-				id: "",
-				tint: WHITE,
-				transp: 0,
-				fill: FILL_STRETCH,
-				tileX: -1,
-				tileY: -1,
-				s0: -1,
-				s1: -1,
-				s2: -1,
-				s3: -1,
-				sliceScale: -1,
-				pixelated: true,
-				rx: 0,
-				ry: 0,
-				rw: 0,
-				rh: 0,
-			};
-			label.ImageColor3 = WHITE;
-			label.ImageTransparency = 0;
-			sp.img = im;
-		}
+		const im = this.ensureImage(sp);
 		const label = im.label;
 		if (im.id !== id) {
 			im.id = id;
@@ -570,7 +546,7 @@ export class Renderer {
 	private bucket(z: number): Bucket {
 		let b = this.buckets.get(z);
 		if (b === undefined) {
-			b = { z, sprites: [], cursor: 0, shown: 0, want: 0, wantCorner: 0, wantStroke: 0 };
+			b = { z, sprites: [], cursor: 0, shown: 0, want: 0, wantCorner: 0, wantStroke: 0, wantImage: 0 };
 			this.buckets.set(z, b);
 			this.list.push(b);
 		}
@@ -623,6 +599,51 @@ export class Renderer {
 			sp.corner = c;
 		}
 		return c;
+	}
+
+	/**
+	 * The sprite's child ImageLabel, created hidden (with no picture) the first time its slot draws an image, or ahead
+	 * of that by `warm()`; hidden, never destroyed, when the slot draws a plain rect again. Its cache starts as what
+	 * the Instance is, so the first real draw writes only what differs.
+	 */
+	private ensureImage(sp: Sprite): SpriteImage {
+		let im = sp.img;
+		if (im === undefined) {
+			const label = new Instance("ImageLabel");
+			label.Name = "I";
+			label.BackgroundTransparency = 1;
+			label.BorderSizePixel = 0;
+			label.Size = FILL;
+			label.Position = ORIGIN;
+			label.ScaleType = Enum.ScaleType.Stretch;
+			label.ResampleMode = Enum.ResamplerMode.Pixelated;
+			label.Visible = false;
+			label.Parent = sp.frame;
+			im = {
+				label,
+				on: false,
+				id: "",
+				tint: WHITE,
+				transp: 0,
+				fill: FILL_STRETCH,
+				tileX: -1,
+				tileY: -1,
+				s0: -1,
+				s1: -1,
+				s2: -1,
+				s3: -1,
+				sliceScale: -1,
+				pixelated: true,
+				rx: 0,
+				ry: 0,
+				rw: 0,
+				rh: 0,
+			};
+			label.ImageColor3 = WHITE;
+			label.ImageTransparency = 0;
+			sp.img = im;
+		}
+		return im;
 	}
 
 	/** the sprite's UIStroke, created disabled the first time it is needed and only disabled afterwards */
@@ -1163,10 +1184,11 @@ export class LightMap {
 		const darkMoved = math.abs(maxDark - this.pDark) >= 0.5 / LIGHT_STEPS;
 		if (darkMoved) this.pDark = maxDark;
 		const nRows = this.sy.size();
-		for (let r = 0; r < nRows; r++) {
+		// loop bounds on `size()` where there is one: roblox-ts compiles only those to a numeric `for` (F10)
+		for (let r = 0; r < this.sy.size(); r++) {
 			if (this.rowDirty[r]) this.sampleRow(r);
 		}
-		for (let r = 0; r < nRows - 1; r++) {
+		for (let r = 0; r < this.sy.size() - 1; r++) {
 			if (this.rowDirty[r] || this.rowDirty[r + 1]) this.selectKeys(r);
 		}
 		const viewW = this.builtW;
@@ -1258,7 +1280,7 @@ export class LightMap {
 		const y = this.sy[r];
 		const cols = this.sx.size();
 		const base = r * cols;
-		for (let c = 0; c < cols; c++) this.samples[base + c] = 0;
+		for (let c = 0; c < this.sx.size(); c++) this.samples[base + c] = 0;
 		for (let i = 0; i < this.nLights; i++) {
 			const dy = y - this.ly[i];
 			const rad = this.lr[i];
@@ -1304,7 +1326,7 @@ export class LightMap {
 		const keys = this.pairKeys[r];
 		keys.clear();
 		keys.push(0);
-		for (let j = 1; j < cols - 1; j++) {
+		for (let j = 1; j < sx.size() - 1; j++) {
 			const q = keys[keys.size() - 1];
 			const u = (sx[j] - sx[q]) / (sx[j + 1] - sx[q]);
 			const ea = math.abs(s[a + q] + (s[a + j + 1] - s[a + q]) * u - s[a + j]);
@@ -1349,7 +1371,7 @@ export class LightMap {
 		const a = r0 * cols;
 		const b = a + cols;
 		const m = keys.size();
-		for (let j = 0; j < m; j++) {
+		for (let j = 0; j < keys.size(); j++) {
 			const c = keys[j];
 			const light = s[a + c] + (s[b + c] - s[a + c]) * f;
 			const step = math.floor((1 - maxDark * (1 - light)) * LIGHT_STEPS + 0.5);

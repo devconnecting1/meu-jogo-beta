@@ -28,7 +28,7 @@ import {
 	zombieRadius,
 } from "shared/game/entities";
 import { Camera, ViewRect } from "shared/engine/camera";
-import { circleInView, part, SIDES } from "./drawKit";
+import { circleInView, mix, part, quantize, SIDES } from "./drawKit";
 import { drawHumanoid, drawZombie } from "./humanoidView";
 import { COLORS, Z } from "shared/engine/colors";
 import { GameRefs, SPEED_SCALE } from "../systems/types";
@@ -36,11 +36,44 @@ import { remoteBosses, remoteZombies, takeZombieDeaths, ZombieDeathEvent } from 
 import { RemoteBoss, RemoteZombie } from "../net/snapshotBuffer";
 import { clamp } from "shared/engine/vec2";
 import { FUSE_TIME } from "shared/sim/ai/zombieTuning";
-import { Renderer } from "shared/engine/renderer";
+import { Renderer, SpriteOpts } from "shared/engine/renderer";
 import { ZombieFlag } from "shared/net/protocol";
 
 const WHITE = COLORS.white;
 const BLACK = COLORS.shadow;
+const BOSS_DARK = mix(COLORS.boss, BLACK, 0.4);
+const NEEDLE = mix(COLORS.blade, COLORS.parcel, 0.4);
+
+/*
+ * The drawing's option tables, one scratch per call site (M4: a literal per sprite was a table per sprite, hundreds a
+ * frame in a fight). The keys that never change are written once here; each draw writes every other key its literal
+ * had, so nothing carries over from one draw to the next.
+ */
+const Z_SHADOW: SpriteOpts = { color: BLACK, zIndex: Z.actorShadow };
+const BOSS_SHADOW: SpriteOpts = { color: BLACK, alpha: 0.35, zIndex: Z.actorShadow };
+const BOSS_LEG: SpriteOpts = { h: 7, color: BOSS_DARK, cornerRadius: 3, zIndex: Z.boss - 1 };
+const BOSS_SEGMENT: SpriteOpts = { stroke: BOSS_DARK, strokeThickness: 2 };
+const BOSS_EYE: SpriteOpts = { circle: true, color: COLORS.detect };
+const BOSS_MANDIBLE: SpriteOpts = { h: 8, color: BOSS_DARK, cornerRadius: 3, zIndex: Z.boss + 1 };
+const BOSS_TENTACLE: SpriteOpts = { w: 80, h: 16, color: BOSS_DARK, cornerRadius: 8, zIndex: Z.boss };
+const BOSS_NEEDLE: SpriteOpts = { w: 30, h: 8, color: BOSS_DARK, zIndex: Z.boss };
+const BOSS_BODY: SpriteOpts = { zIndex: Z.boss + 1 };
+const SPIT_MARK: SpriteOpts = { color: COLORS.acid, stroke: COLORS.acid, strokeThickness: 2, zIndex: Z.decal + 2 };
+const SPIT_SHADOW: SpriteOpts = { color: BLACK, alpha: 0.25, zIndex: Z.actorShadow };
+const SPIT_BLOB: SpriteOpts = {
+	color: COLORS.acid,
+	stroke: COLORS.bloodZombie,
+	strokeThickness: 2,
+	zIndex: Z.projectile,
+};
+const NEEDLE_SHAFT: SpriteOpts = { w: 28, h: 3, color: NEEDLE, zIndex: Z.projectile };
+const NEEDLE_HEAD: SpriteOpts = { w: 6, h: 4, color: COLORS.boss, cornerRadius: 2, zIndex: Z.projectile + 1 };
+const FIRE_BALL: SpriteOpts = { color: COLORS.campfire, alpha: 0.85, zIndex: Z.projectile };
+const SPARK: SpriteOpts = { w: 14, h: 6, color: COLORS.uiBlue, cornerRadius: 3, zIndex: Z.projectile };
+const BULLET: SpriteOpts = { w: 16, h: 4, color: COLORS.bullet, cornerRadius: 2, zIndex: Z.projectile };
+const ARROW_SHAFT: SpriteOpts = { w: 26, h: 3, color: COLORS.arrow };
+const ARROW_HEAD: SpriteOpts = { w: 6, h: 6, color: COLORS.ironDoor, cornerRadius: 1 };
+const ARROW_FLETCH: SpriteOpts = { w: 7, h: 7, color: COLORS.uiRed, cornerRadius: 1 };
 /** humanoid sprites are 36 × scale wide at the shoulders: scale = hit radius / 18 matches the hitbox */
 const HUMANOID_HALF_WIDTH = 18;
 /** spitter puddle size (zombieAI) — the landing marker of an acid blob uses it */
@@ -296,16 +329,16 @@ export class ActorsView {
 		const bodyX = b.bodyX;
 		const bodyY = b.bodyY;
 		if (bodyX === undefined || bodyY === undefined) return;
-		const n = bodyX.size();
+		// (bounds on `size()`, not a local: roblox-ts only compiles those to a numeric `for`, F10)
 		if (fresh) {
 			// first sight: the whole body starts coiled on the head, and unrolls as it moves
-			for (let i = 0; i < n; i++) {
+			for (let i = 0; i < bodyX.size(); i++) {
 				bodyX[i] = b.x;
 				bodyY[i] = b.y;
 			}
 			return;
 		}
-		for (let i = 1; i < n; i++) {
+		for (let i = 1; i < bodyX.size(); i++) {
 			const dx = bodyX[i - 1] - bodyX[i];
 			const dy = bodyY[i - 1] - bodyY[i];
 			const d = math.sqrt(dx * dx + dy * dy);
@@ -332,11 +365,8 @@ export class ActorsView {
 			const lift = math.max(0, zb.jumpHeight ?? 0);
 			const liftScale = 1 + lift / 100;
 			const so = opts.shadow(zb.x, zb.y, 10);
-			r.drawCircle(cam, zb.x + so.x, zb.y + so.y, (rad * 2.1) / liftScale, {
-				color: BLACK,
-				alpha: 0.3 * alpha * (1 - lift / 70),
-				zIndex: Z.actorShadow,
-			});
+			Z_SHADOW.alpha = 0.3 * alpha * (1 - lift / 70);
+			r.drawCircle(cam, zb.x + so.x, zb.y + so.y, (rad * 2.1) / liftScale, Z_SHADOW);
 			const fuse = zb.fuse ?? -1;
 			// lit fuse: red blink that accelerates as it burns (frequency ∝ 1 / time left)
 			const blink = zb.type === 3 && fuse > 0 && math.sin(math.pi * 2 * 3 * math.log(fuse + 0.1)) > 0;
@@ -372,8 +402,9 @@ export class ActorsView {
 	drawBosses(r: Renderer, cam: Camera, v: ViewRect, refs: GameRefs, opts: ActorDrawOpts): void {
 		for (const b of refs.bosses) {
 			const flash = clamp(b.hitFlash ?? 0, 0, 1);
-			const color = flash > 0 ? COLORS.boss.Lerp(WHITE, 0.7 * flash) : COLORS.boss;
-			const dark = COLORS.boss.Lerp(BLACK, 0.4);
+			// memoised blends (drawKit.mix): the same Color3 every frame, the flash on its 1/40 grid
+			const color = flash > 0 ? mix(COLORS.boss, WHITE, 0.7 * quantize(flash)) : COLORS.boss;
+			const dark = BOSS_DARK;
 			if (b.type === 1) {
 				const bodyX = b.bodyX;
 				const bodyY = b.bodyY;
@@ -382,7 +413,7 @@ export class ActorsView {
 				const n = bodyX.size();
 				const seg = BOSS1_SEGMENT_RADIUS * 2;
 				const head = bossHitRadius(b) * 2;
-				for (let i = n - 1; i >= 0; i--) {
+				for (let i = bodyX.size() - 1; i >= 0; i--) {
 					const size = i === 0 ? head : seg;
 					if (!circleInView(bodyX[i], bodyY[i], size, v)) continue;
 					if (i > 0 && i % 3 === 0) {
@@ -391,41 +422,34 @@ export class ActorsView {
 						const j1 = math.min(n - 1, i + 1);
 						const da = math.atan2(bodyY[j0] - bodyY[j1], bodyX[j0] - bodyX[j1]);
 						const swing = math.sin(opts.clock * 12 + i) * 0.35;
+						BOSS_LEG.w = seg * 0.5;
 						for (const side of SIDES) {
-							part(r, cam, bodyX[i], bodyY[i], da + side * (math.pi / 2 + swing), seg * 0.55, 0, {
-								w: seg * 0.5,
-								h: 7,
-								color: dark,
-								cornerRadius: 3,
-								zIndex: Z.boss - 1,
-							});
+							part(
+								r,
+								cam,
+								bodyX[i],
+								bodyY[i],
+								da + side * (math.pi / 2 + swing),
+								seg * 0.55,
+								0,
+								BOSS_LEG,
+							);
 						}
 					}
-					r.drawCircle(cam, bodyX[i], bodyY[i], size, {
-						color: i === 0 || i % 2 === 0 ? color : color.Lerp(BLACK, 0.2),
-						stroke: dark,
-						strokeThickness: 2,
-						zIndex: Z.boss + (i === 0 ? 2 : 0),
-					});
+					BOSS_SEGMENT.color = i === 0 || i % 2 === 0 ? color : mix(color, BLACK, 0.2);
+					BOSS_SEGMENT.zIndex = Z.boss + (i === 0 ? 2 : 0);
+					r.drawCircle(cam, bodyX[i], bodyY[i], size, BOSS_SEGMENT);
 				}
 				if (n > 1) {
 					const ha = math.atan2(bodyY[0] - bodyY[1], bodyX[0] - bodyX[1]);
 					for (const side of SIDES) {
-						part(r, cam, bodyX[0], bodyY[0], ha, head * 0.22, side * head * 0.2, {
-							w: head * 0.12,
-							h: head * 0.12,
-							circle: true,
-							color: COLORS.detect,
-							zIndex: Z.boss + 3,
-						});
+						BOSS_EYE.w = head * 0.12;
+						BOSS_EYE.h = head * 0.12;
+						BOSS_EYE.zIndex = Z.boss + 3;
+						part(r, cam, bodyX[0], bodyY[0], ha, head * 0.22, side * head * 0.2, BOSS_EYE);
 						// mandibles
-						part(r, cam, bodyX[0], bodyY[0], ha + side * 0.35, head * 0.55, 0, {
-							w: head * 0.3,
-							h: 8,
-							color: dark,
-							cornerRadius: 3,
-							zIndex: Z.boss + 1,
-						});
+						BOSS_MANDIBLE.w = head * 0.3;
+						part(r, cam, bodyX[0], bodyY[0], ha + side * 0.35, head * 0.55, 0, BOSS_MANDIBLE);
 					}
 				}
 				continue;
@@ -434,11 +458,7 @@ export class ActorsView {
 			const size = bossHitRadius(b) * 2;
 			if (!circleInView(b.x, b.y, size + 60, v)) continue;
 			const so = opts.shadow(b.x, b.y, 14);
-			r.drawCircle(cam, b.x + so.x, b.y + so.y, size * 1.05, {
-				color: BLACK,
-				alpha: 0.35,
-				zIndex: Z.actorShadow,
-			});
+			r.drawCircle(cam, b.x + so.x, b.y + so.y, size * 1.05, BOSS_SHADOW);
 			if (b.type === 3) {
 				drawHumanoid(
 					r,
@@ -459,39 +479,23 @@ export class ActorsView {
 				// tentacles slowly sweeping around the stationary body
 				for (let i = 0; i < 6; i++) {
 					const ta = opts.clock * 0.6 + (i * math.pi) / 3;
-					part(r, cam, b.x, b.y, ta, size * 0.62, 0, {
-						w: 80,
-						h: 16,
-						color: dark,
-						cornerRadius: 8,
-						zIndex: Z.boss,
-					});
+					part(r, cam, b.x, b.y, ta, size * 0.62, 0, BOSS_TENTACLE);
 				}
 			} else {
 				// needles
 				for (let i = 0; i < 8; i++) {
-					part(r, cam, b.x, b.y, b.angle + (i * math.pi) / 4, size * 0.55, 0, {
-						w: 30,
-						h: 8,
-						color: dark,
-						zIndex: Z.boss,
-					});
+					part(r, cam, b.x, b.y, b.angle + (i * math.pi) / 4, size * 0.55, 0, BOSS_NEEDLE);
 				}
 			}
-			r.drawCircle(cam, b.x, b.y, size, {
-				color,
-				stroke: flash > 0 ? WHITE : dark,
-				strokeThickness: flash > 0 ? 4 : 2,
-				zIndex: Z.boss + 1,
-			});
+			BOSS_BODY.color = color;
+			BOSS_BODY.stroke = flash > 0 ? WHITE : dark;
+			BOSS_BODY.strokeThickness = flash > 0 ? 4 : 2;
+			r.drawCircle(cam, b.x, b.y, size, BOSS_BODY);
 			for (const side of SIDES) {
-				part(r, cam, b.x, b.y, b.angle, size * 0.3, side * size * 0.16, {
-					w: size * 0.12,
-					h: size * 0.12,
-					circle: true,
-					color: COLORS.detect,
-					zIndex: Z.boss + 2,
-				});
+				BOSS_EYE.w = size * 0.12;
+				BOSS_EYE.h = size * 0.12;
+				BOSS_EYE.zIndex = Z.boss + 2;
+				part(r, cam, b.x, b.y, b.angle, size * 0.3, side * size * 0.16, BOSS_EYE);
 			}
 		}
 	}
@@ -547,61 +551,24 @@ export class ActorsView {
 					const t = clamp(b.travel / math.max(1, b.range), 0, 1);
 					const arc = math.sin(t * math.pi);
 					const h = arc * math.min(70, 20 + b.range * 0.2);
-					r.drawCircle(cam, b.targetX, b.targetY, SPIT_MARK_R * 2, {
-						color: COLORS.acid,
-						alpha: 0.08 + 0.12 * t,
-						stroke: COLORS.acid,
-						strokeThickness: 2,
-						strokeAlpha: 0.3 + 0.5 * t,
-						zIndex: Z.decal + 2,
-					});
-					r.drawCircle(cam, b.x, b.y, 12, { color: BLACK, alpha: 0.25, zIndex: Z.actorShadow });
-					r.drawCircle(cam, b.x + up.x * h, b.y + up.y * h, 14 * (1 + 0.5 * arc), {
-						color: COLORS.acid,
-						stroke: COLORS.bloodZombie,
-						strokeThickness: 2,
-						zIndex: Z.projectile,
-					});
+					SPIT_MARK.alpha = 0.08 + 0.12 * t;
+					SPIT_MARK.strokeAlpha = 0.3 + 0.5 * t;
+					r.drawCircle(cam, b.targetX, b.targetY, SPIT_MARK_R * 2, SPIT_MARK);
+					r.drawCircle(cam, b.x, b.y, 12, SPIT_SHADOW);
+					r.drawCircle(cam, b.x + up.x * h, b.y + up.y * h, 14 * (1 + 0.5 * arc), SPIT_BLOB);
 				} else {
 					// boss needle (any enemy shot without a landing point): a thin bone spike
-					part(r, cam, b.x, b.y, b.angle, 0, 0, {
-						w: 28,
-						h: 3,
-						color: COLORS.blade.Lerp(COLORS.parcel, 0.4),
-						zIndex: Z.projectile,
-					});
-					part(r, cam, b.x, b.y, b.angle, 15, 0, {
-						w: 6,
-						h: 4,
-						color: COLORS.boss,
-						cornerRadius: 2,
-						zIndex: Z.projectile + 1,
-					});
+					part(r, cam, b.x, b.y, b.angle, 0, 0, NEEDLE_SHAFT);
+					part(r, cam, b.x, b.y, b.angle, 15, 0, NEEDLE_HEAD);
 				}
 				continue;
 			}
 			if (b.kind === "fire") {
-				r.drawCircle(cam, b.x, b.y, 12 + math.sin(opts.clock * 30 + b.id) * 3, {
-					color: COLORS.campfire,
-					alpha: 0.85,
-					zIndex: Z.projectile,
-				});
+				r.drawCircle(cam, b.x, b.y, 12 + math.sin(opts.clock * 30 + b.id) * 3, FIRE_BALL);
 			} else if (b.kind === "electric") {
-				part(r, cam, b.x, b.y, b.angle, 0, 0, {
-					w: 14,
-					h: 6,
-					color: COLORS.uiBlue,
-					cornerRadius: 3,
-					zIndex: Z.projectile,
-				});
+				part(r, cam, b.x, b.y, b.angle, 0, 0, SPARK);
 			} else {
-				part(r, cam, b.x, b.y, b.angle, 0, 0, {
-					w: 16,
-					h: 4,
-					color: COLORS.bullet,
-					cornerRadius: 2,
-					zIndex: Z.projectile,
-				});
+				part(r, cam, b.x, b.y, b.angle, 0, 0, BULLET);
 			}
 		}
 		for (const [id, ref] of this.stuckRef) {
@@ -612,21 +579,13 @@ export class ActorsView {
 
 /** arrow sprite (shaft, head, fletching) centred on (x, y) */
 function drawArrow(r: Renderer, cam: Camera, x: number, y: number, a: number, alpha: number, z: number): void {
-	part(r, cam, x, y, a, 0, 0, { w: 26, h: 3, color: COLORS.arrow, alpha, zIndex: z });
-	part(r, cam, x, y, a, 14, 0, {
-		w: 6,
-		h: 6,
-		color: COLORS.ironDoor,
-		alpha,
-		cornerRadius: 1,
-		zIndex: z + 1,
-	});
-	part(r, cam, x, y, a, -12, 0, {
-		w: 7,
-		h: 7,
-		color: COLORS.uiRed,
-		alpha,
-		cornerRadius: 1,
-		zIndex: z + 1,
-	});
+	ARROW_SHAFT.alpha = alpha;
+	ARROW_SHAFT.zIndex = z;
+	part(r, cam, x, y, a, 0, 0, ARROW_SHAFT);
+	ARROW_HEAD.alpha = alpha;
+	ARROW_HEAD.zIndex = z + 1;
+	part(r, cam, x, y, a, 14, 0, ARROW_HEAD);
+	ARROW_FLETCH.alpha = alpha;
+	ARROW_FLETCH.zIndex = z + 1;
+	part(r, cam, x, y, a, -12, 0, ARROW_FLETCH);
 }

@@ -2,7 +2,7 @@ import { getCtx, refreshAim } from "./bootstrap";
 import { COLORS, Z } from "shared/engine/colors";
 import { Camera, ViewRect } from "shared/engine/camera";
 import { DESIGN } from "shared/engine/constants";
-import { LightMap, LightMapStats, LightSource, Renderer } from "shared/engine/renderer";
+import { LightMap, LightMapStats, Renderer, SpriteOpts } from "shared/engine/renderer";
 import { clamp, lerp } from "shared/engine/vec2";
 import { ItemKind, WeaponKind } from "shared/data/kinds";
 import { EQUIPS } from "shared/data/equips";
@@ -72,6 +72,8 @@ import { circleInView, part } from "./view/drawKit";
 import { WorldView } from "./view/worldView";
 import { MachinesView } from "./view/machinesView";
 import { ageFlinches } from "./view/solidFlinch";
+import { BodyGrid } from "./view/bodyGrid";
+import { addSurvivorLight, LightList } from "./view/lightList";
 import { AwarenessMarks, MarkAvoid, MarkNight } from "./view/zombieAwareness";
 import * as Quality from "./view/quality";
 import { reducedMotion } from "./ui/skin";
@@ -102,8 +104,6 @@ const CANOPY_SEE_THROUGH = 0.35;
  * cone) is shared/sim/survivorLight.ts, the rule the server's horde visibility uses too (LUZ-04).
  */
 const LIGHT_R: Record<string, number> = { lamp: 400, lamp_drone: 320, campfire: 300, brazier: 330 };
-/** the flashlight's beam is fully bright to this fraction of its reach, then fades to 0 at its end */
-const FLASHLIGHT_INNER = 0.35;
 /** walk-cycle phase per world unit travelled (survivors, local and remote) */
 const FEET_CYCLE_PER_UNIT = 0.09;
 /**
@@ -329,6 +329,17 @@ function itemLook(kind: number, id: number): ItemLook {
 	return ITEM_LOOKS.parts;
 }
 
+/*
+ * The loop's own option tables, one scratch per call site (M4): a literal per decal, particle, item piece and glint
+ * was a table per sprite per frame. The keys that never change are written here; each draw writes the rest.
+ */
+const DECAL_O: SpriteOpts = { zIndex: Z.decal };
+const PUDDLE_O: SpriteOpts = { color: COLORS.acid, stroke: COLORS.bloodZombie, zIndex: Z.decal + 1 };
+const PARTICLE_O: SpriteOpts = { zIndex: Z.particle };
+const ITEM_SHADOW_O: SpriteOpts = { color: BLACK, alpha: 0.3, zIndex: Z.actorShadow };
+const ITEM_PIECE_O: SpriteOpts = { strokeThickness: 1, strokeAlpha: 0.75 };
+const GLINT_O: SpriteOpts = { color: WHITE, zIndex: Z.item + 4 };
+
 /** how far a dropped item lies turned from the world axes (radians), fixed per item */
 const ITEM_TILT = 0.55;
 /** the glint that marks loot: once every period (s), lasting `len` (s), per item out of phase */
@@ -364,6 +375,8 @@ export class GameLoop {
 	/** buildings whose roof is (or may be) not fully opaque; eased even off-screen */
 	private fadingRoofs = new Set<Solid>();
 	private queryBuf: Array<Solid> = [];
+	/** this frame's standing zombies by position: what a tree's canopy asks (updateCanopy) */
+	private readonly underCanopy = new BodyGrid();
 	/** player walk cycle (feet) */
 	private walkPhase = 0;
 	private walkAmp = 0;
@@ -371,10 +384,13 @@ export class GameLoop {
 	private sunX = 0.7;
 	private sunY = 0.7;
 	private nightLight = false;
+	/** what `shadowOffset` answers, refilled per call */
+	private readonly shadowOut = { x: 0, y: 0 };
 	private clock = 0;
 	private lightMap?: LightMap;
 	private nameplate?: Nameplate;
-	private lights: Array<LightSource> = [];
+	/** this frame's lights of the night map (and of the awareness marks), refilled in place */
+	private readonly lights = new LightList();
 	/** sequence of the last input command (u16, wraps): the server acknowledges it from F1 on */
 	private seq = 0;
 	/** the local survivor's body, its melee-sweep memory and this frame's raw input (no per-frame allocation) */
@@ -393,7 +409,7 @@ export class GameLoop {
 	/** the bodies a mark must never cover, refilled in place: the local survivor first, then the allies */
 	private readonly markAvoid = new Array<MarkAvoid>();
 	/** the night the light map drew this frame: a mark is only as bright as the ground under its zombie (IA-05) */
-	private readonly markNight: MarkNight = { dark: 0, lights: this.lights };
+	private readonly markNight: MarkNight = { dark: 0, lights: this.lights.items };
 	/** the local survivor's centre handed to the bubbles, refilled in place so a frame allocates nothing */
 	private readonly selfBody = { x: 0, y: 0 };
 	/** last frame time, so render() can ease what it has to ease (update() runs every frame of a run, UI-06) */
@@ -711,6 +727,12 @@ export class GameLoop {
 		list.clear();
 		// the building records and the trees: never a building's own walls or furniture (queryTown)
 		queryTown(this.world, v.minX, v.minY, v.maxX, v.maxY, list);
+		// the standing zombies, bucketed once for every tree below (L6: each tree walked the whole horde)
+		const under = this.underCanopy;
+		under.clear();
+		for (const z of this.zombies) {
+			if (z.hp > 0) under.add(z.x, z.y);
+		}
 		for (const s of list) {
 			if (s.kind === "building") {
 				this.fadingRoofs.add(s);
@@ -739,23 +761,15 @@ export class GameLoop {
 		// any part of a body (≈18 px radius) under the canopy counts: nobody hides half-covered
 		const r = (s.canopyR ?? 80) + 18;
 		const r2 = r * r;
-		let under = false;
 		const p = this.player;
-		if ((p.x - cx) * (p.x - cx) + (p.y - cy) * (p.y - cy) < r2) {
-			under = true;
-		} else {
-			for (const z of this.zombies) {
-				if (z.hp > 0 && (z.x - cx) * (z.x - cx) + (z.y - cy) * (z.y - cy) < r2) {
+		// the survivor, then the standing zombies from the cells under the crown only (updateWorldFx filled the grid
+		// this frame), then the bosses
+		let under = (p.x - cx) * (p.x - cx) + (p.y - cy) * (p.y - cy) < r2 || this.underCanopy.anyWithin(cx, cy, r);
+		if (!under) {
+			for (const b of this.bosses) {
+				if ((b.x - cx) * (b.x - cx) + (b.y - cy) * (b.y - cy) < r2) {
 					under = true;
 					break;
-				}
-			}
-			if (!under) {
-				for (const b of this.bosses) {
-					if ((b.x - cx) * (b.x - cx) + (b.y - cy) * (b.y - cy) < r2) {
-						under = true;
-						break;
-					}
 				}
 			}
 		}
@@ -782,39 +796,47 @@ export class GameLoop {
 		}
 	}
 
-	/** where a shadow of length `len` falls for something at (x, y) */
+	/**
+	 * Where a shadow of length `len` falls for something at (x, y). The answer is one scratch (the drawKit rule, M4):
+	 * a frame asks for one per solid, item and actor on screen, and no caller keeps it past its next draw.
+	 */
 	private shadowOffset(x: number, y: number, len: number): { x: number; y: number } {
+		const out = this.shadowOut;
 		if (this.nightLight) {
 			const dx = x - this.player.x;
 			const dy = y - this.player.y;
 			const d = math.sqrt(dx * dx + dy * dy);
-			if (d < 1) return { x: 0, y: len * 0.5 };
-			return { x: (dx / d) * len, y: (dy / d) * len };
+			if (d < 1) {
+				out.x = 0;
+				out.y = len * 0.5;
+			} else {
+				out.x = (dx / d) * len;
+				out.y = (dy / d) * len;
+			}
+			return out;
 		}
-		return { x: this.sunX * len, y: this.sunY * len };
+		out.x = this.sunX * len;
+		out.y = this.sunY * len;
+		return out;
 	}
 
 	private drawDecals(r: Renderer, cam: Camera, v: ViewRect): void {
-		this.particles.forDecals(d => {
-			if (!circleInView(d.x, d.y, d.size, v)) return;
-			r.drawCircle(cam, d.x, d.y, d.size, {
-				color: d.color,
-				alpha: 0.7 * math.min(1, d.life / 5),
-				zIndex: Z.decal,
-			});
-		});
+		const o = DECAL_O;
+		for (const d of this.particles.decalRecords()) {
+			if (d.life <= 0 || !circleInView(d.x, d.y, d.size, v)) continue;
+			o.color = d.color;
+			o.alpha = 0.7 * math.min(1, d.life / 5);
+			r.drawCircle(cam, d.x, d.y, d.size, o);
+		}
 		const puddles = this.refs.puddles;
 		if (puddles !== undefined) {
+			const p = PUDDLE_O;
 			for (const pd of puddles) {
 				if (!circleInView(pd.x, pd.y, pd.r, v)) continue;
 				const k = clamp(pd.life / math.max(0.001, pd.lifeMax), 0, 1);
-				r.drawCircle(cam, pd.x, pd.y, pd.r * 2, {
-					color: COLORS.acid,
-					alpha: 0.45 * k,
-					stroke: COLORS.bloodZombie,
-					strokeAlpha: 0.6 * k,
-					zIndex: Z.decal + 1,
-				});
+				p.alpha = 0.45 * k;
+				p.strokeAlpha = 0.6 * k;
+				r.drawCircle(cam, pd.x, pd.y, pd.r * 2, p);
 			}
 		}
 	}
@@ -822,8 +844,10 @@ export class GameLoop {
 	/**
 	 * Ground items lie flat where they fell (no floating bob), turned a little, with a short shadow
 	 * cast like every other object's. Each category has its own silhouette (see ITEM_LOOKS); a brief
-	 * glint every few seconds marks them as loot. A fixed number of sprites per item (the glint is
-	 * drawn transparent between flashes) keeps the renderer's pool order stable.
+	 * glint every few seconds marks them as loot. The glint's two sprites exist only while it flashes: its ZIndex is
+	 * its own bucket in the renderer's pool (one sub-pool per ZIndex), so one appearing or going moves no other
+	 * sprite. It used to be drawn transparent between flashes to keep a single pool's order stable -- two sprites per
+	 * item on screen, about 83 % of the time for nothing.
 	 */
 	private drawItems(r: Renderer, cam: Camera, v: ViewRect): void {
 		for (const it of this.world.items) {
@@ -831,40 +855,42 @@ export class GameLoop {
 			const lk = itemLook(it.kind, it.itemId);
 			const a = (((it.id * 37) % 23) / 11 - 1) * ITEM_TILT;
 			const so = this.shadowOffset(it.x, it.y, 4);
-			part(r, cam, it.x + so.x, it.y + so.y, a, 0, 0, {
-				w: lk.shadowW,
-				h: lk.shadowH,
-				color: BLACK,
-				alpha: 0.3,
-				cornerRadius: lk.shadowR,
-				zIndex: Z.actorShadow,
-			});
+			const sh = ITEM_SHADOW_O;
+			sh.w = lk.shadowW;
+			sh.h = lk.shadowH;
+			sh.cornerRadius = lk.shadowR;
+			part(r, cam, it.x + so.x, it.y + so.y, a, 0, 0, sh);
 			const ca = math.cos(a);
 			const sa = math.sin(a);
+			const o = ITEM_PIECE_O;
 			for (let i = 0; i < lk.parts.size(); i++) {
 				const pc = lk.parts[i];
-				r.drawRect(cam, it.x + ca * pc.f - sa * pc.l, it.y + sa * pc.f + ca * pc.l, {
-					w: pc.w,
-					h: pc.h,
-					// a piece may be turned inside the item (bow limbs, crate brace)
-					rotation: a + pc.rot,
-					color: pc.color,
-					circle: pc.r === CIRCLE,
-					cornerRadius: pc.r,
-					stroke: pc.edge ? LOOT_EDGE : undefined,
-					strokeThickness: 1,
-					strokeAlpha: 0.75,
-					zIndex: Z.item + i,
-				});
+				o.w = pc.w;
+				o.h = pc.h;
+				// a piece may be turned inside the item (bow limbs, crate brace)
+				o.rotation = a + pc.rot;
+				o.color = pc.color;
+				o.circle = pc.r === CIRCLE;
+				o.cornerRadius = pc.r;
+				o.stroke = pc.edge ? LOOT_EDGE : undefined;
+				o.zIndex = Z.item + i;
+				r.drawRect(cam, it.x + ca * pc.f - sa * pc.l, it.y + sa * pc.f + ca * pc.l, o);
 			}
 			// glint: a small four-point sparkle at the item's upper-left, out of phase per item
 			const t = (this.clock + it.id * 0.61) % GLINT_PERIOD;
-			const s = t < GLINT_LEN ? math.sin((t / GLINT_LEN) * math.pi) : 0;
+			if (t >= GLINT_LEN) continue;
+			const s = math.sin((t / GLINT_LEN) * math.pi);
 			const gx = it.x - 10;
 			const gy = it.y - 11;
 			const arm = 3 + GLINT_ARM * s;
-			r.drawRect(cam, gx, gy, { w: arm, h: 2, color: WHITE, alpha: 0.9 * s, zIndex: Z.item + 4 });
-			r.drawRect(cam, gx, gy, { w: 2, h: arm, color: WHITE, alpha: 0.9 * s, zIndex: Z.item + 4 });
+			const g = GLINT_O;
+			g.w = arm;
+			g.h = 2;
+			g.alpha = 0.9 * s;
+			r.drawRect(cam, gx, gy, g);
+			g.w = 2;
+			g.h = arm;
+			r.drawRect(cam, gx, gy, g);
 		}
 	}
 
@@ -910,7 +936,8 @@ export class GameLoop {
 		if (ride !== undefined) {
 			look.angle = rideHeading(ride);
 			look.feetAmp = 0;
-			drawVehicle(r, cam, ride.kind, p.x, p.y, look.angle, so.x, so.y, Z.player - 2);
+			// the look's copy: `so` is the loop's one shadow scratch, and the pet above asked for its own since
+			drawVehicle(r, cam, ride.kind, p.x, p.y, look.angle, look.shadowX, look.shadowY, Z.player - 2);
 		}
 		drawSurvivor(r, cam, look, this.swing);
 	}
@@ -928,14 +955,13 @@ export class GameLoop {
 	}
 
 	private drawParticles(r: Renderer, cam: Camera, v: ViewRect): void {
-		this.particles.forActive(p => {
-			if (!circleInView(p.x, p.y, p.size, v)) return;
-			r.drawCircle(cam, p.x, p.y, p.size, {
-				color: p.color,
-				alpha: clamp((p.life / p.maxLife) * 1.5, 0, 1),
-				zIndex: Z.particle,
-			});
-		});
+		const o = PARTICLE_O;
+		for (const p of this.particles.active()) {
+			if (!circleInView(p.x, p.y, p.size, v)) continue;
+			o.color = p.color;
+			o.alpha = clamp((p.life / p.maxLife) * 1.5, 0, 1);
+			r.drawCircle(cam, p.x, p.y, p.size, o);
+		}
 	}
 
 	render(): void {
@@ -1093,25 +1119,18 @@ export class GameLoop {
 			this.lightMap.hide();
 			return;
 		}
+		// refilled from its pool of records: no table per light per frame (M4)
 		const lights = this.lights;
 		lights.clear();
 		const p = this.player;
 		if (SurvivorLight.carriesLight(p)) {
 			// what is in hand or worn, by the ONE rule the server's horde visibility uses (LUZ-04): the circle
 			// (Nocturnal, torch, night vision) and the flashlight's cone along the aim, to the unit and the degree
-			lights.push({ x: p.x, y: p.y, r: SurvivorLight.survivorLightRadius(save), inner: 0.4 });
+			const radius = SurvivorLight.survivorLightRadius(save);
 			const cone = SurvivorLight.survivorCone(save);
-			if (cone !== undefined) {
-				lights.push({
-					x: p.x,
-					y: p.y,
-					r: cone.radius,
-					inner: FLASHLIGHT_INNER,
-					angle: p.angle,
-					cone: SurvivorLight.CONE_HALF_ANGLE,
-				});
-			}
+			addSurvivorLight(lights, p.x, p.y, p.angle, radius, cone?.radius);
 		}
+		// every ally's, by the same shape and as far as the wire tells what they carry (playersView.collectLights)
 		if (allies.size() > 0) this.playersView.collectLights(allies, lights);
 		const list = this.queryBuf;
 		list.clear();
@@ -1121,23 +1140,21 @@ export class GameLoop {
 			if (r === undefined || s.powered !== true) continue;
 			const fire = s.tags === "campfire" || s.tags === "brazier";
 			const flicker = fire ? 0.92 + math.sin(this.clock * 11 + s.id) * 0.05 : 1;
-			lights.push({ x: s.x + s.w / 2, y: s.y + s.h / 2, r: r * flicker, inner: 0.5 });
+			lights.circle(s.x + s.w / 2, s.y + s.h / 2, r * flicker, 0.5);
 		}
-		this.machines.collectLights(lights);
+		this.machines.collectLights(lights.items);
 		for (const t of this.fxView.shotLines()) {
 			const k = clamp(t.life * 5, 0, 1);
-			if (k > 0.05) lights.push({ x: t.x1, y: t.y1, r: 150, k: 0.85 * k, inner: 0.2 });
+			if (k > 0.05) lights.circle(t.x1, t.y1, 150, 0.2, 0.85 * k);
 		}
 		for (const b of this.bullets) {
-			if (b.kind === "fire") lights.push({ x: b.x, y: b.y, r: 110, k: 0.7, inner: 0.2 });
+			if (b.kind === "fire") lights.circle(b.x, b.y, 110, 0.2, 0.7);
 		}
 		const blasts = this.refs.explosions;
 		if (blasts !== undefined) {
-			for (const e of blasts) {
-				lights.push({ x: e.x, y: e.y, r: e.rMax * 1.8, k: explosionFade(e), inner: 0.35 });
-			}
+			for (const e of blasts) lights.circle(e.x, e.y, e.rMax * 1.8, 0.35, explosionFade(e));
 		}
-		this.lightMap.update(cam, dark, lights);
+		this.lightMap.update(cam, dark, lights.items);
 	}
 
 	/** Hide every world sprite and the night overlay (call when leaving the game screen). */

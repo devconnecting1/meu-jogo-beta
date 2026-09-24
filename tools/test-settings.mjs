@@ -1608,7 +1608,7 @@ console.log("\n11) Graphics: Auto / High / Low e o nivel com que a partida desen
 		p.lowDetail = Q.lowDetail(graphics);
 		for (let i = 0; i < 60; i++) p.bloodBurst(0, 0, 10, "zombie");
 		let n = 0;
-		p.forActive(() => n++);
+		for (const _p of p.active()) n++;
 		return n;
 	};
 	const hi = { strips: stripsAt(1), born: bornAt(1) };

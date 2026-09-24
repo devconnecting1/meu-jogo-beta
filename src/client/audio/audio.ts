@@ -55,6 +55,16 @@ export const AUDIO_RANGE = 1600;
 const AUDIO_NEAR = 140;
 /** world units -> studs: AUDIO_RANGE lands on 100 studs, a comfortable range for the engine's panner */
 const STUDS_PER_UNIT = 100 / AUDIO_RANGE;
+/**
+ * The listener follows the camera once it moved this far (world units: 1/16 stud, 1/1600 of the range). Less is
+ * nothing the panner or the roll-off can render, and the camera's easing creeps by less than that for seconds.
+ */
+const EAR_STEP = 1;
+
+/** the ear to `at` (no closure per call: pcall hands it the CFrame) */
+function placeEar(at: CFrame): void {
+	SoundService.SetListener(Enum.ListenerType.CFrame, at);
+}
 
 /** how loud each bus can get with its slider at 100% */
 const HEADROOM: Record<SoundBus, number> = { sfx: 1, ui: 0.8, bgm: 0.7 };
@@ -219,6 +229,9 @@ class AudioEngine {
 	private lastBgm = -1;
 	private listenerX = 0;
 	private listenerY = 0;
+	/** where the engine's listener was last put (world units); huge = never */
+	private earX = math.huge;
+	private earY = math.huge;
 	private heartbeat?: RBXScriptConnection;
 
 	/** builds the buses, the pool and the listener; safe to call more than once */
@@ -334,12 +347,12 @@ class AudioEngine {
 		// move the ear, not the world: every playing voice is re-panned and re-attenuated by the engine from
 		// here, which is what makes a long sound sweep past instead of following the camera
 		if (!this.started) return;
-		pcall(() =>
-			SoundService.SetListener(
-				Enum.ListenerType.CFrame,
-				new CFrame(new Vector3(x * STUDS_PER_UNIT, 0, y * STUDS_PER_UNIT)),
-			),
-		);
+		// a still camera (a menu, a stand-off, the easing's last creep) asks nothing of the engine: no CFrame, no call.
+		// It ran every frame, a CFrame and a closure each time (L2)
+		if (math.abs(x - this.earX) < EAR_STEP && math.abs(y - this.earY) < EAR_STEP) return;
+		this.earX = x;
+		this.earY = y;
+		pcall(placeEar, new CFrame(new Vector3(x * STUDS_PER_UNIT, 0, y * STUDS_PER_UNIT)));
 	}
 
 	/**

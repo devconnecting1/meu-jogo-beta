@@ -18,6 +18,7 @@ import type { SoundName } from "shared/data/sounds";
 import { currentWeapon } from "shared/game/player";
 import { CLOCK_ANNOUNCEMENTS } from "shared/sim/clock";
 import type { GameRefs } from "../systems/types";
+import { pickupCount } from "../systems/pickups";
 import { audio, AUDIO_RANGE } from "./audio";
 import { drainFxAudio, fxAudioMode } from "./fxAudio";
 import { GameMusic } from "./music";
@@ -31,8 +32,6 @@ const SWING_COOLDOWN = 0.22;
 /** random seconds between two ambient growls of the nearby horde */
 const GROWL_MIN = 3;
 const GROWL_MAX = 7;
-/** a craft plays its own sound: ignore the inventory growth it causes for this long */
-const CRAFT_MUTE = 0.25;
 
 interface ZombieSnap {
 	hp: number;
@@ -54,15 +53,6 @@ function shotSound(kind: WeaponKind): SoundName {
 	return "shotPistol";
 }
 
-/** total items held: a jump means something was picked up (loot, a search, a craft) */
-function inventoryCount(refs: GameRefs): number {
-	const s = refs.save;
-	let n = s.ammoNormal + s.ammoShotgun + s.ammoMachinegun + s.ammoArrow + s.oil + s.electric;
-	for (const v of s.invenUse) n += v;
-	for (const v of s.invenEtc) n += v;
-	return n;
-}
-
 export class GameAudio {
 	readonly music = new GameMusic();
 
@@ -75,11 +65,11 @@ export class GameAudio {
 	private prevSwing = false;
 	private prevDead = false;
 	private prevBlasts = 0;
-	private prevItems = 0;
+	/** pickups heard so far (client/systems/pickups.ts) */
+	private prevPickups = 0;
 	private alertCd = 0;
 	private swingCd = 0;
 	private growlCd = GROWL_MIN;
-	private craftMute = 0;
 	private running = false;
 
 	// ------------------------------------------------------------ run lifecycle
@@ -90,11 +80,10 @@ export class GameAudio {
 		this.zombies.clear();
 		this.bosses.clear();
 		this.prevBlasts = refs.explosions?.size() ?? 0;
-		this.prevItems = inventoryCount(refs);
+		this.prevPickups = pickupCount();
 		this.alertCd = 0;
 		this.swingCd = 0;
 		this.growlCd = GROWL_MIN;
-		this.craftMute = 0;
 		this.snapshot(refs);
 	}
 
@@ -118,7 +107,6 @@ export class GameAudio {
 		if (!this.running) return;
 		this.alertCd = math.max(0, this.alertCd - dt);
 		this.swingCd = math.max(0, this.swingCd - dt);
-		this.craftMute = math.max(0, this.craftMute - dt);
 		this.playerSounds(refs);
 		this.weaponSounds(refs);
 		this.zombieSounds(refs);
@@ -167,7 +155,6 @@ export class GameAudio {
 
 	/** a recipe was crafted (the backpack calls it); coins are covered by the toast hook in uiAudio */
 	crafted(): void {
-		this.craftMute = CRAFT_MUTE;
 		audio.play("craftDone");
 	}
 
@@ -281,9 +268,11 @@ export class GameAudio {
 		}
 		this.prevBlasts = count;
 
-		const items = inventoryCount(refs);
-		if (items > this.prevItems && this.craftMute <= 0) audio.play("pickupItem");
-		this.prevItems = items;
+		// a pickup, and only a pickup: not a craft's bonus, a construction handed back or a prediction undone -- the
+		// backpack growing was all of those (client/systems/pickups.ts)
+		const pickups = pickupCount();
+		if (pickups > this.prevPickups) audio.play("pickupItem");
+		this.prevPickups = pickups;
 	}
 
 	/** the horde has to be heard before it is seen: one nearby zombie growls every few seconds */

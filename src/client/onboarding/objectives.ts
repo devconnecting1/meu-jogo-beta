@@ -2,6 +2,7 @@ import { ETC_ITEMS } from "shared/data/etcItems";
 import { PlayerSaveData } from "shared/game/save";
 import { buildingAt, querySolids, Solid } from "shared/game/world";
 import { placeRecipe } from "shared/sim/placement";
+import { pickupCount } from "../systems/pickups";
 import type { GameRefs } from "../systems/types";
 
 /*
@@ -40,6 +41,7 @@ export interface Memory {
 	distance: number;
 	lastX: number;
 	lastY: number;
+	/** pickups counted when the lesson began (client/systems/pickups.ts) */
 	items: number;
 	campfires: number;
 	/** building solid id → how much loot it held last time we looked */
@@ -92,16 +94,6 @@ export function newMemory(): Memory {
 		looted: false,
 		late: false,
 	};
-}
-
-/** everything the survivor carries, as one number: a pickup of any kind moves it */
-function totalItems(save: PlayerSaveData): number {
-	let n = 0;
-	for (const v of save.invenWeapon) n += v;
-	for (const v of save.invenEquip) n += v;
-	for (const v of save.invenUse) n += v;
-	for (const v of save.invenEtc) n += v;
-	return n + save.ammoNormal + save.ammoShotgun + save.ammoMachinegun + save.ammoArrow + save.oil + save.electric;
 }
 
 function countCampfires(refs: GameRefs): number {
@@ -276,11 +268,13 @@ export const OBJECTIVES: Array<Objective> = [
 		id: "pickup",
 		title: "Pick something up",
 		hint: "Walk over loot on the ground, or press the use button next to it.",
+		// a pickup the game (offline) or the server (a server-owned world) made for this survivor: the backpack growing
+		// was also a craft's bonus, a construction handed back or a prediction undone (client/systems/pickups.ts)
 		begin(refs, mem): void {
-			mem.items = totalItems(refs.save);
+			mem.items = pickupCount();
 		},
 		done(refs, mem): boolean {
-			return totalItems(refs.save) > mem.items;
+			return pickupCount() > mem.items;
 		},
 		target(refs): ObjectiveTarget | undefined {
 			return nearestGroundItem(refs);

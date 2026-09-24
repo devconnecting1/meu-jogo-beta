@@ -61,6 +61,7 @@ import { BossState, ZombieState } from "shared/game/entities";
 import { Solid, WorldData, buildingAt } from "shared/game/world";
 import { isDoor } from "shared/sim/interactQuery";
 import { packRide, rideHeading } from "shared/sim/rideKey";
+import { carriesLight, survivorCone } from "shared/sim/survivorLight";
 import {
 	ActorInterest,
 	InterestTable,
@@ -238,6 +239,9 @@ export function playerBlockOf(sp: ServerPlayer): PlayerSnap {
 	if (p.swingerActive) flags += PlayerFlag.Swinging;
 	if (p.weapon.reloading) flags += PlayerFlag.Reloading;
 	if (p.dead) flags += PlayerFlag.Dead;
+	// LUZ-04: the cone the horde's visibility lights along their aim (zombieBrain `collectLights`, by the same rule),
+	// so every screen draws it where it lights the zombies. A body carries none (`carriesLight`)
+	if (carriesLight(p) && survivorCone(sp.save) !== undefined) flags += PlayerFlag.Flashlight;
 	return {
 		slot: sp.slot,
 		x: p.x,
