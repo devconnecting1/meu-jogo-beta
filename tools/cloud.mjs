@@ -15,6 +15,9 @@
  *                                           new or changed ones only) as Audio assets, write their ids to
  *                                           design/audio/assets.json and regenerate src/shared/data/audioAssets.ts;
  *                                           --dry-run lists without a key
+ *   ... upload-art / upload-audio --reupload-all
+ *                                           upload EVERY file again as the configured creator (ROBLOX_CREATOR_*),
+ *                                           even one already theirs; each old id stays until its new one is approved
  *   npm run cloud -- erase <userId> [--dry-run | --yes]
  *                                           right to erasure: delete the player's key from every per-player store
  *                                           (and their _studio copies) and take their entries out of the admin log;
@@ -29,6 +32,10 @@
  *   PZ_MODERATION_WAIT_S, default 600 s, then stays in assets.json's `pending` for the next run -- never uploaded
  *   twice), a rejected file is never sent again while its bytes are the same, and missing secrets skip the upload
  *   with a notice instead of failing. Without --ci everything behaves as it always did on the owner's PC.
+ *   The creator: assets.json records who uploaded each id (`creator`: "user:<id>" / "group:<id>", read from the
+ *   environment with --ci); an id of ANOTHER creator than ROBLOX_CREATOR_GROUP_ID / _USER_ID (the account changed),
+ *   or with none recorded, is uploaded again by --ci, and the old id stays until the new one is approved
+ *   (docs/CREATOR_HUB.md, "Mudou de conta"). The owner's run only reports those, unless --reupload-all.
  *
  * THE KEY IS NEVER PRINTED. It is read from `.env` (gitignored) or the environment (a CI secret; `.env` wins when
  * both have it), passed in a header, and scrubbed out of any error body before anything reaches the terminal -- an
@@ -110,6 +117,16 @@ const CREDENTIAL_NAMES = [
 	"ROBLOX_CREATOR_GROUP_ID",
 ];
 
+/** the CREDENTIAL_NAMES the environment sets (a CI secret, a shell export), without `.env` */
+function credentialsFromEnv() {
+	const out = {};
+	for (const name of CREDENTIAL_NAMES) {
+		const v = (process.env[name] ?? "").trim();
+		if (v !== "") out[name] = v;
+	}
+	return out;
+}
+
 /** the `.env` path: PZ_CLOUD_ENV points the tests at a throwaway (or missing) file, never the owner's real one */
 const envPath = () => process.env.PZ_CLOUD_ENV ?? join(ROOT, ".env");
 
@@ -118,11 +135,7 @@ const envPath = () => process.env.PZ_CLOUD_ENV ?? join(ROOT, ".env");
  * name `.env` leaves empty -- so on the owner's PC, where `.env` has everything, nothing changes.
  */
 function readCredentials() {
-	const fromEnv = {};
-	for (const name of CREDENTIAL_NAMES) {
-		const v = (process.env[name] ?? "").trim();
-		if (v !== "") fromEnv[name] = v;
-	}
+	const fromEnv = credentialsFromEnv();
 	const path = envPath();
 	const fromFile = {};
 	if (existsSync(path)) {
@@ -386,19 +399,28 @@ function fromOperation(op) {
 	};
 }
 
-/** assets.json: `ids` + `sha1` (what the game uses), `pending` (uploaded, not approved yet) and `rejected` */
+/**
+ * assets.json: `ids` + `sha1` (what the game uses), `creator` (who uploaded each id: "user:<id>" | "group:<id>"),
+ * `pending` (uploaded, not approved yet) and `rejected`. An id without `creator` was uploaded before creators were
+ * recorded (2026-09-24), by the account the project had then: it counts as ANOTHER creator's.
+ */
 function readBook(path) {
 	const raw = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
 	return {
 		ids: { ...(raw.ids ?? {}) },
 		sha1: { ...(raw.sha1 ?? {}) },
+		creator: { ...(raw.creator ?? {}) },
 		pending: { ...(raw.pending ?? {}) },
 		rejected: { ...(raw.rejected ?? {}) },
 	};
 }
 
 function writeBook(path, book, source) {
+	// one creator per id the game uses, in the order of `ids` (an entry of a name without an id is dropped)
+	const creator = {};
+	for (const name of Object.keys(book.ids)) if (book.creator[name] !== undefined) creator[name] = book.creator[name];
 	const out = { uploadedAt: today(), source, ids: book.ids, sha1: book.sha1 };
+	if (Object.keys(creator).length > 0) out.creator = creator;
 	if (Object.keys(book.pending).length > 0) out.pending = book.pending;
 	if (Object.keys(book.rejected).length > 0) out.rejected = book.rejected;
 	writeFileSync(path, `${JSON.stringify(out, undefined, "\t")}\n`);
@@ -406,6 +428,25 @@ function writeBook(path, book, source) {
 
 /** a markdown table cell */
 const cell = text => String(text).replace(/\|/g, "\\|").replace(/\n/g, " ");
+
+/**
+ * Who uploads, and so owns, what goes up: "group:<id>" when ROBLOX_CREATOR_GROUP_ID is set (a group experience), else
+ * "user:<id>" from ROBLOX_CREATOR_USER_ID, else "" (not configured). `invalid`: set, but not only digits. With --ci it
+ * comes from the environment alone (the repository secrets); on the owner's PC from `.env` too. Not a secret -- it is
+ * the public number of a profile or group -- so it is printed and recorded in assets.json.
+ */
+function creatorSetting() {
+	const values = CI ? credentialsFromEnv() : readCredentials().values;
+	const group = String(values.ROBLOX_CREATOR_GROUP_ID ?? "").trim();
+	const user = String(values.ROBLOX_CREATOR_USER_ID ?? "").trim();
+	const raw = group !== "" ? group : user;
+	if (raw === "") return { tag: "" };
+	if (!/^\d+$/.test(raw)) return { tag: "", invalid: true };
+	return { tag: group !== "" ? `group:${group}` : `user:${user}` };
+}
+
+/** the upload's `creationContext.creator` for a creator tag */
+const creatorOf = tag => (tag.startsWith("group:") ? { groupId: tag.slice(6) } : { userId: tag.slice(5) });
 
 /**
  * The upload core of every `upload-*` command: sends the items that are new or changed (by sha1) through the Open
@@ -421,16 +462,34 @@ const cell = text => String(text).replace(/\|/g, "\\|").replace(/\n/g, " ");
  * and is looked at again -- never uploaded again -- until it is approved or rejected. A rejected file goes to
  * `rejected` with its sha1, and --ci never sends those same bytes again (each rejection counts against the account;
  * the owner's own run still may, as before). Changing the file clears both.
+ *
+ * The creator. Each id is recorded with who uploaded it (assets.json's `creator`). An experience can only count on
+ * assets of its own creator -- audio is private to its uploader, and images are too when that account turned Asset
+ * Privacy on (docs/CREATOR_HUB.md, "Mudou de conta") -- so with --ci every id of ANOTHER creator than the configured
+ * one (or with none recorded: uploaded before 2026-09-24) is uploaded again as the configured creator, under the same
+ * rules: the old id stays in assets.json (and in the place) until the new one is APPROVED, one in review waits in
+ * `pending`, a rejected one in `rejected` (not re-sent; the old id stays). The owner's run (no --ci) only reports them.
+ * `reuploadAll` (--reupload-all): every item goes up again as the configured creator, whoever uploaded it.
  */
-async function uploadAssets(spec, dryRun) {
+async function uploadAssets(spec, { dryRun = false, reuploadAll = false } = {}) {
 	const book = readBook(spec.assetsPath);
+	const setting = creatorSetting();
+	const me = setting.tag;
 	let dirty = false;
-	// what the book says about a file that changed or left the list no longer applies: new bytes are a new upload
 	const current = new Map(spec.items.map(it => [it.name, it.hash]));
+	/** the id in the book is this very file's */
+	const same = name => book.ids[name] !== undefined && book.sha1[name] === current.get(name);
+	/** an id the configured creator did not upload (no creator recorded: the old account's) */
+	const foreign = name => me !== "" && book.ids[name] !== undefined && book.creator[name] !== me;
+	/** uploaded again although its id is this file's: a new creator (--ci) or --reupload-all */
+	const replace = name => same(name) && (reuploadAll || (CI && foreign(name)));
+	// what the book says about a file that changed or left the list no longer applies (new bytes are a new upload),
+	// nor about an upload superseded by an id of the same creator for these same bytes; an upload of the NEW creator in
+	// review while the game still uses the old creator's id stays (it is the replacement on its way)
 	for (const list of [book.pending, book.rejected]) {
 		for (const name of Object.keys(list)) {
-			const live = book.ids[name] !== undefined && book.sha1[name] === current.get(name);
-			if (current.get(name) !== list[name]?.sha1 || live) {
+			const superseded = same(name) && !reuploadAll && book.creator[name] === list[name]?.creator;
+			if (current.get(name) !== list[name]?.sha1 || superseded) {
 				delete list[name];
 				dirty = true;
 			}
@@ -440,19 +499,37 @@ async function uploadAssets(spec, dryRun) {
 	const recheck = [];
 	const blocked = [];
 	for (const it of spec.items) {
-		if (book.ids[it.name] && book.sha1[it.name] === it.hash) continue;
+		if (same(it.name) && !replace(it.name)) continue;
 		if (book.pending[it.name] !== undefined) recheck.push(it);
 		else if (book.rejected[it.name] !== undefined && CI) blocked.push(it);
 		else upload.push(it);
 	}
+	/** the uploads that replace a live id (of another creator, or forced): the old id stays until this one is approved */
+	const replacing = new Set(upload.filter(it => same(it.name)).map(it => it.name));
 	const extra = [
+		replacing.size > 0
+			? `; ${replacing.size} delas reenviadas como ${me || "o criador configurado"} ` +
+				`(${reuploadAll ? "--reupload-all" : "o id no ar é de outro criador"}; o id antigo fica até o novo ser aprovado)`
+			: "",
 		recheck.length > 0 ? `; ${recheck.length} em análise na moderação (só consultadas)` : "",
 		blocked.length > 0 ? `; ${blocked.length} recusada(s) antes com os mesmos bytes (não reenviadas)` : "",
 	].join("");
 	console.log(`${spec.items.length} ${spec.noun}; ${upload.length} a enviar (novas ou alteradas)${extra}`);
+	// the owner's run does not move ids between accounts on its own: it says so (the CI, or --reupload-all, does)
+	const others = spec.items.filter(it => same(it.name) && foreign(it.name) && !replace(it.name));
+	if (others.length > 0) {
+		const who = [...new Set(others.map(it => book.creator[it.name] ?? "criador não gravado"))].join(", ");
+		console.log(
+			`  atenção: ${others.length} ${spec.noun} no ar são de outro criador (${who}), não de ${me}: ` +
+				"a CI (--ci) reenvia sozinha; daqui, só com --reupload-all",
+		);
+	}
 	if (dryRun) {
 		for (const it of upload) {
-			console.log(`  ${it.name.padEnd(16)} ${String(it.bytes.length).padStart(6)} B  ${it.size}`);
+			const again = replacing.has(it.name)
+				? `  reenvio (id de ${book.creator[it.name] ?? "criador não gravado"})`
+				: "";
+			console.log(`  ${it.name.padEnd(16)} ${String(it.bytes.length).padStart(6)} B  ${it.size}${again}`);
 		}
 		for (const it of recheck) console.log(`  ${it.name.padEnd(16)} em análise: será consultado, não reenviado`);
 		for (const it of blocked) console.log(`  ${it.name.padEnd(16)} RECUSADO antes: mude o arquivo`);
@@ -498,19 +575,24 @@ async function uploadAssets(spec, dryRun) {
 		}
 	}
 	useKey(["ROBLOX_API_KEY"]);
-	const group = String(env.ROBLOX_CREATOR_GROUP_ID ?? "");
-	const user = String(env.ROBLOX_CREATOR_USER_ID ?? "");
-	const creator = group !== "" ? { groupId: group } : user !== "" ? { userId: user } : undefined;
-	if (creator === undefined)
-		fail("falta ROBLOX_CREATOR_USER_ID (ou ROBLOX_CREATOR_GROUP_ID) no .env: de quem é o asset");
-	if (!/^\d+$/.test(group || user))
-		fail("ROBLOX_CREATOR_USER_ID / ROBLOX_CREATOR_GROUP_ID é o número do id, só dígitos");
+	if (setting.invalid) fail("ROBLOX_CREATOR_USER_ID / ROBLOX_CREATOR_GROUP_ID é o número do id, só dígitos");
+	if (me === "") fail("falta ROBLOX_CREATOR_USER_ID (ou ROBLOX_CREATOR_GROUP_ID) no .env: de quem é o asset");
+	const creator = creatorOf(me);
+	console.log(`criador dos uploads: ${me}`);
+	if (replacing.size > 0) {
+		annotate(
+			"notice",
+			`${spec.title}: reenvio como ${me}`,
+			`${replacing.size} ${spec.noun} no ar ${reuploadAll ? "reenviadas (--reupload-all)" : "são de outro criador"}: ` +
+				`sobem de novo como ${me}. Cada id antigo fica no assets.json (e no place) até o novo ser aprovado.`,
+		);
+	}
 
 	const persist = () => {
 		writeBook(spec.assetsPath, book, spec.source);
 		dirty = false;
 	};
-	const count = { approved: 0, accepted: 0, pending: 0, rejected: 0, failed: 0 };
+	const count = { approved: 0, accepted: 0, pending: 0, rejected: 0, failed: 0, replaced: 0 };
 
 	/** the moderation of an asset that exists: the asset's own answer, or its version's when the asset omits it */
 	const readModeration = async (id, revisionId) => {
@@ -551,6 +633,8 @@ async function uploadAssets(spec, dryRun) {
 	const resolve = (it, got, fresh) => {
 		const name = it.name;
 		const label = name.padEnd(16);
+		// who uploaded this one: this run's creator, or the one recorded when it went into `pending`
+		const by = fresh ? me : (book.pending[name]?.creator ?? me);
 		if (got.state === "error") {
 			delete book.pending[name];
 			count.failed++;
@@ -563,6 +647,7 @@ async function uploadAssets(spec, dryRun) {
 			book.pending[name] = {
 				sha1: it.hash,
 				operation: got.operation,
+				creator: by,
 				since: book.pending[name]?.since ?? today(),
 			};
 			rows.set(name, ["processando: fica para o próximo run (não será reenviado)", `operação ${got.operation}`]);
@@ -572,9 +657,10 @@ async function uploadAssets(spec, dryRun) {
 		const id = got.assetId;
 		if (got.moderation === "rejected") {
 			delete book.pending[name];
-			book.rejected[name] = { sha1: it.hash, id, at: today() };
+			book.rejected[name] = { sha1: it.hash, id, creator: by, at: today() };
 			count.rejected++;
-			rows.set(name, ["RECUSADO pela moderação: o id não entra; mude o arquivo", id]);
+			const kept = book.ids[name] !== undefined ? ` (fica o id antigo, ${book.ids[name]})` : "";
+			rows.set(name, [`RECUSADO pela moderação: o id não entra; mude o arquivo${kept}`, id]);
 			console.log(`  ${label} recusado pela moderação (asset ${id})`);
 			annotate(
 				"error",
@@ -586,25 +672,30 @@ async function uploadAssets(spec, dryRun) {
 			return "done";
 		}
 		if (got.moderation === "approved" || !CI) {
+			const old = book.ids[name];
+			const replaced = old !== undefined && old !== `rbxassetid://${id}` && book.sha1[name] === it.hash;
 			book.ids[name] = `rbxassetid://${id}`;
 			book.sha1[name] = it.hash;
+			book.creator[name] = by;
 			delete book.pending[name];
 			delete book.rejected[name];
 			if (got.moderation === "approved") count.approved++;
 			else count.accepted++;
+			if (replaced) count.replaced++;
 			const result =
-				got.moderation !== "approved"
+				(got.moderation !== "approved"
 					? "gravado (ainda em análise na moderação)"
 					: fresh
 						? "aprovado (enviado agora)"
-						: "aprovado (estava em análise)";
+						: "aprovado (estava em análise)") + (replaced ? `; substitui ${old}` : "");
 			rows.set(name, [result, `rbxassetid://${id}`]);
 			console.log(`  ${label} rbxassetid://${id}${got.moderation !== "approved" ? " (em análise)" : ""}`);
 			persist();
 			return "done";
 		}
-		book.pending[name] = { sha1: it.hash, id, since: book.pending[name]?.since ?? today() };
-		rows.set(name, ["em análise: fica para o próximo run (não será reenviado)", id]);
+		book.pending[name] = { sha1: it.hash, id, creator: by, since: book.pending[name]?.since ?? today() };
+		const kept = book.ids[name] !== undefined ? `; até lá fica ${book.ids[name]}` : "";
+		rows.set(name, [`em análise: fica para o próximo run (não será reenviado)${kept}`, id]);
 		persist();
 		return "pending";
 	};
@@ -710,14 +801,26 @@ async function uploadAssets(spec, dryRun) {
 		count.pending > 0 ? `${count.pending} em análise (próximo run)` : "",
 		count.rejected + blocked.length > 0 ? `${count.rejected + blocked.length} recusada(s)` : "",
 		count.failed > 0 ? `${count.failed} falharam` : "",
+		count.replaced > 0 ? `${count.replaced} trocada(s) por um id de ${me}` : "",
 	].filter(Boolean);
-	stepSummary(table(`${spec.items.length} ${spec.noun}: ${parts.join(" · ")}.`));
+	// ids the game still takes from another creator after this run (a replacement in review, rejected or failed)
+	const stillOld = CI ? spec.items.filter(it => foreign(it.name)).length : 0;
+	const tail = stillOld > 0 ? ` **${stillOld} ainda com o id de outro criador** (o antigo segue no place).` : "";
+	stepSummary(table(`${spec.items.length} ${spec.noun}: ${parts.join(" · ")}.${tail}`));
 	if (count.pending > 0 && CI) {
 		annotate(
 			"warning",
 			`${spec.title}: em análise`,
-			`${count.pending} ${spec.noun} ainda em análise na moderação depois da espera: ficam sem id neste place ` +
-				"(como antes) e entram no próximo run, sem novo upload.",
+			`${count.pending} ${spec.noun} ainda em análise na moderação depois da espera: ficam sem o id novo neste ` +
+				"place (sem id, ou com o antigo quando há um) e entram no próximo run, sem novo upload.",
+		);
+	}
+	if (stillOld > 0) {
+		annotate(
+			"warning",
+			`${spec.title}: ids de outro criador`,
+			`${stillOld} ${spec.noun} ainda usam um id de outro criador (não de ${me}): o antigo fica até o novo ser ` +
+				"aprovado. Em análise: o próximo run consulta; recusado: mude o arquivo; falhou: o próximo run reenvia.",
 		);
 	}
 	// locally an operation that never finished is a failure too: `exit 0` there has always meant "every id written"
@@ -737,7 +840,7 @@ async function uploadAssets(spec, dryRun) {
  * since their last upload go up (assets.json keeps each one's sha1). At the end src/client/view/worldArtAssets.ts is
  * regenerated from assets.json: build, and the town is textured.
  */
-async function uploadArt(dryRun) {
+async function uploadArt(flags) {
 	const manifestPath = join(ART_DIR, "manifest.json");
 	if (!existsSync(manifestPath)) fail("sem design/world-art/manifest.json: rode `npm run art:world` antes");
 	const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
@@ -771,7 +874,7 @@ async function uploadArt(dryRun) {
 			description: it => `Project Z town art: ${it.description} (tools/gen-world-art.mjs)`,
 			regenerate: regenerateArtModule,
 		},
-		dryRun,
+		flags,
 	);
 }
 
@@ -798,7 +901,7 @@ const AUDIO_DIR = process.env.PZ_AUDIO_DIR ?? join(ROOT, "design", "audio");
  * changed bank is a new asset); and audio uploads are counted per month -- the reason the set is five banks, not
  * sixty files. An upload is private to its creator: an experience owned by the same user or group plays it.
  */
-async function uploadAudio(dryRun) {
+async function uploadAudio(flags) {
 	const manifestPath = join(AUDIO_DIR, "manifest.json");
 	if (!existsSync(manifestPath)) fail("sem design/audio/manifest.json: rode `npm run audio:sfx` antes");
 	const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
@@ -835,7 +938,7 @@ async function uploadAudio(dryRun) {
 				`Project Z sound effects, ${it.description}: our own synthesised sounds (tools/gen-sfx.mjs)`,
 			regenerate: regenerateAudioModule,
 		},
-		dryRun,
+		flags,
 	);
 }
 
@@ -997,22 +1100,25 @@ async function erase(args) {
 // ---------------------------------------------------------------- entry
 
 const [cmd, ...rest] = ARGV.filter(a => a !== "--ci");
+/** the flags of upload-art / upload-audio */
+const uploadFlags = args => ({ dryRun: args.includes("--dry-run"), reuploadAll: args.includes("--reupload-all") });
 const commands = {
 	whoami,
 	stores,
 	bans,
 	save: () => save(rest[0]),
 	publish: () => publish(rest.includes("--live")),
-	"upload-art": () => uploadArt(rest.includes("--dry-run")),
-	"upload-audio": () => uploadAudio(rest.includes("--dry-run")),
+	"upload-art": () => uploadArt(uploadFlags(rest)),
+	"upload-audio": () => uploadAudio(uploadFlags(rest)),
 	erase: () => erase(rest),
 };
 // the CI asks before calling a command another branch may still be adding (upload-audio): no key, no output
 if (cmd === "has") process.exit(rest.length === 1 && Object.hasOwn(commands, rest[0]) ? 0 : 1);
 if (!cmd || !Object.hasOwn(commands, cmd)) {
 	console.log(
-		"uso: npm run cloud -- <whoami|stores|save <userId>|bans|publish [--live]|upload-art [--dry-run]|" +
-			"upload-audio [--dry-run]|erase <userId> [--dry-run | --yes]> [--ci]",
+		"uso: npm run cloud -- <whoami|stores|save <userId>|bans|publish [--live]|" +
+			"upload-art [--dry-run] [--reupload-all]|upload-audio [--dry-run] [--reupload-all]|" +
+			"erase <userId> [--dry-run | --yes]> [--ci]",
 	);
 	process.exit(cmd ? 1 : 0);
 }
