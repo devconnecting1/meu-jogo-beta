@@ -1042,10 +1042,11 @@ export class LightMap {
 		const darkMoved = math.abs(maxDark - this.pDark) >= 0.5 / LIGHT_STEPS;
 		if (darkMoved) this.pDark = maxDark;
 		const nRows = this.sy.size();
-		for (let r = 0; r < nRows; r++) {
+		// loop bounds on `size()` where there is one: roblox-ts compiles only those to a numeric `for` (F10)
+		for (let r = 0; r < this.sy.size(); r++) {
 			if (this.rowDirty[r]) this.sampleRow(r);
 		}
-		for (let r = 0; r < nRows - 1; r++) {
+		for (let r = 0; r < this.sy.size() - 1; r++) {
 			if (this.rowDirty[r] || this.rowDirty[r + 1]) this.selectKeys(r);
 		}
 		const viewW = this.builtW;
@@ -1057,7 +1058,7 @@ export class LightMap {
 			if (!darkMoved && !this.rowDirty[r0] && !this.rowDirty[r0 + 1]) continue;
 			this.writeStrip(row, this.buildStrip(r0, cy, maxDark), viewW);
 		}
-		for (let r = 0; r < nRows; r++) this.rowDirty[r] = false;
+		for (let r = 0; r < this.sy.size(); r++) this.rowDirty[r] = false;
 	}
 
 	/**
@@ -1116,7 +1117,7 @@ export class LightMap {
 		const y = this.sy[r];
 		const cols = this.sx.size();
 		const base = r * cols;
-		for (let c = 0; c < cols; c++) this.samples[base + c] = 0;
+		for (let c = 0; c < this.sx.size(); c++) this.samples[base + c] = 0;
 		for (let i = 0; i < this.nLights; i++) {
 			const dy = y - this.ly[i];
 			const rad = this.lr[i];
@@ -1162,7 +1163,7 @@ export class LightMap {
 		const keys = this.pairKeys[r];
 		keys.clear();
 		keys.push(0);
-		for (let j = 1; j < cols - 1; j++) {
+		for (let j = 1; j < sx.size() - 1; j++) {
 			const q = keys[keys.size() - 1];
 			const u = (sx[j] - sx[q]) / (sx[j + 1] - sx[q]);
 			const ea = math.abs(s[a + q] + (s[a + j + 1] - s[a + q]) * u - s[a + j]);
@@ -1205,7 +1206,7 @@ export class LightMap {
 		const a = r0 * cols;
 		const b = a + cols;
 		const m = keys.size();
-		for (let j = 0; j < m; j++) {
+		for (let j = 0; j < keys.size(); j++) {
 			const c = keys[j];
 			const light = s[a + c] + (s[b + c] - s[a + c]) * f;
 			kx[j] = this.sx[c];

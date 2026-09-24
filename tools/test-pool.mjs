@@ -28,6 +28,9 @@
  *      clips to the same rect (rotation support off, nothing rotated above either: the two clips were the same).
  *   9. NO WRITE WITHOUT A CHANGE. A steady music track writes no Volume; the night layer and the touch sticks are
  *      written only when they move (source guards: those two only run on the whole client).
+ *  10. NO GARBAGE ON THE ACTOR PATHS (M4). A walking horde -- hit flashes fading, spitters winding up, a lit fuse --
+ *      builds no Color3 once warm, draws from 4 option tables and writes no property with the value it already had;
+ *      a fight's blood reuses its particle and decal records; GameLoop.shadowOffset answers in one scratch.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -725,6 +728,125 @@ section("9) no write without a change");
 			/placeAt\(this\.aimPad, this\.padAt,/.test(body) &&
 			!/this\.(joyBase|aimPad)\.Position\s*=/.test(body),
 		"the stick's base and the aim pad are placed only when they move (Hud.updateTouch, every frame)",
+	);
+}
+
+// ================================================================ 10. no garbage on the actor paths
+
+section("10) no garbage per frame on the actor paths (M4): option tables, colours, particle records");
+{
+	WA.overrideWorldArt({});
+	const C = globalThis.Color3;
+	const lerp = C.prototype.Lerp;
+	const fromRGB = C.fromRGB;
+	let built = 0;
+	C.prototype.Lerp = function (...a) {
+		built++;
+		return lerp.apply(this, a);
+	};
+	C.fromRGB = (...a) => {
+		built++;
+		return fromRGB(...a);
+	};
+	const r = new Renderer(gui.make("Frame"), "Sprites");
+	const cam = new Camera();
+	cam.setView(1280, 720);
+	r.setView(1280, 720);
+	const opts = new Set();
+	const draw = r.drawRect.bind(r);
+	r.drawRect = (c, x, y, o) => {
+		opts.add(o);
+		return draw(c, x, y, o);
+	};
+	// 40 walkers of every type: 4 hit, 2 spitters winding up, one lit fuse; the hit flash fades 1 -> 0 over 60 frames
+	const horde = [];
+	for (let i = 0; i < 40; i++)
+		horde.push({ x: (i % 10) * 110 - 500, y: Math.floor(i / 10) * 140 - 250, a: i * 0.7, kind: 1 + (i % 5) });
+	const frame = f => {
+		r.beginFrame();
+		for (const [i, z] of horde.entries()) {
+			z.x += Math.cos(z.a) * 0.5;
+			const flash = i < 4 ? 1 - (f % 60) / 60 : 0;
+			const windup = i === 6 || i === 11 ? (f % 50) / 5 : 0;
+			HV.drawZombie(
+				r,
+				cam,
+				z.x,
+				z.y,
+				z.a,
+				1,
+				z.kind,
+				flash,
+				1,
+				f * 0.09 + i,
+				Z.zombie,
+				windup,
+				false,
+				false,
+				i === 7,
+			);
+		}
+		r.endFrame();
+	};
+	for (let f = 0; f < 300; f++) frame(f);
+	built = 0;
+	opts.clear();
+	const w = watch(() => {
+		for (let f = 300; f < 600; f++) frame(f);
+	});
+	check(
+		built === 0,
+		"300 frames of a walking horde, a flash fading and spitters winding up: not one Color3 built once warm",
+		`${built} Color3`,
+	);
+	check(
+		opts.size() <= 4,
+		"every walker is drawn from the same 4 option tables (feet, arms, body, head)",
+		`${opts.size()}`,
+	);
+	check(
+		w.rewrites === 0,
+		"and no property is written again with the value it had (a fresh Color3 each frame was an engine write each frame)",
+		`${(w.writes / 300).toFixed(0)} writes/frame, ${w.rewrites} same-value rewrites`,
+	);
+	C.prototype.Lerp = lerp;
+	C.fromRGB = fromRGB;
+
+	// blood: a fight's sprays and splats reuse their records
+	const { ParticleSystem } = require(join(SRC, "client/systems/particles.ts"));
+	const ps = new ParticleSystem();
+	const seen = new Set();
+	let fresh = 0;
+	let sprayed = 0;
+	const fight = f => {
+		if (f % 6 === 0) {
+			ps.bloodBurst(f % 300, 40, 12, "zombie", 0.5);
+			sprayed += 12;
+		}
+		if (f % 9 === 0) {
+			ps.debrisBurst(f % 200, 10, 6, COLORS.fence);
+			sprayed += 6;
+		}
+		ps.update(1 / 60);
+		for (const p of ps.active()) if (!seen.has(p)) (seen.add(p), fresh++);
+		for (const d of ps.decalRecords()) if (!seen.has(d)) (seen.add(d), fresh++);
+	};
+	for (let f = 0; f < 1200; f++) fight(f);
+	fresh = 0;
+	sprayed = 0;
+	for (let f = 1200; f < 2400; f++) fight(f);
+	// a new record only when the fight reaches a new peak of live particles (the free list grows to it, once)
+	check(
+		fresh <= 12,
+		"20 s of a fight's blood and debris after a warm-up: records reused (free list, decal ring rewritten in place)",
+		`${fresh} new records for ${sprayed} particles sprayed; ${ps.active().length} particles, ${ps.decalRecords().length} decals live`,
+	);
+
+	const loop = readFileSync(join(SRC, "client", "gameLoop.ts"), "utf8");
+	const shadow = loop.slice(loop.indexOf("private shadowOffset("), loop.indexOf("private drawDecals("));
+	check(
+		/return out;/.test(shadow) && !/return \{/.test(shadow),
+		"GameLoop.shadowOffset answers in one scratch, like drawKit's (a table per solid, item and actor before)",
 	);
 }
 

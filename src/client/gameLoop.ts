@@ -2,7 +2,7 @@ import { getCtx, refreshAim } from "./bootstrap";
 import { COLORS, Z } from "shared/engine/colors";
 import { Camera, ViewRect } from "shared/engine/camera";
 import { DESIGN } from "shared/engine/constants";
-import { LightMap, LightSource, Renderer } from "shared/engine/renderer";
+import { LightMap, LightSource, Renderer, SpriteOpts } from "shared/engine/renderer";
 import { clamp, lerp } from "shared/engine/vec2";
 import { ItemKind, WeaponKind } from "shared/data/kinds";
 import { EQUIPS } from "shared/data/equips";
@@ -328,6 +328,17 @@ function itemLook(kind: number, id: number): ItemLook {
 	return ITEM_LOOKS.parts;
 }
 
+/*
+ * The loop's own option tables, one scratch per call site (M4): a literal per decal, particle, item piece and glint
+ * was a table per sprite per frame. The keys that never change are written here; each draw writes the rest.
+ */
+const DECAL_O: SpriteOpts = { zIndex: Z.decal };
+const PUDDLE_O: SpriteOpts = { color: COLORS.acid, stroke: COLORS.bloodZombie, zIndex: Z.decal + 1 };
+const PARTICLE_O: SpriteOpts = { zIndex: Z.particle };
+const ITEM_SHADOW_O: SpriteOpts = { color: BLACK, alpha: 0.3, zIndex: Z.actorShadow };
+const ITEM_PIECE_O: SpriteOpts = { strokeThickness: 1, strokeAlpha: 0.75 };
+const GLINT_O: SpriteOpts = { color: WHITE, zIndex: Z.item + 4 };
+
 /** how far a dropped item lies turned from the world axes (radians), fixed per item */
 const ITEM_TILT = 0.55;
 /** the glint that marks loot: once every period (s), lasting `len` (s), per item out of phase */
@@ -370,6 +381,8 @@ export class GameLoop {
 	private sunX = 0.7;
 	private sunY = 0.7;
 	private nightLight = false;
+	/** what `shadowOffset` answers, refilled per call */
+	private readonly shadowOut = { x: 0, y: 0 };
 	private clock = 0;
 	private lightMap?: LightMap;
 	private nameplate?: Nameplate;
@@ -771,39 +784,47 @@ export class GameLoop {
 		}
 	}
 
-	/** where a shadow of length `len` falls for something at (x, y) */
+	/**
+	 * Where a shadow of length `len` falls for something at (x, y). The answer is one scratch (the drawKit rule, M4):
+	 * a frame asks for one per solid, item and actor on screen, and no caller keeps it past its next draw.
+	 */
 	private shadowOffset(x: number, y: number, len: number): { x: number; y: number } {
+		const out = this.shadowOut;
 		if (this.nightLight) {
 			const dx = x - this.player.x;
 			const dy = y - this.player.y;
 			const d = math.sqrt(dx * dx + dy * dy);
-			if (d < 1) return { x: 0, y: len * 0.5 };
-			return { x: (dx / d) * len, y: (dy / d) * len };
+			if (d < 1) {
+				out.x = 0;
+				out.y = len * 0.5;
+			} else {
+				out.x = (dx / d) * len;
+				out.y = (dy / d) * len;
+			}
+			return out;
 		}
-		return { x: this.sunX * len, y: this.sunY * len };
+		out.x = this.sunX * len;
+		out.y = this.sunY * len;
+		return out;
 	}
 
 	private drawDecals(r: Renderer, cam: Camera, v: ViewRect): void {
-		this.particles.forDecals(d => {
-			if (!circleInView(d.x, d.y, d.size, v)) return;
-			r.drawCircle(cam, d.x, d.y, d.size, {
-				color: d.color,
-				alpha: 0.7 * math.min(1, d.life / 5),
-				zIndex: Z.decal,
-			});
-		});
+		const o = DECAL_O;
+		for (const d of this.particles.decalRecords()) {
+			if (d.life <= 0 || !circleInView(d.x, d.y, d.size, v)) continue;
+			o.color = d.color;
+			o.alpha = 0.7 * math.min(1, d.life / 5);
+			r.drawCircle(cam, d.x, d.y, d.size, o);
+		}
 		const puddles = this.refs.puddles;
 		if (puddles !== undefined) {
+			const p = PUDDLE_O;
 			for (const pd of puddles) {
 				if (!circleInView(pd.x, pd.y, pd.r, v)) continue;
 				const k = clamp(pd.life / math.max(0.001, pd.lifeMax), 0, 1);
-				r.drawCircle(cam, pd.x, pd.y, pd.r * 2, {
-					color: COLORS.acid,
-					alpha: 0.45 * k,
-					stroke: COLORS.bloodZombie,
-					strokeAlpha: 0.6 * k,
-					zIndex: Z.decal + 1,
-				});
+				p.alpha = 0.45 * k;
+				p.strokeAlpha = 0.6 * k;
+				r.drawCircle(cam, pd.x, pd.y, pd.r * 2, p);
 			}
 		}
 	}
@@ -820,31 +841,26 @@ export class GameLoop {
 			const lk = itemLook(it.kind, it.itemId);
 			const a = (((it.id * 37) % 23) / 11 - 1) * ITEM_TILT;
 			const so = this.shadowOffset(it.x, it.y, 4);
-			part(r, cam, it.x + so.x, it.y + so.y, a, 0, 0, {
-				w: lk.shadowW,
-				h: lk.shadowH,
-				color: BLACK,
-				alpha: 0.3,
-				cornerRadius: lk.shadowR,
-				zIndex: Z.actorShadow,
-			});
+			const sh = ITEM_SHADOW_O;
+			sh.w = lk.shadowW;
+			sh.h = lk.shadowH;
+			sh.cornerRadius = lk.shadowR;
+			part(r, cam, it.x + so.x, it.y + so.y, a, 0, 0, sh);
 			const ca = math.cos(a);
 			const sa = math.sin(a);
+			const o = ITEM_PIECE_O;
 			for (let i = 0; i < lk.parts.size(); i++) {
 				const pc = lk.parts[i];
-				r.drawRect(cam, it.x + ca * pc.f - sa * pc.l, it.y + sa * pc.f + ca * pc.l, {
-					w: pc.w,
-					h: pc.h,
-					// a piece may be turned inside the item (bow limbs, crate brace)
-					rotation: a + pc.rot,
-					color: pc.color,
-					circle: pc.r === CIRCLE,
-					cornerRadius: pc.r,
-					stroke: pc.edge ? LOOT_EDGE : undefined,
-					strokeThickness: 1,
-					strokeAlpha: 0.75,
-					zIndex: Z.item + i,
-				});
+				o.w = pc.w;
+				o.h = pc.h;
+				// a piece may be turned inside the item (bow limbs, crate brace)
+				o.rotation = a + pc.rot;
+				o.color = pc.color;
+				o.circle = pc.r === CIRCLE;
+				o.cornerRadius = pc.r;
+				o.stroke = pc.edge ? LOOT_EDGE : undefined;
+				o.zIndex = Z.item + i;
+				r.drawRect(cam, it.x + ca * pc.f - sa * pc.l, it.y + sa * pc.f + ca * pc.l, o);
 			}
 			// glint: a small four-point sparkle at the item's upper-left, out of phase per item
 			const t = (this.clock + it.id * 0.61) % GLINT_PERIOD;
@@ -852,8 +868,14 @@ export class GameLoop {
 			const gx = it.x - 10;
 			const gy = it.y - 11;
 			const arm = 3 + GLINT_ARM * s;
-			r.drawRect(cam, gx, gy, { w: arm, h: 2, color: WHITE, alpha: 0.9 * s, zIndex: Z.item + 4 });
-			r.drawRect(cam, gx, gy, { w: 2, h: arm, color: WHITE, alpha: 0.9 * s, zIndex: Z.item + 4 });
+			const g = GLINT_O;
+			g.w = arm;
+			g.h = 2;
+			g.alpha = 0.9 * s;
+			r.drawRect(cam, gx, gy, g);
+			g.w = 2;
+			g.h = arm;
+			r.drawRect(cam, gx, gy, g);
 		}
 	}
 
@@ -899,7 +921,8 @@ export class GameLoop {
 		if (ride !== undefined) {
 			look.angle = rideHeading(ride);
 			look.feetAmp = 0;
-			drawVehicle(r, cam, ride.kind, p.x, p.y, look.angle, so.x, so.y, Z.player - 2);
+			// the look's copy: `so` is the loop's one shadow scratch, and the pet above asked for its own since
+			drawVehicle(r, cam, ride.kind, p.x, p.y, look.angle, look.shadowX, look.shadowY, Z.player - 2);
 		}
 		drawSurvivor(r, cam, look, this.swing);
 	}
@@ -917,14 +940,13 @@ export class GameLoop {
 	}
 
 	private drawParticles(r: Renderer, cam: Camera, v: ViewRect): void {
-		this.particles.forActive(p => {
-			if (!circleInView(p.x, p.y, p.size, v)) return;
-			r.drawCircle(cam, p.x, p.y, p.size, {
-				color: p.color,
-				alpha: clamp((p.life / p.maxLife) * 1.5, 0, 1),
-				zIndex: Z.particle,
-			});
-		});
+		const o = PARTICLE_O;
+		for (const p of this.particles.active()) {
+			if (!circleInView(p.x, p.y, p.size, v)) continue;
+			o.color = p.color;
+			o.alpha = clamp((p.life / p.maxLife) * 1.5, 0, 1);
+			r.drawCircle(cam, p.x, p.y, p.size, o);
+		}
 	}
 
 	render(): void {
