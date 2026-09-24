@@ -158,6 +158,8 @@ export interface RemoteZombie {
 	/** 1..ZOMBIE_TYPE_MAX */
 	type: number;
 	big: boolean;
+	/** what the server decided it is doing (0 idle … 3 chasing, protocol decision 17), of the same sample as `flags` */
+	aware: number;
 	/** jump height, or the spitter's head recoil — which one is told by the flags */
 	extra: number;
 	/** walk-cycle phase, advanced by the interpolated speed */
@@ -286,6 +288,8 @@ interface ActorSample {
 	flags: number;
 	type: number;
 	big: boolean;
+	/** a zombie's awareness state (0 for a boss) */
+	aware: number;
 	extra: number;
 	hp: number;
 	phase: number;
@@ -319,6 +323,7 @@ function zombieSample(tick: number, z: ZombieSnap): ActorSample {
 		flags: z.flags,
 		type: z.type,
 		big: z.big,
+		aware: z.aware,
 		extra: z.extra ?? 0,
 		hp: 0,
 		phase: 0,
@@ -334,6 +339,7 @@ function bossSample(tick: number, b: BossSnap): ActorSample {
 		flags: b.flags,
 		type: b.type,
 		big: false,
+		aware: 0,
 		extra: b.extra,
 		hp: b.hp,
 		phase: b.phase,
@@ -399,6 +405,7 @@ const SCRATCH: ActorSample = {
 	flags: 0,
 	type: 1,
 	big: false,
+	aware: 0,
 	extra: 0,
 	hp: 0,
 	phase: 0,
@@ -413,6 +420,7 @@ function copySample(into: ActorSample, from: ActorSample): void {
 	into.flags = from.flags;
 	into.type = from.type;
 	into.big = from.big;
+	into.aware = from.aware;
 	into.extra = from.extra;
 	into.hp = from.hp;
 	into.phase = from.phase;
@@ -832,6 +840,7 @@ export class SnapshotBuffer {
 				flags: 0,
 				type: 1,
 				big: false,
+				aware: 0,
 				extra: 0,
 				feetCycle: 0,
 				speed: 0,
@@ -848,6 +857,7 @@ export class SnapshotBuffer {
 		out.flags = at.flags;
 		out.type = at.type;
 		out.big = at.big;
+		out.aware = at.aware;
 		out.extra = at.extra;
 		out.feetCycle = track.feetCycle;
 		out.speed = speed;

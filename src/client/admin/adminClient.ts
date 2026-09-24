@@ -58,6 +58,8 @@ function enableAdmin(deps: AdminDeps): AdminMode {
 	gui.Name = "PZAdmin";
 	gui.ResetOnSpawn = false;
 	gui.IgnoreGuiInset = true;
+	// the device safe area, like the HUD's and the menus' (client/bootstrap.ts): the frame the kit lays out in
+	gui.ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets;
 	gui.DisplayOrder = 150;
 	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling;
 	// the panel is full of names and typed text, and is English on purpose (UI-03): none of it is captured for
@@ -71,7 +73,8 @@ function enableAdmin(deps: AdminDeps): AdminMode {
 	);
 	gui.Parent = ctx.playerGui;
 
-	// debug overlays: inside the game root, above the night (Dark = 80) and below the HUD (90) / menus (100)
+	// debug overlays: inside the world's root (the whole screen, like the world), above the night (Dark = 80); the HUD and
+	// the menus are ScreenGuis of their own above it (client/bootstrap.ts)
 	const overlayLayer = new Instance("Frame");
 	overlayLayer.Name = "AdminOverlay";
 	overlayLayer.Size = UDim2.fromScale(1, 1);

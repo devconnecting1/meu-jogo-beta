@@ -148,8 +148,25 @@ const args = process.argv.slice(2);
 const SHOW_ALL = args.includes("--all");
 const marksIdx = args.indexOf("--marks");
 const MARKS_FILE = marksIdx >= 0 ? args[marksIdx + 1] : undefined;
-const seeds = args.filter((a, i) => /^-?\d+$/.test(a) && (marksIdx < 0 || i !== marksIdx + 1)).map(Number);
+const sweepIdx = args.indexOf("--sweep");
+const baseIdx = args.indexOf("--sweep-base");
+const valueAt = new Set([marksIdx, sweepIdx, baseIdx].filter(i => i >= 0).map(i => i + 1));
+const seeds = args.filter((a, i) => /^-?\d+$/.test(a) && !valueAt.has(i)).map(Number);
 if (seeds.length === 0) seeds.push(DESIGN.TOWN_SEED, 1, 42, 99991, 123456);
+/**
+ * --sweep N: N more towns from seeds drawn the way server/sim/worldReset.ts draws them (any of 1 … 2^31 - 2), by a
+ * MINSTD stream from --sweep-base (default 20260923): a world reset can land on any seed, so CI walks a spread of
+ * them -- the same ones every run (a failure is reproducible: the seed is printed), another base for another spread.
+ */
+const SWEEP = sweepIdx >= 0 ? Number(args[sweepIdx + 1]) : 0;
+if (SWEEP > 0) {
+	let st = baseIdx >= 0 ? Number(args[baseIdx + 1]) % 2147483647 : 20260923;
+	if (st <= 0) st = 1;
+	for (let i = 0; i < SWEEP; i++) {
+		st = (st * 48271) % 2147483647;
+		seeds.push(st % 2147483646 || 1);
+	}
+}
 const PER_RULE = 12;
 
 // ---------------------------------------------------------------- constants (docs/DESIGN_RULES.md)
@@ -318,6 +335,494 @@ function reachability(w, start) {
 	return { at, reachedCells: tail };
 }
 
+// ---------------------------------------------------------------- interiors (EDI-08..EDI-14)
+
+/** the doors a type is meant to have (front + back / service / exits), EDI-09 */
+const DOOR_TARGET = { 1: 2, 2: 2, 3: 3, 4: 3, 5: 2, 6: 2, 7: 3, 8: 2, 9: 2, 10: 2, 11: 2 };
+/**
+ * share of a type's buildings that must reach DOOR_TARGET (a secondary door is dropped where the ground outside is
+ * taken), over all the towns of a run: per town it is noise (3-9 pharmacies or gun shops a town)
+ */
+const DOOR_SHARE = 0.6;
+/** type → buildings and those with all their doors, summed over every seed of the run */
+const DOOR_RUN = {};
+/** rooms that never get a window (EDI-10): a bathroom, a hall, the back rooms, the gun shop's secure room */
+const NO_WINDOW = new Set(["bath", "hall", "stock", "cold", "secure", "corridor", "treatment", "galley"]);
+/** a secondary door's free ground: two bodies deep (shared/game/interiors.ts APPROACH_DEPTH), enough for an alley */
+const APPROACH = 80;
+/** walker speed (u/s): 3 px/frame at 30 fps, shared/data/zombies.ts */
+const WALKER_SPEED = 90;
+/**
+ * EDI-11: the longest a walker takes, from the nearest outside point, to reach any spot of any room (climbing a
+ * window counted at its real slowness). 12 s: under the ~13 s it takes the night's first wave to walk from its
+ * spawn ring (720–1080 u, MP-09) to a survivor standing on the street, so hiding deep inside never buys more
+ * than the walk across a yard.
+ */
+const REACH_BOUND_S = 12;
+
+/** the piece(s) that say what a room is (EDI-08): a room of that kind without any of them fails */
+const DEFINING = {
+	living: ["sofa", "armchair"],
+	kitchen: ["counter", "stove", "fridge"],
+	dining: ["table"],
+	bedroom: ["bed"],
+	bath: ["toilet", "tub", "basin"],
+	sales: ["shelf", "gondola", "gunrack", "clothesrack", "display", "coldcase", "checkout"],
+	stock: ["rack"],
+	cold: ["coldcase"],
+	secure: ["safe", "gunrack"],
+	office: ["desk"],
+	classroom: ["schooldesk", "teacherdesk"],
+	ward: ["hospbed"],
+	treatment: ["optable"],
+	diner: ["table", "booth"],
+	galley: ["stove", "counter", "prep"],
+	lobby: ["reception", "bench", "cabinet"],
+};
+
+/**
+ * The last stretch of a chase is a straight line, not the field (zombieBrain `chaseHeading`: DIRECT_CHASE =
+ * 200 u with a clear segment); 160 u keeps a margin under it.
+ */
+const DIRECT_CHASE_MARGIN = 160;
+
+/**
+ * The horde's own view of a building (server/sim/flowField.ts, shared/game/physics.ts FlowField): 32 u cells on
+ * the world grid, every blocking solid inflated by 4 u and HARD, a window's sill passable (stampWindow); from
+ * every free cell outside the footprint, which cells can the field reach (8 neighbours, no corner cutting)?
+ * `near(x, y)`: a zombie the field brought to a reached cell sees (x, y) down a clear line, close enough to
+ * chase straight there.
+ */
+function fieldReach(w, b) {
+	const CELL = 32;
+	const INFLATE = 4;
+	const M = 256;
+	const ox = Math.floor((b.x - M) / CELL) * CELL;
+	const oy = Math.floor((b.y - M) / CELL) * CELL;
+	const cols = Math.ceil((b.x + b.w + M - ox) / CELL);
+	const rows = Math.ceil((b.y + b.h + M - oy) / CELL);
+	const size = Math.max(cols, rows);
+	const HARD = 2;
+	const grid = new Uint8Array(size * size);
+	for (const s of W.querySolids(w, ox, oy, ox + size * CELL, oy + size * CELL)) {
+		if (s.kind === "window") {
+			physics.stampWindow(s, ox, oy, CELL, size, (gx, gy) => {
+				if (grid[gy * size + gx] < 1) grid[gy * size + gx] = 1;
+			});
+			continue;
+		}
+		if (!W.isBlocking(s)) continue;
+		const gx0 = Math.max(0, Math.floor((s.x - INFLATE - ox) / CELL));
+		const gy0 = Math.max(0, Math.floor((s.y - INFLATE - oy) / CELL));
+		const gx1 = Math.min(size - 1, Math.floor((s.x + s.w + INFLATE - ox) / CELL));
+		const gy1 = Math.min(size - 1, Math.floor((s.y + s.h + INFLATE - oy) / CELL));
+		for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) grid[gy * size + gx] = HARD;
+	}
+	const seen = new Uint8Array(size * size);
+	const queue = [];
+	for (let k = 0; k < size * size; k++) {
+		if (grid[k] === HARD) continue;
+		const x = ox + (k % size) * CELL + CELL / 2;
+		const y = oy + Math.floor(k / size) * CELL + CELL / 2;
+		if (W.buildingAt(w, x, y) === b) continue;
+		seen[k] = 1;
+		queue.push(k);
+	}
+	for (let head = 0; head < queue.length; head++) {
+		const k = queue[head];
+		const cx = k % size;
+		const cy = (k - cx) / size;
+		for (let dy = -1; dy <= 1; dy++) {
+			for (let dx = -1; dx <= 1; dx++) {
+				if (dx === 0 && dy === 0) continue;
+				const gx = cx + dx;
+				const gy = cy + dy;
+				if (gx < 0 || gy < 0 || gx >= size || gy >= size) continue;
+				const nk = gy * size + gx;
+				if (seen[nk] || grid[nk] === HARD) continue;
+				if (dx !== 0 && dy !== 0 && (grid[cy * size + gx] === HARD || grid[gy * size + cx] === HARD)) continue;
+				seen[nk] = 1;
+				queue.push(nk);
+			}
+		}
+	}
+	return {
+		cells: queue.length,
+		near(x, y) {
+			// a reached cell within DIRECT_CHASE_MARGIN, with a straight clear line from its centre to (x, y)
+			const gx = Math.floor((x - ox) / CELL);
+			const gy = Math.floor((y - oy) / CELL);
+			const R = Math.ceil(DIRECT_CHASE_MARGIN / CELL);
+			// ring by ring from the spot's own cell: the nearest reached cell is almost always the answer
+			for (let ring = 0; ring <= R; ring++) {
+				for (let dy = -ring; dy <= ring; dy++) {
+					for (let dx = -ring; dx <= ring; dx++) {
+						if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
+						const ax = gx + dx;
+						const ay = gy + dy;
+						if (ax < 0 || ay < 0 || ax >= size || ay >= size || !seen[ay * size + ax]) continue;
+						const px = ox + ax * CELL + CELL / 2;
+						const py = oy + ay * CELL + CELL / 2;
+						if (Math.hypot(px - x, py - y) > DIRECT_CHASE_MARGIN) continue;
+						if (physics.segmentClear(w, px, py, x, y, physics.blocksMovement)) return true;
+					}
+				}
+			}
+			return false;
+		},
+	};
+}
+
+/** raster of one building's surroundings: blocked for a body of radius r, window vault zones, the footprint */
+function buildingRaster(w, b, r, margin) {
+	const C = 8;
+	const x0 = b.x - margin;
+	const y0 = b.y - margin;
+	const cols = Math.ceil((b.w + margin * 2) / C);
+	const rows = Math.ceil((b.h + margin * 2) / C);
+	const blocked = new Uint8Array(cols * rows);
+	const vault = new Uint8Array(cols * rows);
+	const inside = new Uint8Array(cols * rows);
+	const parts = b.parts ?? [b];
+	for (let j = 0; j < rows; j++) {
+		const py = y0 + j * C + C / 2;
+		for (let i = 0; i < cols; i++) {
+			const px = x0 + i * C + C / 2;
+			if (parts.some(p => px >= p.x && px <= p.x + p.w && py >= p.y && py <= p.y + p.h)) inside[j * cols + i] = 1;
+		}
+	}
+	for (const s of W.querySolids(w, x0, y0, x0 + cols * C, y0 + rows * C)) {
+		const window = s.kind === "window";
+		if (!window && !W.isBlocking(s)) continue;
+		const pad = window ? physics.VAULT_REACH + C : r;
+		const c0 = Math.max(0, Math.floor((s.x - pad - x0) / C));
+		const c1 = Math.min(cols - 1, Math.floor((s.x + s.w + pad - x0) / C));
+		const r0 = Math.max(0, Math.floor((s.y - pad - y0) / C));
+		const r1 = Math.min(rows - 1, Math.floor((s.y + s.h + pad - y0) / C));
+		for (let j = r0; j <= r1; j++) {
+			const py = y0 + j * C + C / 2;
+			const dy = Math.max(s.y - py, 0, py - s.y - s.h);
+			for (let i = c0; i <= c1; i++) {
+				const px = x0 + i * C + C / 2;
+				if (window) {
+					if (physics.inVaultZone(s, px, py)) vault[j * cols + i] = 1;
+					continue;
+				}
+				const dx = Math.max(s.x - px, 0, px - s.x - s.w);
+				if (dx * dx + dy * dy < r * r) blocked[j * cols + i] = 1;
+			}
+		}
+	}
+	const idx = (x, y) => {
+		const i = Math.floor((x - x0) / C);
+		const j = Math.floor((y - y0) / C);
+		return i < 0 || j < 0 || i >= cols || j >= rows ? -1 : j * cols + i;
+	};
+	return { C, x0, y0, cols, rows, blocked, vault, inside, idx };
+}
+
+/**
+ * Cheapest path from `starts` over the free cells `allowed` lets through (8-neighbour, no corner cutting), in
+ * world units; a step inside a window's vault zone costs 1 / VAULT_SLOW of its length (the climb, EDI-10).
+ */
+function pathField(ras, starts, allowed) {
+	const { cols, rows, blocked, vault, C } = ras;
+	const n = cols * rows;
+	const dist = new Float64Array(n).fill(Infinity);
+	const heap = [];
+	const push = (k, d) => {
+		heap.push([d, k]);
+		let i = heap.length - 1;
+		while (i > 0) {
+			const p = (i - 1) >> 1;
+			if (heap[p][0] <= heap[i][0]) break;
+			[heap[p], heap[i]] = [heap[i], heap[p]];
+			i = p;
+		}
+	};
+	const pop = () => {
+		const top = heap[0];
+		const last = heap.pop();
+		if (heap.length > 0) {
+			heap[0] = last;
+			let i = 0;
+			for (;;) {
+				const l = i * 2 + 1;
+				const r = l + 1;
+				let m = i;
+				if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
+				if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
+				if (m === i) break;
+				[heap[m], heap[i]] = [heap[i], heap[m]];
+				i = m;
+			}
+		}
+		return top;
+	};
+	for (const k of starts) {
+		if (k < 0 || blocked[k]) continue;
+		dist[k] = 0;
+		push(k, 0);
+	}
+	const slow = 1 / physics.VAULT_SLOW;
+	while (heap.length > 0) {
+		const [d, k] = pop();
+		if (d > dist[k]) continue;
+		const i = k % cols;
+		const j = (k - i) / cols;
+		for (let dj = -1; dj <= 1; dj++) {
+			for (let di = -1; di <= 1; di++) {
+				if (di === 0 && dj === 0) continue;
+				const ni = i + di;
+				const nj = j + dj;
+				if (ni < 0 || nj < 0 || ni >= cols || nj >= rows) continue;
+				const nk = nj * cols + ni;
+				if (blocked[nk] || !allowed(nk)) continue;
+				if (di !== 0 && dj !== 0 && (blocked[j * cols + ni] || blocked[nj * cols + i])) continue;
+				const step = (di !== 0 && dj !== 0 ? Math.SQRT2 : 1) * C * (vault[nk] || vault[k] ? slow : 1);
+				if (d + step < dist[nk]) {
+					dist[nk] = d + step;
+					push(nk, d + step);
+				}
+			}
+		}
+	}
+	return dist;
+}
+
+/** the free cells of the raster lying in a rect */
+function cellsIn(ras, q) {
+	const out = [];
+	for (let y = q.y + ras.C / 2; y < q.y + q.h; y += ras.C) {
+		for (let x = q.x + ras.C / 2; x < q.x + q.w; x += ras.C) {
+			const k = ras.idx(x, y);
+			if (k >= 0 && !ras.blocked[k] && ras.inside[k]) out.push(k);
+		}
+	}
+	return out;
+}
+
+/**
+ * EDI-08..EDI-14 for every building: rooms reachable from every entrance (a body of 18, through the inside),
+ * every entrance with a free approach, nothing in front of an opening, loot spots reachable, windows only where
+ * a real building has them, entrance counts per type, non-rectangular footprints, and no safe spot: a walker
+ * reaches every free spot of every room from outside within REACH_BOUND_S.
+ */
+function interiorChecks(w, buildings, kidsOf, reach, fail, stats) {
+	const byType = {};
+	let compound = 0;
+	let worst = { s: 0 };
+	let fieldCells = 0;
+	for (const b of buildings) {
+		if ((b.parts?.length ?? 1) > 1) compound++;
+		const openings = b.openings ?? [];
+		const doors = openings.filter(o => o.kind === "door");
+		const windows = openings.filter(o => o.kind === "window");
+		const t = b.buildingType;
+		const tt = (byType[t] ??= { n: 0, target: 0, doors: 0, windows: 0 });
+		tt.n++;
+		tt.doors += doors.length;
+		tt.windows += windows.length;
+		if (doors.length >= (DOOR_TARGET[t] ?? 2)) tt.target++;
+		if (doors.filter(o => o.main).length !== 1)
+			fail("EDI-09", `${b.tags} #${b.id}: ${doors.filter(o => o.main).length} main doors`, cx(b), cy(b));
+		// a second way out always: another door or a window (no single-exit building)
+		if (doors.length + windows.length < 2) fail("EDI-09", `${b.tags} #${b.id}: a single way in`, cx(b), cy(b));
+		const rooms = b.rooms ?? [];
+		const roomAt = (x, y) => rooms.find(q => x >= q.x && x <= q.x + q.w && y >= q.y && y <= q.y + q.h);
+		const kids = kidsOf.get(b.id) ?? [];
+		const furniture = kids.filter(s => s.kind === "furniture");
+		// EDI-10: windows only where a real building has them, and wide enough for the biggest walker
+		for (const o of windows) {
+			const n = NORMAL[o.side];
+			const r = roomAt(o.x + o.w / 2 - n[0] * 30, o.y + o.h / 2 - n[1] * 30);
+			if (r !== undefined && NO_WINDOW.has(r.kind)) {
+				fail("EDI-10", `${b.tags} #${b.id}: a window in the ${r.kind}`, o.x + o.w / 2, o.y + o.h / 2);
+			}
+			if (Math.max(o.w, o.h) < physics.ZOMBIE_RADIUS * 1.4 * 2 + 8) {
+				fail("EDI-10", `${b.tags} #${b.id}: window too narrow for a big walker`, o.x, o.y);
+			}
+		}
+		// EDI-12: nothing in front of a doorway (two bodies deep) or a window (one body deep)
+		for (const o of openings) {
+			const along = o.w >= o.h;
+			const d = o.kind === "window" ? 36 : 64;
+			const zones = along
+				? [
+						{ x: o.x, y: o.y - d, w: o.w, h: d },
+						{ x: o.x, y: o.y + o.h, w: o.w, h: d },
+					]
+				: [
+						{ x: o.x - d, y: o.y, w: d, h: o.h },
+						{ x: o.x + o.w, y: o.y, w: d, h: o.h },
+					];
+			for (const z of zones) {
+				const hit = furniture.find(f => overlap(f, z));
+				if (hit) fail("EDI-12", `${b.tags} #${b.id}: ${hit.tags} blocks a ${o.kind}`, cx(hit), cy(hit));
+			}
+		}
+		// EDI-09: every door opens onto free ground (a body walks APPROACH u straight out) that the town reaches
+		for (const o of doors) {
+			const n = NORMAL[o.side];
+			const ox = o.x + o.w / 2;
+			const oy = o.y + o.h / 2;
+			let blocked;
+			for (let t2 = TOWN.WALL_T / 2 + BODY_R + 2; t2 <= TOWN.WALL_T / 2 + APPROACH - BODY_R; t2 += 6) {
+				const hit = physics.circleBlocked(w, ox + n[0] * t2, oy + n[1] * t2, BODY_R);
+				if (hit) {
+					blocked = hit;
+					break;
+				}
+			}
+			if (blocked) {
+				fail(
+					"EDI-09",
+					`${b.tags} #${b.id}: ${o.main ? "main" : "secondary"} door blocked outside by ${blocked.kind}/${blocked.tags}`,
+					ox,
+					oy,
+				);
+			} else if (!reach.at(ox + n[0] * (TOWN.WALL_T / 2 + 40), oy + n[1] * (TOWN.WALL_T / 2 + 40)).reached) {
+				fail("EDI-09", `${b.tags} #${b.id}: a door opens onto ground the town does not reach`, ox, oy);
+			}
+		}
+		if (rooms.length === 0) continue;
+		// EDI-08: from every door, through the inside, a body of 18 reaches every room and every loot spot
+		const ras = buildingRaster(w, b, BODY_R, 160);
+		for (const o of doors) {
+			const n = NORMAL[o.side];
+			const sx = o.x + o.w / 2 + n[0] * (TOWN.WALL_T / 2 + 20);
+			const sy = o.y + o.h / 2 + n[1] * (TOWN.WALL_T / 2 + 20);
+			const start = ras.idx(sx, sy);
+			const dist = pathField(
+				ras,
+				[start],
+				k =>
+					ras.inside[k] === 1 ||
+					k === start ||
+					Math.hypot((k % ras.cols) * ras.C + ras.x0 - sx, Math.floor(k / ras.cols) * ras.C + ras.y0 - sy) <
+						40,
+			);
+			const seen = new Set();
+			for (const q of rooms) {
+				if (seen.has(q.room)) continue;
+				const cells = rooms.filter(p => p.room === q.room).flatMap(p => cellsIn(ras, p));
+				if (cells.length === 0) {
+					fail("EDI-08", `${b.tags} #${b.id}: the ${q.kind} has no free floor for a body`, cx(q), cy(q));
+					seen.add(q.room);
+					continue;
+				}
+				if (!cells.some(k => dist[k] < Infinity)) {
+					fail(
+						"EDI-08",
+						`${b.tags} #${b.id}: the ${q.kind} cannot be reached from the ${o.main ? "main" : "secondary"} door`,
+						cx(q),
+						cy(q),
+					);
+				}
+				seen.add(q.room);
+			}
+			if (o.main) {
+				for (const s of b.lootSpots ?? []) {
+					const k = ras.idx(s.x, s.y);
+					if (k < 0 || !(dist[k] < Infinity))
+						fail("EDI-03", `${b.tags} #${b.id}: loot spot not reachable`, s.x, s.y);
+				}
+			}
+		}
+		if ((b.lootSpots ?? []).length === 0) fail("EDI-03", `${b.tags} #${b.id}: no loot spot`, cx(b), cy(b));
+		// EDI-11: no safe spot -- from the nearest reachable outside point, a walker (16) gets to every spot a survivor
+		// (18) can stand on, fast. The two rasters share their grid (same box, same margin), so a cell index is the
+		// same spot in both.
+		const zr = buildingRaster(w, b, physics.ZOMBIE_RADIUS, 160);
+		const starts = [];
+		for (let k = 0; k < zr.cols * zr.rows; k++) {
+			if (zr.inside[k] || zr.blocked[k]) continue;
+			const px = (k % zr.cols) * zr.C + zr.x0 + zr.C / 2;
+			const py = Math.floor(k / zr.cols) * zr.C + zr.y0 + zr.C / 2;
+			if (reach.at(px, py).reached) starts.push(k);
+		}
+		const zd = pathField(zr, starts, () => true);
+		const seenZ = new Set();
+		for (const q of rooms) {
+			if (seenZ.has(q.room)) continue;
+			seenZ.add(q.room);
+			const cells = rooms.filter(p => p.room === q.room).flatMap(p => cellsIn(ras, p));
+			let far = 0;
+			for (const k of cells) {
+				if (!(zd[k] < Infinity)) {
+					far = Infinity;
+					break;
+				}
+				far = Math.max(far, zd[k]);
+			}
+			const s = far / WALKER_SPEED;
+			if (s > worst.s) worst = { s, b, room: q.kind };
+			if (far === Infinity) {
+				fail(
+					"EDI-11",
+					`${b.tags} #${b.id}: a spot of the ${q.kind} no walker can reach (a safe spot)`,
+					cx(q),
+					cy(q),
+				);
+			} else if (s > REACH_BOUND_S) {
+				fail(
+					"EDI-11",
+					`${b.tags} #${b.id}: the ${q.kind} is ${s.toFixed(1)} s from outside for a walker (> ${REACH_BOUND_S})`,
+					cx(q),
+					cy(q),
+				);
+			}
+		}
+		// EDI-11, as the horde really walks: the server's flow field (32 u cells, solids inflated 4 u, a window's
+		// sill passable) reaches, from outside, a cell next to every spot a survivor can stand on -- the last few
+		// metres are the straight chase (DIRECT_CHASE, 200 u), not the field
+		const field = fieldReach(w, b);
+		for (let k = 0; k < ras.cols * ras.rows; k++) {
+			if (!ras.inside[k] || ras.blocked[k]) continue;
+			const px = (k % ras.cols) * ras.C + ras.x0 + ras.C / 2;
+			const py = Math.floor(k / ras.cols) * ras.C + ras.y0 + ras.C / 2;
+			if (!field.near(px, py)) {
+				fail("EDI-11", `${b.tags} #${b.id}: the horde's flow field reaches nothing near this spot`, px, py);
+				break;
+			}
+		}
+		fieldCells += field.cells;
+		// EDI-08: every room has the piece that says what it is (a bedroom its bed, a ward its beds...)
+		const seenD = new Set();
+		for (const q of rooms) {
+			if (seenD.has(q.room)) continue;
+			seenD.add(q.room);
+			const want = DEFINING[q.kind];
+			if (want === undefined || want.length === 0) continue;
+			const rects = rooms.filter(p => p.room === q.room);
+			const has = furniture.some(
+				f => want.includes(f.tags) && rects.some(r => inside({ x: cx(f), y: cy(f), w: 0, h: 0 }, r)),
+			);
+			if (!has) fail("EDI-08", `${b.tags} #${b.id}: the ${q.kind} has none of ${want.join("/")}`, cx(q), cy(q));
+		}
+	}
+	// the share of each type that has all its doors is judged over the whole run (below the seeds' loop): a town
+	// holds only 3-9 buildings of most types, and one yard taken by a tree moves a single town's share by 15-30 %
+	for (const [t, tt] of Object.entries(byType)) {
+		const run = (DOOR_RUN[t] ??= { n: 0, target: 0 });
+		run.n += tt.n;
+		run.target += tt.target;
+	}
+	if (buildings.length > 0 && compound / buildings.length < 0.5) {
+		fail("EDI-14", `only ${compound}/${buildings.length} footprints are not a plain box (< 50%)`, 0, 0);
+	}
+	stats.compound = compound;
+	stats.fieldCells = fieldCells;
+	stats.worstReach = worst.s;
+	stats.worstRoom = worst.b ? `${worst.b.tags} #${worst.b.id} ${worst.room}` : "-";
+	stats.doorsByType = Object.fromEntries(
+		Object.entries(byType).map(([t, tt]) => [
+			TYPE_TAG[t],
+			`${(tt.doors / tt.n).toFixed(1)}d/${(tt.windows / tt.n).toFixed(1)}w`,
+		]),
+	);
+}
+
 /** gameLoop.findSpawnPoint, replayed with a seeded Math.random */
 function spawnPoints(w, n) {
 	const out = [];
@@ -457,15 +962,46 @@ function validate(seed) {
 			fail("INT-01", `spatial grid misses #${a.id}`, cx(a), cy(a));
 		}
 	}
-	const wallsOf = new Map();
-	for (const s of S) if (s.tags === "bwall") wallsOf.set(s.parentId, [...(wallsOf.get(s.parentId) ?? []), s]);
-	for (const b of buildings) {
-		const ws = wallsOf.get(b.id) ?? [];
-		if (ws.length !== 5) {
-			fail("INT-01", `${b.tags} #${b.id} has ${ws.length} wall segments (expected 5)`, cx(b), cy(b));
+	// a building is its record + walls (outside walls and partitions), windows and furniture, all inside the
+	// footprint: the union of its parts, which tile the record's box without overlapping (EDI-14)
+	const partsOf = b => b.parts ?? [b];
+	const inFootprint = (b, r) => {
+		// every corner (pulled 0.5 in) inside some part: a piece may straddle two parts, never the outside
+		for (const [px, py] of [
+			[r.x + 0.5, r.y + 0.5],
+			[r.x + r.w - 0.5, r.y + 0.5],
+			[r.x + 0.5, r.y + r.h - 0.5],
+			[r.x + r.w - 0.5, r.y + r.h - 0.5],
+		]) {
+			if (!partsOf(b).some(p => px >= p.x && px <= p.x + p.w && py >= p.y && py <= p.y + p.h)) return false;
 		}
-		for (const x of ws) if (!inside(x, b)) fail("INT-01", `wall #${x.id} outside ${b.tags} #${b.id}`, cx(x), cy(x));
-		if (W.buildingAt(w, cx(b), cy(b)) !== b) fail("INT-01", `buildingAt misses ${b.tags} #${b.id}`, cx(b), cy(b));
+		return true;
+	};
+	const kidsOf = new Map();
+	for (const s of S) if (s.parentId !== undefined) kidsOf.set(s.parentId, [...(kidsOf.get(s.parentId) ?? []), s]);
+	for (const b of buildings) {
+		const kids = kidsOf.get(b.id) ?? [];
+		const ws = kids.filter(s => s.tags === "bwall");
+		if (ws.length < 4) fail("INT-01", `${b.tags} #${b.id} has ${ws.length} wall segments (< 4)`, cx(b), cy(b));
+		for (const x of kids) {
+			if (!inside(x, b) || !inFootprint(b, x)) {
+				fail("INT-01", `${x.kind}/${x.tags} #${x.id} outside ${b.tags} #${b.id}'s footprint`, cx(x), cy(x));
+			}
+		}
+		const parts = partsOf(b);
+		let area = 0;
+		for (let i = 0; i < parts.length; i++) {
+			area += parts[i].w * parts[i].h;
+			if (!inside(parts[i], b)) fail("EDI-14", `${b.tags} #${b.id}: a part leaves its box`, cx(b), cy(b));
+			for (let k = i + 1; k < parts.length; k++) {
+				if (overlap(parts[i], parts[k])) fail("EDI-14", `${b.tags} #${b.id}: two parts overlap`, cx(b), cy(b));
+			}
+		}
+		if (area > b.w * b.h + 1) fail("EDI-14", `${b.tags} #${b.id}: parts larger than the box`, cx(b), cy(b));
+		const mid = b.mainWing ?? parts[0];
+		if (W.buildingAt(w, cx(mid), cy(mid)) !== b) {
+			fail("INT-01", `buildingAt misses ${b.tags} #${b.id}`, cx(mid), cy(mid));
+		}
 	}
 
 	// boss plazas keep their BOSS_CLEAR radius free of anything solid
@@ -594,7 +1130,7 @@ function validate(seed) {
 			fail("EDI-01", `${b.tags} #${b.id}: door (${b.doorSide}) does not face a street`, b.doorX, b.doorY);
 			continue;
 		}
-		for (let t = d.reach - BODY_R - 2; t >= -150; t -= 4) {
+		for (let t = d.reach - BODY_R - 2; t >= -(TOWN.WALL_T / 2 + 72 - BODY_R); t -= 4) {
 			const x = b.doorX + d.n[0] * t;
 			const y = b.doorY + d.n[1] * t;
 			const hit = physics.circleBlocked(w, x, y, BODY_R);
@@ -603,18 +1139,22 @@ function validate(seed) {
 				break;
 			}
 		}
-		// the game's own physics: walk in from 150 u outside the door
+		// the game's own physics: walk in from 150 u outside the door until a body is past the wall (a house with a
+		// back door straight behind the front one lets you walk on out of the other side: that is a way through)
 		let px = b.doorX + d.n[0] * 150;
 		let py = b.doorY + d.n[1] * 150;
-		for (let i = 0; i < 120; i++) {
+		let walkedIn = false;
+		for (let i = 0; i < 120 && !walkedIn; i++) {
 			const m = physics.moveActor(w, px, py, BODY_R, -d.n[0] * 5, -d.n[1] * 5);
 			px = m.x;
 			py = m.y;
+			const deep = (px - b.doorX) * -d.n[0] + (py - b.doorY) * -d.n[1];
+			if (deep > TOWN.WALL_T / 2 + BODY_R + 8 && W.buildingAt(w, px, py) === b) walkedIn = true;
 		}
-		if (!(px > b.x + 30 && px < b.x + b.w - 30 && py > b.y + 30 && py < b.y + b.h - 30)) {
+		if (!walkedIn) {
 			fail("EDI-01", `${b.tags} #${b.id}: moveActor cannot walk in through the door`, b.doorX, b.doorY);
 		}
-		if (!reach.at(cx(b), cy(b)).reached && !reach.at(b.doorX - d.n[0] * 80, b.doorY - d.n[1] * 80).reached) {
+		if (!reach.at(cx(b), cy(b)).reached && !reach.at(b.doorX - d.n[0] * 48, b.doorY - d.n[1] * 48).reached) {
 			fail("EDI-01", `${b.tags} #${b.id}: interior not reachable from the spawn point`, cx(b), cy(b));
 		}
 	}
@@ -623,8 +1163,19 @@ function validate(seed) {
 	for (const d of doors) {
 		const b = d.b;
 		if (d.reach === undefined) continue;
-		const front = d.reach - TOWN.WALL_T / 2 - SW;
+		// the setback is the street FACE's (the box's edge); a door recessed into a porch or a courtyard sits deeper
+		const T2 = TOWN.WALL_T / 2;
+		const recess = {
+			top: b.doorY - T2 - b.y,
+			bottom: b.y + b.h - (b.doorY + T2),
+			left: b.doorX - T2 - b.x,
+			right: b.x + b.w - (b.doorX + T2),
+		}[b.doorSide];
+		const front = d.reach - TOWN.WALL_T / 2 - SW - recess;
 		const t = b.buildingType;
+		if ((t === 1 || t === 2) && recess > 200) {
+			fail("EDI-02", `house #${b.id}: door ${fmt(recess)} u deep in its porch (> 200)`, b.doorX, b.doorY);
+		}
 		const lot = w.lots.find(l => b.x >= l.x && b.x < l.x + l.w && b.y >= l.y && b.y < l.y + l.h);
 		if (
 			(t === 1 || t === 2) &&
@@ -760,6 +1311,10 @@ function validate(seed) {
 			}
 		}
 	}
+
+	// --- EDI-08..EDI-14: interiors, entrances, windows, furniture, no safe spot
+	const interior = {};
+	interiorChecks(w, buildings, kidsOf, reach, fail, interior);
 
 	// --- VEG-01 (rest): trunk on a carriageway, in front of a door or on a driveway
 	for (const s of trees) {
@@ -971,7 +1526,13 @@ function validate(seed) {
 			const bin = edgeUV(e, cx(s), cy(s));
 			for (const d of doors) {
 				if (d.b.doorSide !== e.side) continue;
-				const door = edgeUV(e, d.b.doorX, d.b.doorY);
+				// the entrance where it meets the street face (the box's edge): a door set back into a porch or an
+				// entrance court (EDI-14) is still the entrance of that stretch of sidewalk
+				const b = d.b;
+				const T2 = TOWN.WALL_T / 2;
+				const fx = b.doorSide === "left" ? b.x + T2 : b.doorSide === "right" ? b.x + b.w - T2 : b.doorX;
+				const fy = b.doorSide === "top" ? b.y + T2 : b.doorSide === "bottom" ? b.y + b.h - T2 : b.doorY;
+				const door = edgeUV(e, fx, fy);
 				if (
 					door.u >= e.a &&
 					door.u <= e.b &&
@@ -1062,6 +1623,7 @@ function validate(seed) {
 		lotCars: cars.length - parked.length - abandoned.length,
 		trash: trash.length,
 		crossings: crossings.length,
+		interior,
 	};
 	return { fails, stats };
 }
@@ -1090,6 +1652,13 @@ for (const seed of seeds) {
 			`${stats.solids} solids, ${stats.buildings} buildings (${tp}) | trees ${stats.trees} (street ${stats.streetTrees}) | ` +
 			`cars ${stats.cars} (parked ${stats.parked}, abandoned ${stats.abandoned}, in lots ${stats.lotCars}) | bins ${stats.trash} | crossings ${stats.crossings}`,
 	);
+	const it = stats.interior;
+	console.log(
+		`  interiors: ${it.compound}/${stats.buildings} footprints not a box | worst walker reach ${it.worstReach.toFixed(1)} s (${it.worstRoom}) | doors/windows per building: ` +
+			Object.entries(it.doorsByType)
+				.map(([k, v]) => `${k} ${v}`)
+				.join(", "),
+	);
 	for (const [rule, list] of [...byRule].sort((a, b) => a[0].localeCompare(b[0]))) {
 		console.log(`  ${rule}: ${list.length}`);
 		for (const f of SHOW_ALL ? list : list.slice(0, PER_RULE)) {
@@ -1098,6 +1667,19 @@ for (const seed of seeds) {
 		if (!SHOW_ALL && list.length > PER_RULE) console.log(`    … ${list.length - PER_RULE} more (--all)`);
 	}
 }
+// EDI-09 over the run: each type's share of buildings with all its doors
+const shares = [];
+for (const [t, run] of Object.entries(DOOR_RUN)) {
+	const share = run.target / run.n;
+	shares.push(`${TYPE_TAG[t]} ${(share * 100).toFixed(0)}% of ${run.n}`);
+	if (share < DOOR_SHARE) {
+		const msg = `${TYPE_TAG[t]}: only ${(share * 100).toFixed(0)}% of ${run.n} have their ${DOOR_TARGET[t]} doors (< ${DOOR_SHARE * 100}%)`;
+		all.push({ rule: "EDI-09", msg, x: 0, y: 0 });
+		total++;
+		console.log(`  EDI-09 (run) ${msg}`);
+	}
+}
+console.log(`  doors over the run (EDI-09, >= ${DOOR_SHARE * 100}% with all their doors): ${shares.join(", ")}`);
 if (MARKS_FILE) writeFileSync(MARKS_FILE, JSON.stringify(all));
 console.log(
 	`${total === 0 ? "PASS" : "FAIL"}: ${seeds.length} seed(s), ${total} failure(s), ${fmt(performance.now() - t0)} ms`,

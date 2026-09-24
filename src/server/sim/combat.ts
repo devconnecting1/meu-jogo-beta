@@ -168,8 +168,11 @@ export interface CombatHooks {
 	/** hp reached 0 inside this resolution; the XP was already paid, 2A removes the body */
 	zombieKilled?: (z: Ent.ZombieState, killerSlot: number) => void;
 	bossKilled?: (b: Ent.BossState, killerSlot: number) => void;
-	/** gunfire noise ring (zombieAI's emitSound): a shot is heard far further than it travels */
-	noise?: (x: number, y: number, radius: number, shot: boolean) => void;
+	/**
+	 * gunfire noise ring (zombieAI's emitSound): a shot is heard far further than it travels. `gun` is the weapon
+	 * that fired, so the ears can grade it by class (shared/sim/ai/noise.ts `gunClassScale`)
+	 */
+	noise?: (x: number, y: number, radius: number, shot: boolean, gun?: Wp.WeaponDef) => void;
 	/** a blade crossed a tree/car/bin: true when it gave something (F3's server/sim/interaction.ts) */
 	chop?: (s: Solid, chopping: boolean) => boolean;
 	projectile?: (request: ProjectileRequest) => void;
@@ -729,7 +732,7 @@ export class ServerCombat {
 		}
 		if (w.kind !== WeaponKind.Bow) {
 			const loud = sp.save.equipGun === SILENCER_ID ? SHOT_NOISE / 3 : SHOT_NOISE;
-			this.hooks.noise?.(p.x, p.y, loud, true);
+			this.hooks.noise?.(p.x, p.y, loud, true, w);
 		}
 		rt.angleRange = math.min(40, rt.angleRange + w.recoil);
 		return true;

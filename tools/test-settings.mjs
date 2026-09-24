@@ -26,7 +26,8 @@
  *   4. TOUCH           each slider and switch moves the geometry the bootstrap hit-tests (getTouchLayout), the HUD's
  *                      touch layer is redrawn on it, the preview is that very layout (under a real top bar too), a
  *                      fixed stick is only grabbed at its home, and left-handed swaps which half moves.
- *   5. CONTROLS        the device radio lists SCHEMES; every row of every scheme is a binding the real bootstrap
+ *   5. CONTROLS        the device radio lists SCHEMES and opens on the device in use (UserInputService.PreferredInput);
+ *                      every row of every scheme is a binding the real bootstrap
  *                      honours (probed through its InputBegan / InputChanged / InputEnded handlers and the HUD's
  *                      touch buttons). A tip that promises a key that does nothing fails here.
  *   6. DEFAULTS        each tab's Defaults puts EXACTLY that tab's fields back to defaultSettings(), after the
@@ -37,15 +38,19 @@
  *                      server's report sanitiser and a reload, and garbage or out-of-range values are clamped; a change
  *                      made before the server's save arrived survives it (carried field by field).
  *   9. REDUCE MOTION   the read-only row follows the Roblox setting live and writes nothing.
+ *  10. ...EVERYWHERE   what the row promises holds in the whole game: with it on, every tween the logo, the kit and the
+ *                      fades create is 0 s long and the nameplate does not pop; skin.ts motionTween is the only
+ *                      TweenService.Create in src/; every periodic pulse of the interface is gated by it (the HUD's
+ *                      own pulses are measured frame by frame in test:hud).
  *
  * Pure Node (>= 18) plus the project's TypeScript.
  */
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { installUiShims } from "./ui-shim.mjs";
 
 const ui = installUiShims({ seed: 1, viewport: [1120, 630] });
-const { SRC, ROOT, require, flush, service, setViewport, setClock, getClock } = ui;
+const { SRC, ROOT, require, flush, service, setViewport, setClock, getClock, makeInstance } = ui;
 
 // ---------------------------------------------------------------- Sounds that play (the tree only stores props)
 
@@ -717,6 +722,36 @@ openTab(2);
 }
 closeSettings();
 flush();
+// the device it opens on is the one the player is using (UserInputService.PreferredInput, client/ui/device.ts)
+{
+	const opensOn = [];
+	for (const p of ["KeyboardAndMouse", "Touch", "Gamepad"]) {
+		UIS.PreferredInput = Enum.PreferredInput[p];
+		flush();
+		const close = showSettings(
+			ctx,
+			() => {},
+			() => {},
+		);
+		flush();
+		openTab(2);
+		const lists = [0, 1, 2].map(i => findIn(findIn(settingsRoot(), "Keys"), `List${i}`));
+		const shownAt = lists.findIndex(l => {
+			for (let n = l; n !== undefined && n.IsA("GuiObject"); n = n.Parent) if (!n.Visible) return false;
+			return true;
+		});
+		opensOn.push(shownAt);
+		close();
+		flush();
+	}
+	UIS.PreferredInput = undefined;
+	flush();
+	check(
+		"Controls abre no dispositivo em uso (PreferredInput): teclado, toque, controle",
+		JSON.stringify(opensOn) === JSON.stringify([0, 1, 2]),
+		opensOn.join(", "),
+	);
+}
 
 /** every chip of every scheme -> a probe of the REAL bootstrap (or the HUD) that returns true when it does what it says */
 const input = ctx.input;
@@ -1406,6 +1441,109 @@ console.log("\n9) Reduce motion: segue a configuracao do Roblox, so leitura\n");
 	check("...e nao e um controle: nenhum botao na linha", !row.GetDescendants().some(d => d.IsA("GuiButton")));
 	closeSettings();
 	flush();
+}
+
+// ================================================================ 10. Reduce motion, everywhere the row says
+
+console.log("\n10) Reduce motion em todo o jogo: todo tween sem duracao, nenhum pulo nem pulso\n");
+
+{
+	// every TweenService.Create of the game, with the duration it asked for (the shim lands every tween at once, so
+	// the duration is the only thing that tells an eased fade from a cut)
+	const TS = service("TweenService");
+	const made = [];
+	const create = TS.Create;
+	TS.Create = (obj, info, props) => {
+		made.push({ obj, time: info.args[0], props });
+		return create(obj, info, props);
+	};
+	const { showLogo } = require(join(SRC, "client/ui/logo.ts"));
+	const { Nameplate } = require(join(SRC, "client/ui/nameplate.ts"));
+	const { tween, fadeText } = require(join(SRC, "client/ui/widgets.ts"));
+	const run = () => {
+		made.length = 0;
+		// the splash: its title fades in (the subtitle follows 0,35 s later, a task.delay the shim does not run)
+		showLogo(layer, () => {});
+		flush();
+		layer.FindFirstChild("Logo")?.Destroy();
+		// the nameplate's level-up pop
+		const host = makeInstance("Frame", false);
+		const plate = new Nameplate(host, 1, { displayName: "Ana", name: "Ana" });
+		plate.update(10, 10, 1, true);
+		plate.update(10, 10, 2, true);
+		const pops = made.filter(m => m.props.Scale !== undefined).length;
+		plate.destroy();
+		// the kit's own entry points
+		const f = makeInstance("Frame", false);
+		tween(f, 0.3, { BackgroundTransparency: 0.5 });
+		const l = makeInstance("TextLabel", false);
+		fadeText(l, 0.4, 0);
+		return { times: made.map(m => m.time), pops };
+	};
+	const eased = run();
+	GuiService.ReducedMotionEnabled = true;
+	flush();
+	const cut = run();
+	GuiService.ReducedMotionEnabled = false;
+	flush();
+	TS.Create = create;
+	check(
+		"sem Reduce Motion: o logo esmaece, a placa de nome da o pulo do nivel, o kit anima (o controle do teste)",
+		eased.times.length >= 4 && eased.times.every(t => t > 0) && eased.pops === 1,
+		`duracoes ${eased.times.join(", ")}; pulos ${eased.pops}`,
+	);
+	check(
+		"com Reduce Motion: todo tween (logo, kit, fades) tem duracao 0, e a placa de nome nao pula",
+		cut.times.length >= 3 && cut.times.every(t => t === 0) && cut.pops === 0,
+		`duracoes ${cut.times.join(", ")}; pulos ${cut.pops}`,
+	);
+
+	// nothing in src/ builds a tween of its own: skin.ts motionTween is the one TweenService.Create, so Reduce Motion
+	// is honoured in one place; and every periodic pulse of the interface is gated by it
+	const walk = dir =>
+		readdirSync(dir).flatMap(n => {
+			const p = join(dir, n);
+			return statSync(p).isDirectory() ? walk(p) : p.endsWith(".ts") ? [p] : [];
+		});
+	const rogue = [];
+	for (const file of walk(SRC)) {
+		const text = readFileSync(file, "utf8");
+		const rel = file.slice(SRC.length + 1);
+		const creates = (text.match(/TweenService\.Create\(|new TweenInfo\(/g) ?? []).length;
+		if (creates > 0 && !(rel === join("client", "ui", "skin.ts") && creates === 2))
+			rogue.push(`${rel} (${creates})`);
+	}
+	check(
+		"um tween so em todo src/: skin.ts motionTween (nenhum TweenService.Create / TweenInfo fora dele)",
+		rogue.length === 0,
+		rogue.join(", "),
+	);
+	const PULSES = [
+		["client/ui/hud.ts", /reducedMotion\(\) \? 0 : 0\.15 \* math\.sin\(now \* 4\)/, "a vinheta de HP baixa"],
+		["client/ui/hudConsole.ts", /const still = W\.reducedMotion\(\);/, "o pisca das barras de HP e fome"],
+		["client/ui/hudSky.ts", /W\.reducedMotion\(\) \|\| math\.floor\(now \* PULSE_HZ \* 2\) % 2 === 0/, "o relogio"],
+		[
+			"client/onboarding/coach.ts",
+			/reducedMotion\(\) \? 0 : math\.sin\(os\.clock\(\) \* 4\) \* 4/,
+			"a seta do coach",
+		],
+		[
+			"client/view/allyPlate.ts",
+			/reducedMotion\(\) \? 0\.45 : 0\.45 \+ 0\.3 \* math\.sin/,
+			"o anel do aliado caido",
+		],
+		[
+			"client/ui/dangerFlash.ts",
+			/reducedMotion\(\) \? \(strength > 0 \? 1 : 0\) : strength/,
+			"o flash sobre os menus",
+		],
+	];
+	const ungated = PULSES.filter(([f, re]) => !re.test(readFileSync(join(SRC, f), "utf8"))).map(([, , what]) => what);
+	check(
+		"todo pulso periodico da interface para com Reduce Motion (vinheta, barras, relogio, seta do coach, anel, flash)",
+		ungated.length === 0,
+		ungated.join(", "),
+	);
 }
 
 console.log("");

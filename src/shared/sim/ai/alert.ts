@@ -11,8 +11,10 @@
  *   - one shout wakes at most ALERT_MAX_WAKE zombies, the nearest first;
  *   - everyone woken also gets the cooldown, so the ones just alerted cannot relay it;
  *   - the caller runs at most ALERT_SHOUTS_PER_TICK shouts per tick.
- * Woken zombies are told WHERE the shouter saw the survivor (memory.report), so they converge on that place
- * and search it — they do not magically learn where the survivor is now.
+ * Woken zombies are told WHERE the shouter saw the survivor (memory.report): they turn SUSPICIOUS and converge
+ * on that place — they do not magically learn where the survivor is now, and only their own eyes turn it into a
+ * chase. That is how a pack forms: one sees you, groans, a handful walk over, and the ones that then see you for
+ * themselves groan in turn — once their own cooldown allows it.
  *
  * Pure: a list of positions in, a list of indices out. No world, no Instances (docs/MULTIPLAYER.md §11.2).
  */
@@ -23,7 +25,8 @@ export interface AlertUnit {
 	x: number;
 	y: number;
 	hp: number;
-	detect: boolean;
+	/** the awareness state (shared/sim/ai/memory.ts `Aware`): a zombie already chasing does not need waking */
+	aware?: number;
 	/** seconds until this zombie may shout again */
 	alertCd?: number;
 }
@@ -38,11 +41,16 @@ export const ALERT_COOLDOWN = 9;
 export const ALERT_SHOUT_TIME = 0.9;
 /** hard ceiling of shouts resolved in one AI tick, so a crowd cannot spike the CPU */
 export const ALERT_SHOUTS_PER_TICK = 2;
+/** `Aware.Chasing` (shared/sim/ai/memory.ts), repeated here so this module stays import-free */
+const CHASING = 3;
+
+/** distances of the kept entries (module scratch: a shout allocates nothing) */
+const dists: Array<number> = [];
 
 /**
  * Which units hear a shout at (x, y): indices into `units`, nearest first, at most `maxWake`.
- * Skips the dead, the ones already hunting and `shouterId` itself. Ties break by id, so the result does not
- * depend on the order the array happens to be in.
+ * Skips the dead, the ones already chasing and `shouterId` itself — a suspicious or searching zombie is
+ * woken with the fresher place. Ties break by id, so the result does not depend on the order of the array.
  */
 export function hearers(
 	units: ReadonlyArray<AlertUnit>,
@@ -54,11 +62,11 @@ export function hearers(
 	maxWake = ALERT_MAX_WAKE,
 ): number {
 	out.clear();
-	const dists: Array<number> = [];
+	dists.clear();
 	const r2 = radius * radius;
 	for (let i = 0; i < units.size(); i++) {
 		const u = units[i];
-		if (u.id === shouterId || u.hp <= 0 || u.detect) continue;
+		if (u.id === shouterId || u.hp <= 0 || u.aware === CHASING) continue;
 		const dx = u.x - x;
 		const dy = u.y - y;
 		const d2 = dx * dx + dy * dy;

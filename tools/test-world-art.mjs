@@ -49,6 +49,8 @@
  *      (tools/golden/characters-flat.json, recorded from f3c5564); each group falls back on its own; with the
  *      sheets a survivor is two sprites, a zombie and a pet one. The cost of a night -- 60 zombies, 4 survivors and
  *      their pets, 300 frames -- flat against art: sprites, Instances, property writes, time, and no churn.
+ *  11. THE INTERIORS (EDI-04, ART-12). With every roof on, nothing of any interior is drawn; walking in and out of
+ *      the largest building creates no Instance; its sprites inside and the writes of a walk across it (printed).
  *
  * Pure Node (>= 18) + the project's TypeScript on tools/luau-shim.mjs and the fake GUI tree of tools/fake-gui.mjs.
  */
@@ -77,7 +79,8 @@ const { Camera } = require(join(SRC, "shared/engine/camera.ts"));
 const { Renderer } = require(join(SRC, "shared/engine/renderer.ts"));
 const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
 const { generateTown, buildingAt, pointInSolid, hash01 } = require(join(SRC, "shared/game/world.ts"));
-const { WorldView } = require(join(SRC, "client/view/worldView.ts"));
+const WV = require(join(SRC, "client/view/worldView.ts"));
+const { WorldView } = WV;
 const ART_MODULE = join(SRC, "client/view/worldArt.ts");
 const WA = existsSync(ART_MODULE) ? require(ART_MODULE) : undefined;
 
@@ -777,6 +780,11 @@ section("6) the art pipeline: manifest, PNGs, worldArtAssets.ts, palette");
 		["dirt", mixc(c255(COLORS.dirtPath), W255, 0.25)],
 		["floorWood", c255(COLORS.floorWood)],
 		["floorShop", c255(COLORS.floorShop)],
+		// the interiors' rooms (shared/game/interiors.ts): tiles, carpet, kitchen checker, bathroom tiles
+		["floorTile", c255(COLORS.floorTile)],
+		["floorCarpet", c255(COLORS.floorCarpet)],
+		["floorKitchen", c255(COLORS.floorKitchen)],
+		["floorBath", c255(COLORS.floorBath)],
 	];
 	for (const [name, flat] of pairs) {
 		const m = mean(decoded[name]);
@@ -784,6 +792,15 @@ section("6) the art pipeline: manifest, PNGs, worldArtAssets.ts, palette");
 		const b = lab(...flat);
 		const dE = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 		check(dE <= 6, `${name.padEnd(10)} keeps the flat colour it replaces`, `mean ΔE ${dE.toFixed(1)}`);
+	}
+	// a back room's floor is the concrete texture tinted (ImageColor3 multiplies) to the flat floorConcrete
+	const tint = WV.CONCRETE_FLOOR_TINT;
+	if (tint !== undefined) {
+		const m = mean(decoded.concrete).map((v, i) => v * [tint.R, tint.G, tint.B][i]);
+		const a = lab(...m);
+		const b = lab(...c255(COLORS.floorConcrete));
+		const dE = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+		check(dE <= 6, "concrete tinted for a back room keeps floorConcrete", `mean ΔE ${dE.toFixed(1)}`);
 	}
 }
 
@@ -1007,8 +1024,12 @@ function frameOf(sign) {
 		`${maxLayer}`,
 	);
 }
-/** where a building's sign goes, by its record: the hook's arguments (worldView.ts drawSignage) */
-const signOf = b => BS.signRect(b.buildingType ?? 1, b.doorSide ?? "bottom", b.doorX, b.doorY, b);
+/**
+ * where a building's sign goes, by its record: the hook's arguments (worldView.ts drawSignage) -- the MAIN entrance,
+ * and the roof of the main wing (shared/game/interiors.ts: the wing behind the facade that holds the main door)
+ */
+const roofOf = b => b.mainWing ?? b;
+const signOf = b => BS.signRect(b.buildingType ?? 1, b.doorSide ?? "bottom", b.doorX, b.doorY, roofOf(b));
 {
 	// --- placement, on every building of five towns: at the main entrance, facing its street, on the roof
 	const seeds = [DESIGN.TOWN_SEED, 1, 42, 99991, 123456];
@@ -1036,18 +1057,22 @@ const signOf = b => BS.signRect(b.buildingType ?? 1, b.doorSide ?? "bottom", b.d
 			signs++;
 			const side = b.doorSide;
 			const alongX = side === "top" || side === "bottom";
-			// on the roof: never over the sidewalk
+			// on the roof: never over the sidewalk, and on the main wing (a compound footprint's porch, entrance
+			// court or loading notch is not roof)
+			const wing = roofOf(b);
 			if (q.x < b.x || q.y < b.y || q.x + q.w > b.x + b.w || q.y + q.h > b.y + b.h)
 				bad.push(`${seed}: ${b.tags} #${b.id}: the sign leaves the footprint`);
+			if (q.x < wing.x || q.y < wing.y || q.x + q.w > wing.x + wing.w || q.y + q.h > wing.y + wing.h)
+				bad.push(`${seed}: ${b.tags} #${b.id}: the sign leaves the main wing's roof`);
 			// on the entrance wall, SIGN_INSET in from its facade
 			const inset =
 				side === "top"
-					? q.y - b.y
+					? q.y - wing.y
 					: side === "bottom"
-						? b.y + b.h - (q.y + q.h)
+						? wing.y + wing.h - (q.y + q.h)
 						: side === "left"
-							? q.x - b.x
-							: b.x + b.w - (q.x + q.w);
+							? q.x - wing.x
+							: wing.x + wing.w - (q.x + q.w);
 			if (Math.abs(inset - BS.SIGN_INSET) > 0.01)
 				bad.push(`${seed}: ${b.tags} #${b.id}: ${inset} u from its entrance wall`);
 			// beside the doorway, never over it: SIGN_GAP clear of the opening, right next to it
@@ -1073,8 +1098,8 @@ const signOf = b => BS.signRect(b.buildingType ?? 1, b.doorSide ?? "bottom", b.d
 			// sized to the building: no giant sticker
 			maxShare = Math.max(maxShare, (a1 - a0) / (alongX ? b.w : b.h));
 			if (BS.hasHelipad(t)) {
-				const p = BS.helipadRect(b);
-				if (p.x < b.x || p.y < b.y || p.x + p.w > b.x + b.w || p.y + p.h > b.y + b.h)
+				const p = BS.helipadRect(wing);
+				if (p.x < wing.x || p.y < wing.y || p.x + p.w > wing.x + wing.w || p.y + p.h > wing.y + wing.h)
 					bad.push(`${seed}: ${b.tags} #${b.id}: the helipad leaves the roof`);
 				if (p.x < q.x + q.w && q.x < p.x + p.w && p.y < q.y + q.h && q.y < p.y + p.h)
 					bad.push(`${seed}: ${b.tags} #${b.id}: the helipad under the sign`);
@@ -1231,21 +1256,24 @@ const signOf = b => BS.signRect(b.buildingType ?? 1, b.doorSide ?? "bottom", b.d
 				else picture.push(p);
 			}
 		}
-		// the roof round the board (12 to 28 u out, on the roof) and the ground in front of the facade
+		// the roof round the board (12 to 28 u out, on the main wing's roof) and the ground in front of its facade
+		// (a school's entrance court, a shop's front)
 		const roof = [];
 		const ground = [];
 		const n = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] }[b.doorSide];
+		const wing = roofOf(b);
 		for (let y = q.y - 28; y <= q.y + q.h + 28; y += 4) {
 			for (let x = q.x - 28; x <= q.x + q.w + 28; x += 4) {
 				const out = Math.max(q.x - x, x - q.x - q.w, q.y - y, y - q.y - q.h);
-				if (out < 12 || x < b.x + 8 || y < b.y + 8 || x > b.x + b.w - 8 || y > b.y + b.h - 8) continue;
+				if (out < 12 || x < wing.x + 8 || y < wing.y + 8 || x > wing.x + wing.w - 8 || y > wing.y + wing.h - 8)
+					continue;
 				roof.push(px(x, y));
 			}
 		}
 		for (let k = 40; k <= 100; k += 6) {
 			for (let a = 0; a <= 1; a += 0.1) {
-				const x = n[0] !== 0 ? (n[0] < 0 ? b.x : b.x + b.w) + n[0] * k : q.x + a * q.w;
-				const y = n[1] !== 0 ? (n[1] < 0 ? b.y : b.y + b.h) + n[1] * k : q.y + a * q.h;
+				const x = n[0] !== 0 ? (n[0] < 0 ? wing.x : wing.x + wing.w) + n[0] * k : q.x + a * q.w;
+				const y = n[1] !== 0 ? (n[1] < 0 ? wing.y : wing.y + wing.h) + n[1] * k : q.y + a * q.h;
 				ground.push(px(x, y));
 			}
 		}
@@ -1824,6 +1852,93 @@ section("10) the characters' pixel art (ART-08..ART-11): sheets, fallback, cost 
 	);
 }
 setArt({});
+
+// ================================================================ 11. the interiors (EDI-04, EDI-08..EDI-14, ART-12)
+
+section("11) interiors: nothing under a closed roof is drawn, walking in and out creates no Instance, the cost inside");
+{
+	const IV_MODULE = join(SRC, "client/view/interiorView.ts");
+	const IV = existsSync(IV_MODULE) ? require(IV_MODULE) : undefined;
+	// every call into the interior drawing, counted (an older checkout has none: its numbers are the "before")
+	const drawn = { furniture: 0, decor: 0, openings: 0, walls: 0 };
+	if (IV !== undefined) {
+		const proto = IV.InteriorView.prototype;
+		for (const [key, name] of [
+			["furniture", "drawFurniture"],
+			["decor", "drawDecor"],
+			["openings", "drawOpenings"],
+			["walls", "drawWall"],
+		]) {
+			const real = proto[name];
+			proto[name] = function (...a) {
+				drawn[key]++;
+				return real.apply(this, a);
+			};
+		}
+	}
+	const reset = () => {
+		for (const k of Object.keys(drawn)) drawn[k] = 0;
+	};
+	// the town's largest building, and a camera on it
+	let big;
+	for (const s of world.solids) {
+		if (s.kind !== "building") continue;
+		if (big === undefined || s.w * s.h > big.w * big.h || (s.w * s.h === big.w * big.h && s.id < big.id)) big = s;
+	}
+	const at = { x: big.x + big.w / 2, y: big.y + big.h / 2 };
+	for (const [label, ids] of [
+		["flat", {}],
+		["art", ALL.ids],
+	]) {
+		setArt(ids);
+		// roofs on: the dense downtown and the big building from outside draw nothing of any interior
+		const st = stage(1920, 1080, 1);
+		const view = new WorldView(shadowFn(false));
+		reset();
+		drawTown(st, view, 8400, 10250);
+		drawTown(st, view, at.x, at.y);
+		const closed = drawn.furniture + drawn.decor + drawn.openings + drawn.walls;
+		check(
+			closed === 0,
+			`${label}: with every roof on, no furniture, decoration, frame or wall is drawn`,
+			`${closed}`,
+		);
+		const outside = countSprites(st.r.layer).sprites;
+		// in and out of the building three times (the roof fades both ways), then twice more: no Instance
+		const cycle = () => {
+			for (const a of [1, 0.6, 0.2, 0, 0, 0, 0.2, 0.6, 1]) {
+				big.roofAlpha = a;
+				for (let f = 0; f < 4; f++) drawTown(st, view, at.x + f * 5, at.y);
+			}
+		};
+		for (let k = 0; k < 3; k++) cycle();
+		const created = gui.stats.created;
+		cycle();
+		cycle();
+		check(
+			gui.stats.created === created,
+			`${label}: walking in and out of it creates no Instance`,
+			`${gui.stats.created - created} created`,
+		);
+		// inside, the roof off: the sprites of the screen and the property writes of a walk across the building
+		big.roofAlpha = 0;
+		drawTown(st, view, at.x, at.y);
+		const inside = countSprites(st.r.layer);
+		const w0 = gui.stats.writes;
+		const steps = 120;
+		for (let f = 0; f < steps; f++) {
+			const t = f / steps;
+			drawTown(st, view, at.x - big.w * 0.3 + t * big.w * 0.6, at.y + Math.sin(t * 6) * big.h * 0.2);
+		}
+		const writes = (gui.stats.writes - w0) / steps;
+		big.roofAlpha = undefined;
+		console.log(
+			`       ${label.padEnd(4)} ${big.tags} #${big.id} (${big.w} x ${big.h}), 1920 x 1080: ${outside} sprites from outside, ` +
+				`${inside.sprites} inside (${inside.flat} flat, ${inside.images} images); ${writes.toFixed(0)} property writes a frame walking across it`,
+		);
+	}
+	setArt({});
+}
 
 console.log(failures === 0 ? "\nworld-art: all checks passed" : `\nworld-art: ${failures} FAILED`);
 process.exit(failures === 0 ? 0 : 1);

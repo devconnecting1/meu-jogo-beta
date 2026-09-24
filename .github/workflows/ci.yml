@@ -40,8 +40,10 @@ jobs:
       - name: Format check
         run: npm run format:check
 
-      - name: World design rules (docs/DESIGN_RULES.md [auto])
-        run: npm run validate:world
+      # the 5 reference towns and 20 more from seeds drawn as a world reset draws them (MP-22 picks ANY seed): the
+      # interiors must leave no hiding spot in any town a player can get (EDI-11), not just in the 5 we look at
+      - name: World design rules (docs/DESIGN_RULES.md [auto]) + a 20-seed sweep
+        run: npm run validate:world -- --sweep 20
 
       # UI-01: colours come from design/tweakcn-theme.json through `npm run theme`, never from a hand edit
       - name: Theme pipeline (themeTokens.ts really is the generated file)
@@ -64,6 +66,10 @@ jobs:
 
       - name: Cosmetics are drawn (outfits, pets that follow, the wardrobe preview; MON-04)
         run: npm run test:cosmetics
+
+      # IA-05: the blue dot, the gold "?" and the red "!" over the horde, measured on every ground and at night
+      - name: Zombie awareness marks (shape + colour, LEG-03 contrast, never over a survivor, Reduce Motion, no churn)
+        run: npm run test:awareness
 
       - name: A struck tree or car stops shaking (every client-side flinch is aged by one clock)
         run: npm run test:flinch

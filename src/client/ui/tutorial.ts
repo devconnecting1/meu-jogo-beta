@@ -3,19 +3,9 @@ import { langGet } from "shared/data/lang";
 import { RULES_TEXT } from "shared/data/rules";
 import { popup } from "./popup";
 import { registerBack } from "./backStack";
+import { inputDevice } from "./device";
 import { TEXT, THEME, space } from "./theme";
-import {
-	BUTTON_SIZE,
-	Button,
-	Dialog,
-	Keycap,
-	autoFocus,
-	cardHeaderHeight,
-	gamepadActive,
-	makeLabel,
-	nl,
-	uiScale,
-} from "./widgets";
+import { BUTTON_SIZE, Button, Dialog, Keycap, autoFocus, cardHeaderHeight, makeLabel, nl, uiScale } from "./widgets";
 
 /*
  * "How to play": the one reference card of the game.
@@ -32,8 +22,6 @@ import {
  * every player is offered before the first match and can reopen from the lobby at any time; the same text is on the
  * experience page (docs/CREATOR_HUB.md) for whoever cannot get in.
  */
-
-const UserInputService = game.GetService("UserInputService");
 
 const PANEL_W = 920;
 const PAD = space(6);
@@ -125,13 +113,15 @@ export const SCHEME_TOUCH = 1;
 export const SCHEME_GAMEPAD = 2;
 
 /**
- * The scheme the player is on NOW (a SCHEMES index): the pad if the last input came from one, touch on a device
- * with no mouse, the keyboard otherwise. One rule for every key hint (Settings › Controls opens on it, the item
- * card's usage hint speaks it), so a phone player and a pad player each read their own keys first.
+ * The scheme the player is on NOW (a SCHEMES index): the device the interface is laid out for (client/ui/device.ts,
+ * UserInputService.PreferredInput) -- the pad, the touch screen or the keyboard. One rule for every key hint (Settings ›
+ * Controls opens on it, the item card's usage hint speaks it), so a phone player and a pad player each read their own
+ * keys first.
  */
 export function currentScheme(): number {
-	if (gamepadActive()) return SCHEME_GAMEPAD;
-	return UserInputService.TouchEnabled && !UserInputService.MouseEnabled ? SCHEME_TOUCH : SCHEME_KEYBOARD;
+	const device = inputDevice();
+	if (device === "gamepad") return SCHEME_GAMEPAD;
+	return device === "touch" ? SCHEME_TOUCH : SCHEME_KEYBOARD;
 }
 
 const SURVIVAL_TIPS = [
@@ -173,7 +163,7 @@ export function showTutorial(ctx: GameContext, onDone: () => void): () => void {
 	const panel = dialog.card;
 	const top = dialog.contentY;
 	// the player's own scheme first: a phone player should not have to read the PC column to find theirs
-	const order = UserInputService.TouchEnabled && !UserInputService.MouseEnabled ? [1, 0, 2] : [0, 1, 2];
+	const order = inputDevice() === "touch" ? [1, 0, 2] : [0, 1, 2];
 
 	for (let i = 0; i < order.size(); i++) {
 		const scheme = SCHEMES[order[i]];

@@ -15,6 +15,7 @@ import { defaultSave, PlayerSaveData } from "shared/game/save";
 import { GameContext, GamePhase } from "shared/game/context";
 import { syncChatInput } from "./chatInput";
 import { closeTopScreen } from "./ui/backStack";
+import { inputDevice, onInputDeviceChanged, refreshSafeArea, safeSize, topInset, touchOffset } from "./ui/device";
 import { warmFightPool } from "./view/poolWarmup";
 
 const Players = game.GetService("Players");
@@ -55,18 +56,43 @@ pcall(() => {
 const player = Players.LocalPlayer;
 const playerGui = player.WaitForChild("PlayerGui") as PlayerGui;
 
-const stale = playerGui.FindFirstChild("GameGui");
-if (stale !== undefined) {
-	stale.Destroy();
+for (const name of ["GameGui", "HudGui", "UiGui"]) {
+	playerGui.FindFirstChild(name)?.Destroy();
 }
 
-const screen = new Instance("ScreenGui");
-screen.Name = "GameGui";
-screen.ResetOnSpawn = false;
-screen.IgnoreGuiInset = true;
-screen.DisplayOrder = 100;
-screen.ZIndexBehavior = Enum.ZIndexBehavior.Sibling;
+/*
+ * Three ScreenGuis, drawn in DisplayOrder (docs/DESIGN_RULES.md UI-02; the perf audit's H2):
+ *   GameGui 100  the world, the night, the plates over it and the town behind the menus: nothing here takes input, so it
+ *                covers the WHOLE screen (ScreenInsets.None), under a notch too -- no seam at the safe area's edge;
+ *   HudGui  101  the run's HUD and the touch controls: the device safe area (client/ui/device.ts);
+ *   UiGui   102  the menus, windows, popups, toasts and the hit flash above them: the device safe area, and not drawn at
+ *                all while nothing is on it (syncUiGui below).
+ * A LayerCollector caches its drawing until ANY descendant changes, and the world changes every frame: in one ScreenGui
+ * it dragged the HUD (~1,100 Instances) and a Bag kept hidden for reuse (up to ~3,400) along with it.
+ * The two interactive ones do not reserve the Roblox top bar (CoreUISafeInsets would take its whole width): the kit keeps
+ * clear of its buttons itself (UI-02, UI-07). Their default SafeAreaCompatibility is kept on purpose: a menu's scrim
+ * covers the safe area, and the engine stretches exactly such a full-screen background to the physical edges.
+ */
+function screenGui(name: string, order: number, insets: Enum.ScreenInsets): ScreenGui {
+	const g = new Instance("ScreenGui");
+	g.Name = name;
+	g.ResetOnSpawn = false;
+	// the engine ties IgnoreGuiInset to ScreenInsets: set it first, so the explicit inset below is the last word
+	g.IgnoreGuiInset = true;
+	g.ScreenInsets = insets;
+	g.DisplayOrder = order;
+	g.ZIndexBehavior = Enum.ZIndexBehavior.Sibling;
+	return g;
+}
+
+const screen = screenGui("GameGui", 100, Enum.ScreenInsets.None);
+screen.ClipToDeviceSafeArea = false;
+screen.SafeAreaCompatibility = Enum.SafeAreaCompatibility.None;
 screen.Parent = playerGui;
+const hudGui = screenGui("HudGui", 101, Enum.ScreenInsets.DeviceSafeInsets);
+hudGui.Parent = playerGui;
+const uiGui = screenGui("UiGui", 102, Enum.ScreenInsets.DeviceSafeInsets);
+uiGui.Parent = playerGui;
 
 const root = new Instance("Frame");
 root.Name = "Root";
@@ -92,13 +118,23 @@ darkLayer.BorderSizePixel = 0;
 darkLayer.ZIndex = 80;
 darkLayer.Parent = root;
 
+// the town behind the menus (UI-10, client/view/townFlyover.ts): it glides every frame, so it is drawn with the world and
+// not in the menus' ScreenGui -- over the (empty) world of the lobby, under every menu
+const backdropLayer = new Instance("Frame");
+backdropLayer.Name = "Backdrop";
+backdropLayer.Size = UDim2.fromScale(1, 1);
+backdropLayer.BackgroundTransparency = 1;
+backdropLayer.BorderSizePixel = 0;
+backdropLayer.ZIndex = 90;
+backdropLayer.Parent = root;
+
 const hudLayer = new Instance("Frame");
 hudLayer.Name = "Hud";
 hudLayer.Size = UDim2.fromScale(1, 1);
 hudLayer.BackgroundTransparency = 1;
 hudLayer.BorderSizePixel = 0;
 hudLayer.ZIndex = 90;
-hudLayer.Parent = root;
+hudLayer.Parent = hudGui;
 
 const uiLayer = new Instance("Frame");
 uiLayer.Name = "Ui";
@@ -106,12 +142,50 @@ uiLayer.Size = UDim2.fromScale(1, 1);
 uiLayer.BackgroundTransparency = 1;
 uiLayer.BorderSizePixel = 0;
 uiLayer.ZIndex = 100;
-uiLayer.Parent = root;
+uiLayer.Parent = uiGui;
+
+/** a child of the menus' layer that puts something on screen: shown, and holding a GuiObject (an empty toast stack does not) */
+function showsSomething(child: Instance): boolean {
+	return child.IsA("GuiObject") && child.Visible && child.FindFirstChildWhichIsA("GuiObject") !== undefined;
+}
+
+/**
+ * The menus' ScreenGui is drawn only while one of its screens shows something: in a run with no menu open -- and with the
+ * Bag kept built but hidden -- it costs nothing (LayerCollector.Enabled: "rendering its contents"). Every screen, dialog,
+ * toast and the hit flash lives in `uiLayer`, so watching its children (shown / hidden, filled / emptied) is the whole rule.
+ */
+function syncUiGui(): void {
+	let shown = false;
+	for (const child of uiLayer.GetChildren()) {
+		if (showsSomething(child)) {
+			shown = true;
+			break;
+		}
+	}
+	if (uiGui.Enabled !== shown) uiGui.Enabled = shown;
+}
+const uiWatch = new Map<Instance, Array<RBXScriptConnection>>();
+uiLayer.ChildAdded.Connect(child => {
+	const conns = [child.ChildAdded.Connect(syncUiGui), child.ChildRemoved.Connect(syncUiGui)];
+	if (child.IsA("GuiObject")) conns.push(child.GetPropertyChangedSignal("Visible").Connect(syncUiGui));
+	uiWatch.set(child, conns);
+	syncUiGui();
+});
+uiLayer.ChildRemoved.Connect(child => {
+	for (const conn of uiWatch.get(child) ?? []) conn.Disconnect();
+	uiWatch.delete(child);
+	syncUiGui();
+});
+syncUiGui();
 
 const cam = new Camera();
 const input = new InputState();
-// phones/tablets start in touch aim (the "mouse" location there is just the last finger)
-if (UserInputService.TouchEnabled && !UserInputService.MouseEnabled) input.aimMode = "touch";
+// a touch screen in use starts in touch aim (the "mouse" location there is just the last finger) -- the same answer the
+// HUD draws its touch controls from (client/ui/device.ts: UserInputService.PreferredInput), and again when it changes
+if (inputDevice() === "touch") input.aimMode = "touch";
+onInputDeviceChanged(device => {
+	if (device === "touch") input.aimMode = "touch";
+});
 const renderer = new Renderer(worldLayer, "Sprites");
 const save: PlayerSaveData = defaultSave();
 
@@ -119,10 +193,13 @@ const ctx: GameContext = {
 	playerGui,
 	screen,
 	root,
+	hudGui,
 	hudLayer,
 	worldLayer,
+	uiGui,
 	uiLayer,
 	darkLayer,
+	backdropLayer,
 	cam,
 	input,
 	renderer,
@@ -133,18 +210,6 @@ const ctx: GameContext = {
 };
 
 // ---------------------------------------------------------------- touch layout
-
-/** px covered by the Roblox top bar (our ScreenGui ignores the inset, so we keep clear of it) */
-function topInset(): number {
-	const [topLeft] = GuiService.GetGuiInset();
-	let inset = topLeft.Y;
-	const [ok, value] = pcall(() => GuiService.TopbarInset);
-	if (ok) {
-		const rect = value as Rect;
-		if (rect.Height > 0) inset = math.max(inset, rect.Max.Y);
-	}
-	return math.max(0, inset);
-}
 
 function touchPrefs(): TouchPrefs {
 	const s = ctx.save.settings;
@@ -166,9 +231,12 @@ const layoutListeners = new Set<() => void>();
 /**
  * Recomputes the touch geometry from the current save + viewport. Called on a viewport change and by the
  * settings screen whenever a control slider moves, so what the thumb hits and what the HUD draws stay identical.
+ * It is laid out in the HUD's coordinates -- the device safe area (client/ui/device.ts) -- where the touch layer is
+ * drawn and where touchPos puts a finger.
  */
 export function refreshTouchLayout(): TouchLayout {
-	layout = computeTouchLayout(touchPrefs(), ctx.viewW, ctx.viewH, topInset());
+	const safe = safeSize();
+	layout = computeTouchLayout(touchPrefs(), safe.X, safe.Y, topInset());
 	input.joystickRadius = layout.move.radius;
 	layoutRevision += 1;
 	for (const fn of layoutListeners) fn();
@@ -206,6 +274,7 @@ function resize(): void {
 	ctx.viewH = viewportY;
 	cam.setView(viewportX, viewportY);
 	renderer.setView(viewportX, viewportY);
+	refreshSafeArea();
 	refreshTouchLayout();
 	print(`[${GAME_NAME}] viewport ${viewportX}x${viewportY} (${layout.shape})`);
 }
@@ -554,10 +623,13 @@ function handleGamepadStick(inputObj: InputObject): void {
 
 // ---------------------------------------------------------------- touch
 
-/** Touch positions come inset-relative; with IgnoreGuiInset=true GUI coords include the inset. */
+/**
+ * A finger in the HUD's coordinates (the device safe area), where the touch layout is laid out and drawn: Position
+ * comes relative to the core UI safe area, and client/ui/device.ts knows how far the device safe area starts from it.
+ */
 function touchPos(t: InputObject): { x: number; y: number } {
-	const [inset] = GuiService.GetGuiInset();
-	return { x: t.Position.X + inset.X, y: t.Position.Y + inset.Y };
+	const off = touchOffset();
+	return { x: t.Position.X + off.X, y: t.Position.Y + off.Y };
 }
 
 function startMove(t: InputObject, x: number, y: number): void {

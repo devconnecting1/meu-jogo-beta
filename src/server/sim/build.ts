@@ -33,6 +33,7 @@ import {
 	placeRecipe,
 	placedSolid,
 	placementValid,
+	snapToOpening,
 } from "shared/sim/placement";
 import { addSolid, Solid, WorldData } from "shared/game/world";
 import { PlayerSaveData } from "shared/game/save";
@@ -156,7 +157,8 @@ export class ServerBuild {
 		const r = ghostRectSticky(def, state.x, state.y, state.angle, p.rot, p.prevX, p.prevY);
 		p.prevX = r.x;
 		p.prevY = r.y;
-		return r;
+		// a barricade or a door aimed at a doorway or a window fills it (EDI-13); the deadband stays on the grid
+		return snapToOpening(this.world, def, r);
 	}
 
 	rotate(slot: number): PlaceOutcome {
@@ -191,7 +193,12 @@ export class ServerBuild {
 		}
 		if ((this.owned.get(slot) ?? 0) >= MAX_BUILDS_PER_PLAYER) return this.refuse(p, "capPlayer");
 		if (this.total >= MAX_BUILDS_PER_SERVER) return this.refuse(p, "capServer");
-		const r = ghostRectSticky(def, state.x, state.y, state.angle, p.rot, p.prevX, p.prevY);
+		// a barricade or a door aimed at a doorway or a window fills it (EDI-13): the same snap as the client's ghost
+		const r = snapToOpening(
+			this.world,
+			def,
+			ghostRectSticky(def, state.x, state.y, state.angle, p.rot, p.prevX, p.prevY),
+		);
 		if (!placementValid(this.world, r, players, zombies)) return this.refuse(p, "invalid");
 		const rot = p.rot;
 		const placeable = p.placeable;

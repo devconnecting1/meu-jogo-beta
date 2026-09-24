@@ -1,6 +1,6 @@
 import { ETC_ITEMS } from "shared/data/etcItems";
 import { PlayerSaveData } from "shared/game/save";
-import { querySolids, Solid } from "shared/game/world";
+import { buildingAt, querySolids, Solid } from "shared/game/world";
 import { placeRecipe } from "shared/sim/placement";
 import type { GameRefs } from "../systems/types";
 
@@ -135,6 +135,46 @@ function nearestSolid(refs: GameRefs, range: number, pick: (s: Solid) => boolean
 	return { x: best.x + best.w / 2, y: best.y + best.h / 2, kind: "place" };
 }
 
+/**
+ * Where to search: the loot spot nearest the survivor (EDI-03: in front of the fridge, the shelves, the gun rack --
+ * the search only answers within arm's reach of one, shared/sim/interactQuery.ts `nearLootSpot`). A building without
+ * spots is searched anywhere inside: its middle.
+ *
+ * A building this client KNOWS holds loot comes first. Mostly it knows nothing: the server rolls the loot and tells a
+ * survivor only about the building they stand in (LootFlag, client/net/worldMirror.ts; the content never travels,
+ * §4.3), so any other house may hold something and is worth the walk. The one it knows is empty -- the building the
+ * survivor stands in with no flag -- is left out, or the arrow would keep pointing at the shelves just emptied.
+ */
+function nearestLootSpot(refs: GameRefs, range: number): ObjectiveTarget | undefined {
+	const p = refs.player;
+	const here = buildingAt(refs.world, p.x, p.y);
+	// [0]: buildings known to hold loot, [1]: buildings nobody told this client about
+	const bx = [0, 0];
+	const by = [0, 0];
+	const bestD = [math.huge, math.huge];
+	for (const s of querySolids(refs.world, p.x - range, p.y - range, p.x + range, p.y + range)) {
+		if (s.kind !== "building" || s.removed === true) continue;
+		const known = (s.lootItems?.size() ?? 0) > 0;
+		if (!known && s === here) continue;
+		const k = known ? 0 : 1;
+		const spots = s.lootSpots;
+		const n = spots === undefined ? 0 : spots.size();
+		for (let i = 0; i < math.max(1, n); i++) {
+			const x = spots !== undefined && n > 0 ? spots[i].x : s.x + s.w / 2;
+			const y = spots !== undefined && n > 0 ? spots[i].y : s.y + s.h / 2;
+			const d = (x - p.x) * (x - p.x) + (y - p.y) * (y - p.y);
+			if (d < bestD[k]) {
+				bestD[k] = d;
+				bx[k] = x;
+				by[k] = y;
+			}
+		}
+	}
+	const k = bestD[0] < math.huge ? 0 : 1;
+	if (bestD[k] === math.huge) return undefined;
+	return { x: bx[k], y: by[k], kind: "place" };
+}
+
 function nearestGroundItem(refs: GameRefs): ObjectiveTarget | undefined {
 	const p = refs.player;
 	let bx = 0;
@@ -261,7 +301,7 @@ export const OBJECTIVES: Array<Objective> = [
 	{
 		id: "loot",
 		title: "Search a house",
-		hint: "Step inside and use the door-side prompt to empty its shelves.",
+		hint: "Go in to the fridge, shelf or cabinet the arrow shows and press use there.",
 		begin(refs, mem): void {
 			mem.loot.clear();
 			mem.lootScan = 0;
@@ -271,7 +311,7 @@ export const OBJECTIVES: Array<Objective> = [
 			return mem.looted;
 		},
 		target(refs): ObjectiveTarget | undefined {
-			return nearestSolid(refs, 2600, s => s.kind === "building" && (s.lootItems?.size() ?? 0) > 0);
+			return nearestLootSpot(refs, 2600);
 		},
 	},
 	{

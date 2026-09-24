@@ -12,7 +12,7 @@
 import { Camera } from "shared/engine/camera";
 import { clamp } from "shared/engine/vec2";
 import { GAME, RADIUS, TEXT, THEME, TRANSPARENCY, fontOf, space } from "../ui/theme";
-import { addStroke, onLayoutChange, uiScale } from "../ui/widgets";
+import { addStroke, onLayoutChange, reducedMotion, uiScale } from "../ui/widgets";
 import { Nameplate, profileOf } from "../ui/nameplate";
 import { RemotePlayerView } from "../net/netTypes";
 import { SURVIVOR_R } from "./survivorView";
@@ -259,7 +259,8 @@ export class AllyPlate {
 			this.lastRingY = ry;
 			ring.Position = UDim2.fromOffset(rx, ry);
 		}
-		const alpha = quantise(0.45 + 0.3 * math.sin(clock * RING_PULSE));
+		// the breath is motion: under Reduce Motion the ring holds at its middle (it still says "revive me here")
+		const alpha = quantise(reducedMotion() ? 0.45 : 0.45 + 0.3 * math.sin(clock * RING_PULSE));
 		if (alpha !== this.lastRingA) {
 			this.lastRingA = alpha;
 			const stroke = this.ringStroke;
