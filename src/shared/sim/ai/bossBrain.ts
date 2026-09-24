@@ -130,7 +130,7 @@ function updateSerpent(refs: Ctx.AiRefs, b: BossState, dt: number): void {
 				Ctx.hurtPlayer(refs, p, refs.saveOf(p), perFrame * SPEED_SCALE * dt, true);
 				if (!wasHit) {
 					p.reactionDir = ang;
-					Ctx.fxBlood(refs, p.x, p.y, 4, "player");
+					Ctx.fxBlood(refs, p.x, p.y, 4, "player", ang);
 				}
 				break;
 			}
@@ -154,7 +154,8 @@ function updateStationary(refs: Ctx.AiRefs, b: BossState, dt: number): void {
 			}
 			if (Ctx.hurtPlayer(refs, p, refs.saveOf(p), b.damage)) p.reactionDir = ang + math.pi;
 			Ctx.fxTracer(refs, b.x, b.y, p.x, p.y, "boss", 0.3);
-			Ctx.fxBlood(refs, p.x, p.y, 6, "player");
+			// from the boss through its victim (ART-15), though the grab pulls the survivor the other way
+			Ctx.fxBlood(refs, p.x, p.y, 6, "player", ang);
 		}
 	}
 }

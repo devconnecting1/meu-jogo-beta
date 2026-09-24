@@ -1024,11 +1024,18 @@ export const ProjEndHow = {
 } as const;
 const PROJ_END_MAX = 4;
 
+/** whose blood: a survivor's (Red) or the horde's (`Green`, its old name: a dark red since ART-15, LEG-02) */
 export const BloodKind = {
 	Red: 0,
 	Green: 1,
 } as const;
 const BLOOD_KIND_MAX = 1;
+/**
+ * Set on a Blood event's kind byte when it has no direction (a kill, a bite the simulation gave no angle): its angle
+ * byte is then 0 and means nothing, and the client sprays it all round. Without it a kill's spray and its stain were
+ * thrown to +x on every client (the angle 0 of "no angle").
+ */
+const BLOOD_UNDIRECTED = 0x80;
 
 /** pellets per ShotResult (shotgun: 5) */
 export const FX_SHOT_MAX_HITS = 16;
@@ -1086,7 +1093,8 @@ export interface FxBlood {
 	t: typeof FxType.Blood;
 	x: number;
 	y: number;
-	angle: number;
+	/** the way the blood was thrown (attacker -> target); undefined: no way, all round */
+	angle?: number;
 	/** particles, 0..255 */
 	amount: number;
 	/** BloodKind */
@@ -1209,9 +1217,9 @@ function writeFxEvent(w: NetWriter, e: FxEvent): void {
 		case FxType.Blood:
 			w.pos(e.x);
 			w.pos(e.y);
-			w.angle8(e.angle);
+			w.angle8(e.angle ?? 0);
 			w.u8(e.amount);
-			w.u8(clampInt(e.kind, 0, BLOOD_KIND_MAX));
+			w.u8(clampInt(e.kind, 0, BLOOD_KIND_MAX) + (e.angle === undefined ? BLOOD_UNDIRECTED : 0));
 			break;
 		case FxType.Debris:
 			w.pos(e.x);
@@ -1292,9 +1300,11 @@ function readFxEvent(r: NetReader): FxEvent | undefined {
 		const y = r.pos();
 		const angle = r.angle8();
 		const amount = r.u8();
-		const kind = r.u8();
+		const flags = r.u8();
+		const undirected = flags >= BLOOD_UNDIRECTED;
+		const kind = undirected ? flags - BLOOD_UNDIRECTED : flags;
 		if (kind > BLOOD_KIND_MAX) return undefined;
-		return { t: FxType.Blood, x, y, angle, amount, kind };
+		return { t: FxType.Blood, x, y, angle: undirected ? undefined : angle, amount, kind };
 	} else if (t === FxType.Debris) {
 		const x = r.pos();
 		const y = r.pos();

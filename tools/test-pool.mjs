@@ -20,7 +20,7 @@
  *      a blank ImageLabel as reserved; drawing on a warmed sprite keeps its write cache true (no stale corner, no
  *      stroke left on, a sheet cell drawn on a warmed image creates nothing).
  *   5. THE WARM-UP PROFILE. poolWarmup.ts reserves what the reference fight draws, flat and with the characters'
- *      art: on the warmed pool the fight creates no Frame, UICorner, UIStroke or ImageLabel (the characters' labels
+ *      and the blood's art: on the warmed pool the fight creates no Frame, UICorner, UIStroke or ImageLabel (the characters' labels
  *      are built hidden by the warm-up), and no layer is reserved far past what the fight shows.
  *   6. THE DRIVER. warmFightPool warms only while the lobby or its menus are up (not behind the boot logo, not
  *      during a run), WARM_PER_FRAME sprites a frame, and lets go of Heartbeat once the pool is warm.
@@ -39,6 +39,10 @@
  *  12. THE HORDE'S ORDER (perf audit M2). The real SnapshotBuffer, with its netId table walked in Luau's order: a
  *      spawn under a recycled low netId moves no walker already drawn, and a death at the front moves one walker
  *      into its place (it used to move the whole horde: 280 sprites, 867 writes for 40 walkers).
+ *  14. THE BLOOD'S PIXEL ART (ART-15, client/view/bloodView.ts). On the pool warmed with its profile, a 10 s fight's
+ *      stains and droplets create no Instance, write no ZIndex and build no Color3; a stain born into a full ring
+ *      rewrites one sprite; a stain's whole life under a still camera writes only at its steps, then it is gone.
+ *      (The reference fight of 1-5 draws its blood through the same view: flat circles, or cells and squares.)
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -98,6 +102,8 @@ const WA = require(join(SRC, "client/view/worldArt.ts"));
 const { WORLD_ART } = require(join(SRC, "client/view/worldArtAssets.ts"));
 const CA = require(join(SRC, "client/view/charArt.ts"));
 const PW = require(join(SRC, "client/view/poolWarmup.ts"));
+const BV = require(join(SRC, "client/view/bloodView.ts"));
+const PS = require(join(SRC, "client/systems/particles.ts"));
 const { AudioTrack } = require(join(SRC, "client/audio/audio.ts"));
 
 // ---------------------------------------------------------------- harness
@@ -162,9 +168,29 @@ function allIds() {
 const world = generateTown(DESIGN.TOWN_SEED);
 const AT = { x: 8400, y: 10250 };
 
+/** a survivor's fresh blood stain (a ParticleSystem decal record) of diameter `d`, for the real BloodView */
+function stainAt(x, y, d) {
+	return {
+		x,
+		y,
+		size: d,
+		color: COLORS.blood,
+		life: 10,
+		maxLife: 10,
+		kind: PS.DECAL_DROP,
+		src: PS.BLOOD_SURVIVOR,
+		sector: -1,
+		age: 0,
+		ground: -1,
+		pick: -1,
+	};
+}
+
 /**
  * A night fight drawn in GameLoop.render's order: the town's ground, blood decals and acid puddles, the town's solids,
- * the horde (a shadow + drawZombie each), 4 survivors, 60 sparks, 12 tracers. `state.town` false leaves the town out.
+ * the horde (a shadow + drawZombie each), 4 survivors, 60 sparks of blood, 12 tracers. `state.town` false leaves the
+ * town out. The blood goes through the real client/view/bloodView.ts: flat circles, or with its atlas live (ART-15)
+ * one image per stain and square droplets under the bodies.
  */
 function makeFight(vw, vh, n = 40) {
 	const root = gui.make("Frame");
@@ -186,9 +212,23 @@ function makeFight(vw, vh, n = 40) {
 			kind: 1 + (i % 5),
 		});
 	}
-	const newDecal = () => ({ x: AT.x + (rnd() - 0.5) * vw, y: AT.y + (rnd() - 0.5) * vh, d: 10 + rnd() * 20 });
+	const newDecal = () => stainAt(AT.x + (rnd() - 0.5) * vw, AT.y + (rnd() - 0.5) * vh, 10 + rnd() * 20);
 	const decals = [];
 	for (let i = 0; i < 40; i++) decals.push(newDecal());
+	const blood = new BV.BloodView();
+	const sparks = [];
+	for (let i = 0; i < 60; i++) {
+		sparks.push({
+			x: AT.x + i * 7 - 200,
+			y: AT.y - 100 + (i % 7) * 9,
+			size: 5,
+			color: COLORS.blood,
+			life: 0.3,
+			maxLife: 0.4,
+			src: PS.BLOOD_SURVIVOR,
+			tone: i % 3,
+		});
+	}
 	const puddles = [];
 	for (let i = 0; i < 4; i++) puddles.push({ x: AT.x - 300 + i * 150, y: AT.y + 200 });
 	const looks = [];
@@ -207,7 +247,8 @@ function makeFight(vw, vh, n = 40) {
 		const v = cam.viewRect(32);
 		r.beginFrame();
 		if (state.town) view.drawGround(r, cam, v, world);
-		for (const d of decals) r.drawCircle(cam, d.x, d.y, d.d, { color: COLORS.blood, alpha: 0.6, zIndex: Z.decal });
+		const art = WA.artId("blood");
+		for (const d of decals) blood.drawDecal(r, cam, v, d, world, art);
 		for (const p of puddles) {
 			r.drawCircle(cam, p.x, p.y, 40, {
 				color: COLORS.acid,
@@ -223,13 +264,7 @@ function makeFight(vw, vh, n = 40) {
 			HV.drawZombie(r, cam, z.x, z.y, z.a, 1, z.kind, 0, 1, state.t + z.id, Z.zombie, 0, false, false, false);
 		}
 		for (const l of looks) SV.drawSurvivor(r, cam, l, trail);
-		for (let i = 0; i < 60; i++) {
-			r.drawCircle(cam, AT.x + i * 7 - 200, AT.y - 100 + (i % 7) * 9, 5, {
-				color: COLORS.blood,
-				alpha: 0.8,
-				zIndex: Z.particle,
-			});
-		}
+		for (const p of sparks) blood.drawParticle(r, cam, v, p, art !== undefined);
 		for (let i = 0; i < 12; i++) {
 			r.drawSegment(cam, AT.x, AT.y, AT.x + 300, AT.y + i * 20 - 120, {
 				h: 2,
@@ -329,7 +364,7 @@ section("1) the same picture: every sprite paints by ZIndex, then in draw order"
 section("2) a birth or a death costs O(1), and never a ZIndex");
 {
 	const S = makeFight(1280, 720);
-	const extra = { x: AT.x + 20, y: AT.y + 30, d: 24 };
+	const extra = stainAt(AT.x + 20, AT.y + 30, 24);
 	// warm-up: both states drawn once
 	S.frame();
 	S.decals.push(extra);
@@ -603,7 +638,7 @@ for (const [label, ids] of [
 	const sArt = CA.survivorArtLive();
 	const S = makeFight(1920, 1080);
 	S.state.town = false;
-	PW.reserveFightPool(S.r, 1920, 1080, zArt, sArt);
+	PW.reserveFightPool(S.r, 1920, 1080, zArt, sArt, BV.bloodArtLive());
 	const c0 = gui.stats.created;
 	const images0 = gui.stats.byClass.ImageLabel ?? 0;
 	let frames = 0;
@@ -983,6 +1018,18 @@ section("10) no garbage per frame on the actor paths (M4): option tables, colour
 		fresh <= 12,
 		"20 s of a fight's blood and debris after a warm-up: records reused (free list, decal ring rewritten in place)",
 		`${fresh} new records for ${sprayed} particles sprayed; ${ps.active().length} particles, ${ps.decalRecords().length} decals live`,
+	);
+	// the same with the blood's pixel art (ART-15): stains live a game day, join and smear, and still reuse their records
+	ps.clear();
+	ps.pixelArt = true;
+	for (let f = 0; f < 1200; f++) fight(f);
+	fresh = 0;
+	sprayed = 0;
+	for (let f = 1200; f < 2400; f++) fight(f);
+	check(
+		fresh <= 12,
+		"...and with the pixel art's stains (a game day long, joined, smeared): records reused all the same",
+		`${fresh} new records for ${sprayed} particles sprayed; ${ps.decalRecords().length} decals live`,
 	);
 
 	const loop = readFileSync(join(SRC, "client", "gameLoop.ts"), "utf8");
@@ -1382,6 +1429,113 @@ section("13) ground items (ITM-07): drops, a pile, the target and the glint -- n
 			RULE.groundTier(4, 23) === "supply" &&
 			RULE.groundTier(3, 12) === "supply",
 		"tiers: a boss's trophy or a golden weapon is rare, a weapon or equipment gear, the rest supplies",
+	);
+	WA.overrideWorldArt(undefined);
+}
+
+// ================================================================ 14. the blood's pixel art (ART-15)
+
+section("14) the blood's pixel art (ART-15): a stain born costs one sprite, drying writes only at its steps, no churn");
+{
+	WA.overrideWorldArt(allIds());
+	const root = gui.make("Frame");
+	const r = new Renderer(root, "Sprites");
+	const cam = new Camera();
+	cam.setView(1920, 1080);
+	r.setView(1920, 1080);
+	cam.x = AT.x;
+	cam.y = AT.y;
+	const blood = new BV.BloodView();
+	const ps = new PS.ParticleSystem();
+	ps.pixelArt = true;
+	const frame = () => {
+		const v = cam.viewRect(32);
+		r.beginFrame();
+		blood.drawDecals(r, cam, v, ps, world);
+		blood.drawParticles(r, cam, v, ps);
+		r.endFrame();
+	};
+	// the warm-up the lobby does, then a fight: shots with a direction, kills, bites, chips
+	PW.reserveFightPool(r, 1920, 1080, true, true, BV.bloodArtLive());
+	while (r.warm(PW.WARM_PER_FRAME) > 0);
+	const fight = f => {
+		if (f % 8 === 0)
+			ps.bloodBurst(AT.x + ((f * 37) % 900) - 450, AT.y + ((f * 53) % 500) - 250, 3, "zombie", f * 0.4);
+		if (f % 45 === 7) ps.bloodBurst(AT.x + ((f * 29) % 800) - 400, AT.y + ((f * 17) % 400) - 200, 10, "zombie");
+		if (f % 70 === 11) ps.bloodBurst(AT.x, AT.y + 40, 4, "player", f);
+		if (f % 50 === 3) ps.debrisBurst(AT.x + 90, AT.y + 90, 5, COLORS.fence);
+		ps.update(1 / 60);
+		frame();
+	};
+	for (let f = 0; f < 600; f++) fight(f);
+	const C = globalThis.Color3;
+	const lerp = C.prototype.Lerp;
+	const fromRGB = C.fromRGB;
+	let built = 0;
+	C.prototype.Lerp = function (...a) {
+		built++;
+		return lerp.apply(this, a);
+	};
+	C.fromRGB = (...a) => {
+		built++;
+		return fromRGB(...a);
+	};
+	const w = watch(() => {
+		for (let f = 600; f < 1200; f++) fight(f);
+	});
+	C.prototype.Lerp = lerp;
+	C.fromRGB = fromRGB;
+	check(
+		w.created === 0 && w.zWrites === 0 && built === 0,
+		"a 10 s fight's blood on the warmed pool: no Instance, no ZIndex write, not one Color3 built",
+		`${w.created} created, ${w.zWrites} ZIndex, ${built} Color3; ${(w.writes / 600).toFixed(0)} writes/frame [${top(w.byProp, 600)}]`,
+	);
+
+	// a full ring: the stain shed longest ago gives its record, and its sprite, to the newest -- nothing else moves
+	ps.clear();
+	for (let i = 0; i < 160; i++) {
+		ps.addDecal(
+			AT.x - 600 + (i % 20) * 60,
+			AT.y - 300 + Math.floor(i / 20) * 70,
+			30,
+			COLORS.bloodHorde,
+			PS.DECAL_SPLAT,
+			PS.BLOOD_HORDE,
+		);
+		ps.update(0.05);
+	}
+	frame();
+	frame();
+	const born = watch(() => {
+		ps.addDecal(AT.x + 3, AT.y + 250, 30, COLORS.bloodHorde, PS.DECAL_SPLAT, PS.BLOOD_HORDE);
+		frame();
+	});
+	check(
+		born.touched.size() === 1 && born.zWrites === 0 && born.created === 0,
+		"a stain born into a full ring (160) rewrites one sprite: the one of the stain it replaced",
+		`${born.writes} writes on ${born.touched.size()} sprite(s)`,
+	);
+
+	// one stain drying under a still camera: writes only at its steps (wet -> matte, 5 tints, 5 fades), then it is gone
+	ps.clear();
+	ps.addDecal(AT.x, AT.y, 30, COLORS.blood, PS.DECAL_SPLAT, PS.BLOOD_SURVIVOR);
+	frame();
+	frame();
+	let steps = 0;
+	let quiet = 0;
+	const life = watch(() => {
+		for (let t = 0; t < PS.BLOOD_LIFE_S + 5; t += 0.5) {
+			const before = gui.stats.writes;
+			ps.update(0.5);
+			frame();
+			if (gui.stats.writes > before) steps++;
+			else quiet++;
+		}
+	});
+	const shown = r.layer.GetChildren().filter(f => f.Visible !== false && f.ZIndex === Z.decal).length;
+	check(
+		steps <= 1 + BV.BLOOD_DRY_STEPS + BV.BLOOD_FADE_STEPS + 1 && life.writes <= 3 * steps && shown === 0,
+		`a stain's whole life (${PS.BLOOD_LIFE_S} s) under a still camera: ${steps} frames write (${life.writes} writes), ${quiet} write nothing; then it is gone`,
 	);
 	WA.overrideWorldArt(undefined);
 }

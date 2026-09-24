@@ -1241,6 +1241,30 @@ test("Fx: round trip, batching and sizes", () => {
 	eq("empty batch", P.encodeFx({ tick: 1, events: [] }).packets.length, 0);
 });
 
+test("Fx: blood with no direction stays with none (a kill sprays all round, not to +x)", () => {
+	const events = [
+		{ t: P.FxType.Blood, x: 1000, y: 2000, amount: 10, kind: P.BloodKind.Green },
+		{ t: P.FxType.Blood, x: 1000, y: 2000, angle: 0, amount: 3, kind: P.BloodKind.Green },
+		{ t: P.FxType.Blood, x: 1000, y: 2000, angle: 2, amount: 4, kind: P.BloodKind.Red },
+		{ t: P.FxType.Blood, x: 1000, y: 2000, amount: 4, kind: P.BloodKind.Red },
+	];
+	const res = P.encodeFx({ tick: 9, events });
+	const got = P.decodeFx(res.packets[0]).events;
+	eq("four events", got.length, 4);
+	eq("a kill: no direction", got[0].angle, undefined);
+	angNear("a hit to +x keeps its direction", got[1].angle, 0, ANG8_TOL);
+	angNear("a bite keeps its direction", got[2].angle, 2, ANG8_TOL);
+	eq("a bite with none: none", got[3].angle, undefined);
+	eq("the horde's kind survives the flag", got[0].kind, P.BloodKind.Green);
+	eq("a survivor's too", got[3].kind, P.BloodKind.Red);
+	const one = P.encodeFx({ tick: 1, events: [events[0]] });
+	const two = P.encodeFx({ tick: 1, events: [events[1]] });
+	eq("no byte more for the flag", buffer.len(one.packets[0]), buffer.len(two.packets[0]));
+	const bytes = bytesOf(one.packets[0]);
+	bytes[bytes.length - 1] = 0x82;
+	eq("an undirected kind past the last is refused", P.decodeFx(bufOf(bytes)), undefined);
+});
+
 test("Fx: malformed packets are refused", () => {
 	const pkt = P.encodeFx({ tick: 3, events: [randFxEvent(), randFxEvent()] }).packets[0];
 	const good = bytesOf(pkt);

@@ -337,6 +337,23 @@ section("C. o servidor decide: mordida, porta, item usado, buzina e campainha vi
 		);
 		const wire = FW.toWireFx(bites[0], i => i);
 		check(wire?.t === P.FxType.Sound && FW.wireSoundOf(wire.sound) === "bite", "e vai pelo fio como Sound 'bite'");
+		// ART-15: the bite's blood is thrown from the biter through the bitten (the walker is to its east: to -x),
+		// and that direction survives the wire; a kill's blood has none (all round, not to +x)
+		const thrown = blood.map(b => {
+			const pkt = P.encodeFx({ tick: 1, events: [FW.toWireFx(b, i => i)] }).packets[0];
+			return FW.fromWireFx(P.decodeFx(pkt).events[0]).dir;
+		});
+		check(
+			blood.length > 0 && thrown.every(a => a !== undefined && Math.cos(a) < -0.9),
+			"o sangue da mordida sai do zumbi para o sobrevivente, e a direcao passa pelo fio (ART-15)",
+			thrown.map(a => (a === undefined ? "none" : `${((a * 180) / Math.PI).toFixed(0)}°`)).join(", "),
+		);
+		const kill = { kind: "blood", x: 1, y: 1, count: 10, source: "zombie" };
+		const killPkt = P.encodeFx({ tick: 1, events: [FW.toWireFx(kill, i => i)] }).packets[0];
+		check(
+			FW.fromWireFx(P.decodeFx(killPkt).events[0]).dir === undefined,
+			"e o de uma morte, sem direcao, chega sem direcao (antes chegava com 0: tudo para +x)",
+		);
 	}
 	// the doors: a built wooden door and an iron one, opened and closed by E
 	const placeableOf = kind => Number(Object.keys(PLACEABLES).find(k => PLACEABLES[k].kind === kind));

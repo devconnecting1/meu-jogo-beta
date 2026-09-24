@@ -62,6 +62,16 @@
  *      ground, and on every ground the weakest icon reads at least as well as the weakest flat look it replaces; out
  *      of every light no item steps more than 1.5:1 off its ground (nothing glows), and every sprite of the view is
  *      under the night. The pictures: node tools/render-ground-items.mjs --out <dir>.
+ *  13. COMBAT BLOOD (ART-15, LEG-02, client/view/bloodView.ts). With no id a seeded 15 s fight's blood makes the
+ *      draw calls of the GameLoop before the art (tools/golden/blood-flat.json, `--golden-blood` with PZ_SRC on that
+ *      commit; the horde's colour hashed by name), and with the art it throws the same dice. The horde's blood is a
+ *      darker, browner red than a survivor's, far from the acid and off every ground. The atlas: three bands (matte
+ *      greyscale, the two wet ones in their own reds, no outline, no near-white fleck, their means the palette's); a
+ *      smear's spatter runs along its hit in all 8 directions; every stain is one image on the texel grid, every
+ *      droplet a square, all of them under the bodies and the items; a stain ages in 11 looks, always drier and
+ *      fainter, darker where it soaks in (asphalt, grass, soil: checked against 4000 points of the town); droplets on
+ *      one spot join, and a full ring keeps the newest; an item lying in blood (wet, drying, dry) still reads.
+ *      The pictures: node tools/render-blood.mjs --out <dir> (docs/art/blood).
  *
  * Pure Node (>= 18) + the project's TypeScript on tools/luau-shim.mjs and the fake GUI tree of tools/fake-gui.mjs.
  */
@@ -70,7 +80,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { installShims, ROOT } from "./luau-shim.mjs";
+import { installShims, ROOT, setSeed } from "./luau-shim.mjs";
 import { installFakeGui } from "./fake-gui.mjs";
 import { countSprites, rasterise } from "./gui-raster.mjs";
 import { decodePNG } from "./png-lite.mjs";
@@ -336,6 +346,89 @@ if (process.argv.includes("--golden-interiors")) {
 	mkdirSync(join(ROOT, "tools", "golden"), { recursive: true });
 	writeFileSync(GOLDEN_INTERIORS, `${JSON.stringify(out, undefined, "\t")}\n`);
 	console.log(`wrote ${GOLDEN_INTERIORS}`);
+	process.exit(0);
+}
+
+/**
+ * ART-15, combat blood: a seeded 15 s fight's sprays, kills, bites and debris through the REAL ParticleSystem, drawn
+ * every frame by `draw` while the camera drifts, the draw calls hashed. tools/golden/blood-flat.json holds them as the
+ * GameLoop of the commit before the blood's pixel art drew them (`--golden-blood`, with PZ_SRC on that commit: its
+ * drawDecals / drawParticles are `legacyBloodDraw` below, line for line). The horde's colour is hashed by name, not by
+ * value: LEG-02 moved it from green to a dark red with the art, and the digest proves every other thing is the same.
+ */
+const GOLDEN_BLOOD = join(ROOT, "tools", "golden", "blood-flat.json");
+const { ParticleSystem } = require(join(SRC, "client/systems/particles.ts"));
+const { circleInView } = require(join(SRC, "client/view/drawKit.ts"));
+const BLOOD_AT = { x: 8400, y: 10250 };
+/** the flat blood exactly as GameLoop drew it before ART-15 (its DECAL_O / PARTICLE_O and the two loops) */
+function legacyBloodDraw(r, cam, v, ps) {
+	const o = { zIndex: Z.decal };
+	for (const d of ps.decalRecords()) {
+		if (d.life <= 0 || !circleInView(d.x, d.y, d.size, v)) continue;
+		o.color = d.color;
+		o.alpha = 0.7 * Math.min(1, d.life / 5);
+		r.drawCircle(cam, d.x, d.y, d.size, o);
+	}
+	const q = { zIndex: Z.particle };
+	for (const p of ps.active()) {
+		if (!circleInView(p.x, p.y, p.size, v)) continue;
+		q.color = p.color;
+		q.alpha = Math.min(Math.max((p.life / p.maxLife) * 1.5, 0), 1);
+		r.drawCircle(cam, p.x, p.y, p.size, q);
+	}
+}
+/**
+ * The fight: a 3-drop shot every 40 frames (with its direction), a heavy 12-drop hit every 30 (the decal ring fills and
+ * wraps), a kill every 130, a bite every 170, a tree's chips every 210, the low tier from frame 450. `setup(ps)` runs
+ * once before it (the art turns ps.pixelArt on), `each(ps, f)` after every step. Answers the digest of the draw calls.
+ */
+function bloodScenario(draw, setup, each) {
+	setSeed(4242);
+	const ps = new ParticleSystem();
+	if (setup !== undefined) setup(ps);
+	const st = stage(1280, 720, 1);
+	const at = BLOOD_AT;
+	calls.length = 0;
+	for (let f = 0; f < 900; f++) {
+		if (f % 40 === 0)
+			ps.bloodBurst(at.x + ((f * 37) % 500) - 250, at.y + ((f * 53) % 300) - 150, 3, "zombie", (f * 0.7) % 6.28);
+		if (f % 30 === 5) ps.bloodBurst(at.x + ((f * 61) % 700) - 350, at.y + ((f * 23) % 400) - 200, 12, "zombie", f);
+		if (f % 130 === 10) ps.bloodBurst(at.x + ((f * 29) % 400) - 200, at.y + ((f * 17) % 260) - 130, 10, "zombie");
+		if (f % 170 === 25) ps.bloodBurst(at.x - 40 + (f % 80), at.y + 20, 4, "player");
+		if (f % 210 === 40) ps.debrisBurst(at.x + 100, at.y - 60, 5, COLORS.treeTrunk);
+		if (f === 450) ps.lowDetail = true;
+		ps.update(1 / 60);
+		if (each !== undefined) each(ps, f);
+		st.cam.x = at.x + f * 0.4;
+		st.cam.y = at.y + Math.sin(f / 50) * 30;
+		const v = st.cam.viewRect(32);
+		st.r.beginFrame();
+		capturing = true;
+		draw(st.r, st.cam, v, ps);
+		capturing = false;
+		st.r.endFrame();
+	}
+	const red = JSON.stringify(rgb(COLORS.blood));
+	const horde = JSON.stringify(rgb(COLORS.bloodHorde ?? COLORS.bloodZombie));
+	const named = calls.map(c => {
+		const k = JSON.stringify(c[5]);
+		return [...c.slice(0, 5), k === red ? "blood" : k === horde ? "horde" : c[5], ...c.slice(6)];
+	});
+	calls.length = 0;
+	return { count: named.length, sha1: createHash("sha1").update(JSON.stringify(named)).digest("hex"), ps, st };
+}
+if (process.argv.includes("--golden-blood")) {
+	setArt({});
+	const d = bloodScenario(legacyBloodDraw);
+	const out = {
+		note: "draw-call digest of the flat combat blood of a seeded fight (tools/test-world-art.mjs --golden-blood, legacyBloodDraw); the horde's colour by name",
+		recordedFrom: process.env.PZ_GOLDEN_FROM ?? "the src it was run on",
+		count: d.count,
+		sha1: d.sha1,
+	};
+	mkdirSync(join(ROOT, "tools", "golden"), { recursive: true });
+	writeFileSync(GOLDEN_BLOOD, `${JSON.stringify(out, undefined, "\t")}\n`);
+	console.log(`wrote ${GOLDEN_BLOOD} (${d.count} calls)`);
 	process.exit(0);
 }
 
@@ -2814,6 +2907,477 @@ section("12) ground items (ITM-07): every item on every ground, by day, in the s
 			zs.length > 0 && Math.max(...zs) < Z.effect,
 			`every sprite of a ground item -- icon, shadow, ring, glint, the target's brackets -- is under the night (ZIndex < ${Z.effect})`,
 			`highest ${Math.max(...zs)}`,
+		);
+	}
+}
+
+// ================================================================ 13. combat blood (ART-15)
+
+section(
+	"13) combat blood (ART-15): the flat drawing as before; with the atlas, pixel stains that age, under the bodies",
+);
+{
+	const BV = require(join(SRC, "client/view/bloodView.ts"));
+	const BA = require(join(SRC, "client/view/bloodAtlas.ts"));
+	const PS = require(join(SRC, "client/systems/particles.ts"));
+	const view = new BV.BloodView();
+	const drawBlood = (r, cam, v, ps) => {
+		view.drawDecals(r, cam, v, ps, world);
+		view.drawParticles(r, cam, v, ps);
+	};
+	const labOf = c => lab(...rgb(c));
+	const dE3 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+
+	// a. no id, no change: the golden flat fight
+	setArt({});
+	const golden = JSON.parse(readFileSync(GOLDEN_BLOOD, "utf8"));
+	const flat = bloodScenario(drawBlood);
+	check(
+		flat.count === golden.count && flat.sha1 === golden.sha1,
+		`no id: every stain and droplet of a 15 s fight is drawn exactly as before (tools/golden/blood-flat.json, from ${golden.recordedFrom})`,
+		`${flat.count} calls ${flat.sha1.slice(0, 10)}, golden ${golden.count} ${golden.sha1.slice(0, 10)}`,
+	);
+	// LEG-02: the horde's blood is a dark brownish red, apart from a survivor's and from the acid (the only green left)
+	{
+		const h = rgb(COLORS.bloodHorde);
+		const hs = dE3(labOf(COLORS.bloodHorde), labOf(COLORS.blood));
+		const ha = dE3(labOf(COLORS.bloodHorde), labOf(COLORS.acid));
+		const darker = labOf(COLORS.bloodHorde)[0] < labOf(COLORS.blood)[0] - 4;
+		check(
+			h[0] > h[1] * 2 && h[1] >= h[2] && darker && hs >= 20 && ha >= 60,
+			"LEG-02: the horde bleeds a darker, browner red than a survivor, far from the acid's green",
+			`horde (${h.join(",")}): ${hs.toFixed(1)} ΔE off a survivor's, ${ha.toFixed(1)} off the acid; L* ${labOf(COLORS.bloodHorde)[0].toFixed(0)} vs ${labOf(COLORS.blood)[0].toFixed(0)}`,
+		);
+		// the old green was 21 ΔE off the lawn: on grass a zombie's blood all but vanished
+		const grounds = [
+			COLORS.grass,
+			COLORS.road,
+			COLORS.sidewalk,
+			COLORS.floorWood,
+			COLORS.floorCarpet,
+			COLORS.dirtPath,
+		];
+		const least = Math.min(...grounds.map(g => dE3(labOf(COLORS.bloodHorde), labOf(g))));
+		check(least >= 30, "the horde's fresh blood stands off every ground (≥ 30 ΔE)", `least ${least.toFixed(1)} ΔE`);
+	}
+
+	// b. the same dice with the art: only the stains differ, never the sprays
+	{
+		const trace = art => {
+			const pos = [];
+			bloodScenario(
+				() => {},
+				ps => (ps.pixelArt = art),
+				ps => {
+					for (const p of ps.active()) pos.push(Math.round(p.x * 1000), Math.round(p.y * 1000));
+				},
+			);
+			return createHash("sha1").update(pos.join(",")).digest("hex");
+		};
+		check(
+			trace(false) === trace(true),
+			"with the art the fight throws the same dice: every droplet flies the same",
+		);
+	}
+
+	// c. the atlas: layout, bands, colours
+	const png = decodePNG(readFileSync(join(ART_DIR, "blood.png")));
+	const man = JSON.parse(readFileSync(join(ART_DIR, "manifest.json"), "utf8")).textures.find(t => t.name === "blood");
+	{
+		const cells = BA.BLOOD_CELLS;
+		const inside = cells.every(([x, y, w, h]) => x + w <= png.w && y + h + 2 * BA.BLOOD_BAND_H <= png.h);
+		check(
+			man !== undefined &&
+				man.kind === "atlas" &&
+				png.w === BA.BLOOD_ATLAS_W &&
+				png.h === BA.BLOOD_ATLAS_H &&
+				BA.BLOOD_BAND_H * 3 === png.h &&
+				inside,
+			"the atlas: in the manifest (uploaded like the rest), the size bloodAtlas.ts says, three bands, every cell inside",
+			`${png.w} x ${png.h}, ${cells.length} cells`,
+		);
+		check(
+			BA.BLOOD_DROPS === 16 &&
+				BA.BLOOD_SPLATS === 12 &&
+				cells.length - BA.BLOOD_SMEAR_FIRST === 8 * BA.BLOOD_SMEAR_SHAPES &&
+				BA.BLOOD_SPLAT_FIRST === BA.BLOOD_DROP_FIRST + BA.BLOOD_DROPS &&
+				BA.BLOOD_SMEAR_FIRST === BA.BLOOD_SPLAT_FIRST + BA.BLOOD_SPLATS,
+			"4 drops and 3 splats in 4 flips each, 2 smears in 8 directions",
+		);
+		const texels = (band, fn) => {
+			for (const [x0, y0, w, h] of cells) {
+				for (let y = 0; y < h; y++) {
+					for (let x = 0; x < w; x++) {
+						const i = ((band * BA.BLOOD_BAND_H + y0 + y) * png.w + x0 + x) * 4;
+						if (png.data[i + 3] > 0) fn([png.data[i], png.data[i + 1], png.data[i + 2]], png.data[i + 3]);
+					}
+				}
+			}
+		};
+		let grey = true;
+		texels(0, c => (grey &&= c[0] === c[1] && c[1] === c[2]));
+		check(grey, "band 0 is greyscale: the drying and the ground tint it (ImageColor3), like the roofs (ART-03)");
+		for (const [band, base, who] of [
+			[1, COLORS.blood, "a survivor's"],
+			[2, COLORS.bloodHorde, "the horde's"],
+		]) {
+			let red = true;
+			let lightest = 0;
+			const sum = [0, 0, 0];
+			let n = 0;
+			texels(band, (c, a) => {
+				red &&= c[0] > c[1] && c[0] > c[2];
+				lightest = Math.max(lightest, lab(...c)[0]);
+				for (let k = 0; k < 3; k++) sum[k] += c[k] * a;
+				n += a;
+			});
+			const mean = sum.map(v => v / n);
+			const off = dE3(lab(...mean), labOf(base));
+			check(
+				red && lightest < 75 && off <= 8,
+				`band ${band}, ${who} wet blood: every texel its own red (no outline, no halo of another colour), no near-white fleck (LEG-01), its mean the palette's`,
+				`lightest L* ${lightest.toFixed(0)}, mean ${off.toFixed(1)} ΔE off the palette`,
+			);
+		}
+	}
+
+	// d. a smear runs from the attacker through the target: its droplets lie along the hit, in all 8 directions
+	{
+		const bad = [];
+		for (let s = 0; s < 8; s++) {
+			for (const pick of [0.2, 0.7]) {
+				const [x0, y0, w, h, ax, ay] = BA.BLOOD_CELLS[BV.stainCell(PS.DECAL_SMEAR, pick, s)];
+				let sx = 0;
+				let sy = 0;
+				let n = 0;
+				for (let y = 0; y < h; y++) {
+					for (let x = 0; x < w; x++) {
+						if (png.data[((y0 + y) * png.w + x0 + x) * 4 + 3] === 0) continue;
+						sx += x + 0.5 - ax;
+						sy += y + 0.5 - ay;
+						n++;
+					}
+				}
+				const got = Math.atan2(sy, sx);
+				const want = (s * Math.PI) / 4;
+				const off = Math.abs(Math.atan2(Math.sin(got - want), Math.cos(got - want)));
+				if (off > 0.45 || PS.sectorOf(want + 0.3) !== s)
+					bad.push(`sector ${s}: ${((got * 180) / Math.PI).toFixed(0)}°`);
+			}
+		}
+		check(
+			bad.length === 0,
+			"a smear's spatter lies along the hit's direction, all 8 of them (within 26°)",
+			bad.join(", "),
+		);
+	}
+
+	// e. what the art draws: one image per stain on the texel grid, square droplets, all of it under the bodies
+	{
+		setArt({ ...ALL.ids });
+		check(BV.bloodArtLive(), "with the atlas's id the pixel art is live");
+		const st = stage(1280, 720, 1);
+		const got = [];
+		const draw = st.r.drawRect;
+		st.r.drawRect = function (cam, x, y, o) {
+			got.push({ x, y, w: o.w, h: o.h, z: o.zIndex, image: o.image, circle: o.circle, alpha: o.alpha });
+			return draw.call(this, cam, x, y, o);
+		};
+		setSeed(99);
+		const ps = new ParticleSystem();
+		ps.pixelArt = true;
+		st.cam.x = BLOOD_AT.x;
+		st.cam.y = BLOOD_AT.y;
+		let rounds = 0;
+		for (let f = 0; f < 240; f++) {
+			if (f % 20 === 0) ps.bloodBurst(BLOOD_AT.x + f, BLOOD_AT.y, 3, "zombie", f * 0.3);
+			if (f % 60 === 5) ps.bloodBurst(BLOOD_AT.x - f, BLOOD_AT.y + 50, 10, "zombie");
+			if (f % 70 === 9) ps.bloodBurst(BLOOD_AT.x, BLOOD_AT.y - 80, 4, "player", 1);
+			if (f % 50 === 3) ps.debrisBurst(BLOOD_AT.x + 90, BLOOD_AT.y + 90, 5, COLORS.fence);
+			ps.update(1 / 60);
+			st.r.beginFrame();
+			drawBlood(st.r, st.cam, st.cam.viewRect(32), ps);
+			st.r.endFrame();
+			rounds++;
+		}
+		const stains = got.filter(c => c.z === Z.decal);
+		const drops = got.filter(c => c.z === Z.decal + 1);
+		const chips = got.filter(c => c.z === Z.particle);
+		const onGrid = c =>
+			Math.abs(((c.x - c.w / 2) % 4) + 4) % 4 < 1e-6 && Math.abs(((c.y - c.h / 2) % 4) + 4) % 4 < 1e-6;
+		check(
+			stains.length > 0 && stains.every(c => c.image === ALL.ids.blood && c.circle !== true && onGrid(c)),
+			"every stain is one cell of the atlas, on the town's texel grid (never a circle)",
+			`${stains.length} stain draws in ${rounds} frames`,
+		);
+		check(
+			drops.length > 0 &&
+				chips.length > 0 &&
+				[...drops, ...chips].every(
+					c => c.circle !== true && c.w === c.h && (c.w === 4 || c.w === 8) && onGrid(c),
+				),
+			"every droplet and chip is a square of one or two texels on the grid, never a circle",
+			`${drops.length} droplets, ${chips.length} chips`,
+		);
+		check(
+			[...stains, ...drops].every(c => c.z < Z.actorShadow) &&
+				[...drops, ...chips].every(c => (c.alpha ?? 1) === 1),
+			"LEG-03: blood lies and flies under every body, shadow and item on the ground; a droplet never fades or flickers",
+			`highest blood ZIndex ${Math.max(...[...stains, ...drops].map(c => c.z))} < ${Z.actorShadow}`,
+		);
+		const noBlood = { ...ALL.ids };
+		delete noBlood.blood;
+		setArt(noBlood);
+		check(
+			!BV.bloodArtLive(),
+			"without the atlas's id (or when it did not load) the blood is flat, the rest of the art or not",
+		);
+		setArt({});
+	}
+
+	// f. a stain ages in steps: wet, drying, a game day old, gone -- monotonic, nothing flashes
+	{
+		const d = {
+			x: 0,
+			y: 0,
+			size: 30,
+			color: COLORS.bloodHorde,
+			life: 10,
+			maxLife: 10,
+			kind: 1,
+			src: PS.BLOOD_HORDE,
+		};
+		let changes = 0;
+		let last;
+		let alphaUp = false;
+		let wetter = false;
+		let prevAlpha = 1;
+		let prevDry = Infinity;
+		const dry = labOf(COLORS.bloodDry);
+		for (let age = 0; age < PS.BLOOD_LIFE_S; age += 0.25) {
+			d.age = age;
+			const band = BV.stainBand(d.src, age);
+			const tint = BV.stainTint(d, band, BV.GROUND_HARD);
+			const alpha = BV.stainAlpha(age);
+			const key = `${band}|${rgb(tint).join(",")}|${alpha}`;
+			if (key !== last) changes++;
+			last = key;
+			if (alpha > prevAlpha + 1e-9) alphaUp = true;
+			prevAlpha = alpha;
+			if (band === 0) {
+				const toDry = dE3(labOf(tint), dry);
+				if (toDry > prevDry + 1e-6) wetter = true;
+				prevDry = toDry;
+			}
+		}
+		check(
+			changes <= 1 + BV.BLOOD_DRY_STEPS + BV.BLOOD_FADE_STEPS && !alphaUp && !wetter,
+			`over its ${PS.BLOOD_LIFE_S} s a stain changes look ${changes} times: wet, ${BV.BLOOD_DRY_STEPS} steps to dry, ${BV.BLOOD_FADE_STEPS} to gone -- always drier and fainter, never back`,
+		);
+		const wet = BV.stainBand(PS.BLOOD_SURVIVOR, 0) === 1 && BV.stainBand(PS.BLOOD_HORDE, 0) === 2;
+		const gone = BV.stainBand(PS.BLOOD_SURVIVOR, PS.BLOOD_WET_S) === 0;
+		const dried =
+			rgb(BV.stainTint({ ...d, age: PS.BLOOD_DRY_S }, 0, BV.GROUND_HARD)).join() === rgb(COLORS.bloodDry).join();
+		check(
+			wet && gone && dried,
+			"wet (its glossy band) for the first seconds, then matte; a game day old it is COLORS.bloodDry",
+		);
+		const soak = labOf(BV.stainTint({ ...d, age: 60 }, 0, BV.GROUND_SOAK));
+		const hard = labOf(BV.stainTint({ ...d, age: 60 }, 0, BV.GROUND_HARD));
+		const chroma = c => Math.hypot(c[1], c[2]);
+		check(
+			soak[0] < hard[0] && chroma(soak) < chroma(hard),
+			"on asphalt, grass and dirt the blood soaks in: darker and less red than on a floor",
+			`L* ${soak[0].toFixed(0)} vs ${hard[0].toFixed(0)}, chroma ${chroma(soak).toFixed(0)} vs ${chroma(hard).toFixed(0)}`,
+		);
+	}
+
+	// g. stains join, and the ring keeps the newest
+	{
+		const ps = new ParticleSystem();
+		ps.pixelArt = true;
+		for (let i = 0; i < 200; i++)
+			ps.addDecal(5000 + (i % 3), 5000, 10, COLORS.blood, PS.DECAL_DROP, PS.BLOOD_SURVIVOR);
+		const one = ps.decalRecords().length;
+		ps.addDecal(5000, 5000, 30, COLORS.blood, PS.DECAL_SPLAT, PS.BLOOD_SURVIVOR);
+		ps.addDecal(5004, 5002, 10, COLORS.blood, PS.DECAL_DROP, PS.BLOOD_SURVIVOR);
+		ps.addDecal(5000, 5000, 10, COLORS.bloodHorde, PS.DECAL_DROP, PS.BLOOD_HORDE);
+		check(
+			one === 1 && ps.decalRecords().length === 3,
+			"200 droplets on one spot are one stain; a splat on it is a second, and the horde's blood is its own",
+			`${one} then ${ps.decalRecords().length} records`,
+		);
+		const ring = new ParticleSystem();
+		ring.pixelArt = true;
+		for (let i = 0; i < 400; i++) {
+			ring.addDecal(i * 60, 0, 30, COLORS.bloodHorde, PS.DECAL_SPLAT, PS.BLOOD_HORDE);
+			ring.update(0.5);
+		}
+		const xs = ring.decalRecords().map(d => d.x);
+		check(
+			xs.length === 160 && Math.min(...xs) === 240 * 60 && xs.includes(399 * 60),
+			"400 stains in a long night: the ring holds 160 (80 on Low), the 240 shed longest ago gave their records up",
+			`${xs.length} records, the oldest at #${Math.min(...xs) / 60}`,
+		);
+	}
+
+	// h. what a stain lies on
+	{
+		const soakKinds = new Set([
+			"road",
+			"median",
+			"grass",
+			"grassLong",
+			"park",
+			"path",
+			"verge",
+			"pit",
+			"parking",
+			"stall",
+			"playground",
+			"border",
+		]);
+		const hardKinds = new Set([
+			"building",
+			"sidewalk",
+			"plaza",
+			"walk",
+			"drive",
+			"apron",
+			"ramp",
+			"porch",
+			"patio",
+		]);
+		const wrong = [];
+		let n = 0;
+		setSeed(5);
+		for (let i = 0; i < 4000; i++) {
+			const x = Math.random() * world.width;
+			const y = Math.random() * world.height;
+			const s = surfaceAt(x, y);
+			const want = soakKinds.has(s) ? BV.GROUND_SOAK : hardKinds.has(s) ? BV.GROUND_HARD : undefined;
+			if (want === undefined) continue;
+			n++;
+			if (BV.bloodGround(world, x, y) !== want) wrong.push(`${s} at ${x.toFixed(0)},${y.toFixed(0)}`);
+		}
+		check(
+			wrong.length === 0 && n > 2000,
+			"a stain soaks into asphalt, grass and soil, and lies on floors, sidewalks and porches (4000 points of the town)",
+			wrong.length > 0 ? wrong.slice(0, 3).join("; ") : `${n} points`,
+		);
+	}
+
+	// i. LEG-03 and LEG-01: an item lying in blood still reads, wet or dry, on a floor and on the asphalt
+	{
+		const { GroundItemsView } = require(join(SRC, "client/view/groundItemsView.ts"));
+		setArt({ ...ALL.ids });
+		const S = 64;
+		const ITEMS = [
+			[3, 0, "Raw meat"],
+			[3, 5, "First aid"],
+			[3, 12, "Bandage"],
+			[1, 10, "Pistol"],
+			[4, 44, "Ammo"],
+			[4, 41, "Leather"],
+			[4, 23, "Wood"],
+		];
+		const GROUNDS = [
+			["wood floor", "floorWood", undefined],
+			["asphalt", "asphalt", undefined],
+			["tile floor", "floorTile", undefined],
+		];
+		const lin = c => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+		const lum = ([r, g, b]) => 0.2126 * lin(r / 255) + 0.7152 * lin(g / 255) + 0.0722 * lin(b / 255);
+		const ratio = (a, b) => (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
+		const shot = (ground, stain, item) => {
+			const root = gui.make("Frame");
+			const r = new Renderer(root, "Sprites");
+			r.setView(S, S);
+			const cam = new Camera();
+			cam.setView(S, S);
+			cam.x = 5000;
+			cam.y = 5000;
+			const items = new GroundItemsView(shadowFn(false));
+			items.reduceMotion = true;
+			r.beginFrame();
+			const sz = WA.artSize(ground[1]);
+			r.drawRect(cam, 5000, 5000, {
+				w: 400,
+				h: 400,
+				zIndex: Z.ground,
+				image: WA.artId(ground[1]),
+				scaleType: "tile",
+				tileW: sz.w * 4,
+				tileH: sz.h * 4,
+			});
+			view.drawDecal(r, cam, cam.viewRect(32), stain, world, WA.artId("blood"));
+			if (item !== undefined) {
+				items.draw(
+					r,
+					cam,
+					cam.viewRect(32),
+					[{ id: 77, kind: item[0], itemId: item[1], count: 1, x: 5000, y: 5000, vx: 0, vy: 0 }],
+					1.3,
+					0,
+				);
+			}
+			r.endFrame();
+			return rasterise({ layer: r.layer, vw: S, vh: S }, COLORS.bg, localImage);
+		};
+		const step = (a, b) => {
+			let best = 1;
+			let e = 0;
+			for (let i = 0; i < a.w * a.h; i++) {
+				const p = [a.data[i * 4], a.data[i * 4 + 1], a.data[i * 4 + 2]];
+				const q = [b.data[i * 4], b.data[i * 4 + 1], b.data[i * 4 + 2]];
+				if (p[0] === q[0] && p[1] === q[1] && p[2] === q[2]) continue;
+				best = Math.max(best, ratio(p, q));
+				e = Math.max(e, dE3(lab(...p), lab(...q)));
+			}
+			return { ratio: best, dE: e };
+		};
+		const bad = [];
+		let weakest;
+		let cases = 0;
+		for (const g of GROUNDS) {
+			for (const [src, age, what] of [
+				[PS.BLOOD_SURVIVOR, 0, "a survivor's wet"],
+				[PS.BLOOD_HORDE, 0, "the horde's wet"],
+				[PS.BLOOD_HORDE, 300, "drying"],
+				[PS.BLOOD_HORDE, 700, "a day old"],
+			]) {
+				const stain = {
+					x: 5000,
+					y: 5000,
+					size: 30,
+					color: COLORS.blood,
+					life: 10,
+					maxLife: 10,
+					kind: PS.DECAL_SPLAT,
+					src,
+					sector: -1,
+					age,
+					ground: -1,
+					pick: 0.1,
+				};
+				const base = shot(g, stain, undefined);
+				for (const it of ITEMS) {
+					const s = step(shot(g, stain, it), base);
+					cases++;
+					if (weakest === undefined || s.dE < weakest.dE)
+						weakest = { ...s, where: `${it[2]} in ${what} blood on ${g[0]}` };
+					if (!(s.ratio >= 3 || s.dE >= 35))
+						bad.push(`${it[2]} in ${what} blood on ${g[0]}: ${s.ratio.toFixed(2)}:1 ${s.dE.toFixed(0)} ΔE`);
+				}
+			}
+		}
+		setArt({});
+		check(
+			bad.length === 0,
+			`LEG-01/LEG-03: ${cases} items lying in a splat (wet, drying, dry; wood, asphalt, tiles) step ≥ 3:1 or ≥ 35 ΔE off it`,
+			bad.length > 0
+				? bad.slice(0, 3).join("; ")
+				: `weakest ${weakest.ratio.toFixed(2)}:1 / ${weakest.dE.toFixed(0)} ΔE (${weakest.where})`,
 		);
 	}
 }

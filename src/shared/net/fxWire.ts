@@ -80,7 +80,7 @@ export function tracerKindOf(id: number): TracerKind {
 	return TRACER_IDS[math.clamp(id, 1, TRACER_KIND_MAX) - 1] ?? "bullet";
 }
 
-/** survivors bleed red, everything else green (LEG-02) */
+/** survivors bleed a bright red, everything else the horde's dark red (LEG-02; `BloodKind.Green` is its old name) */
 export function bloodKindId(source: BloodSource): number {
 	return source === "player" ? BloodKind.Red : BloodKind.Green;
 }
@@ -102,7 +102,8 @@ export function toWireFx(e: SimFx, slotOf: (index: number) => number): WireFx | 
 			t: FxType.Blood,
 			x: e.x,
 			y: e.y,
-			angle: e.dir ?? 0,
+			// no direction travels as none (protocol.ts BLOOD_UNDIRECTED): a kill's spray is all round, not to +x
+			angle: e.dir,
 			amount: e.count,
 			kind: bloodKindId(e.source),
 		};
