@@ -1662,21 +1662,26 @@ export function moduleSource(manifest, ids) {
 	return L.join("\n");
 }
 
+/** writes `text` to `path`, formatted by the project's own prettier (the files it writes are checked with it) */
+async function writeFormatted(path, text) {
+	let out = text;
+	try {
+		const prettier = await import("prettier");
+		const options = (await prettier.resolveConfig(path)) ?? {};
+		out = await prettier.format(text, { ...options, filepath: path });
+	} catch (e) {
+		console.log(`(prettier not available: ${e?.message ?? e}; ${relative(ROOT, path)} is written unformatted)`);
+	}
+	mkdirSync(dirname(path), { recursive: true });
+	writeFileSync(path, out);
+}
+
 async function writeModule(manifest) {
 	const assetsPath = join(AUDIO_DIR, "assets.json");
 	const assets = existsSync(assetsPath) ? JSON.parse(readFileSync(assetsPath, "utf8")) : {};
 	const ids = liveBankIds(manifest, assets);
-	let src = moduleSource(manifest, ids);
-	// the module lives under src/, where CI checks the formatting: format it with the project's own prettier
-	try {
-		const prettier = await import("prettier");
-		const options = (await prettier.resolveConfig(AUDIO_TS)) ?? {};
-		src = await prettier.format(src, { ...options, filepath: AUDIO_TS });
-	} catch (e) {
-		console.log(`(prettier not available: ${e?.message ?? e}; the module is written unformatted)`);
-	}
-	mkdirSync(dirname(AUDIO_TS), { recursive: true });
-	writeFileSync(AUDIO_TS, src);
+	// the module lives under src/, where CI checks the formatting
+	await writeFormatted(AUDIO_TS, moduleSource(manifest, ids));
 	const live = Object.values(ids).filter(v => v !== "").length;
 	console.log(`wrote ${relative(ROOT, AUDIO_TS)} (${live}/${manifest.banks.length} banks with an asset id)`);
 }
@@ -1909,9 +1914,8 @@ async function main(args) {
 	mkdirSync(join(AUDIO_DIR, "banks"), { recursive: true });
 	for (const b of BANKS) writeFileSync(join(AUDIO_DIR, "banks", `${b}.wav`), bankBytes[b]);
 	writeFileSync(join(AUDIO_DIR, "manifest.json"), `${JSON.stringify(manifest, undefined, "\t")}\n`);
-	writeFileSync(join(AUDIO_DIR, "README.md"), readmeMd(manifest));
-	mkdirSync(dirname(PREVIEW), { recursive: true });
-	writeFileSync(PREVIEW, previewHtml(manifest, banks));
+	await writeFormatted(join(AUDIO_DIR, "README.md"), readmeMd(manifest));
+	await writeFormatted(PREVIEW, previewHtml(manifest, banks));
 	const split = args.indexOf("--split");
 	if (split >= 0 && args[split + 1] !== undefined) {
 		const dir = resolve(args[split + 1]);
