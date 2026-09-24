@@ -133,17 +133,27 @@ export function fromWireFx(e: WireFx): SimFx | undefined {
 /**
  * Where an effect happens, for the interest filter of §4.3 — the wire must not tell a client about a fight
  * it cannot see. A `Shake` has no position: it is addressed to one survivor and only ever sent to them, so
- * it answers `undefined` and the caller routes it by slot instead.
+ * it answers false and the caller routes it by slot instead. The position goes into `out` (no table per event per
+ * viewer: server/net/replication.ts asks once per event and tick).
  */
-export function fxPosition(e: WireFx): { x: number; y: number } | undefined {
-	if (e.t === FxType.Shake) return undefined;
-	if (e.t === FxType.SolidShake) return undefined;
+export function fxPosition(e: WireFx, out: { x: number; y: number }): boolean {
+	if (e.t === FxType.Shake) return false;
+	if (e.t === FxType.SolidShake) return false;
 	if (e.t === FxType.Shot) {
 		const hits = e.hits;
-		return hits.size() > 0 ? { x: hits[0].x, y: hits[0].y } : undefined;
+		if (hits.size() === 0) return false;
+		out.x = hits[0].x;
+		out.y = hits[0].y;
+		return true;
 	}
-	if (e.t === FxType.Tracer) return { x: e.x1, y: e.y1 };
-	return { x: e.x, y: e.y };
+	if (e.t === FxType.Tracer) {
+		out.x = e.x1;
+		out.y = e.y1;
+		return true;
+	}
+	out.x = e.x;
+	out.y = e.y;
+	return true;
 }
 
 /** the survivor a `Shake` belongs to, or SLOT_NONE for every other event */

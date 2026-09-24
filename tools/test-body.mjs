@@ -2516,6 +2516,85 @@ section("25) a simulation tick that throws is logged with its traceback (F6)", (
 	);
 });
 
+section(
+	"25b) every phase of the tick is a MicroProfiler label that closes, even on a throw; the counts reach the admin (F6)",
+	() => {
+		const srv = bootServer();
+		const admin = srv.join(ADMIN_ID, "admin");
+		const p = srv.join(newUser(), "profiled");
+		srv.immortal.add(p);
+		srv.enter(p);
+		debug.profileLabels.clear();
+		const unbalanced = debug.profileUnbalanced;
+		srv.run(1.2);
+		check(
+			debug.profileOpen === 0 && debug.profileUnbalanced === unbalanced,
+			"every label a tick opened, it closed",
+			`${debug.profileOpen} open, ${debug.profileUnbalanced - unbalanced} ends without a begin`,
+		);
+		const want = ["PZ.step", "PZ.players", "PZ.horde", "PZ.horde.field", "PZ.horde.zombies", "PZ.world"];
+		want.push("PZ.replication", "PZ.repl.collect", "PZ.repl.snap");
+		const missing = want.filter(label => !debug.profileLabels.has(label));
+		check(
+			missing.length === 0,
+			"the tick's phases are MicroProfiler bars (PZ.step, PZ.horde.field, PZ.repl.snap…)",
+			missing,
+		);
+		check(debug.memoryCategory === undefined, "the heartbeat leaves the memory category as it found it (PZ.sim)");
+		const ws = srv.env.services.Workspace;
+		const costs = ["players", "field", "zombies", "replication"].map(n => ws.GetAttribute(`pz_cost_${n}_ms`));
+		check(
+			costs.every(v => typeof v === "number"),
+			"each phase's cost is an attribute (pz_cost_<phase>_ms)",
+			costs,
+		);
+		check(
+			ws.GetAttribute("pz_tick_errors") === 0,
+			"pz_tick_errors is published, at 0",
+			ws.GetAttribute("pz_tick_errors"),
+		);
+		const info = adminRequest(srv, admin, { kind: "serverInfo" });
+		const sim = info?.data?.sim;
+		check(
+			sim !== undefined && sim.phases.length === 12 && sim.phases[0].name === "players" && sim.tickErrors === 0,
+			"...and the admin panel's Server info carries the same numbers",
+			JSON.stringify(sim?.phases?.map(x => x.name)),
+		);
+		// a tick that throws inside the horde, three heartbeats running: the labels it was inside are closed for it, and
+		// every failure is counted though the repeated message is logged once
+		const horde = srv.sim.horde;
+		const step = horde.step;
+		horde.step = () => {
+			throw new Error("injected: the horde failed");
+		};
+		for (let i = 0; i < 3; i++) {
+			try {
+				srv.beat();
+			} catch {
+				// the harness throws on the logged failure (the first one): that is the point here
+			}
+		}
+		horde.step = step;
+		check(
+			debug.profileOpen === 0,
+			"a tick that threw inside PZ.horde left no label open",
+			`${debug.profileOpen} open`,
+		);
+		check(srv.host.metrics().tickErrors === 3, "each failed heartbeat is counted", srv.host.metrics().tickErrors);
+		check(
+			ws.GetAttribute("pz_tick_errors") >= 1,
+			"...and pz_tick_errors goes out while every tick fails",
+			ws.GetAttribute("pz_tick_errors"),
+		);
+		srv.run(1.1);
+		check(
+			ws.GetAttribute("pz_tick_errors") === 3,
+			"once it runs again, the count stands at 3",
+			ws.GetAttribute("pz_tick_errors"),
+		);
+	},
+);
+
 // ================================================================ 26–28: the review of the F5 fix
 
 /** a returning survivor: one session that stored `money` and left */

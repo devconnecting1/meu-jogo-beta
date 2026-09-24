@@ -159,6 +159,25 @@ export interface BanHistoryResult {
 	entries: Array<BanHistoryEntry>;
 }
 
+/**
+ * The simulation's §12.2 numbers as the host last published them (once a second, server/net/mpHost.ts): the same
+ * values as the Workspace attributes `pz_tick_*`, `pz_backlog_ms`, `pz_dropped_ticks` and `pz_cost_<phase>_ms`.
+ */
+export interface SimMetrics {
+	/** server tick cost over the last 300 ticks, milliseconds (§3.2 target: p95 <= 6) */
+	tickAvgMs: number;
+	tickP95Ms: number;
+	/** the Heartbeat debt being repaid right now, milliseconds */
+	backlogMs: number;
+	/** ticks dropped since boot (the server fell too far behind to repay them) */
+	droppedTicks: number;
+	/** heartbeats whose work threw since boot (`pz_tick_errors`) */
+	tickErrors: number;
+	zombies: number;
+	/** average milliseconds per tick of each phase over the last second, in the order the tick runs them */
+	phases: Array<{ name: string; ms: number }>;
+}
+
 export interface ServerInfo {
 	jobId: string;
 	placeId: number;
@@ -169,6 +188,8 @@ export interface ServerInfo {
 	maxPlayers: number;
 	dataStore: string;
 	auditStore: string;
+	/** undefined while this server runs no simulation (MP_PHASE = 0) */
+	sim?: SimMetrics;
 }
 
 export interface AuditEntry {

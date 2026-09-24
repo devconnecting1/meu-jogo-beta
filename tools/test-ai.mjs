@@ -1830,6 +1830,128 @@ function testServerHorde() {
 		for (let f = 0; f < 60; f++) zombieAI.updateZombies(refs, DT);
 		check(dist(z.x, z.y, x0, y0) > 0, "...and with MP_PHASE < 2 the old single-player path still runs");
 	}
+
+	// an older src (PZ_SRC) has no `upToDate`: the rebuild-skip checks are about this one
+	if (typeof flowFieldMod.MultiFlowField.prototype.upToDate !== "function") return;
+
+	// (e) F2: a rebuild whose answer would be the field already in use is not started -- and that is exact
+	{
+		setSeed(SEED);
+		const world = W.createWorld(3000, 3000);
+		wall(world, 1500, 0, 32, 1400);
+		const src = [
+			{ x: 600, y: 200, index: 0, seed: 0 },
+			{ x: 1800, y: 200, index: 1, seed: 0 },
+		];
+		const a = new flowFieldMod.MultiFlowField();
+		a.rebuild(world, src);
+		check(a.upToDate(src), "a field is up to date with the sources it was built for");
+		// (600, 200) -> (605, 220): still cell (18, 6). The body moved; what the field is a function of did not
+		const within = [{ x: 605, y: 220, index: 0, seed: 0 }, src[1]];
+		check(a.upToDate(within), "...and with a survivor who moved inside their cell");
+		const b = new flowFieldMod.MultiFlowField();
+		b.rebuild(world, within);
+		let cells = 0;
+		let differ = 0;
+		for (let y = 16; y < 3000; y += 32) {
+			for (let x = 16; x < 3000; x += 32) {
+				cells++;
+				const same =
+					a.pathCells(x, y) === b.pathCells(x, y) &&
+					a.targetOf(x, y) === b.targetOf(x, y) &&
+					a.heading(x, y) === b.heading(x, y);
+				if (!same) differ++;
+			}
+		}
+		check(differ === 0, `the rebuild it skips would have been identical (${differ} of ${cells} cells differ)`);
+		check(!a.upToDate([{ x: 640, y: 200, index: 0, seed: 0 }, src[1]]), "a survivor in a new cell rebuilds");
+		check(!a.upToDate([{ ...src[0], seed: flowFieldMod.DOWNED_SEED }, src[1]]), "so does one going down (seed)");
+		check(!a.upToDate([src[0]]), "so does one leaving");
+		check(!a.upToDate([src[0], { ...src[1], index: 2 }]), "so does the roster shifting (index)");
+		a.dirtyRect(1400, 600, 64, 64);
+		check(!a.upToDate(src), "and so does a dirtied rect (a barricade, a door)");
+		a.rebuild(world, src);
+		check(a.upToDate(src), "...until the field is rebuilt");
+	}
+
+	// (f) ...in the live loop: survivors standing still cost no rebuild at all; a step into a new cell does
+	{
+		// noon of day 1: nothing hunts them, so nothing shoves a body across a cell border behind the test's back
+		const { sim, horde } = serverScene(6, 1200, 0, 12, 1);
+		for (let t = 0; t < 30; t++) sim.step();
+		const field = horde.field;
+		const r0 = field.rebuilds;
+		for (let t = 0; t < 120; t++) sim.step();
+		check(field.rebuilds === r0, `six survivors standing still for 2 s: ${field.rebuilds - r0} rebuilds`);
+		const sp = sim.players()[0];
+		sp.state.x += 64;
+		for (let t = 0; t < 30; t++) sim.step();
+		check(field.rebuilds === r0 + 1, `one of them two cells further: one rebuild (${field.rebuilds - r0})`);
+	}
+
+	// (g) F3: `downhill` is memoised per complete field -- and no heading changes for it, even while a rebuild
+	// re-rasterises a tile the complete field still answers with
+	{
+		setSeed(SEED);
+		const world = W.generateTown(DESIGN.TOWN_SEED);
+		const cx = world.width / 2;
+		const cy = world.height / 2;
+		const sources = [];
+		for (let i = 0; i < 6; i++) {
+			const a = (i / 6) * Math.PI * 2;
+			const spot = serverPlayers.findSpawnPoint(world, {
+				allies: [{ x: cx + Math.cos(a) * 1500, y: cy + Math.sin(a) * 1500 }],
+			});
+			sources.push({ x: spot.x, y: spot.y, index: i, seed: 0 });
+		}
+		const memo = new flowFieldMod.MultiFlowField();
+		const plain = new flowFieldMod.MultiFlowField(false);
+		memo.rebuild(world, sources);
+		plain.rebuild(world, sources);
+		/** headings of both fields over a lattice round every source; twice, so the second pass reads the memo */
+		const compare = () => {
+			let n = 0;
+			let differ = 0;
+			for (let pass = 0; pass < 2; pass++) {
+				for (const s of sources) {
+					for (let dy = -1200; dy <= 1200; dy += 37) {
+						for (let dx = -1200; dx <= 1200; dx += 37) {
+							n++;
+							if (memo.heading(s.x + dx, s.y + dy) !== plain.heading(s.x + dx, s.y + dy)) differ++;
+						}
+					}
+				}
+			}
+			return { n, differ };
+		};
+		const fresh = compare();
+		check(fresh.differ === 0, `memoised headings = computed ones (${fresh.differ} of ${fresh.n} differ)`);
+		// a construction goes up next to survivor 0 -- an indestructible one, HARD in the field, so `downhill` really
+		// answers differently round it -- and the next rebuild re-rasterises that tile while the old field is live
+		const s0 = sources[0];
+		const bar = W.addSolid(world, {
+			kind: "barricade",
+			x: s0.x + 60,
+			y: s0.y - 64,
+			w: 32,
+			h: 128,
+			hp: 300,
+			hpMax: 300,
+			destructible: false,
+			tags: "barricade",
+			rot: 0,
+		});
+		memo.dirtyRect(bar.x, bar.y, bar.w, bar.h);
+		plain.dirtyRect(bar.x, bar.y, bar.w, bar.h);
+		memo.startRebuild(world, sources);
+		plain.startRebuild(world, sources);
+		const during = compare();
+		check(during.differ === 0, `...while a rebuild re-rasterised a live tile (${during.differ} differ)`);
+		memo.step(1e9);
+		plain.step(1e9);
+		const after = compare();
+		check(after.differ === 0, `...and once the new field landed (${after.differ} differ)`);
+	}
 }
 
 // ---------------------------------------------------------------- 11. the §3.2 tick budget
@@ -1839,28 +1961,52 @@ function testTickCost() {
 	const runs = [
 		{ label: "6 survivors together (one cluster)", spread: 300 },
 		{ label: "6 survivors spread out (worst case for the field)", spread: 3000 },
+		// standing survivors never move a source, so the field idles (F2): this is the case that keeps it busy
+		{ label: "6 survivors spread out and WALKING (the field never idles)", spread: 3000, walk: true },
 	];
 	for (const run of runs) {
 		const { sim, horde } = serverScene(6, run.spread, 150);
-		// §12.2 wants the cost per STEP, not only per tick: the same hook the live server gives os.clock
-		horde.nowMs = () => performance.now();
-		for (let t = 0; t < 120; t++) sim.step(); // warm-up: the first field and the JIT
+		const roster = sim.players();
+		let seq = 0;
+		/** one command per survivor per tick, turning a full circle every 10 s (a ~330 u loop, walls permitting) */
+		const feed = t => {
+			if (!run.walk) return;
+			seq += 1;
+			roster.forEach((sp, i) => {
+				sp.started = true;
+				const turn = (t / 600 + i / 6) % 1;
+				sp.queue.push({ seq, moveAng: Math.floor(turn * 256) % 256, moveMag: 255, aim: 0, held: 0, edges: 0 });
+			});
+		};
+		// §12.2 wants the cost per STEP, not only per tick: the same clock the live server gives the simulation
+		// (mpHost: `sim.instrument(os.clock)`), which measures every phase of the tick; an older src (PZ_SRC) only has
+		// the horde's own hook
+		const instrumented = typeof sim.instrument === "function";
+		if (instrumented) sim.instrument(() => performance.now());
+		else horde.nowMs = () => performance.now();
+		const cost = () => (instrumented ? sim.cost : horde.cost);
+		for (let t = 0; t < 120; t++) {
+			feed(t);
+			sim.step(); // warm-up: the first field and the JIT
+		}
 		const N = 1800;
 		const samples = new Float64Array(N);
-		const phases = { clock: 0, population: 0, field: 0, zombies: 0, bosses: 0, book: 0 };
-		const peaks = { clock: 0, population: 0, field: 0, zombies: 0, bosses: 0, book: 0 };
+		const phases = {};
+		const peaks = {};
+		for (const k in cost()) {
+			phases[k] = 0;
+			peaks[k] = 0;
+		}
 		for (let t = 0; t < N; t++) {
+			feed(120 + t);
 			const t0 = performance.now();
 			sim.step();
 			samples[t] = performance.now() - t0;
-			const c = horde.cost;
-			phases.clock += c.clock;
-			phases.population += c.population;
-			phases.field += c.field;
-			phases.zombies += c.zombies;
-			phases.bosses += c.bosses;
-			phases.book += c.book;
-			for (const k in peaks) if (c[k] > peaks[k]) peaks[k] = c[k];
+			const c = cost();
+			for (const k in phases) {
+				phases[k] += c[k];
+				if (c[k] > peaks[k]) peaks[k] = c[k];
+			}
 		}
 		const sorted = Float64Array.from(samples).sort();
 		let total = 0;
@@ -1874,7 +2020,8 @@ function testTickCost() {
 		);
 		info(
 			`   field: ${horde.field.lastTiles} active tiles . ${horde.field.lastCells} cells per rebuild . ` +
-				`${horde.field.cachedTiles()} tiles cached`,
+				`${horde.field.cachedTiles()} tiles cached` +
+				(horde.field.rebuilds !== undefined ? ` . ${horde.field.rebuilds} rebuilds in ${N + 120} ticks` : ""),
 		);
 		info(
 			"   per step (avg ms): " +
