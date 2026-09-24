@@ -13,6 +13,7 @@ import { Renderer } from "shared/engine/renderer";
 import { COLORS } from "shared/engine/colors";
 import { defaultSave, PlayerSaveData } from "shared/game/save";
 import { GameContext, GamePhase } from "shared/game/context";
+import { closeTopScreen } from "./ui/backStack";
 import { inputDevice, onInputDeviceChanged, refreshSafeArea, safeSize, topInset, touchOffset } from "./ui/device";
 import { warmFightPool } from "./view/poolWarmup";
 
@@ -497,6 +498,14 @@ UserInputService.InputBegan.Connect((inputObj, gpe) => {
 		addAttackSource();
 		return;
 	}
+	// back out of the screen on top (client/ui/backStack.ts): the pad's B -- read even when the engine's GUI navigation
+	// took it too (with a control selected it drops the selection, which is all B did before) -- and Backspace, unless a
+	// text box is typing it. With no screen up nothing is eaten: neither means anything in a run (keyboard B = Backpack)
+	const k = inputObj.KeyCode;
+	const back =
+		(k === Enum.KeyCode.ButtonB && inputObj.UserInputType.Name.sub(1, 7) === "Gamepad") ||
+		(k === Enum.KeyCode.Backspace && inputObj.UserInputType === Enum.UserInputType.Keyboard && !gpe);
+	if (back && closeTopScreen()) return;
 	if (gpe) return;
 	if (inputObj.UserInputType === Enum.UserInputType.MouseButton2) {
 		input.actionPressed = true;

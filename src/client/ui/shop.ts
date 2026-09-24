@@ -4,6 +4,7 @@ import { ECONOMY, SHOP_PACKS } from "shared/data/shop";
 import { langGet } from "shared/data/lang";
 import { ShopActionReason, ShopActionRequest } from "shared/net/net";
 import { invokeShopAction, onWalletChanged, sessionReady } from "../systems/saveClient";
+import { registerBack } from "./backStack";
 import { toast } from "./popup";
 import { GAME, RADIUS, TEXT, THEME, space } from "./theme";
 import {
@@ -125,13 +126,15 @@ export function showShop(ctx: GameContext, onBack: () => void, onWardrobe: () =>
 	// edges (Back, the coins), so it keeps clear of the Roblox buttons as a whole (makeScreen's default content)
 	const { root, body } = makeScreen(ctx.uiLayer, "Shop", { transparency: 1 });
 
-	Button(body, "Back", `‹  ${tr("Back")}`, {
+	const back = Button(body, "Back", `‹  ${tr("Back")}`, {
 		x: MARGIN_X,
 		y: HEADER_Y,
 		w: 124,
 		variant: "secondary",
 		onClick: (): void => onBack(),
 	});
+	// B / Backspace goes Back (backStack.ts)
+	registerBack(back, onBack);
 	makeLabel(body, "Title", tr("Shop"), 184, HEADER_Y, 400, BUTTON_SIZE.default.h, TEXT.xl3, THEME.foreground, {
 		font: "title",
 		align: "left",

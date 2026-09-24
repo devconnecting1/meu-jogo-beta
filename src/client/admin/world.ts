@@ -14,6 +14,14 @@ import { PLACEABLES } from "../systems/build";
 import type { GameRefs } from "../systems/types";
 import type { GameLoop } from "../gameLoop";
 import { AdminOverlay, OverlayFlags, PlacementPreview } from "./overlay";
+import { serverOwnsWorld } from "../net/authority";
+
+/**
+ * From WORLD_SERVER_PHASE the items and the constructions are the server's (docs/MULTIPLAYER.md §4.8): one made here
+ * would exist on this screen only -- nobody else sees it, the server's zombies walk through it, and the next
+ * WorldInit wipes it (correctness review of 5967a18, K). Until the admin tools go through the server, they say so.
+ */
+const SERVER_WORLD = "Not available while the server owns the world (items and structures are the server's)";
 
 /*
  * AdminWorld: the ONLY way the admin panel touches the game world.
@@ -383,6 +391,7 @@ export class LocalAdminWorld implements AdminWorld {
 
 	spawnItem(group: ItemGroup, index: number, count: number, x: number, y: number): ActionResult {
 		if (!this.ready()) return { ok: false, message: "Start a run first" };
+		if (serverOwnsWorld()) return { ok: false, message: SERVER_WORLD };
 		let itemId = index;
 		if (group === "ammo") {
 			// ammo pools are ETC items 44..48; electricity has no ground item
@@ -434,6 +443,7 @@ export class LocalAdminWorld implements AdminWorld {
 
 	spawnStructure(kind: StructureKind, x: number, y: number): ActionResult {
 		if (!this.ready()) return { ok: false, message: "Start a run first" };
+		if (serverOwnsWorld()) return { ok: false, message: SERVER_WORLD };
 		const info = STRUCTURE_KINDS.find(s => s.kind === kind);
 		const def = info !== undefined ? PLACEABLES[info.placeable] : undefined;
 		if (def === undefined) return { ok: false, message: "Unknown structure" };

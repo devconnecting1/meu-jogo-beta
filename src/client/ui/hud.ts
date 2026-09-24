@@ -629,12 +629,12 @@ export class Hud {
 		// ---- contextual buttons
 		this.actionBtn = this.touchButton(layer, "UseBtn", L.use, "use", "default", () => this.onAction?.());
 		this.actionBtn.Visible = false;
-		this.useLabel = this.touchCaption(layer, "UseCap", L.use, this.tr("Use"));
+		this.useLabel = this.touchCaption(layer, "UseCap", L.use, this.tr("USE"));
 		this.useLabel.Visible = false;
 		this.reloadBtn = this.touchButton(layer, "ReloadBtn", L.reload, "reload", "secondary", () => {
 			this.ctx.input.reloadPressed = true;
 		});
-		this.touchCaption(layer, "ReloadCap", L.reload, this.tr("Reload"));
+		this.touchCaption(layer, "ReloadCap", L.reload, this.tr("RELOAD"));
 		this.touchButton(layer, "BagBtn", L.bag, "bag", "secondary", () => this.onBackpack?.());
 		this.touchButton(layer, "MenuBtn", L.pause, "menu", "secondary", () => this.onPause?.());
 	}
@@ -678,7 +678,7 @@ export class Hud {
 		return makeLabel(
 			layer,
 			name,
-			text.upper(),
+			text,
 			at.x - w / 2,
 			at.y - at.r - 2 - h,
 			w,

@@ -35,6 +35,7 @@
  */
 import { BORDER, GAME, SIDEBAR, SURFACE, TEXT, THEME, TRANSPARENCY, TextRole, fontOf, roleFont, space } from "./theme";
 import { PlateState, clearPlate, paintPlate, plateUnit, reliefPx } from "./plate";
+import { registerBack } from "./backStack";
 import { inputDevice } from "./device";
 import {
 	DESIGN_H,
@@ -1763,6 +1764,8 @@ export function Dialog(layer: Instance, name: string, props: DialogProps): Dialo
 			onClick: (): void => handle.close(),
 		});
 		autoFocus(close);
+		// B / Backspace backs out of the dialog the way its X does (backStack.ts)
+		registerBack(close, (): void => handle.close());
 	}
 	// entrance: fade the scrim in, zoom the card from 95% (both instant under Reduce Motion, via tween())
 	root.BackgroundTransparency = 1;

@@ -43,12 +43,14 @@ import { WEAPONS, WeaponDef, usesMagazine } from "shared/data/weapons";
 import { PLAYER_RADIUS, circleBlocked } from "shared/game/physics";
 import { PlayerState, createPlayer, damageIsServerOwned, weaponReserve, weaponSpendAmmo } from "shared/game/player";
 import { PlayerSaveData, SAVE_LIMITS, ownsWeapon, resetRun } from "shared/game/save";
+import { countLifeDeath } from "../save/achievements";
 import type { ShopActionReason } from "shared/net/net";
 import { LifeState } from "shared/net/protocol";
 import { daybreakWaitSeconds } from "shared/sim/clock";
 import { isFuelWeapon } from "./combat";
 import { SPAWN_SHIELD_S, ServerPlayer, SpawnQuery, adoptSave, createServerPlayer, findSpawnPoint } from "./players";
 import type { ServerSimulation } from "./simulation";
+import * as Analytics from "../analytics/events";
 
 /**
  * §7.2: "O estado de mundo fica 5 min em memória" after a disconnect (seconds).
@@ -187,7 +189,10 @@ export function freshBody(save: PlayerSaveData, x: number, y: number, full: bool
  */
 export function stripClientLife(prev: PlayerSaveData, upd: PlayerSaveData): boolean {
 	if (!serverOwnsLife()) return false;
-	const changed = upd.runOver !== prev.runOver || upd.runHp !== prev.runHp || upd.runHunger !== prev.runHunger;
+	// what counts as an attempt is the one thing a report could want from these: `runOver: false` over a death. The
+	// hp and hunger are pinned in silence -- the client is never sent the ones the server banks (an autosave writes
+	// them), so an honest report carries old values every time and would be "stale" on every report (review #10)
+	const changed = prev.runOver && !upd.runOver;
 	upd.runOver = prev.runOver;
 	upd.runHp = prev.runHp;
 	upd.runHunger = prev.runHunger;
@@ -488,11 +493,21 @@ export class LifeKeeper {
 		rec.dead = true;
 		rec.declined = false;
 		rec.downFor = daybreakWaitSeconds(this.sim.clock.dayTime);
+		// A construction still on the cursor goes back into the backpack that paid for it -- the dying run's, which
+		// the body keeps through the death, the daybreak and a Rebirth (MP-21; nothing else in the backpack is lost to
+		// a death either). Refunding HERE is what makes it safe: the run that paid gets it back, and a New game then
+		// wipes it with the rest of that run instead of a later refund landing it in the new life (review R1).
+		const refunded = this.sim.build?.cancel(sp.slot, sp.save).kind === "cancelled";
 		if (serverOwnsLife()) {
+			// EVERY death of this life, whatever answers it (CON-04: Never die; `deathCount` only counts paid Rebirths)
+			countLifeDeath(sp.save);
 			writeRunBody(sp.save, sp.state);
+			this.onSaveChanged?.(sp.userId);
+		} else if (refunded) {
 			this.onSaveChanged?.(sp.userId);
 		}
 		this.wire.life(sp.slot, LifeState.Dead);
+		Analytics.death(sp.save, this.sim.clock.dayTime, this.sim.count());
 	}
 
 	/**
@@ -533,6 +548,8 @@ export class LifeKeeper {
 		rec.declined = true;
 		if (sp !== undefined) {
 			sp.state.weapon.ammoCount = 0;
+			// the old run's construction is not the new life's (review R1): gone, not refunded
+			this.sim.build?.drop(sp.slot);
 		} else {
 			rec.body = undefined;
 			rec.unloaded = false;
@@ -724,6 +741,8 @@ export class LifeKeeper {
 
 	/** MP-22: the new life a world's end gives (the reset New game gives), and a body that stands up for it */
 	private grantNewLife(rec: LifeRecord, save: PlayerSaveData): void {
+		// as `newLife`: whatever the old run still had on the cursor is not the new life's (review R1)
+		if (rec.slot !== undefined) this.sim.build?.drop(rec.slot);
 		if (serverOwnsLife()) {
 			resetRun(save);
 			save.runRev = math.min(save.runRev + 1, SAVE_LIMITS.COUNTER_MAX);

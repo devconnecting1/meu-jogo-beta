@@ -32,13 +32,17 @@ Key,Context,Example,Source
 ,,,Rafflesia
 ,,,Giant
 ,,,Hedgehog
-,,,Game over#Continue?
-,,,Would you watch a short video#to get a bonus parcel?
+,,,"Game over
+Continue?"
+,,,"Would you watch a short video
+to get a bonus parcel?"
 ,,,Price
-,,,Are you sure#you want to quit?
+,,,"Are you sure
+you want to quit?"
 ,,,You don't have enough money
 ,,,Would you rate our game?
-,,,Do you want to#watch the tutorial?
+,,,"Do you want to
+watch the tutorial?"
 ,,,Level UP
 ,,,Night is coming
 ,,,Good morning
@@ -350,13 +354,26 @@ Key,Context,Example,Source
 ,,,1000 + 300 coins
 ,,,Watch ads
 ,,,Wait for ads
-,,,Cotton clothes X 1#Axe X 1#Flashlight X 1
-,,,Cooked meat X 3#Pizza X 3#Cooked meal X 3
-,,,First aid kit X 2#Bandage X 3#Adrenaline X 2
-,,,Wood X 20#Cloth X 10#Stone X 20
-,,,Blueprint X 5#Steel X 20#Machine parts X 10
-,,,Battery X 5#Computer chip X 2#Bulb X 2
-,,,Steel X 10#Gunpowder X 10
+,,,"Cotton clothes X 1
+Axe X 1
+Flashlight X 1"
+,,,"Cooked meat X 3
+Pizza X 3
+Cooked meal X 3"
+,,,"First aid kit X 2
+Bandage X 3
+Adrenaline X 2"
+,,,"Wood X 20
+Cloth X 10
+Stone X 20"
+,,,"Blueprint X 5
+Steel X 20
+Machine parts X 10"
+,,,"Battery X 5
+Computer chip X 2
+Bulb X 2"
+,,,"Steel X 10
+Gunpowder X 10"
 ,,,Pigeon the bird X 1
 ,,,Carolina the dog X 1
 ,,,Please try again
@@ -438,7 +455,7 @@ Key,Context,Example,Source
 ,,,Move
 ,,,Aim
 ,,,"Interact, search, loot"
-,,,Right click also interacts.
+,,,Right click also interacts; Backspace goes back in menus.
 ,,,Move (the stick opens under it)
 ,,,Drag to aim
 ,,,Fire the aimed shot
@@ -447,7 +464,7 @@ Key,Context,Example,Source
 ,,,"Size, height, floating stick and left-handed: Settings › Touch controls."
 ,,,Interact
 ,,,Menus
-,,,Menus are navigated with the stick; the selected button carries a focus ring.
+,,,"Menus: the stick moves the focus ring, B goes back."
 ,,,Game
 ,,,Genre
 ,,,Top-down zombie survival
@@ -455,9 +472,14 @@ Key,Context,Example,Source
 ,,,Mode
 ,,,"Co-op, up to"
 ,,,survivors
+,,,Version
 ,,,Open credits
 ,,,Your screen
-,,,"General: how loud the sounds and the music are, and how big the panels of a run are.#Touch controls: size, height and side of the phone controls, with a preview of your screen.#Controls: every key and button the game listens to, on each device.#About: the game and its credits.#A change applies at once and is saved with your progress. Defaults puts a tab back as it came."
+,,,"General: how loud the sounds and the music are, and how big the panels of a run are.
+Touch controls: size, height and side of the phone controls, with a preview of your screen.
+Controls: every key and button the game listens to, on each device.
+About: the game and its credits.
+A change applies at once and is saved with your progress. Defaults puts a tab back as it came."
 ,,,Survivor
 ,,,Best day
 ,,,Level
@@ -480,7 +502,9 @@ Key,Context,Example,Source
 ,,,Earn coins
 ,,,Delivered when your next game starts
 ,,,Progress not loaded
-,,,"Your progress could not be loaded.#Nothing will be overwritten: retry,#or play without saving."
+,,,"Your progress could not be loaded.
+Nothing will be overwritten: retry,
+or play without saving."
 ,,,Retry
 ,,,Play without saving
 ,,,Saving is unavailable in this environment
@@ -500,8 +524,10 @@ Key,Context,Example,Source
 ,,,Survival days
 ,,,Continue price
 ,,,Your run is over
-,,,"Rebirth to continue this run, or start a new game from day 1.#Level, skills, coins and packs are kept."
-,,,"Rebirth wakes you now. New game starts a new life at day 1,#which wakes at first light. Level, skills, coins and packs are kept."
+,,,"Rebirth to continue this run, or start a new game from day 1.
+Level, skills, coins and packs are kept."
+,,,"Rebirth wakes you now. New game starts a new life at day 1,
+which wakes at first light. Level, skills, coins and packs are kept."
 ,,,Purchased
 ,,,Not enough coins
 ,,,more needed
@@ -549,18 +575,27 @@ Key,Context,Example,Source
 ,,,Rebirth is for your own world; here you wake at daybreak
 ,,,Reload
 ,,,Skip
-,,,"Start a new life from day 1.#Level, skills, coins and packs are kept.#The town keeps its own day: nothing you do resets it."
-,,,"You wake at first light.#If nobody is left standing, a new town begins at day 1."
-,,,"Your new life wakes at first light.#If nobody is left standing, a new town begins at day 1."
+,,,"Start a new life from day 1.
+Level, skills, coins and packs are kept.
+The town keeps its own day: nothing you do resets it."
+,,,"You wake at first light.
+If nobody is left standing, a new town begins at day 1."
+,,,"Your new life wakes at first light.
+If nobody is left standing, a new town begins at day 1."
 ,,,You have
 ,,,You survived
 ,,,You survived a day
 ,,,You're already full
-,,,"Your level, skills, coins and packs stay with you.#Only this run's day counter goes back to 1."
+,,,"Your level, skills, coins and packs stay with you.
+Only this run's day counter goes back to 1."
 ,,,"Your progress changed, try again"
 ,,,Zombies killed
 ,,,days
-,,,"The backpack and the menu never stop the world: open them somewhere safe.#Fire keeps the night lit and cooks what you find — 10 wood makes a campfire, no workbench needed.#Houses are looted once with E; their shelves refill after half a day.#Hunger drains all day: eat before it empties, not after.#Waves come at 19:00, 22:00 and 01:00. Be somewhere you chose."
+,,,"The backpack and the menu never stop the world: open them somewhere safe.
+Fire keeps the night lit and cooks what you find — 10 wood makes a campfire, no workbench needed.
+Houses are looted once with E; their shelves refill after half a day.
+Hunger drains all day: eat before it empties, not after.
+Waves come at 19:00, 22:00 and 01:00. Be somewhere you chose."
 ,,,Rifle
 ,,,Machine gun
 ,,,Shotgun
@@ -617,7 +652,11 @@ Key,Context,Example,Source
 ,,,coins
 ,,,Came in a pack: it stays until a New game. Buy it to keep it for good.
 ,,,"What you buy is yours for good, and everyone sees it. Coins are earned by playing."
-,,,"Outfits change how your survivor looks, and a pet follows you. You can wear one of each.#Everyone sees them, and they change nothing else: no defence, no speed, no loot.#Locked items show their price in coins. Coins are earned by playing: days survived, record days and bosses.#Titles are never sold: each one is earned by playing, and shows under your name for everyone.#Pick an item to try it on in the preview, then buy or wear it."
+,,,"Outfits change how your survivor looks, and a pet follows you. You can wear one of each.
+Everyone sees them, and they change nothing else: no defence, no speed, no loot.
+Locked items show their price in coins. Coins are earned by playing: days survived, record days and bosses.
+Titles are never sold: each one is earned by playing, and shows under your name for everyone.
+Pick an item to try it on in the preview, then buy or wear it."
 ,,,Titles
 ,,,Title
 ,,,None
@@ -656,9 +695,13 @@ Key,Context,Example,Source
 ,,,Your new life wakes at first light
 ,,,Delivered when you enter the city
 ,,,The town keeps its own day. This life and your record count yours.
-,,,"Your survivor as everyone sees them, how long this life has lasted and what you carry.#Enter the city to play. The town keeps its own day, shared by everyone on this server.#When a run is over: Rebirth wakes you now for coins, waiting for daybreak is free and keeps this life, and New game starts a new life at day 1.#Outfits and pets are in the Wardrobe. Everyone sees them, and they change nothing else."
+,,,"Your survivor as everyone sees them, how long this life has lasted and what you carry.
+Enter the city to play. The town keeps its own day, shared by everyone on this server.
+When a run is over: Rebirth wakes you now for coins, waiting for daybreak is free and keeps this life, and New game starts a new life at day 1.
+Outfits and pets are in the Wardrobe. Everyone sees them, and they change nothing else."
 ,,,Wait for daybreak
-,,,"Rebirth wakes you now, for coins. Waiting for daybreak is free and keeps this life.#New game starts a new life at day 1, woken at first light. Level, skills, coins and packs are kept."
+,,,"Rebirth wakes you now, for coins. Waiting for daybreak is free and keeps this life.
+New game starts a new life at day 1, woken at first light. Level, skills, coins and packs are kept."
 ,,,Weapons
 ,,,Usables
 ,,,Materials
@@ -667,6 +710,17 @@ Key,Context,Example,Source
 ,,,DEFAULT
 ,,,COSTUME
 ,,,MAKES
+,,,START
+,,,LEVEL
+,,,WEAPON
+,,,CLOTHES
+,,,HAND
+,,,GUN
+,,,OUTFIT
+,,,PET
+,,,TITLE
+,,,USE
+,,,RELOAD
 ,,,Not owned
 ,,,Currently equipped.
 ,,,Nothing is worn in this slot now.
@@ -719,7 +773,10 @@ Key,Context,Example,Source
 ,,,skill points to spend.
 ,,,No skill points
 ,,,No skill points to spend. Level up to earn more.
-,,,"Everything you carry, by kind. Pick an item to see what it is and what you can do with it.#Craft makes items from materials. Some recipes need a craft desk or a lit fire next to you.#Level up to earn skill points, and spend them in Skills.#The backpack and the menu never stop the world: open them somewhere safe."
+,,,"Everything you carry, by kind. Pick an item to see what it is and what you can do with it.
+Craft makes items from materials. Some recipes need a craft desk or a lit fire next to you.
+Level up to earn skill points, and spend them in Skills.
+The backpack and the menu never stop the world: open them somewhere safe."
 ,,,All time
 ,,,Titles earned
 ,,,Rebirths

@@ -1,5 +1,6 @@
 import { GameContext } from "shared/game/context";
 import { langGet } from "shared/data/lang";
+import { registerBack } from "./backStack";
 import { inputDevice } from "./device";
 import { TEXT, THEME, space } from "./theme";
 import { BUTTON_SIZE, Button, Dialog, Keycap, autoFocus, cardHeaderHeight, makeLabel, nl, uiScale } from "./widgets";
@@ -56,7 +57,8 @@ export const SCHEMES: Array<Scheme> = [
 			// the match scoreboard (MP-23): held, not toggled; Tab is the Roblox player list's (UI-02)
 			["Q (hold)", "Survivors in town"],
 		],
-		note: "Right click also interacts.",
+		// Backspace backs out of the screen on top (client/ui/backStack.ts); Esc is Roblox's own (UI-02)
+		note: "Right click also interacts; Backspace goes back in menus.",
 	},
 	{
 		title: "Touch",
@@ -90,7 +92,8 @@ export const SCHEMES: Array<Scheme> = [
 			["Back", "Survivors in town"],
 			["D-pad", "Menus"],
 		],
-		note: "Menus are navigated with the stick; the selected button carries a focus ring.",
+		// B backs out of the screen on top (client/ui/backStack.ts): the one line Settings > Controls has room for
+		note: "Menus: the stick moves the focus ring, B goes back.",
 	},
 ];
 
@@ -233,19 +236,22 @@ export function showTutorial(ctx: GameContext, onDone: () => void): () => void {
 	const cleanup = (): void => {
 		dialog.root.Destroy();
 	};
+	const finish = (): void => {
+		// the lobby asks for this card once, before the first match; answering it is answering the question
+		ctx.save.tutorialDone = true;
+		cleanup();
+		onDone();
+	};
 	const done = Button(panel, "Done", tr("Got it"), {
 		x: PANEL_W - PAD - FOOTER_W,
 		y: TIPS_Y + (TIPS_H - FOOTER_H) / 2,
 		w: FOOTER_W,
 		size: "lg",
 		variant: "default",
-		onClick: (): void => {
-			// the lobby asks for this card once, before the first match; answering it is answering the question
-			ctx.save.tutorialDone = true;
-			cleanup();
-			onDone();
-		},
+		onClick: finish,
 	});
+	// B / Backspace is "Got it": the card is read, the way out is the same (backStack.ts)
+	registerBack(done, finish);
 	autoFocus(done);
 	return cleanup;
 }

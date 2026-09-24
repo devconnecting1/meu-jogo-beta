@@ -63,7 +63,7 @@ const { showWardrobe } = require(join(SRC, "client/ui/wardrobe.ts"));
 const { showLobby } = require(join(SRC, "client/ui/lobby.ts"));
 const { showShop } = require(join(SRC, "client/ui/shop.ts"));
 const { showCredits } = require(join(SRC, "client/ui/credits.ts"));
-const { showTutorial } = require(join(SRC, "client/ui/tutorial.ts"));
+const { showTutorial, SCHEMES } = require(join(SRC, "client/ui/tutorial.ts"));
 const { showPause } = require(join(SRC, "client/ui/pauseMenu.ts"));
 const { popup } = require(join(SRC, "client/ui/popup.ts"));
 const { showRecords } = require(join(SRC, "client/ui/records.ts"));
@@ -990,7 +990,7 @@ function textFits(label) {
 		"...escolher Gamepad mostra as teclas dele, o titulo e a nota dele, e acende o ponto azul -- sem Instance",
 		listShown().join() === "2" &&
 			keysTitle === "Gamepad" &&
-			findIn(settingsRoot(), "Note", "TextLabel").Text.startsWith("Menus are navigated") &&
+			findIn(settingsRoot(), "Note", "TextLabel").Text === SCHEMES[2].note &&
 			options[2].FindFirstChild("Socket").FindFirstChild("Dot").Visible &&
 			!options[0].FindFirstChild("Socket").FindFirstChild("Dot").Visible &&
 			r.created === 0,
