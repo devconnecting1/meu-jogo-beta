@@ -1039,6 +1039,83 @@ section("6) the art pipeline: manifest, PNGs, worldArtAssets.ts, palette");
 		const dE = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 		check(dE <= 6, "concrete tinted for a back room keeps floorConcrete", `mean ΔE ${dE.toFixed(1)}`);
 	}
+	// the rain's puddles (LUZ-05, client/view/weatherView.ts): pixel art in four tones, the vertical road's texture the
+	// same picture mirrored on its diagonal, and every drop's ring on the water
+	const WTV = require(join(SRC, "client/view/weatherView.ts"));
+	if (WTV.PUDDLE_ART !== undefined && decoded.puddle0 !== undefined) {
+		const px = (img, x, y) => [...img.data.subarray((y * img.w + x) * 4, (y * img.w + x) * 4 + 4)];
+		const onWater = (img, x, y) => x >= 0 && y >= 0 && x < img.w && y < img.h && px(img, x, y)[3] > 200;
+		const bad = [];
+		WTV.PUDDLE_ART.forEach((name, v) => {
+			const h = decoded[name];
+			const vt = decoded[WTV.PUDDLE_ART_V[v]];
+			// the tones: every opaque colour the texture uses, and the halo (the one translucent tone)
+			const tones = new Set();
+			const halo = new Set();
+			for (let y = 0; y < h.h; y++) {
+				for (let x = 0; x < h.w; x++) {
+					const [r, g, b, a] = px(h, x, y);
+					if (a === 0) continue;
+					(a > 200 ? tones : halo).add(`${r},${g},${b}`);
+					const t = px(vt, y, x);
+					if (t.join() !== [r, g, b, a].join()) bad.push(`${name}V is not ${name} mirrored at ${x},${y}`);
+				}
+			}
+			if (vt.w !== h.h || vt.h !== h.w) bad.push(`${name}V size`);
+			// (a Set's size is a method under the Luau shims: count its entries)
+			const nTones = [...tones].length;
+			const nHalo = [...halo].length;
+			if (nTones !== 3 || nHalo !== 1) bad.push(`${name}: ${nTones} water tones, ${nHalo} halo`);
+			// the lit rim on the light side: the first water texel of every column from the top is the lightest tone
+			let lit = 0;
+			let cols = 0;
+			for (let x = 0; x < h.w; x++) {
+				for (let y = 0; y < h.h; y++) {
+					if (!onWater(h, x, y)) continue;
+					cols++;
+					const [r, g, b] = px(h, x, y);
+					if (r + g + b >= Math.max(...[...tones].map(t => t.split(",").reduce((a, c) => a + Number(c), 0))))
+						lit++;
+					break;
+				}
+			}
+			if (lit < cols * 0.6) bad.push(`${name}: the top shore is lit in ${lit} of ${cols} columns`);
+			for (const [sx, sy] of WTV.PUDDLE_DROPS[v]) {
+				// the ring (3 x 3) and the texels beside it on the water, in both textures
+				for (const [dx, dy] of [
+					[0, 0],
+					[-1, 0],
+					[1, 0],
+					[0, -1],
+					[0, 1],
+					[-2, 0],
+					[2, 0],
+					[0, -2],
+					[0, 2],
+				]) {
+					if (!onWater(h, sx + dx, sy + dy)) bad.push(`${name}: drop ${sx},${sy} off the water`);
+					if (!onWater(vt, sy + dy, sx + dx)) bad.push(`${name}V: drop ${sy},${sx} off the water`);
+				}
+			}
+		});
+		check(
+			bad.length === 0,
+			"puddles: dark water, sky streaks and a lit rim on the top shore (3 tones) and a wet halo; the vertical ones mirrored on the diagonal; every drop lands on the water",
+			bad.slice(0, 4).join("; "),
+		);
+		const ring = decoded.puddleDrop;
+		const ringTexels =
+			ring === undefined ? 0 : [...Array(ring.w * ring.h).keys()].filter(i => ring.data[i * 4 + 3] > 0).length;
+		check(
+			ring !== undefined &&
+				ring.w === 3 &&
+				ring.h === 3 &&
+				ringTexels === 4 &&
+				ring.data[(1 * 3 + 1) * 4 + 3] === 0,
+			"a drop's ring: four texels round an empty one (a static picture: it moves on a beat, and not at all with Reduce Motion)",
+			`${ringTexels} texels`,
+		);
+	}
 }
 
 // ================================================================ 7. the tools run

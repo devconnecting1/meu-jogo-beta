@@ -1155,6 +1155,199 @@ function bloodDry(seed) {
 	return t;
 }
 
+/**
+ * The rain's puddles (DESIGN_RULES LUZ-05, client/view/weatherView.ts `PUDDLE_ART`): standing water on the asphalt, on
+ * the town's 4-u texel. The pool is three or four overlapping ellipses along its length, each a little higher or
+ * lower, its shores stepping a texel in or out every few columns and broken by noise, so the edge steps irregularly,
+ * texel by texel (a dip in old asphalt, never a pill). Four
+ * tones: the dark water, the sky's reflection as lighter streaks across it, a 1-texel highlight rim on the light side
+ * (the top and the left, where the town's light comes from, ART-02) and a 1-texel halo of wet, darker ground round it.
+ * `lobe`: the main pool keeps to one end and a small pool lies off the other (-1: at the left, +1: at the right), a
+ * texel of wet ground between them. Drawn along +x; `transposed()` turns it for a vertical road with the rim still on
+ * the light side (a turn by 90° would put it on the right). The palette is colors.ts's own (`puddle`, `puddleSheen`).
+ */
+function puddle(w, h, seed, { lobe = 0 } = {}) {
+	const t = new Tex(w, h);
+	const size = Math.max(w, h);
+	const n = fbm(
+		size,
+		[
+			[4, 1],
+			[9, 0.4],
+		],
+		seed,
+	);
+	const r = rng(seed);
+	const water = new Uint8Array(w * h);
+	const at = (x, y) => (x >= 0 && y >= 0 && x < w && y < h ? water[y * w + x] : 0);
+	const mid = (h - 1) / 2;
+	const half = (h - 2) / 2;
+	// the main pool's stretch of the length (a lobed puddle leaves the rest to its small pool)
+	const share = lobe ? 0.72 : 1;
+	const x0 = lobe < 0 ? (w - 1) * (1 - share) + 0.5 : 0.5;
+	const len = (w - 1) * share - 0.5;
+	// a long pool is four of them, a short one three; the middle ones the deepest
+	const k = len / h > 2.2 ? 4 : 3;
+	const blobs = [];
+	for (let i = 0; i < k; i++) {
+		const end = i === 0 || i === k - 1;
+		blobs.push({
+			cx: 0,
+			cy: mid + (r() - 0.5) * half * (end ? 0.8 : 0.35),
+			rx: (len / k) * (end ? 0.8 : 0.9) * (0.92 + r() * 0.16),
+			ry: half * (end ? 0.6 + r() * 0.3 : 0.84 + r() * 0.2),
+		});
+	}
+	// the end ones reach the ends and no further (an ellipse cut by the picture's edge is a square end); the rest
+	// spread evenly between them
+	const first = x0 + blobs[0].rx;
+	const last = x0 + len - blobs[k - 1].rx;
+	blobs.forEach((b, i) => (b.cx = first + ((last - first) * i) / (k - 1)));
+	for (let y = 1; y < h - 1; y++) {
+		for (let x = 1; x < w - 1; x++) {
+			const q = n[y * size + x] * 0.7;
+			for (const b of blobs) {
+				if (((x - b.cx) / b.rx) ** 2 + ((y - b.cy) / b.ry) ** 2 + q < 1) {
+					water[y * w + x] = 1;
+					break;
+				}
+			}
+		}
+	}
+	// no lone texels and no one-texel necks: a water texel with fewer than 2 water neighbours dries, a dry one with 3+ fills
+	const smooth = () => {
+		for (let pass = 0; pass < 2; pass++) {
+			const next = Uint8Array.from(water);
+			for (let y = 1; y < h - 1; y++) {
+				for (let x = 1; x < w - 1; x++) {
+					const k = at(x - 1, y) + at(x + 1, y) + at(x, y - 1) + at(x, y + 1);
+					if (at(x, y) && k < 2) next[y * w + x] = 0;
+					else if (!at(x, y) && k >= 3) next[y * w + x] = 1;
+				}
+			}
+			water.set(next);
+		}
+	};
+	// the shore steps: along the length, the top and the bottom edge each move a texel in or out every few columns,
+	// on their own (the steps of a pixel-art puddle, not the curve of an ellipse)
+	{
+		let dt = 0;
+		let db = 0;
+		let runT = 0;
+		let runB = 0;
+		for (let x = 2; x < w - 2; x++) {
+			if (runT <= 0) {
+				dt = Math.max(-1, Math.min(1, dt + (r() < 0.5 ? -1 : 1)));
+				runT = 2 + Math.floor(r() * 3);
+			}
+			if (runB <= 0) {
+				db = Math.max(-1, Math.min(1, db + (r() < 0.5 ? -1 : 1)));
+				runB = 2 + Math.floor(r() * 3);
+			}
+			runT--;
+			runB--;
+			let y0 = -1;
+			let y1 = -1;
+			for (let y = 1; y < h - 1; y++) {
+				if (!water[y * w + x]) continue;
+				if (y0 < 0) y0 = y;
+				y1 = y;
+			}
+			// the thin ends are left as they are: they round the pool off
+			if (y0 < 0 || y1 - y0 < 3) continue;
+			const top = Math.max(1, y0 + dt);
+			const bot = Math.min(h - 2, y1 + db);
+			if (bot - top < 2) continue;
+			for (let y = 1; y < h - 1; y++) water[y * w + x] = y >= top && y <= bot ? 1 : 0;
+		}
+	}
+	smooth();
+	if (lobe) {
+		// the small pool, off the main one's end and a little to one side, a texel of wet ground apart
+		const main = Uint8Array.from(water);
+		const near = (x, y) => {
+			for (let dy = -1; dy <= 1; dy++)
+				for (let dx = -1; dx <= 1; dx++) if (main[(y + dy) * w + x + dx]) return true;
+			return false;
+		};
+		const sx = lobe > 0 ? (w - 1) * (share + (1 - share) * 0.45) : (w - 1) * (1 - share) * 0.55;
+		const sy = mid + (r() < 0.5 ? -1 : 1) * half * 0.25;
+		const srx = (w - 1) * (1 - share) * 0.42;
+		const sry = half * 0.62;
+		for (let y = 1; y < h - 1; y++) {
+			for (let x = 1; x < w - 1; x++) {
+				if (main[y * w + x] || near(x, y)) continue;
+				if (((x - sx) / srx) ** 2 + ((y - sy) / sry) ** 2 + n[y * size + x] * 0.3 < 1) water[y * w + x] = 1;
+			}
+		}
+	}
+	// the top row of water in each column (the sky's streaks sit under it)
+	const top = [];
+	for (let x = 0; x < w; x++) {
+		let y0 = -1;
+		for (let y = 0; y < h && y0 < 0; y++) if (at(x, y)) y0 = y;
+		top.push(y0);
+	}
+	const halo = mix(C.road, BLACK, 0.55);
+	const dark = C.puddle;
+	const band = mix(C.puddle, C.puddleSheen, 0.45);
+	const rim = C.puddleSheen;
+	// the sky in the water: a long streak in the first half, a shorter one further on and lower (a deep puddle only)
+	const streak = (x, y) => {
+		const a = Math.round(x0 + len * 0.18);
+		const b = Math.round(x0 + len * 0.5);
+		const c = Math.round(x0 + len * 0.58);
+		const d = Math.round(x0 + len * 0.76);
+		if (x >= a && x < b && y === top[x] + 2) return true;
+		return x >= c && x < d && y === top[x] + 4 && h > 9;
+	};
+	for (let y = 0; y < h; y++) {
+		for (let x = 0; x < w; x++) {
+			if (!at(x, y)) {
+				// the wet ground: a texel touching the water (sides, not corners: a stepped ring)
+				if (at(x - 1, y) || at(x + 1, y) || at(x, y - 1) || at(x, y + 1)) t.set(x, y, halo, 128);
+				continue;
+			}
+			// the rim catches the light along the near shore and fades out along the far end and the lower left
+			const up = !at(x, y - 1);
+			const left = !at(x - 1, y);
+			let c = dark;
+			if ((up && x < x0 + len * 0.8) || (left && y <= mid)) c = rim;
+			else if (up || left || (streak(x, y) && at(x, y + 1) && at(x + 1, y))) c = band;
+			t.set(x, y, c, 236);
+		}
+	}
+	return t;
+}
+
+/** `t` mirrored across its diagonal (x <-> y): a puddle for a vertical road, its lit rim still at the top and left */
+function transposed(t) {
+	const o = new Tex(t.h, t.w);
+	for (let y = 0; y < t.h; y++) {
+		for (let x = 0; x < t.w; x++) {
+			const [r, g, b, a] = t.get(x, y);
+			if (a > 0) o.set(y, x, [r, g, b], a);
+		}
+	}
+	return o;
+}
+
+/**
+ * A drop landing on a puddle: four texels round an empty one, the ring it leaves (weatherView `PUDDLE_DROPS`). A static
+ * picture: the view moves it from spot to spot on a beat, and not at all with Reduce Motion.
+ */
+function puddleDrop() {
+	const t = new Tex(3, 3);
+	for (const [x, y] of [
+		[1, 0],
+		[0, 1],
+		[2, 1],
+		[1, 2],
+	])
+		t.set(x, y, C.puddleRipple, 210);
+	return t;
+}
+
 /** motor oil soaked into the concrete or the asphalt */
 function oilStain(seed) {
 	const t = new Tex(16, 12);
@@ -1753,6 +1946,19 @@ function build() {
 	for (let i = 0; i < 2; i++) add_(`oil${i}`, "sprite", oilStain(95 + i), "oil stain");
 	for (let i = 0; i < 2; i++) add_(`crack${i}`, "sprite", crack(97 + i), "asphalt crack");
 	add_("manhole", "sprite", manhole(), "manhole cover");
+	// the rain's puddles (LUZ-05): two long gutter shapes and two lane ones, each along x and turned for a vertical
+	// road, and the drop that lands on them
+	const PUDDLES = [
+		[puddle(38, 11, 201), "in a gutter: long, stepped edge"],
+		[puddle(30, 10, 202, { lobe: 1 }), "in a gutter, a small pool past its end"],
+		[puddle(22, 14, 203), "in a lane: a dip in the asphalt"],
+		[puddle(32, 15, 204, { lobe: -1 }), "in a lane, a small pool before it"],
+	];
+	PUDDLES.forEach(([tex, what], i) => {
+		add_(`puddle${i}`, "sprite", tex, `rain puddle ${what} (sky streaks, lit rim, wet halo)`);
+		add_(`puddle${i}V`, "sprite", transposed(tex), `rain puddle ${what}, on a vertical road`);
+	});
+	add_("puddleDrop", "sprite", puddleDrop(), "a drop's ring on a puddle (4 texels)");
 	add_("drain", "sprite", drain(), "storm drain");
 	// a NEW name, not the old top-down "pump": the owner's place holds an id for that one, and the upright art under
 	// it would be the old picture stretched until the next upload; a new texture has no id, so ART-01's flat

@@ -36,9 +36,12 @@
  *      a fight's blood reuses its particle and decal records; GameLoop.shadowOffset answers in one scratch.
  *  11. THE CANOPY ASKS A GRID (L6). "Is a body under this crown?" answered from the cells under it, exactly as the
  *      walk over the whole horde answered it, with the grid's arrays kept from frame to frame.
- *  14. THE WEATHER (LUZ-05). A storm on a wet street, the camera running along it: on the pool warmed with
- *      poolWarmup's WEATHER no Instance and no ZIndex write; the streaks and the puddles fit that reservation; a rain
- *      draws fewer streaks than a storm, the Low tier half and Reduce Motion none; the streets dry and stop drawing.
+ *  14. THE WEATHER (LUZ-05). A storm on a wet street, the camera running along it, with the puddles' pixel art and
+ *      without it (the flat drawing): on the pool warmed with poolWarmup's `weatherPool` no Instance and no ZIndex
+ *      write; the streaks and the puddles fit that reservation; a rain draws fewer streaks than a storm, the Low tier
+ *      half and Reduce Motion none; the drops sit still with Reduce Motion (the camera still: no write at all) and
+ *      move on their beat without it; every puddle on the texel grid, the four shapes all used; the streets dry and
+ *      stop drawing.
  *  12. THE HORDE'S ORDER (perf audit M2). The real SnapshotBuffer, with its netId table walked in Luau's order: a
  *      spawn under a recycled low netId moves no walker already drawn, and a death at the front moves one walker
  *      into its place (it used to move the whole horde: 280 sprites, 867 writes for 40 walkers).
@@ -687,8 +690,8 @@ section("6) warmFightPool: only behind the lobby and its menus, a few sprites a 
 	}
 	const ref = new Renderer(gui.make("Frame"), "Sprites");
 	PW.reserveFightPool(ref, 1920, 1080, false, false);
-	// and the weather a fight may happen in (LUZ-05, §14)
-	PW.reserveWeatherPool(ref, 1920, 1080);
+	// and the weather a fight may happen in (LUZ-05, §14), its puddles flat as the art is here
+	PW.reserveWeatherPool(ref, 1920, 1080, false);
 	while (ref.warm(1000) > 0);
 	check(
 		heartbeat.conns.size() === before && r.poolSize() === ref.poolSize(),
@@ -1395,77 +1398,139 @@ section("13) ground items (ITM-07): drops, a pile, the target and the glint -- n
 
 section("14) the weather (LUZ-05): a storm's streaks and a wet street's puddles -- no Instance after the warm-up");
 {
-	WA.overrideWorldArt({});
 	const WV = require(join(SRC, "client/view/weatherView.ts"));
+	const { WORLD_TEXEL } = require(join(SRC, "client/view/worldArtAssets.ts"));
+	// the puddles' textures live under fake ids (and the drop's ring), or none of them (the flat drawing)
+	const puddleIds = {};
+	[...WV.PUDDLE_ART, ...WV.PUDDLE_ART_V, "puddleDrop"].forEach((n, i) => (puddleIds[n] = `rbxassetid://${9100 + i}`));
 	// the longest plain street of the town, walked along its length at a run's pace, in a storm
 	const road = [...world.roads]
 		.filter(r => !r.avenue)
 		.sort((a, b) => Math.max(b.w, b.h) - Math.max(a.w, a.h) || a.x - b.x || a.y - b.y)[0];
-	const run = ({ low = false, reduceMotion = false, frames = 600, storm = true } = {}) => {
+	const run = ({ art, low = false, reduceMotion = false, frames = 600, storm = true, still = false } = {}) => {
+		WA.overrideWorldArt(art ? puddleIds : {});
 		const r = new Renderer(gui.make("Frame"), "Sprites");
 		const cam = new Camera();
 		cam.setView(1920, 1080);
 		r.setView(1920, 1080);
-		PW.reserveWeatherPool(r, 1920, 1080);
+		PW.reserveWeatherPool(r, 1920, 1080, WV.puddleArtLive());
 		while (r.warm(1000) > 0);
 		const view = new WV.WeatherView();
 		const f = { clock: 0, reduceMotion, low };
 		let maxRain = 0;
 		let maxWet = 0;
+		let images = 0;
+		// the still camera: on the first puddle of the town (the drops' spots are its own)
+		const p0 = WV.puddlesOf(world)[0];
 		const frame = i => {
 			const t = i / 60;
 			f.clock = t;
-			cam.x = road.vertical ? road.x + road.w / 2 : road.x + 300 + t * 250;
-			cam.y = road.vertical ? road.y + 300 + t * 250 : road.y + road.h / 2;
+			if (still) {
+				cam.x = p0.x;
+				cam.y = p0.y;
+			} else {
+				cam.x = road.vertical ? road.x + road.w / 2 : road.x + 300 + t * 250;
+				cam.y = road.vertical ? road.y + 300 + t * 250 : road.y + road.h / 2;
+			}
 			view.step(1 / 60, true, storm);
 			r.beginFrame();
 			const v = cam.viewRect(32);
 			view.drawPuddles(r, cam, v, world, f);
-			view.drawRain(r, cam, v, f);
+			// the still camera watches the puddles alone (the streaks fall every frame, by design)
+			if (!still) view.drawRain(r, cam, v, f);
 			r.endFrame();
 			let rain = 0;
 			let wet = 0;
 			for (const s of r.layer.GetChildren()) {
 				if (s.Visible === false) continue;
 				if (s.ZIndex === Z.rain) rain++;
-				else if (s.ZIndex === Z.wet) wet++;
+				else if (s.ZIndex === Z.wet) {
+					wet++;
+					if (s.FindFirstChild("I")?.Visible === true) images++;
+				}
 			}
 			maxRain = Math.max(maxRain, rain);
 			maxWet = Math.max(maxWet, wet);
 		};
+		// the first second off the books: the view settles and the camera's first frames place every sprite
+		if (still) for (let i = 0; i < 60; i++) frame(i);
 		const w = watch(() => {
-			for (let i = 0; i < frames; i++) frame(i);
+			for (let i = still ? 60 : 0; i < (still ? 60 : 0) + frames; i++) frame(i);
 		});
-		return { w, maxRain, maxWet, r };
+		return { w, maxRain, maxWet, images, r };
 	};
-	const storm = run();
-	const reserved = new Map(PW.WEATHER.map(([z, n]) => [z, n]));
-	check(
-		storm.w.created === 0 && storm.w.zWrites === 0,
-		"10 s of a storm on a wet street, the camera running along it: no Instance on the warmed pool, no ZIndex write",
-		`${storm.w.created} Instances; ${(storm.w.writes / 600).toFixed(1)} writes a frame (${top(storm.w.byProp, 600, 4)})`,
-	);
-	check(
-		storm.maxRain <= reserved.get(Z.rain) &&
-			storm.maxWet <= reserved.get(Z.wet) &&
-			storm.maxRain >= reserved.get(Z.rain) * 0.75 &&
-			storm.maxWet >= reserved.get(Z.wet) * 0.25,
-		"what it draws fits what the warm-up reserved, and the reservation is not far past it",
-		`streaks ${storm.maxRain} of ${reserved.get(Z.rain)}, puddle sprites up to ${storm.maxWet} of ${reserved.get(Z.wet)}`,
-	);
-	const rain = run({ storm: false });
-	const low = run({ low: true });
-	const calm = run({ reduceMotion: true });
-	check(
-		rain.maxRain < storm.maxRain && low.maxRain <= Math.ceil(storm.maxRain / 2) && calm.maxRain === 0,
-		"a rain draws fewer streaks than a storm, the Low tier half, and Reduce Motion none",
-		`storm ${storm.maxRain}, rain ${rain.maxRain}, Low ${low.maxRain}, Reduce Motion ${calm.maxRain}`,
-	);
-	check(
-		low.maxWet <= storm.maxWet / 2 + 1 && calm.maxWet < storm.maxWet && calm.maxWet > 0,
-		"Low draws the water without its sheen and rings; Reduce Motion keeps the puddles, drops the rings",
-		`puddle sprites: High ${storm.maxWet}, Low ${low.maxWet}, Reduce Motion ${calm.maxWet}`,
-	);
+	for (const art of [true, false]) {
+		const look = art ? "pixel art" : "flat";
+		const storm = run({ art });
+		const reserved = new Map(PW.weatherPool(art).map(([z, n]) => [z, n]));
+		check(
+			storm.w.created === 0 && storm.w.zWrites === 0,
+			`${look}: 10 s of a storm on a wet street, the camera running along it: no Instance on the warmed pool, no ZIndex write`,
+			`${storm.w.created} Instances; ${(storm.w.writes / 600).toFixed(1)} writes a frame (${top(storm.w.byProp, 600, 4)})`,
+		);
+		check(
+			storm.maxRain <= reserved.get(Z.rain) &&
+				storm.maxWet <= reserved.get(Z.wet) &&
+				storm.maxRain >= reserved.get(Z.rain) * 0.75 &&
+				storm.maxWet >= reserved.get(Z.wet) * 0.25,
+			`${look}: what it draws fits what the warm-up reserved, and the reservation is not far past it`,
+			`streaks ${storm.maxRain} of ${reserved.get(Z.rain)}, puddle sprites up to ${storm.maxWet} of ${reserved.get(Z.wet)}`,
+		);
+		check(
+			art ? storm.images > 0 : storm.images === 0,
+			art
+				? "pixel art: the puddles and their drops are images"
+				: "flat: no image anywhere (the textures have no id)",
+			`${storm.images} image sprites drawn`,
+		);
+		const rain = run({ art, storm: false });
+		const low = run({ art, low: true });
+		const calm = run({ art, reduceMotion: true });
+		check(
+			rain.maxRain < storm.maxRain && low.maxRain <= Math.ceil(storm.maxRain / 2) && calm.maxRain === 0,
+			`${look}: a rain draws fewer streaks than a storm, the Low tier half, and Reduce Motion none`,
+			`storm ${storm.maxRain}, rain ${rain.maxRain}, Low ${low.maxRain}, Reduce Motion ${calm.maxRain}`,
+		);
+		check(
+			low.maxWet <= storm.maxWet / 2 + 1 && calm.maxWet === storm.maxWet,
+			`${look}: Low draws the puddles without their drops${art ? "" : " and sheen"}; Reduce Motion keeps the drops (still)`,
+			`puddle sprites: High ${storm.maxWet}, Low ${low.maxWet}, Reduce Motion ${calm.maxWet}`,
+		);
+		// the camera still, the rain steady: with Reduce Motion nothing moves, so nothing is written; without it only
+		// the drops, one move per drop per beat
+		const stillCalm = run({ art, reduceMotion: true, still: true, storm: false });
+		const stillRain = run({ art, still: true, storm: false });
+		// a drop moves every 0.55 s: 10 s is ~18 moves, one Position write each
+		check(
+			stillCalm.w.writes === 0 &&
+				stillRain.w.writes > 0 &&
+				stillRain.w.writes <= stillRain.maxWet * 20 &&
+				Object.keys(stillRain.w.byProp).every(k => k === "Frame.Position"),
+			`${look}: the camera still in the rain: Reduce Motion writes nothing (the drops sit still), without it the drops move on their beat and nothing else is written`,
+			`Reduce Motion ${stillCalm.w.writes} writes in 10 s; the drops moving ${stillRain.w.writes} (${top(stillRain.w.byProp, 1, 3)}), ${stillRain.maxWet} sprites`,
+		);
+	}
+	WA.overrideWorldArt({});
+	// the puddles themselves: on the texel grid, the gutter's two shapes in the gutters, the lane's in the lanes, all four
+	{
+		const puddles = WV.puddlesOf(world);
+		const offGrid = puddles.filter(
+			p => (p.x - p.w / 2) % WORLD_TEXEL !== 0 || (p.y - p.h / 2) % WORLD_TEXEL !== 0,
+		).length;
+		const count = (v, alongX) => puddles.filter(p => p.variant === v && p.alongX === alongX).length;
+		const shapes = [0, 1, 2, 3].map(v => `${v}: ${count(v, true)} + ${count(v, false)}`);
+		check(
+			puddles.length > 20 && offGrid === 0 && [0, 1, 2, 3].every(v => count(v, true) > 0 && count(v, false) > 0),
+			"every puddle's texture lies on the 4-u texel grid (its texels are the asphalt's); all four shapes, on both kinds of road",
+			`${puddles.length} puddles, ${offGrid} off the grid; shape: along x + along y ${shapes.join(", ")}`,
+		);
+		const again = WV.puddlesOf(world);
+		check(
+			again.length === puddles.length &&
+				again.every((p, i) => p.x === puddles[i].x && p.y === puddles[i].y && p.variant === puddles[i].variant),
+			"the same town, the same puddles, the same shapes (placed by the town, not by the screen)",
+		);
+	}
 	// the streets dry: after the rain the puddles fade and are gone, and nothing is drawn from then on
 	{
 		const r = new Renderer(gui.make("Frame"), "Sprites");
