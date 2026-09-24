@@ -21,8 +21,9 @@
  *      Each texture falls back ON ITS OWN: with only the lawn uploaded, only the lawn is textured.
  *   3. NO CHURN. After a warm-up, 600 frames of camera movement create no Instance, flat and with art, and the
  *      renderer's write cache still skips what did not change.
- *   4. THE COST, measured on a dense 1920 x 1080 downtown screen: sprites, ImageLabels, strokes, corners and the
- *      Node time of a frame, flat against art (printed; the art stays within 10 % of the flat town's sprites).
+ *   4. THE COST, measured on a dense 1920 x 1080 downtown screen (the block whose screen draws the most sprites flat):
+ *      sprites, ImageLabels, strokes, corners and the Node time of a frame, flat against art (printed; the art stays
+ *      within 10 % of the flat town's sprites there, and over every downtown block's screen together).
  *   5. LEGIBILITY (LEG-03). A walker and the survivor on every kind of ground, rendered through the real code and
  *      rasterised: the strongest colour step across the silhouette (ΔE, CIELAB) must not drop with the textures,
  *      and a walker on grass must clear the bar the old outline missed (it measured 15; the lawn's own colour).
@@ -52,7 +53,7 @@
  *  11. THE INTERIORS (EDI-04, ART-12). With every roof on, nothing of any interior is drawn; walking in and out of
  *      the largest building creates no Instance; its sprites inside and the writes of a walk across it (printed), the
  *      art costing no more sprites than the flat drawing. 11b, their pixel art: with no id, the first building of each
- *      of the 15 types seen from inside makes the flat interiors' very draw calls (tools/golden/interiors-flat.json,
+ *      type (the 15 of before and the everyday town's) seen from inside makes the flat interiors' very draw calls (tools/golden/interiors-flat.json,
  *      `--golden-interiors` with PZ_SRC on the commit before the art); in 5 towns every piece of furniture is drawn
  *      from the atlas, exactly on its solid's rect (plus its baked shadow), in at most 4 sprites; every decoration and
  *      every doorway and window has its art; a chair faces its table. §5 measures the bodies on every room floor and
@@ -345,7 +346,10 @@ if (process.argv.includes("--golden-chars")) {
 const GOLDEN_INTERIORS = join(ROOT, "tools", "golden", "interiors-flat.json");
 function interiorBuildings(w) {
 	const out = [];
-	for (let t = 1; t <= 15; t++) {
+	// every type of the town: the 15 of before and the everyday town's (EDI-18..EDI-23: the bank and its vault too)
+	let top = 15;
+	for (const s of w.solids) if (s.kind === "building" && s.buildingType > top) top = s.buildingType;
+	for (let t = 1; t <= top; t++) {
 		const list = w.solids.filter(s => s.kind === "building" && s.buildingType === t && s.rooms !== undefined);
 		list.sort((a, b) => a.id - b.id);
 		if (list[0] !== undefined) out.push(list[0]);
@@ -610,6 +614,38 @@ setArt({});
 // ================================================================ 4. the cost
 
 section("4) cost of a dense screen: downtown, 1920 x 1080, zoom 1");
+/**
+ * The screens: the middle of every downtown block. The dense one is the block whose screen draws the most sprites flat
+ * (the fixed point of before, 8400 x 10250, framed one market's big roof and no sign once the everyday town moved the
+ * buildings round, EDI-18/EDI-19, 2026-09-24); the budget holds there, and over every block's screen together.
+ */
+const blockScreens = world.lots.filter(l => l.zone === "commercial").map(l => ({ x: l.x + l.w / 2, y: l.y + l.h / 2 }));
+function spritesAt(ids, at) {
+	setArt(ids);
+	const st = stage(1920, 1080, 1);
+	drawTown(st, new WorldView(shadowFn(false)), at.x, at.y);
+	return countSprites(st.r.layer).sprites;
+}
+let DENSE = { x: 8400, y: 10250 };
+const blocks = { flat: 0, art: 0, worst: 0, where: "" };
+{
+	let most = -1;
+	for (const at of blockScreens) {
+		const f = spritesAt({}, at);
+		const a = spritesAt(ALL.ids, at);
+		blocks.flat += f;
+		blocks.art += a;
+		if (f > most) {
+			most = f;
+			DENSE = at;
+		}
+		if (a / f > blocks.worst) {
+			blocks.worst = a / f;
+			blocks.where = `${Math.round(at.x)} x ${Math.round(at.y)}: ${a} vs ${f}`;
+		}
+	}
+}
+console.log(`       the densest downtown screen: the block round ${Math.round(DENSE.x)} x ${Math.round(DENSE.y)}`);
 const perf = {};
 for (const [label, ids] of [
 	["flat", {}],
@@ -618,7 +654,7 @@ for (const [label, ids] of [
 	setArt(ids);
 	const st = stage(1920, 1080, 1);
 	const view = new WorldView(shadowFn(false));
-	const at = { x: 8400, y: 10250 };
+	const at = DENSE;
 	const created0 = gui.stats.created;
 	drawTown(st, view, at.x, at.y);
 	const c = countSprites(st.r.layer);
@@ -638,6 +674,11 @@ check(
 	perf.art.sprites <= perf.flat.sprites * 1.1,
 	"the art stays within 10 % of the flat town's sprites",
 	`${perf.art.sprites} vs ${perf.flat.sprites}`,
+);
+check(
+	blockScreens.length > 0 && blocks.art <= blocks.flat * 1.1,
+	`and so it does over every downtown block's screen together (${blockScreens.length})`,
+	`${blocks.art} vs ${blocks.flat}; the most, ${((blocks.worst - 1) * 100).toFixed(0)} %, at ${blocks.where}`,
 );
 setArt({});
 

@@ -654,9 +654,7 @@ export class ServerItems {
 	 * rolls its fuel (EDI-16), a market stall, a pile or a shed its own table (EDI-20..MOB-06), a building its type's.
 	 */
 	rollLoot(s: Solid): void {
-		s.lootItems = isYardContainer(s)
-			? rollYardLoot(s)
-			: rollBuildingLoot(s.buildingType ?? 0, s.lootSlots ?? 2);
+		s.lootItems = isYardContainer(s) ? rollYardLoot(s) : rollBuildingLoot(s.buildingType ?? 0, s.lootSlots ?? 2);
 	}
 
 	// ---------------------------------------------------------------- map items (§8.1)

@@ -2524,7 +2524,10 @@ section(
 	const door = world.solids.find(s => V.isVaultDoor(s) && s.bankId === bank?.id);
 	const box = world.solids.find(s => V.isVaultBox(s) && s.bankId === bank?.id);
 	const portico = world.solids.find(s => V.isPortico(s) && s.bankId === bank?.id);
-	check(door !== undefined && box !== undefined && portico !== undefined, "com a porta do cofre, as caixas e o portico");
+	check(
+		door !== undefined && box !== undefined && portico !== undefined,
+		"com a porta do cofre, as caixas e o portico",
+	);
 	checkEq(door?.open, false, "a porta do cofre nasce fechada");
 	const vault = bank.rooms.find(r => r.kind === "vault");
 	// the hall side of the door: away from the vault's floor
@@ -2637,12 +2640,21 @@ section(
 		const cd = cw.solids.find(s => s.id === door.id);
 		const cpo = cw.solids.find(s => s.id === portico.id);
 		Mirror.forgetMirrorIndex();
-		check(cd !== undefined && V.isVaultDoor(cd) && cd.open === false, "o cliente gera a mesma porta, com o mesmo id, fechada");
+		check(
+			cd !== undefined && V.isVaultDoor(cd) && cd.open === false,
+			"o cliente gera a mesma porta, com o mesmo id, fechada",
+		);
 		Mirror.applyMirrorEvent(cw, doorSets[0].ev);
 		Mirror.applyMirrorEvent(cw, bells[0].ev);
-		check(cd?.open === true && cpo?.powered === true, "o DoorSet e o LightSet de sempre abrem a copia dele e tocam o sino");
+		check(
+			cd?.open === true && cpo?.powered === true,
+			"o DoorSet e o LightSet de sempre abrem a copia dele e tocam o sino",
+		);
 		Mirror.resetMirror(cw);
-		check(cd?.open === false && cpo?.powered !== true, "um WorldInit novo fecha a porta e cala o sino ate ser avisado");
+		check(
+			cd?.open === false && cpo?.powered !== true,
+			"um WorldInit novo fecha a porta e cala o sino ate ser avisado",
+		);
 		Mirror.forgetMirrorIndex();
 	}
 	// E at the open door: nothing -- it hangs open for good
@@ -2690,7 +2702,10 @@ section(
 		`${pulses} aneis`,
 	);
 	const off = drain(sim).filter(p => p.ev.t === P.WorldEv.LightSet && p.ev.id === portico.id);
-	check(off.length === 1 && off[0].ev.powered === false, `depois de ${V.VAULT_ALARM_S} s o sino cala (LightSet desligado)`);
+	check(
+		off.length === 1 && off[0].ev.powered === false,
+		`depois de ${V.VAULT_ALARM_S} s o sino cala (LightSet desligado)`,
+	);
 	checkEq(portico.powered, false, "e o portico fica em silencio");
 
 	// the boxes: inside the vault, the flag is theirs; E takes everything; once a town
@@ -2705,7 +2720,11 @@ section(
 		flags.some(p => p.ev.buildingId === box.id && p.ev.hasLoot),
 		"dentro do cofre, o LootFlag e o das caixas, nao o do banco",
 	);
-	checkEq(IQ.interactTarget(world, a.state.x, a.state.y)?.kind, "pump", "o E ali abre as caixas (um conteiner, como a barraca)");
+	checkEq(
+		IQ.interactTarget(world, a.state.x, a.state.y)?.kind,
+		"pump",
+		"o E ali abre as caixas (um conteiner, como a barraca)",
+	);
 	const inBox = box.lootItems.map(d => `${d.kind}/${d.id}`);
 	check(
 		box.lootItems.every(d => VAULT_LOOT.some(e => e.kind === d.kind && e.index === d.id)) &&
@@ -2713,11 +2732,17 @@ section(
 		"so o que a tabela do cofre tem, e nunca arma ou municao",
 		inBox.join(" "),
 	);
-	check(box.lootItems.some(d => d.kind === 4 && d.id === 27), "ouro sempre (2 a 4 pedacos)");
+	check(
+		box.lootItems.some(d => d.kind === 4 && d.id === 27),
+		"ouro sempre (2 a 4 pedacos)",
+	);
 	const gold = countItem(a.save, 4, 27);
 	send(a, seq++, 0, PRESS_E, sim.tick / sim.simHz);
 	const took = run(sim, 1);
-	check(took.some(s => s.outcome.kind === "pump"), "o E leva tudo");
+	check(
+		took.some(s => s.outcome.kind === "pump"),
+		"o E leva tudo",
+	);
 	check(countItem(a.save, 4, 27) > gold, "o ouro foi para a mochila");
 	checkEq(box.lootItems.length, 0, "as caixas ficaram vazias");
 	checkEq(box.lootTimer, Infinity, "e nao enchem de novo nesta cidade (uma vez por mundo)");
@@ -2731,7 +2756,12 @@ section(
 	{
 		const w2 = W.serverWorld(W.generateTown(7331));
 		const d2 = w2.solids.find(s => V.isVaultDoor(s));
-		const sim2 = new ServerSimulation({ world: w2, clock: new WorldClock({ day: 1, dayTime: 12 }), zombies: true, interactive: true });
+		const sim2 = new ServerSimulation({
+			world: w2,
+			clock: new WorldClock({ day: 1, dayTime: 12 }),
+			zombies: true,
+			interactive: true,
+		});
 		const c = addPlayer(sim2, 0, at.x, at.y);
 		addItem(c.save, V.VAULT_TOOL_KIND, V.VAULT_TOOL_INDEX, 1);
 		for (let i = 0; i < Math.round(sim2.simHz * 1.2); i++) {
