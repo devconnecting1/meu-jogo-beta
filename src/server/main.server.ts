@@ -104,8 +104,15 @@ const AUTOSAVE_MIN_BUDGET = 4;
 const LOCK_STALE = 300;
 /** rewrite (refreshing the lock) at least this often even without changes (s) */
 const LOCK_REFRESH = 150;
-/** how long a join waits for another server to release the lock before taking it over (s) */
-const LOCK_WAIT = 15;
+/** the combat-log guard's backstop: a leaving session's last write is made at most this long after LINGER_S (s) */
+const GUARD_BACKSTOP_S = 2;
+/**
+ * How long a join waits for another server to release the lock before taking it over (s): 15, plus the combat-log
+ * guard's longest hold on a leaving session's last write (LINGER_S, then the backstop) -- a player who quits mid-bite
+ * and joins another server at once must load the save written after the guard, not take the lock under it (review of
+ * 6e6dfa0).
+ */
+const LOCK_WAIT = 15 + LINGER_S + GUARD_BACKSTOP_S;
 const JOB_ID = game.JobId !== "" ? game.JobId : `studio-${HttpService.GenerateGUID(false)}`;
 
 /** client can re-request a failed load at most this often (s) */
@@ -1399,12 +1406,30 @@ Players.PlayerRemoving.Connect(player => {
 		return;
 	}
 	// the backstop: a heartbeat that stopped, a host replaced -- the session's last write never waits on the body for
-	// longer than the guard itself (and `finish` runs once, whichever comes first)
-	task.delay(LINGER_S + 2, finish);
+	// longer than the guard itself (and `finish` runs once, whichever comes first). The body is banked FIRST, as it
+	// stands, so the write carries it -- never the save from before the bank (review of 6e6dfa0)
+	task.delay(LINGER_S + GUARD_BACKSTOP_S, () => {
+		if (written || shuttingDown) return;
+		guarded("banking the body", () => mpHost?.bankLingering(userId), s.key);
+		finish();
+	});
 });
 
-game.BindToClose(() => {
+game.BindToClose(reason => {
 	shuttingDown = true;
+	const closing = os.clock();
+	// the combat-log guard on an EMPTY server (review of 6e6dfa0, HIGH): the last player quitting mid-bite empties it
+	// -- Play solo, a private town of one, the last one on a public server -- and the platform closes it a moment later.
+	// That close is the player's doing, not the server's: the host keeps ticking (the Heartbeat runs while this waits)
+	// until the guard has let every body go, as it would have on a server that stayed up, at most LINGER_S + 0.5 s --
+	// taken out of the writes' budget below, so the whole callback stays under the platform's 30 s. Any other reason
+	// (an update, maintenance, a developer's shutdown) is the server's doing: the bodies are banked as they stand
+	if (reason === Enum.CloseReason.ServerEmpty) {
+		const host = mpHost;
+		if (host !== undefined) {
+			waitUntil(() => guarded("the combat-log guard", () => host.guarding()) !== true, LINGER_S + 0.5);
+		}
+	}
 	// §7.2 "Servidor desligando": stop the simulation and bank every body into its save before the writes below
 	// capture them (a second BindToClose would race this one, so the host is stopped here, first). Guarded (F5): a
 	// simulation that cannot stop must not keep a single save from being written
@@ -1423,7 +1448,8 @@ game.BindToClose(() => {
 			remaining -= 1;
 		});
 	}
-	waitUntil(() => remaining <= 0, SHUTDOWN_BUDGET);
+	// whatever the guard's wait above took comes out of this budget: the callback as a whole stays SHUTDOWN_BUDGET
+	waitUntil(() => remaining <= 0, math.max(0, SHUTDOWN_BUDGET - (os.clock() - closing)));
 });
 
 task.spawn(() => {

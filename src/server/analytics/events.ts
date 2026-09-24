@@ -450,6 +450,12 @@ export interface WorldView {
 	bodyOf(player: Player): { dead: boolean } | undefined;
 	/** survivors standing in the city (alive) */
 	standing(): number;
+	/**
+	 * Does the combat-log guard still hold this user's body in the city (server/net/mpHost.ts `linger`, LINGER_S)? A
+	 * session that left in a fight is summed up when the body comes out, so a death in the guard is logged BEFORE
+	 * SessionEnded, and SessionEnded says "Dead". Absent: nobody is ever held.
+	 */
+	lingering?(userId: number): boolean;
 }
 
 export interface AnalyticsOptions {
@@ -766,13 +772,24 @@ export class ServerAnalytics {
 		if (e.onboarding) this.advanceOnboarding(e);
 	}
 
-	/** the player left the server: the session's aggregates, once (Players.PlayerRemoving, BindToClose) */
+	/**
+	 * The player left the server: the session's aggregates, once (Players.PlayerRemoving, BindToClose). One who left in
+	 * a fight leaves a body the combat-log guard holds a few seconds more (`WorldView.lingering`): the session is summed
+	 * up when it comes out (`poll`), so a death in the guard is its Died, logged before SessionEnded, and SessionEnded
+	 * says where the body ended ("Dead"). The session's length is still counted to the departure.
+	 */
 	playerLeft(player: Player): void {
 		this.arrivals.delete(player);
 		const e = this.entries.get(player);
 		if (e === undefined) return;
 		if (e.leftAt === undefined) e.leftAt = this.clock();
+		if (this.held(e)) return;
 		this.summarize(e);
+	}
+
+	/** is this entry's body still held in the city by the combat-log guard? */
+	private held(e: Entry): boolean {
+		return this.world?.lingering?.(e.userId) === true;
 	}
 
 	private summarize(e: Entry): void {
@@ -820,6 +837,8 @@ export class ServerAnalytics {
 			// a removal this module missed (a Player already parented to nil) is a leave too
 			if (e.leftAt === undefined && player.Parent === undefined) this.playerLeft(player);
 			if (e.leftAt !== undefined) {
+				// a departure the combat-log guard held: summed up once the body is out (LINGER_S), before the grace ends
+				if (!e.summarized && (!this.held(e) || now - e.leftAt >= LEAVE_GRACE_S)) this.summarize(e);
 				if (now - e.leftAt >= LEAVE_GRACE_S) gone.push(player);
 				continue;
 			}
@@ -1169,6 +1188,9 @@ export class ServerAnalytics {
 				if (first !== undefined) break;
 			}
 		}
+		// who carries it, in order: a fallen survivor given the new life here, then any of the fallen still connected,
+		// then (a restart) the keeper who asked, then anybody connected -- the fallen come first, the keeper included
+		// when they fell with it (a restart ends every life, so they usually did)
 		if (first === undefined && report.by !== undefined) first = this.entryOfUser(report.by);
 		// the fallen all left the server (a world its dead walked out of ends only with somebody connected, MP-22 and the
 		// review of 577c729, L1): the world is still one event, on whoever is here -- in the lobby, or just connected

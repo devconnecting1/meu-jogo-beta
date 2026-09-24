@@ -154,6 +154,10 @@ class Signal {
 	Fire(...args) {
 		for (const h of [...this.handlers]) if (h.on) runThread(h.fn, args);
 	}
+	/** Roblox guarantees no order between connections: this fires them the other way round */
+	FireReversed(...args) {
+		for (const h of [...this.handlers].reverse()) if (h.on) runThread(h.fn, args);
+	}
 	Wait() {
 		throw new Yield();
 	}
@@ -425,9 +429,11 @@ function bootServer(opts = {}) {
 			remote("LoadRequest").OnServerEvent.Fire(p);
 			return p;
 		},
-		quit(p) {
+		/** the player leaves the SERVER; `reversed` fires the PlayerRemoving handlers the other way round */
+		quit(p, reversed = false) {
 			Players.list = Players.list.filter(x => x !== p);
-			Players.PlayerRemoving.Fire(p);
+			if (reversed) Players.PlayerRemoving.FireReversed(p);
+			else Players.PlayerRemoving.Fire(p);
 			p._parent = undefined;
 		},
 		save(p) {
@@ -1783,6 +1789,70 @@ section("11) SessionEnded: where and when each session quit; Died: the cause, re
 			A.causeOfDeath(undefined, undefined) === "Cause - Unknown",
 		"causeOfDeath: a living boss within BOSS_REACH is Boss; a far or a dead one is not",
 	);
+});
+
+// ================================================================ 11b: a death in the combat-log guard
+
+/*
+ * The review of 6e6dfa0: a survivor who quits mid-bite leaves the body 5 s in the fight (§7.2, the combat-log guard),
+ * and it can die there. The session is summed up when the body comes out, so the Died is logged BEFORE SessionEnded and
+ * SessionEnded says "Dead" -- whichever PlayerRemoving handler runs first (Roblox sets no order: analytics' own may ask
+ * before the host has started the guard). One who quits out of any fight is summed up at once, as always.
+ */
+section("11b) a death in the combat-log guard: Died before SessionEnded, and SessionEnded says Dead", () => {
+	const { createZombie } = require(join(SRC, "shared/game/entities.ts"));
+	for (const reversed of [false, true]) {
+		const s = bootServer();
+		const A = s.A;
+		s.sim.clock.setClock(12);
+		const w = s.join(newUser(), "witness");
+		s.immortal.add(w);
+		s.enter(w);
+		const p = s.join(newUser(), "quits mid-bite");
+		const sp = s.enter(p);
+		s.run(1.2);
+		s.sim.horde.zombies.length = 0;
+		for (let i = 0; i < 4; i++) {
+			const z = createZombie(1, sp.state.x + 32 * Math.cos(i * 1.6), sp.state.y + 32 * Math.sin(i * 1.6), 5);
+			z.detect = true;
+			s.sim.horde.zombies.push(z);
+		}
+		sp.state.godMode = false;
+		s.run(0.3);
+		sp.state.hp = 3;
+		s.quit(p, reversed);
+		const endedAtQuit = customs(s, p.UserId, A.EVENT.SessionEnded).length;
+		s.run(7);
+		const rows = s.of(p.UserId, "custom");
+		const died = rows.findIndex(r => r.name === A.EVENT.Died);
+		const ended = rows.findIndex(r => r.name === A.EVENT.SessionEnded);
+		const order = reversed ? "analytics' handler first" : "the host's handler first";
+		check(
+			sp.state.dead &&
+				endedAtQuit === 0 &&
+				died >= 0 &&
+				ended > died &&
+				rows[ended].fields.CustomField01 === "Where - Dead" &&
+				customs(s, p.UserId, A.EVENT.SessionEnded).length === 1,
+			`(${order}) quit mid-bite, died in the guard: Died, then one SessionEnded "Where - Dead"`,
+			`dead ${sp.state.dead}; SessionEnded at the quit ${endedAtQuit}; order ${rows.map(r => r.name).join(" > ")}; ` +
+				`where ${rows[ended]?.fields.CustomField01}`,
+		);
+	}
+	// out of any fight: summed up at the departure, as always
+	{
+		const s = bootServer();
+		const A = s.A;
+		const p = s.join(newUser(), "calm");
+		s.enter(p);
+		s.sim.horde.zombies.length = 0;
+		s.run(1.2);
+		s.quit(p);
+		check(
+			customs(s, p.UserId, A.EVENT.SessionEnded).length === 1,
+			"out of any fight: SessionEnded at the departure, as before",
+		);
+	}
 });
 
 // ================================================================ 12: experiments (server/config/experiments.ts)

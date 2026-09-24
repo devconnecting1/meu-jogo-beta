@@ -243,6 +243,14 @@ export interface MpHost {
 	release(player: Player, save?: PlayerSaveData, onBanked?: () => void): boolean;
 	/** the combat-log guard: is this user's body still in the world with nobody at the controls? (LINGER_S) */
 	lingering(userId: number): boolean;
+	/** the combat-log guard: is any body still in the world with nobody at the controls? (the empty server's close) */
+	guarding(): boolean;
+	/**
+	 * The combat-log guard's backstop (server/main.server.ts, LINGER_S + 2 s after the departure, when the heartbeat
+	 * has not let the body go): out of the world now and banked into the save the departure handed over, WITHOUT the
+	 * final write (`onBanked`) -- the caller makes it right after, on a save that holds the body. Nothing when it is gone.
+	 */
+	bankLingering(userId: number): void;
 	/** the live body into `save`, without moving it (the autosave); true when the save changed */
 	settle(player: Player, save: PlayerSaveData): boolean;
 	/**
@@ -604,6 +612,9 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	/** the body stays behind with nobody at the controls (`inFight`); `stepLingers` ends it */
 	function linger(userId: number, sp: ServerPlayer, kind: "leave" | "disconnect"): void {
 		sp.idle = true;
+		// nobody at the controls includes the backpack: the verbs queued before the departure (eight kits sent with an
+		// `atSeq` still ahead, say) are dropped and answered, not played out for the player who left (review of 6e6dfa0)
+		sim.backpack.remove(sp.slot);
 		lingers.set(userId, { userId, slot: sp.slot, until: os.clock() + LINGER_S, kind });
 		print(`[${GAME_NAME}] ${sp.name} left in a fight: the body stays ${LINGER_S} s (${kind})`);
 	}
@@ -628,7 +639,11 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		if (write && onBanked !== undefined) task.spawn(onBanked);
 	}
 
-	/** once per heartbeat, BEFORE rule 6 counts anybody: the lingering bodies whose time is up, or that died */
+	/**
+	 * Once per heartbeat, in its own guard BEFORE the tick (review of 6e6dfa0): the lingering bodies whose time is up,
+	 * or that died, leave -- so a tick that keeps throwing never keeps a body in the guard, nor its final write waiting
+	 * for the backstop.
+	 */
 	function stepLingers(now: number): void {
 		if (lingers.size() === 0) return;
 		const done = new Array<number>();
@@ -958,13 +973,12 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			const flash = hit !== undefined ? (hit.state.hitFlash ?? 0) : 0;
 			if (flash > 0) hurtAt.set(player.UserId, now - math.max(0, 1 - flash));
 		}
-		// the combat-log guard: a lingering body is hit too, and its time runs out -- banked BEFORE rule 6 counts it
+		// the combat-log guard: a lingering body is hit too (its time runs out in `stepLingers`, before the tick)
 		for (const [userId, lg] of lingers) {
 			const hit = sim.get(lg.slot);
 			const flash = hit !== undefined ? (hit.state.hitFlash ?? 0) : 0;
 			if (flash > 0) hurtAt.set(userId, now - math.max(0, 1 - flash));
 		}
-		stepLingers(now);
 		// the night the dead are waiting out ran in the same real seconds the sim just did (MP-21)
 		lives.step(dt);
 		if (now - metricAt >= METRIC_INTERVAL) {
@@ -987,6 +1001,11 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		beatDt = dt;
 		// what the simulation allocates is its own line in the Developer Console's memory categories (F6)
 		debug.setmemorycategory("PZ.sim");
+		// the combat-log guard first, and apart: a tick that throws must not hold a body (and its final write) in it
+		if (lingers.size() > 0) {
+			const [guardOk, guardErr] = xpcall(stepLingers, tickTrace, now);
+			if (!guardOk) warn(`[${GAME_NAME}] the combat-log guard failed: ${tostring(guardErr)}`);
+		}
 		const [ok, err] = xpcall(beatBody, tickTrace);
 		// a tick that threw left the labels it was inside open (see `profiler`)
 		while (profileDepth > 0) profiler.end();
@@ -1086,6 +1105,12 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		lingering(userId) {
 			return lingers.has(userId);
 		},
+		guarding() {
+			return lingers.size() > 0;
+		},
+		bankLingering(userId) {
+			endLinger(userId, false);
+		},
 		settle(player, save) {
 			return lives.settle(player.UserId, save);
 		},
@@ -1178,6 +1203,18 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			for (const sp of sim.players()) if (!sp.state.dead) n += 1;
 			return n;
 		},
+		// held by the combat-log guard -- or about to be: the PlayerRemoving handlers run in no set order, and analytics'
+		// may ask before this host's has started the guard. The same `inFight`, at the same instant, decides both
+		lingering(userId) {
+			if (lingers.has(userId)) return true;
+			if (stopped) return false;
+			for (const [player, link] of links) {
+				if (player.UserId !== userId || link.slot === undefined) continue;
+				const sp = sim.get(link.slot);
+				if (sp !== undefined && inFight(sp, os.clock())) return true;
+			}
+			return false;
+		},
 	});
 
 	/**
@@ -1251,6 +1288,20 @@ export function startMpHost(options: MpHostOptions): MpHost {
 					host.seed = newTown.seed;
 					host.startedAt = now;
 					pcall(() => Workspace.SetAttribute(WORLD_SEED_ATTRIBUTE, newTown.seed));
+				},
+				// the combat-log guard's bodies leave the old town as their players did, BEFORE the fallen are counted
+				// (review of 6e6dfa0, MEDIUM): a quit is then a departure owed the new life, a Home a kept body that gets it
+				// -- before, the body stood on into the new town with its old life (a day-12 life in a day-1 town), and
+				// the slot it held could be a newcomer's by the time the guard ran out. Each one's final write goes now
+				onCommitted: () => {
+					const held = new Array<number>();
+					for (const [userId] of lingers) held.push(userId);
+					for (const userId of held) {
+						const [ok, err] = xpcall(() => endLinger(userId, true), tickTrace);
+						if (!ok) {
+							warn(`[${GAME_NAME}] a body in the guard could not leave the old town: ${tostring(err)}`);
+						}
+					}
 				},
 			}),
 		);

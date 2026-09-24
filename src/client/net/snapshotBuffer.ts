@@ -126,6 +126,13 @@ const BRIDGE_TAU_S = 0.2;
 const BRIDGE_CATCHUP_UPS = 150;
 /** below this the bridge offset is dropped (under a tenth of a pixel) */
 const BRIDGE_EPS = 0.05;
+/**
+ * The most a bridge may owe (review of 6e6dfa0): past it the silence was too long for one walk -- a body drawn this far
+ * from where the server has it would slide on for most of a second, through what stands between, and a shot at it
+ * would be judged somewhere else. It starts again where it is, faded in, like a re-entry (`restartTrack`). A 400 ms
+ * burst leaves walkers ~28 u behind; a runner through a 1 s silence is past it.
+ */
+const BRIDGE_MAX_U = 64;
 
 /** how a newer sample follows a zombie track (`SnapshotBuffer.discontinuity`) */
 const Break = {
@@ -360,6 +367,8 @@ class ActorTrack {
 	/** the render tick this track was last drawn at, and a stream silence it just came back from (`bridge`) */
 	renderAt = -math.huge;
 	bridge = false;
+	/** the first tick after that silence: where the track starts again when the bridge would owe too much */
+	bridgeTick = -math.huge;
 	/** what the drawing still owes its interpolation after a stream silence, eased out (BRIDGE_TAU_S) */
 	offX = 0;
 	offY = 0;
@@ -437,6 +446,10 @@ export interface SnapshotStats {
 	restarts: number;
 	/** zombie tracks that came back after a silence of the whole stream and were kept, at their alpha (`discontinuity`) */
 	bridged: number;
+	/** ...of those, the ones whose catch-up would have owed more than BRIDGE_MAX_U, started again instead (`bridge`) */
+	bridgeCapped: number;
+	/** the most any kept bridge owed, in units (never above BRIDGE_MAX_U) */
+	bridgeMax: number;
 	/** survivor tracks restarted, faded in, where the survivor appeared (`allyJumped`, N3) */
 	allyJumps: number;
 }
@@ -562,6 +575,9 @@ export class SnapshotBuffer {
 	private restarts = 0;
 	/** zombie tracks that came back after a stream-wide silence and were kept as one walk (`discontinuity`) */
 	private bridged = 0;
+	/** bridges that would have owed more than BRIDGE_MAX_U, and the most a kept one owed (`bridge`) */
+	private bridgeCapped = 0;
+	private bridgeMax = 0;
 	/** survivor tracks restarted where the survivor appeared (`allyJumped`, N3) */
 	private allyJumps = 0;
 	/** arrival of the newest part accepted, any tick (`STREAM_QUIET_S`) */
@@ -860,6 +876,7 @@ export class SnapshotBuffer {
 				} else if (kind === Break.Stream) {
 					this.bridged += 1;
 					track.bridge = true;
+					track.bridgeTick = tick;
 				}
 			}
 			if (track.insert(zombieSample(tick, z))) {
@@ -1234,8 +1251,22 @@ export class SnapshotBuffer {
 		track.bridge = false;
 		if (!track.hasDrawn || track.renderAt === -math.huge) return;
 		const past = this.sampleAt(track, track.renderAt, ZOMBIE_BASE_RADIUS, world);
-		track.offX = track.drawnX - past.x;
-		track.offY = track.drawnY - past.y;
+		const offX = track.drawnX - past.x;
+		const offY = track.drawnY - past.y;
+		const owed = math.sqrt(offX * offX + offY * offY);
+		if (owed > BRIDGE_MAX_U) {
+			// too much for one walk (BRIDGE_MAX_U): it starts again from the first sample after the silence, faded in
+			const from = track.bridgeTick;
+			const kept = new Array<ActorSample>();
+			for (const s of track.samples) if (s.tick >= from) kept.push(s);
+			this.restartTrack(track, from);
+			for (const s of kept) track.samples.push(s);
+			this.bridgeCapped += 1;
+			return;
+		}
+		if (owed > this.bridgeMax) this.bridgeMax = owed;
+		track.offX = offX;
+		track.offY = offY;
 	}
 
 	private bossStateOf(netId: number, track: ActorTrack, render: number, world?: WorldData): RemoteBoss {
@@ -1404,6 +1435,8 @@ export class SnapshotBuffer {
 			absorbedS: this.absorbedTicks / this.simHz,
 			restarts: this.restarts,
 			bridged: this.bridged,
+			bridgeCapped: this.bridgeCapped,
+			bridgeMax: this.bridgeMax,
 			allyJumps: this.allyJumps,
 		};
 	}

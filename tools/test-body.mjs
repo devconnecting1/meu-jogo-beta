@@ -95,6 +95,9 @@
  *                           nobody at the controls, is bitten meanwhile and banked as it came out (dead if it died); the
  *                           final write and the lock's release wait for it; out of any fight nothing waits; back from
  *                           the lobby inside the guard, the same body where it stands; a shutdown banks it alive.
+ *  36. THE GUARD'S REVIEW    (of 6e6dfa0) the empty server's close (ServerEmpty) lets the guard finish, any other close
+ *                           banks as it stands; the backstop banks before it writes; verbs queued before the departure
+ *                           are dropped; a tick that throws does not hold the body; LOCK_WAIT covers the guard.
  *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs, plus the small fake Roblox below.
  */
@@ -589,8 +592,28 @@ function bootServer({ privateServer = false } = {}) {
 			const hours = seconds * DESIGN.TIME_SPEED * 1.2;
 			server.sim.clock.setClock(6 - hours);
 		},
-		shutdown() {
-			for (const fn of env.closers) runThread(fn, []);
+		/**
+		 * The BindToClose callbacks, with Roblox's CloseReason (none by default). `engineRuns`: the engine keeps running
+		 * while they yield -- every task.wait inside them runs that many frames of the fake (Heartbeat, timers) and
+		 * returns -- instead of abandoning the thread; the answer is the seconds they waited that way.
+		 */
+		shutdown(reason, engineRuns = false) {
+			const realWait = globalThis.task.wait;
+			let waited = 0;
+			if (engineRuns) {
+				globalThis.task.wait = (sec = 0) => {
+					const dt = Math.max(1 / 60, sec ?? 0);
+					server.run(dt);
+					waited += dt;
+					return dt;
+				};
+			}
+			try {
+				for (const fn of env.closers) runThread(fn, reason === undefined ? [] : [reason]);
+			} finally {
+				globalThis.task.wait = realWait;
+			}
+			return waited;
 		},
 		/** every `onWorldWiped` report, through the keeper's own hook (chained, the host still logs) */
 		wipes() {
@@ -4701,6 +4724,211 @@ section("35) the combat-log guard: a body in a fight stays 5 s behind the player
 				stored.runOver === false,
 			"(g) a shutdown in the guard banks the body as it stands (alive), and the BindToClose writes it",
 			`hp ${f1(hp)}, stored ${f1(stored?.runHp)}, runOver ${stored?.runOver}`,
+		);
+	}
+});
+
+// ================================================================ 36: the review of 6e6dfa0
+
+/*
+ * The guard review of 6e6dfa0 (save integrity clean; these each came with a probe that reproduced them):
+ *   (a) HIGH  the LAST player quits mid-bite: the empty server closes a moment later (CloseReason.ServerEmpty) and the
+ *             shutdown used to bank the body as it stood -- alive, whatever the bites were about to do (Play solo, a
+ *             private town of one, the last one on a public server). Now the host keeps ticking until the guard lets it
+ *             go (at most LINGER_S + 0.5 s, inside SHUTDOWN_BUDGET); any other reason still banks it as it stands.
+ *   (b) LOW   the backstop (LINGER_S + 2 s) wrote the save from BEFORE the bank when a hitch let it run first: it banks
+ *             the body first now, then writes.
+ *   (c) LOW   backpack verbs queued before the departure (kits with an `atSeq` still ahead) were played out in the guard.
+ *   (d) LOW   the guard ended inside the tick: a tick that kept throwing held the body (and its final write) until the
+ *             backstop. It runs apart, before the tick.
+ *   (e) LOW   LOCK_WAIT covers the guard's longest hold on a last write (15 + LINGER_S + the backstop).
+ */
+section("36) the review of 6e6dfa0: the empty server, the backstop, queued verbs, a throwing tick, LOCK_WAIT", () => {
+	// each boot loads the modules again (a new server process): read them from the boot at hand (as 35)
+	const mod = rel => require(join(SRC, rel));
+	const LINGER_S = 5;
+	const lockOf = userId => fakeStore(mod("server/save/stores.ts").SAVE_STORE).data.get(String(userId))?.lock;
+	const biters = (s, sp, n = 2, dist = 34) => {
+		const { createZombie } = mod("shared/game/entities.ts");
+		const Brain = mod("shared/sim/ai/zombieBrain.ts");
+		for (let i = 0; i < n; i++) {
+			const a = (i / n) * Math.PI * 2;
+			const z = createZombie(1, sp.state.x + Math.cos(a) * dist, sp.state.y + Math.sin(a) * dist, 5);
+			z.detect = true;
+			Brain.seedHunt(z, sp.state.x, sp.state.y);
+			s.sim.horde.zombies.push(z);
+		}
+	};
+	const clearHorde = s => {
+		s.sim.horde.zombies.length = 0;
+	};
+
+	// (a) the last player quits mid-bite; the empty server closes 1 s later
+	for (const reason of [Enum.CloseReason.ServerEmpty, Enum.CloseReason.DeveloperShutdown]) {
+		const s = bootServer();
+		const uid = newUser();
+		const p = s.join(uid, "solo");
+		const sp = s.enter(p);
+		s.sim.clock.setClock(12, 3);
+		clearHorde(s);
+		biters(s, sp, 2);
+		s.run(0.3);
+		sp.state.hp = 40;
+		s.quit(p);
+		s.run(1);
+		const hpAtClose = sp.state.hp;
+		const waited = s.shutdown(reason, true);
+		const stored = s.stored(uid);
+		if (reason === Enum.CloseReason.ServerEmpty) {
+			check(
+				sp.state.dead &&
+					stored?.runOver === true &&
+					waited <= LINGER_S + 0.5 + 0.2 &&
+					lockOf(uid) === undefined,
+				"(a) the last one quits mid-bite and the EMPTY server closes a second later: the host ticks on until the guard " +
+					"lets the body go -- it dies of the bites, and that is what is written (not an escape)",
+				`dead ${sp.state.dead}, stored runOver ${stored?.runOver}, the close waited ${f1(waited)} s (at most ${LINGER_S + 0.5})`,
+			);
+		} else {
+			check(
+				!sp.state.dead &&
+					stored?.runOver === false &&
+					Math.abs((stored?.runHp ?? -1) - Math.floor(hpAtClose)) <= 1 &&
+					waited === 0,
+				"(a) any other close (an update, a developer's shutdown) is the server's doing: banked alive as it stands, no wait",
+				`stored runHp ${stored?.runHp} (hp at the close ${f1(hpAtClose)}), runOver ${stored?.runOver}, waited ${waited} s`,
+			);
+		}
+	}
+	// (a) an empty server with nobody in the guard closes without waiting
+	{
+		const s = bootServer();
+		const uid = newUser();
+		const p = s.join(uid, "calm");
+		s.enter(p);
+		clearHorde(s);
+		s.run(0.3);
+		s.quit(p);
+		const waited = s.shutdown(Enum.CloseReason.ServerEmpty, true);
+		check(
+			waited === 0 && lockOf(uid) === undefined,
+			"(a) ...and with nobody in the guard it closes at once",
+			`${waited} s`,
+		);
+	}
+
+	// (b) a 6.5 s hitch: the backstop and the heartbeat land in the same frame, the backstop first
+	{
+		const s = bootServer();
+		const w = s.join(newUser(), "witness");
+		s.immortal.add(w);
+		s.enter(w);
+		const uid = newUser();
+		const p = s.join(uid, "hitch");
+		const sp = s.enter(p);
+		sp.state.hpMax = 400;
+		sp.state.hp = 400;
+		clearHorde(s);
+		biters(s, sp, 4, 30);
+		s.run(0.4);
+		s.quit(p);
+		s.run(1);
+		sp.state.hp = 2;
+		s.beat(6.5);
+		s.run(0.5);
+		const stored = s.stored(uid);
+		const banked = sp.state.dead ? 0 : Math.floor(sp.state.hp);
+		check(
+			stored?.runOver === sp.state.dead && stored?.runHp === banked && lockOf(uid) === undefined,
+			"(b) a hitch lets the backstop run before the guard's end: it banks the body first, and the write carries it",
+			`banked hp ${banked}, dead ${sp.state.dead}; stored runHp ${stored?.runHp} (0 = the save from before the bank), ` +
+				`runOver ${stored?.runOver}`,
+		);
+	}
+
+	// (c) eight kits queued ahead of the command stream, then the quit
+	{
+		const s = bootServer();
+		const w = s.join(newUser(), "witness");
+		s.immortal.add(w);
+		s.enter(w);
+		const uid = newUser();
+		const p = s.join(uid, "medic");
+		const save = s.save(p);
+		save.invenUse[5] = 8;
+		const sp = s.enter(p);
+		sp.state.hpMax = 400;
+		sp.state.hp = 400;
+		clearHorde(s);
+		biters(s, sp, 2);
+		s.run(0.4);
+		sp.state.hp = 60;
+		for (let n = 1; n <= 8; n++) s.verb(p, s.P.IntentKind.UseItem, 5, (sp.lastSeq + 200) & 0xffff, n);
+		s.quit(p);
+		const lingering = s.host.lingering(uid);
+		let highest = sp.state.hp;
+		for (let i = 0; i < 60 * (LINGER_S - 0.2); i++) {
+			s.beat();
+			if (sp.state.hp > highest) highest = sp.state.hp;
+		}
+		check(
+			lingering && save.invenUse[5] === 8 && highest <= 60,
+			"(c) verbs queued before the departure are dropped (and answered), not played out in the guard",
+			`${8 - save.invenUse[5]} kit(s) used, hp at most ${f1(highest)} (60 at the quit)`,
+		);
+	}
+
+	// (d) every tick throws: the guard still ends on time, apart from it
+	{
+		const s = bootServer();
+		const w = s.join(newUser(), "witness");
+		s.immortal.add(w);
+		s.enter(w);
+		const uid = newUser();
+		const p = s.join(uid, "broken tick");
+		const sp = s.enter(p);
+		sp.state.hpMax = 400;
+		sp.state.hp = 400;
+		clearHorde(s);
+		biters(s, sp, 2);
+		s.run(0.4);
+		s.quit(p);
+		const realAdvance = s.sim.advance;
+		s.sim.advance = () => {
+			throw new Error("injected tick failure");
+		};
+		let released = -1;
+		let t = 0;
+		try {
+			while (t < LINGER_S + 1.5) {
+				try {
+					s.beat();
+				} catch {
+					// the harness reports a failed tick by throwing after the frame: the frame ran
+				}
+				t += 1 / 60;
+				if (released < 0 && lockOf(uid) === undefined) released = t;
+			}
+		} finally {
+			s.sim.advance = realAdvance;
+		}
+		check(
+			released >= LINGER_S - 0.1 && released <= LINGER_S + 0.2 && !s.host.lingering(uid),
+			"(d) a tick that throws every frame does not hold the body: the guard ends on time, and the last write with it " +
+				"(not at the backstop, 2 s later)",
+			`the lock went ${f1(released)} s after the quit`,
+		);
+	}
+
+	// (e) the join's lock wait covers the guard's longest hold on a last write
+	{
+		const { readFileSync } = require("node:fs");
+		const main = readFileSync(join(SRC, "server/main.server.ts"), "utf8");
+		check(
+			/const LOCK_WAIT = 15 \+ LINGER_S \+ GUARD_BACKSTOP_S;/.test(main) &&
+				/task\.delay\(LINGER_S \+ GUARD_BACKSTOP_S,/.test(main),
+			"(e) LOCK_WAIT = 15 + LINGER_S + the backstop: a quit mid-bite followed by a join elsewhere loads the save " +
+				"written after the guard",
 		);
 	}
 });

@@ -93,6 +93,9 @@
  *                              leaving inside the window ends it at the last departure (leaving is declining, MP-22 --
  *                              it used to close the window as if the world were merely empty, and the lost world went
  *                              on for the next player); the first leaving standing with only a dead one left opens it.
+ *  23. A RESTART IN THE GUARD  (review of 6e6dfa0) MP-26's restart commits while the combat-log guard holds a body: it
+ *                              leaves the old town as its player did -- a quit owed the new life, a Home given it --
+ *                              instead of standing on into the day-1 town with its day-12 life.
  *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs, plus the small fake Roblox below (the
  * same one tools/test-body.mjs uses).
@@ -3145,6 +3148,92 @@ section("22) nobody is the host: the world ends when nobody is left alive, never
 		}
 	}
 });
+
+// ================================================================ 23: a restart while the guard holds a body
+
+/*
+ * The review of 6e6dfa0, MEDIUM: MP-26's Restart town committed while the combat-log guard still held a body in the old
+ * streets. The body stood on into the day-1 town with its old life (a day-12 life), because it was in the world with no
+ * session behind it: neither reborn nor owed. Now every guarded body leaves the old town at the commit, the way its
+ * player did, BEFORE the fallen are counted: a quit is a departure owed the new life (granted when the save is back on
+ * this server), a Home a kept body that is given it at once.
+ */
+section(
+	"23) a restart while the guard holds a body: it leaves the old town as its player did, and gets the new life",
+	() => {
+		const { createZombie } = require(join(SRC, "shared/game/entities.ts"));
+		const LINGER_S = 5;
+		for (const how of ["quit", "home"]) {
+			const s = bootServer();
+			const keeper = s.join(newUser(), "keeper");
+			s.enter(keeper);
+			s.host.playerOf(keeper).state.godMode = true;
+			const uid = newUser();
+			const p = s.join(uid, "leaver");
+			const save = s.save(p);
+			save.day = 12;
+			save.lifeNights = 11;
+			const sp = s.enter(p);
+			sp.state.hpMax = 400;
+			sp.state.hp = 400;
+			sp.state.godMode = false;
+			s.sim.horde.zombies.length = 0;
+			for (let i = 0; i < 2; i++) {
+				const z = createZombie(1, sp.state.x + 34 * Math.cos(i * 3), sp.state.y + 34 * Math.sin(i * 3), 5);
+				z.detect = true;
+				s.sim.horde.zombies.push(z);
+			}
+			s.run(0.4);
+			if (how === "quit") s.quit(p);
+			else s.exit(p);
+			const lingering = s.host.lingering(uid);
+			const started = s.host.restartTown(keeper.UserId);
+			s.run(0.2);
+			const stillHeld = s.host.lingering(uid);
+			const inTown = s.sim.players().some(x => x.userId === uid);
+			s.sim.horde.zombies.length = 0;
+			s.run(LINGER_S + 1);
+			const tag = how === "quit" ? "(quit mid-bite)" : "(Home mid-bite)";
+			if (how === "quit") {
+				// read now: the load below grants the debt and clears it
+				const owed = s.host.lives.records.get(uid)?.newLifeOwed === true;
+				const p2 = s.join(uid, "leaver");
+				const back = s.save(p2);
+				const body = s.enter(p2);
+				check(
+					lingering &&
+						started === "started" &&
+						!stillHeld &&
+						!inTown &&
+						owed &&
+						back?.day === 1 &&
+						body !== undefined &&
+						!body.state.dead,
+					`${tag} the restart takes the guarded body out of the old town as a departure: owed the new life, and back on ` +
+						"this server it is day 1 in the day-1 town",
+					`held at the quit ${lingering}, after the commit ${stillHeld}, in the new town ${inTown}, owed ${owed}; back: ` +
+						`life day ${back?.day}, town day ${s.sim.clock.day}`,
+				);
+			} else {
+				const body = s.enter(p);
+				check(
+					lingering &&
+						started === "started" &&
+						!stillHeld &&
+						!inTown &&
+						save.day === 1 &&
+						save.lifeNights === 0 &&
+						body !== undefined &&
+						!body.state.dead,
+					`${tag} the restart takes the guarded body out as a kept body in the lobby, and gives it the new life at once: ` +
+						"day 1 on the next entry",
+					`held at Home ${lingering}, after the commit ${stillHeld}, in the new town ${inTown}; life day ${save.day}, ` +
+						`town day ${s.sim.clock.day}`,
+				);
+			}
+		}
+	},
+);
 
 // ================================================================
 

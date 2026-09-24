@@ -73,6 +73,9 @@
  *   (l) the review of 577c729, M1: loss bursts of 350 and 400 ms on the Snap stream, strict (no allowance for the end of
  *       an extrapolation): no body blinks (alpha >= 0.8), none restarts, none jumps. Before: every track restarted at
  *       alpha 0 (the horde blinked to 0.05); dropping only the history jumped 43 u in one frame, keeping it snapped 29.5 u.
+ *   (m) the review of 6e6dfa0: a 1.6 s silence of the whole stream with the same walkers -- more than one walk can
+ *       catch up with. No bridge may owe more than BRIDGE_MAX_U (64 u): a body that would is started again where it
+ *       is, faded in, instead of sliding ~100 u for most of a second; strict, no frame over the body's own speed.
  *   (h) also checks L4: a moved body's rewind history (combat.history) goes with its old identity.
  * Root cause: the population put a wave walker or a special left behind back on the survivor's ring under the SAME
  * netId (shared/sim/ai/population.ts `cleanup`), and every screen that still had it interpolated it across the town.
@@ -694,6 +697,8 @@ function run(scn, profileName) {
 		relocInView,
 		restarts: cl.snapshots.stats().restarts ?? 0,
 		bridged: cl.snapshots.stats().bridged ?? 0,
+		bridgeCapped: cl.snapshots.stats().bridgeCapped ?? 0,
+		bridgeMax: cl.snapshots.stats().bridgeMax ?? 0,
 		viewW,
 		viewH,
 		zombiesEnd: horde.zombies.length,
@@ -1016,6 +1021,8 @@ const FADE_SNAP_ALPHA = 0.1;
 const SCREEN_MARGIN = 40;
 /** (l): the alpha a body that had fully appeared may dip to in a loss burst (M1: no blink) */
 const ALPHA_FLOOR = 0.8;
+/** (l), (m): the most a bridge may owe (client/net/snapshotBuffer.ts BRIDGE_MAX_U, review of 6e6dfa0) */
+const BRIDGE_MAX_U = 64;
 /** (h): at most this share of the relocated bodies may land on the 1920 x 1080 screen (§3.5 "Limpeza") */
 const SPAWN_IN_VIEW_MAX_PCT = 10;
 
@@ -1334,6 +1341,37 @@ const SCENARIOS = {
 		},
 		input: still,
 	},
+	/*
+	 * (m) The review of 6e6dfa0: the bridge of (l) has a ceiling. A 1.6 s silence of the whole stream leaves each walker
+	 * ~80-100 u from where it was held: eased at 150 u/s it would slide for most of a second, drawn where the server
+	 * no longer has it. Past BRIDGE_MAX_U the track starts again, faded in, where the body is; the short burst before it
+	 * is still one walk.
+	 */
+	m: {
+		title: "(m) um silencio de 1,6 s no Snap: nenhuma ponte deve mais que 64 u (quem deveria recomeca, aparecendo aos poucos)",
+		seconds: 9,
+		warmup: 1,
+		viewW: 1920,
+		viewH: 1080,
+		profiles: ["clean", "wan"],
+		ownVerdict: true,
+		speedCheck: true,
+		strictSpeed: true,
+		bridgeCap: true,
+		lossBursts: [
+			[2.5, 0.35],
+			[5, 1.6],
+		],
+		setup: ({ sx, sy }) => {
+			const out = [];
+			for (let i = 0; i < 6; i++) {
+				const a = (i / 6) * TAU + 0.3;
+				out.push(hunter(1, sx + Math.cos(a) * 700, sy + Math.sin(a) * 480, sx, sy));
+			}
+			return out;
+		},
+		input: still,
+	},
 	k: {
 		title: "(k) o servidor move um corpo 670 u sem trocar o netId (a guarda do cliente)",
 		seconds: 6,
@@ -1565,6 +1603,26 @@ for (const [tag, { sp, res, scn }] of Object.entries(speeds)) {
 			`${tag}: nenhuma trilha recomeca (a lacuna e do fluxo inteiro, nao de um corpo)`,
 			res.restarts === 0 && res.bridged > 0,
 			`${res.restarts} recomecos, ${res.bridged} trilhas mantidas como uma caminhada`,
+		);
+	}
+	if (scn.alphaCheck === true) {
+		check(
+			`${tag}: nenhuma ponte chega ao teto (ela nunca deve mais que ${BRIDGE_MAX_U} u numa rajada curta)`,
+			res.bridgeCapped === 0 && res.bridgeMax <= BRIDGE_MAX_U,
+			`a maior ${res.bridgeMax.toFixed(1)} u, ${res.bridgeCapped} no teto`,
+		);
+	}
+	if (scn.bridgeCap === true) {
+		check(
+			`${tag}: nenhuma ponte deve mais que ${BRIDGE_MAX_U} u; quem deveria recomeca onde esta, aparecendo aos poucos`,
+			res.bridgeMax <= BRIDGE_MAX_U && res.bridgeCapped > 0 && res.restarts >= res.bridgeCapped,
+			`a maior mantida ${res.bridgeMax.toFixed(1)} u, ${res.bridgeCapped} recomecadas no teto, ` +
+				`${res.bridged} pontes ao todo, ${res.restarts} recomecos`,
+		);
+		check(
+			`${tag}: a rajada curta antes dela continua uma caminhada (pontes mantidas)`,
+			res.bridged > res.bridgeCapped && res.bridgeMax > 0,
+			`${res.bridged - res.bridgeCapped} mantidas, a maior ${res.bridgeMax.toFixed(1)} u`,
 		);
 	}
 	if (scn.restartExpected !== undefined) {
