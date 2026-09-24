@@ -29,7 +29,8 @@ export type PixelIconKind =
 	| "grave"
 	| "heart"
 	| "restart"
-	| "home";
+	| "home"
+	| "save";
 
 /** bitmap side (pixels) */
 const N = 9;
@@ -215,6 +216,18 @@ const BITMAPS: Record<PixelIconKind, Array<string>> = {
 		".##...##.",
 		".##...##.",
 		".##...##.",
+	],
+	// a floppy disk: the cut corner, the metal shutter with its slot, the label (SAV-01's save indicator)
+	save: [
+		"########.",
+		"##.....##",
+		"##...#.##",
+		"##.....##",
+		"#########",
+		"#########",
+		"#.......#",
+		"#.......#",
+		"#########",
 	],
 };
 

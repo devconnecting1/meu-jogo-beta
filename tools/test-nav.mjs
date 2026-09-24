@@ -250,7 +250,7 @@ const SCREENS = [
 		phase: "playing",
 		root: "Menu",
 		control: "Btn0",
-		open: done => showPause(ctx, 0, { onResume: done, onSave: noop, onHome: noop, onShop: noop, onSettings: noop }),
+		open: done => showPause(ctx, 0, { onResume: done, onHome: noop, onShop: noop, onSettings: noop }),
 	},
 	{
 		name: "Bag",
@@ -562,7 +562,7 @@ ctx.phase = "playing";
 	input.beginFrame();
 	flush();
 
-	const close = showPause(ctx, 0, { onResume: noop, onSave: noop, onHome: noop, onShop: noop, onSettings: noop });
+	const close = showPause(ctx, 0, { onResume: noop, onHome: noop, onShop: noop, onSettings: noop });
 	flush();
 	tap(pad("ButtonStart"));
 	const startCloses = input.pausePressed;
@@ -570,10 +570,28 @@ ctx.phase = "playing";
 	close();
 	flush();
 	check("Menu da partida pelo controle: Start (que o abriu) chega ao jogo, que o fecha", startCloses === true);
+	// SAV-01: saving is automatic -- the Menu the pad walks through has no Save row
+	{
+		const c = showPause(ctx, 0, { onResume: noop, onHome: noop, onShop: noop, onSettings: noop });
+		flush();
+		const menu = layer.FindFirstChild("Menu");
+		const rows = menu.GetDescendants().filter(d => d.ClassName === "TextButton" && /^Btn\d$/.test(d.Name));
+		const labels = rows.map(b => b.FindFirstChild("Label")?.Text ?? b.Text);
+		const saves = menu
+			.GetDescendants()
+			.filter(d => (d.ClassName === "TextLabel" || d.ClassName === "TextButton") && d.Text === "Save");
+		c();
+		flush();
+		check(
+			"SAV-01: o Menu da partida tem 4 linhas (Back to game, Shop, Settings, Home) e nenhum Save",
+			labels.join(" | ") === "Back to game | Shop | Settings | Home" && saves.length === 0,
+			labels.join(" | "),
+		);
+	}
 	// the key on the Menu's title strip is the one that opens it on THIS device, as the HUD's Menu plate says
 	// (SCHEMES): P on a keyboard, Start on a pad, none on a touch screen (its MENU is a button, not a key)
 	const keyOnMenu = () => {
-		const c = showPause(ctx, 0, { onResume: noop, onSave: noop, onHome: noop, onShop: noop, onSettings: noop });
+		const c = showPause(ctx, 0, { onResume: noop, onHome: noop, onShop: noop, onSettings: noop });
 		flush();
 		const hint = findIn(layer.FindFirstChild("Menu"), "KeyHint");
 		const text = hint === undefined ? undefined : findIn(hint, "Text")?.Text;
@@ -1502,11 +1520,7 @@ function textsIn(root, where) {
 		"PopupOverlay",
 	);
 	ctx.phase = "playing";
-	visit(
-		"Menu",
-		() => showPause(ctx, 0, { onResume: noop, onSave: noop, onHome: noop, onShop: noop, onSettings: noop }),
-		"Menu",
-	);
+	visit("Menu", () => showPause(ctx, 0, { onResume: noop, onHome: noop, onShop: noop, onSettings: noop }), "Menu");
 	// the death screen (gameOver.ts, UI-13): its four epitaphs (a record, five days, a first death, the rest), with and
 	// without the coins for a Rebirth, and every state of the wait -- somebody standing (one, two), by day, the town
 	// falling, the town's window run out, a new life waiting, the count at zero

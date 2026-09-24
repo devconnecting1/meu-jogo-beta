@@ -54,8 +54,7 @@ import { LobbyHandle, LobbyPage, LobbyStatus, RunState, showLobby } from "./ui/l
 import * as Flyover from "./view/townFlyover";
 import { actionErrorText, showShop } from "./ui/shop";
 import { showWardrobe } from "./ui/wardrobe";
-import { startTitleNotices } from "./ui/titleNotice";
-import { startAchievementNotices } from "./ui/achievementNotice";
+import { startServerNotices } from "./ui/serverNotices";
 import { showSettings } from "./ui/settings";
 import { showCredits } from "./ui/credits";
 import { showTutorial } from "./ui/tutorial";
@@ -76,6 +75,8 @@ import { AdminHooks, startAdmin } from "./admin/adminClient";
  * - after a game over the run can only continue with a paid Rebirth (server) or restart at day 1 (New game)
  * - progress is reported to the server every 60 s, on a new day, on a boss kill, on death and when
  *   leaving the run; nothing is reported before the server's LoadAck was adopted
+ * - saving is automatic only (DESIGN_RULES SAV-01): there is no Save button, and a report is never a write -- the
+ *   server writes on its own schedule and tells the corner indicator (client/ui/saveIndicator.ts)
  */
 
 const RunService = game.GetService("RunService");
@@ -247,7 +248,7 @@ net.onLoad(info => {
 	if (ctx.phase !== "boot") goLobby(lobbyNav.handle !== undefined ? lobbyNav.page : "menu");
 });
 
-net.onSaveAck((ack, manual) => {
+net.onSaveAck(ack => {
 	if (ack.ok) {
 		if (ack.earned > 0) {
 			const parts: Array<string> = [];
@@ -255,14 +256,8 @@ net.onSaveAck((ack, manual) => {
 			if (ack.earnedBosses > 0) parts.push(`${tr("Boss defeated")} ×${ack.earnedBosses}`);
 			toast(ctx, `+${fmtInt(ack.earned)} $   ${parts.join("  ·  ")}`, "coin");
 		}
-		if (manual) {
-			if (net.savingPersistent()) toast(ctx, tr("Progress saved"), "success");
-			else toast(ctx, tr("Saving is unavailable in this environment"), "error");
-		}
 	} else if (ack.reason === "readonly" || ack.reason === "stale") {
 		toast(ctx, `${tr("Could not save")}: ${tr("Progress not loaded")}`, "error");
-	} else if (manual) {
-		toast(ctx, tr("Could not save"), "error");
 	}
 });
 
@@ -608,10 +603,6 @@ function openPause(): void {
 		0,
 		{
 			onResume: closePause,
-			onSave: () => {
-				if (net.requestSave("manual")) toast(ctx, tr("Saving..."));
-				else toast(ctx, offlineNote() ?? tr("Could not save"), "error");
-			},
 			onHome: goLobby,
 			onShop: () => {
 				stopGame();
@@ -921,9 +912,8 @@ function onTown(notice: TownNotice): void {
 
 netOnTown(onTown);
 // MON-05: "Title unlocked: [Survivor]" the moment the server grants one; CON-04: "Achievement unlocked" the moment
-// the server's counter reaches its goal
-startTitleNotices(ctx);
-startAchievementNotices(ctx);
+// the server's counter reaches its goal; SAV-01: "Saving..." / "Saved" in the corner when the server writes the save
+startServerNotices(ctx);
 
 function resumeRun(): void {
 	clearScreen();

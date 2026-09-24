@@ -413,15 +413,18 @@ export const LANG_TABLE: Array<string> = [
 	"Retry",
 	"Play without saving",
 	"Saving is unavailable in this environment",
-	"Progress saved",
+	// SAV-01: saving is automatic only (no Save button); the corner indicator says what the server's writes did
+	// (client/ui/saveIndicator.ts)
 	"Saving...",
+	"Saved",
+	"Progress not saved — retrying",
+	"Progress not saved",
 	"Could not save",
 	"Welcome, survivor! Here are 20 coins to start",
 	// the in-run menu (P / Start / the menu button). DESIGN_RULES UI-06: no menu pauses the world, so no text
 	// may say it does -- no "Paused" title, no "Resume", no "(pauses)" (tools/test-contrast.mjs checks).
-	// "Menu" and "Backpack" are already listed (the settings' Controls tab)
+	// "Menu" and "Backpack" are already listed (the settings' Controls tab). No "Save": saving is automatic (SAV-01)
 	"Back to game",
-	"Save",
 	"Home",
 	"Game over",
 	// the death screen's epitaph (client/onboarding/gameOver.ts `epitaph`), one of four: the first is the first death's

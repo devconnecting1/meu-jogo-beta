@@ -58,13 +58,17 @@
  *     pixel of it under the key badge, one side for every weapon that the screen pixels carry evenly (16 / 24 / 32 /
  *     40 / 48 px...) with every Frame and the image on whole pixels (Pixelated), no Instance while weapons change,
  *     and a resize re-fits it in place. Pictures of the same drawing: node tools/render-hotbar.mjs --out <dir>.
+ *  8. the save indicator (DESIGN_RULES SAV-01, client/ui/saveIndicator.ts): built on the first notice, its words and
+ *     theme colours per state, in the Roblox top bar right of its buttons (under the bar when it has no free stretch)
+ *     and covering nothing of the HUD, taking no input; "Saved" holds then fades (Reduce Motion: it just goes), the
+ *     failure stays until a write lands; 400 notices and 3000 frames create no Instance, and a still frame writes nothing.
  *
  * Pure Node (>= 18) plus the project's TypeScript.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { installUiShims } from "./ui-shim.mjs";
-import { layoutGame, paintList, rectOf } from "./ui-layout.mjs";
+import { layoutGame, paintList, rectOf, shown } from "./ui-layout.mjs";
 import { rasterPaint } from "./ui-raster.mjs";
 import { decodePNG } from "./png-lite.mjs";
 
@@ -1964,6 +1968,167 @@ console.log("\n7) o icone no ladrilho: no meio do que sobra, longe da tecla e da
 	hud.unmount();
 	setIconAtlas("");
 	own([AXE, PISTOL]);
+}
+
+// ---------------------------------------------------------------- 8) the save indicator (SAV-01)
+
+console.log('\n8) o indicador de save (SAV-01): "Saving..." / "Saved" no canto, a falha dita, sem churn\n');
+{
+	const SI = require(join(SRC, "client/ui/saveIndicator.ts"));
+	const { topBar } = require(join(SRC, "client/ui/skin.ts"));
+	const gs = service("GuiService");
+	const uiG = ctx.uiGui;
+	setViewport(1365, 567, 58, 160);
+	ctx.phase = "playing";
+	const hud = new Hud(ctx);
+	hud.mount();
+	const ind = new SI.SaveIndicator(ctx.uiLayer, () => 0);
+	const offBefore = uiG.Enabled === false;
+	const built = phase("indicador: o primeiro aviso (constroi)", () => ind.show("saving"));
+	layoutGame(ui, ctx);
+	const root = ind.frame();
+	const label = deep(root, "Text");
+	const chip = deep(root, "Chip");
+	const pixels = (deep(root, "Icon")?.GetChildren() ?? []).filter(f => f.ClassName === "Frame");
+	check(
+		"o primeiro aviso monta o chip (uma vez) e liga a ScreenGui dos menus; antes dele nada existia",
+		built.created > 0 && offBefore && uiG.Enabled === true && ind.shown() === "saving",
+		`${cost(built)}`,
+	);
+	// the words and the colours of each state, from lang.ts and the theme
+	const looks = {};
+	for (const state of ["saving", "saved", "failing", "stopped"]) {
+		ind.show(state);
+		layoutGame(ui, ctx);
+		looks[state] = {
+			text: label.Text,
+			color: label.TextColor3,
+			icon: pixels[0]?.BackgroundColor3,
+			w: Math.round(rectOf(root).w),
+		};
+	}
+	check(
+		'os textos: "Saving...", "Saved", "Progress not saved — retrying", "Progress not saved"',
+		looks.saving.text === "Saving..." &&
+			looks.saved.text === "Saved" &&
+			looks.failing.text === "Progress not saved — retrying" &&
+			looks.stopped.text === "Progress not saved",
+		Object.values(looks)
+			.map(l => l.text)
+			.join(" | "),
+	);
+	check(
+		"as cores sao do tema: gravando em cinza mudo, gravado com o disquete verde, a falha em vermelho",
+		sameColor(looks.saving.color, THEME.mutedForeground) &&
+			sameColor(looks.saved.color, THEME.foreground) &&
+			sameColor(looks.saved.icon, GAME.success) &&
+			sameColor(looks.failing.color, THEME.destructive) &&
+			sameColor(looks.failing.icon, THEME.destructive) &&
+			chip !== undefined &&
+			pixels.length > 0,
+		`${pixels.length} Frames no disquete`,
+	);
+	check(
+		"o aviso de falha cabe no chip largo: o chip cresce para ele e volta ao tamanho curto no Saved",
+		looks.failing.w > looks.saved.w && looks.stopped.w === looks.failing.w,
+		`${looks.saved.w} / ${looks.failing.w} px`,
+	);
+
+	// where: in the top bar, right of the Roblox buttons -- a strip the HUD never uses
+	ind.show("saved");
+	layoutGame(ui, ctx);
+	const bar = topBar();
+	const r = rectOf(root);
+	check(
+		"1365 x 567 (barra de 58 px, botoes nos 160 px): o chip fica NA barra, a direita dos botoes, nunca sob eles",
+		r.x >= bar.freeMin && r.x + r.w <= bar.freeMax && r.y >= 0 && r.y + r.h <= bar.h,
+		`x ${Math.round(r.x)}..${Math.round(r.x + r.w)}, y ${Math.round(r.y)}..${Math.round(r.y + r.h)}, barra ${bar.h} px, livre desde ${bar.freeMin}`,
+	);
+	const overlaps = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+	/** a GuiObject that puts something on screen (the HUD's full-screen holders are transparent and draw nothing) */
+	const draws = d =>
+		(d.BackgroundTransparency ?? 1) < 1 ||
+		(typeof d.Text === "string" && d.Text !== "" && d.TextTransparency < 1) ||
+		(typeof d.Image === "string" && d.Image !== "" && (d.ImageTransparency ?? 0) < 1);
+	const covered = hudRoot()
+		.GetDescendants()
+		.filter(d => d.IsA("GuiObject") && shown(d) && d.AbsoluteSize.X > 0 && draws(d) && overlaps(rectOf(d), r));
+	check("...e nao cobre nada da HUD da partida", covered.length === 0, covered.map(d => d.Name).join(", ") || "nada");
+	check(
+		"nao bloqueia: nao recebe clique nem foco, e fica acima dos menus (e do flash) e abaixo dos toasts",
+		root.Active === false &&
+			root.GetDescendants().every(d => d.ClassName !== "TextButton" && d.ClassName !== "ImageButton") &&
+			root.ZIndex > 350 &&
+			root.ZIndex < 1000,
+		`ZIndex ${root.ZIndex}`,
+	);
+	// no free stretch in the bar reported: just under it, at the left
+	setViewport(1120, 630, 36);
+	layoutGame(ui, ctx);
+	const low = rectOf(root);
+	check(
+		"sem trecho livre na barra (TopbarInset sem folga): logo abaixo dela, a esquerda",
+		low.y >= 36 && low.y < 36 + 20 && low.x < 20,
+		`x ${Math.round(low.x)}, y ${Math.round(low.y)}`,
+	);
+	setViewport(1365, 567, 58, 160);
+
+	// "Saved" holds, then fades; the failure stays until a write lands
+	ind.show("saved");
+	ind.step(SI.SAVED_HOLD_S - 0.1);
+	const held = ind.shown() === "saved" && label.TextTransparency === 0;
+	ind.step(0.1 + SI.FADE_S / 2);
+	const fading = ind.shown() === "saved" && label.TextTransparency > 0 && label.TextTransparency < 1;
+	ind.step(SI.FADE_S);
+	flush();
+	const gone = ind.shown() === undefined && root.Visible === false && uiG.Enabled === false;
+	check(
+		`"Saved" fica ${SI.SAVED_HOLD_S} s, some em ${SI.FADE_S} s, e a ScreenGui dos menus volta a desligar`,
+		held && fading && gone,
+		`parado ${held}, sumindo ${fading}, sumiu ${gone}`,
+	);
+	ind.show("failing");
+	ind.step(600);
+	const stays = ind.shown() === "failing" && label.TextTransparency === 0;
+	ind.show("saving");
+	ind.show("saved");
+	check(
+		'"Progress not saved — retrying" fica na tela (10 min) ate uma gravacao dar certo; ai vira "Saved"',
+		stays && ind.shown() === "saved",
+	);
+	// Reduce Motion: no fade, the chip goes at once when its time is up
+	gs.ReducedMotionEnabled = true;
+	flush();
+	ind.show("saved");
+	ind.step(SI.SAVED_HOLD_S + 0.01);
+	const instant = ind.shown() === undefined && label.TextTransparency === 0;
+	gs.ReducedMotionEnabled = false;
+	flush();
+	check("com Reduzir Movimento nao ha esmaecimento: o chip some de uma vez", instant);
+
+	// no churn: 400 notices and 3000 frames create nothing
+	const states = ["saving", "saved", "saving", "failing", "saving", "saved", "stopped"];
+	const churn = phase("indicador: 400 avisos e 3000 quadros", () => {
+		for (let i = 0; i < 400; i++) {
+			ind.show(states[i % states.length]);
+			for (let f = 0; f < 7; f++) ind.step(1 / 60 + (f === 6 ? SI.SAVED_HOLD_S : 0));
+		}
+		for (let f = 0; f < 200; f++) ind.step(1 / 60);
+	});
+	check("400 avisos e 3000 quadros: nenhuma Instance criada nem destruida (UI-09)", zero(churn), cost(churn));
+	ind.show("failing");
+	const quiet = phase("indicador: 600 quadros parado", () => {
+		for (let f = 0; f < 600; f++) ind.step(1 / 60);
+	});
+	check("parado (a falha na tela), 600 quadros nao escrevem nada", quiet.writes === 0 && zero(quiet), cost(quiet));
+	// no contour on its text (UI-04)
+	check(
+		"sem contorno no texto (UI-04)",
+		label.TextStrokeTransparency === 1 && label.GetChildren().every(c => c.ClassName !== "UIStroke"),
+	);
+	root.Destroy();
+	hud.unmount();
+	flush();
 }
 
 // ---------------------------------------------------------------- report

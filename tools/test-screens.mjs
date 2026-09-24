@@ -1077,6 +1077,44 @@ function textFits(label) {
 	flush();
 }
 
+// SAV-01: the in-run menu without its Save row (saving is automatic) -- four rows, all inside the panel, the note under
+// the last one, and no "Save" anywhere on it
+{
+	setScreen(1365, 567, 58, 160);
+	const noop = () => {};
+	const close = showPause(
+		ctx,
+		0,
+		{ onResume: noop, onHome: noop, onShop: noop, onSettings: noop },
+		{ note: "Saving is unavailable in this environment" },
+	);
+	flush();
+	const menu = layer.FindFirstChild("Menu");
+	const panel = menu.FindFirstChild("Body").FindFirstChild("Panel");
+	const rows = panel.GetChildren().filter(c => /^Btn\d$/.test(c.Name));
+	const saves = menu.GetDescendants().filter(d => d.Text === "Save");
+	const p = rectOf(panel);
+	const inside = g => {
+		const r = rectOf(g);
+		return r.x >= p.x - 0.5 && r.y >= p.y - 0.5 && r.x + r.w <= p.x + p.w + 0.5 && r.y + r.h <= p.y + p.h + 0.5;
+	};
+	const note = panel.FindFirstChild("Note");
+	const last = rows[rows.length - 1];
+	check(
+		'SAV-01: o menu da partida sem o Save -- 4 linhas dentro do painel, a nota abaixo da ultima, nenhum "Save"',
+		rows.length === 4 &&
+			saves.length === 0 &&
+			rows.every(inside) &&
+			note !== undefined &&
+			inside(note) &&
+			rectOf(note).y >= rectOf(last).y + rectOf(last).h,
+		`${rows.length} linhas, painel ${fmt(p)}`,
+	);
+	close();
+	flush();
+	setScreen(1120, 630);
+}
+
 // source guards: what main.client.ts does (it does not load under Node)
 {
 	const main = readFileSync(join(SRC, "client/main.client.ts"), "utf8");

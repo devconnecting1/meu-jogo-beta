@@ -396,12 +396,13 @@ or play without saving."
 ,,,Retry
 ,,,Play without saving
 ,,,Saving is unavailable in this environment
-,,,Progress saved
 ,,,Saving...
+,,,Saved
+,,,Progress not saved — retrying
+,,,Progress not saved
 ,,,Could not save
 ,,,"Welcome, survivor! Here are 20 coins to start"
 ,,,Back to game
-,,,Save
 ,,,Home
 ,,,Game over
 ,,,A new record. The town remembers.
