@@ -142,6 +142,24 @@ export function pickTownSeed(previous: number, roll: () => number = () => rndInt
 }
 
 /**
+ * The seed of a server's FIRST town (the owner, 2026-09-24: "the map must be made when the player enters the match
+ * (if they entered alone/first) … generated exclusively by the server, as a seed"). The server is the one authority
+ * on its town: it picks a fresh seed at boot -- which, for the first survivor to arrive, is the same thing as picking
+ * it when they arrive -- and every later joiner gets that town; it changes only when the world ends (MP-22,
+ * `endWorld`) or the server shuts down. Until this, every server opened on DESIGN.TOWN_SEED: the same streets in
+ * every server, and a new town only after a world ended.
+ *
+ * `pinned` is a seed a developer set on the server itself (server/main.server.ts reads ServerStorage's
+ * TOWN_SEED_PIN_ATTRIBUTE, which no client can see or write): a town reproduced in Studio, and the node suites that
+ * play on the validated town. Anything that is not a whole 1 … TOWN_SEED_MAX is no pin. Nothing a client sends is
+ * ever an input here.
+ */
+export function bootTownSeed(pinned: unknown, roll?: () => number): number {
+	if (wholeIn(pinned, 1, TOWN_SEED_MAX)) return pinned;
+	return pickTownSeed(0, roll);
+}
+
+/**
  * The world `current` ends, as `report` (life.ts rule 6) says, and a new one begins — the five steps at the top of
  * this file, in that order. Returns what happened; nothing here waits for anything but `options.pace`, while the new
  * town is generated and before anything has changed.

@@ -24,16 +24,7 @@ import { GameLoop } from "./gameLoop";
 import { audio, gameAudio, playFootstep, startUiAudio } from "./audio";
 import { onFootstep } from "./view/footsteps";
 import * as Boot from "./boot";
-import {
-	netActive,
-	netEnterWorld,
-	netHosted,
-	netLeaveWorld,
-	netOnTown,
-	netPrewarm,
-	netTownSeed,
-	TownNotice,
-} from "./net/netClient";
+import { netActive, netEnterWorld, netHosted, netLeaveWorld, netOnTown, netPrewarm, TownNotice } from "./net/netClient";
 import {
 	attachRun,
 	DaybreakWait,
@@ -350,7 +341,8 @@ function lobbyStatus(): LobbyStatus {
 		run,
 		hosted,
 		clockDriven: loop.getRefs().daynight.serverDriven(),
-		seed: netTownSeed(),
+		// the SERVER's town (MP-24), or undefined until heard: the page colour behind the menus, never a guessed town
+		seed: Boot.knownTownSeed(),
 		fellOn: lobbyNav.fellOn,
 		offlineNote: offlineNote(),
 	};
@@ -363,7 +355,7 @@ function lobbyStatus(): LobbyStatus {
 function menuScreen(phase: GamePhase): void {
 	clearScreen();
 	setPhase(phase);
-	Flyover.pinFlyover(ctx.backdropLayer, netTownSeed());
+	Flyover.pinFlyover(ctx.backdropLayer, Boot.knownTownSeed());
 }
 
 /** `back` is where the shop's Back button goes: the lobby by default, or the suspended run when opened from the menu. */
@@ -1170,9 +1162,6 @@ function begin(): void {
 	showLogo(ctx.uiLayer, () => {
 		goLobby();
 	});
-	// the town behind the lobby (UI-10) is generated while the logo holds still (its fades end at 1.25 s, the lobby
-	// opens at 1.5 s), not when the lobby opens
-	task.delay(1.3, () => Flyover.prewarmTown(netTownSeed()));
 }
 
 // audio (src/client/audio): the mixer boots with the client, reads the Settings sliders straight from the
@@ -1201,6 +1190,9 @@ Bag.start();
 // F1: assina os remotes do host agora, nao no primeiro quadro da partida -- o servidor admite o jogador
 // assim que ele entra e ja comeca a mandar snapshot (client/net/netClient.ts: netPrewarm)
 netPrewarm();
+// MP-24: the town the SERVER runs, heard the moment this client joins -- generated a slice per frame behind the logo
+// (the lobby draws it; the match takes that very copy) and followed by the menus' flyover when a world ends
+Boot.startServerTown();
 task.delay(LOAD_FALLBACK_SEC, begin);
 
 print(`[${GAME_NAME}] client ready`);

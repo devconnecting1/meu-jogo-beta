@@ -145,7 +145,10 @@ export interface ReplicatorOptions {
 	tick0Time: number;
 	/** §4.5 map hash, so the client can check it generated the same town */
 	mapHash: number;
-	/** (MP-22) the seed the town was generated from; DESIGN.TOWN_SEED, the town every server opens with, if omitted */
+	/**
+	 * (MP-22, MP-24) the seed the town was generated from: the one the host picked (server/net/mpHost.ts always names
+	 * it). DESIGN.TOWN_SEED if omitted -- a harness's default only
+	 */
 	seed?: number;
 }
 

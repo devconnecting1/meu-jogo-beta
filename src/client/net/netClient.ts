@@ -883,9 +883,10 @@ export function netBindAdmin(flags: { noclip: boolean; frozen: boolean }): void 
 }
 
 /**
- * MP-22: the seed of the town the server runs — the one GameLoop.init builds. The last InitBegin or WorldReset this
- * client read; before either, the server's replicated attribute (a client that connected after a world ended and
- * has not entered it yet); failing that, or offline, the town every server opens with.
+ * MP-22 / MP-24: the seed of the town the server runs — the one GameLoop.init builds. The last InitBegin or WorldReset
+ * this client read; before either, the server's replicated attribute (what the lobby drew, client/boot/serverTown.ts).
+ * Offline, the client's own DESIGN.TOWN_SEED. Only a match entered before the attribute ever arrived falls back to it
+ * too: that is a guess, and the InitBegin of the entry corrects it (main.client.ts onTown rebuilds the town).
  */
 export function netTownSeed(): number {
 	if (MP_PHASE < 1) return DESIGN.TOWN_SEED;

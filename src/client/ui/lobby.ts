@@ -99,8 +99,11 @@ export interface LobbyStatus {
 	 * clock yet, but the server that publishes it is the one that revives).
 	 */
 	clockDriven?: boolean;
-	/** the town the player enters (MP-22: the server's seed); the flyover draws it */
-	seed: number;
+	/**
+	 * The town the player enters: the SERVER's seed (MP-24, client/boot/serverTown.ts `knownTownSeed`), which the flyover
+	 * draws; undefined while the client has not heard it (the page colour behind the menus, never a guessed town)
+	 */
+	seed?: number;
 	/** MP-22: the day the last town fell on, when this client saw it fall */
 	fellOn?: number;
 	/** why progress is not being saved (undefined = saving normally) */

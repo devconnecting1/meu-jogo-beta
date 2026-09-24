@@ -1736,14 +1736,20 @@ section("t) fortificar: barricada ou porta mirada numa janela ou num vao de pred
 
 section("u) a cidade gerada em fatias e a mesma: o servidor cede entre dois predios num reset (MP-22)");
 {
-	// server/net/mpHost.ts generates a world reset's town a slice per frame through `pace`; the town must not know
+	// server/net/mpHost.ts generates a world reset's town a slice per frame through `pace`, and the client's lobby does
+	// too (client/boot/townCache.ts, MP-24); the town must not know. `pace` runs after every building's interior and
+	// between two lots while the town is laid out, so no slice is one long stretch (npm run test:seed goes seed by seed)
 	let calls = 0;
 	const sliced = W.generateTown(DESIGN.TOWN_SEED, () => {
 		calls += 1;
 	});
 	const whole = W.generateTown(DESIGN.TOWN_SEED);
 	const buildings = whole.solids.filter(s => s.kind === "building").length;
-	checkEq(calls, buildings, "pace e chamado uma vez por predio, depois do interior dele");
+	check(
+		calls >= buildings + whole.lots.length,
+		"pace e chamado depois do interior de cada predio e entre dois lotes",
+		`${calls} chamadas, ${buildings} predios, ${whole.lots.length} lotes`,
+	);
 	const key = w => w.solids.map(s => `${s.kind}:${s.x}:${s.y}:${s.w}:${s.h}:${s.parentId}`).join("|");
 	check(key(sliced) === key(whole), "e a cidade e a mesma, solido por solido", `${sliced.solids.length} solidos`);
 	checkEq(mapHashOf(sliced), mapHashOf(whole), "o mesmo mapHash (o que o cliente confere ao entrar)");

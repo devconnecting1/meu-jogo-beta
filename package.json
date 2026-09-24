@@ -56,6 +56,7 @@
 		"test:vehicles": "node tools/test-vehicles.mjs",
 		"test:power": "node tools/test-power.mjs",
 		"test:cache": "node tools/test-cache.mjs",
+		"test:seed": "node tools/test-seed.mjs",
 		"lint": "eslint \"src/**/*.ts\" --max-warnings 0",
 		"format": "prettier --write \"src/**/*.ts\"",
 		"format:check": "prettier --check \"src/**/*.ts\""

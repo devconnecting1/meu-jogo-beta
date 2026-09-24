@@ -1710,6 +1710,89 @@ section("(ia) every client draws the awareness state the SERVER decided (2 bits 
 	checkEq(buffer.len(one.parts[0]), 8 + 9, "a zombie record is still 9 bytes with its state (header 8 + 9)");
 }
 
+// ================================================================ the town's seed (MP-22, MP-24)
+
+section("(seed) the town is the server's: every newcomer is told its seed, and the next one reaches everybody at once");
+{
+	// a server on a town of its OWN (MP-24: picked at boot, no longer DESIGN.TOWN_SEED everywhere)
+	const S = 1234567;
+	const T = 7654321;
+	const townS = generateTown(S);
+	const townT = generateTown(T);
+	resetEntityIds();
+	const sim = new ServerSimulation({ world: townS, zombies: false });
+	const transport = recordingTransport();
+	const rep = new Replicator(sim, transport, { tick0Time: 0, mapHash: mapHashOf(townS), seed: S });
+	sim.onTick = tick => rep.afterTick(tick);
+	const arrive = slot => {
+		const sp = PL.createServerPlayer(
+			{ slot, userId: 2000 + slot, name: `s${slot}` },
+			defaultSave(),
+			townS.width / 2,
+			townS.height / 2,
+			sim.tick,
+			CFG.SIM_HZ,
+		);
+		sim.add(sp);
+		rep.welcome(sp);
+		return sp;
+	};
+	/** every World event sent so far: [slot | "all", event], in the order a client reads them */
+	const sent = () => {
+		const out = [];
+		for (const packet of transport.broadcasts)
+			for (const e of P.decodeWorld(packet)?.events ?? []) out.push(["all", e]);
+		for (const [slot, list] of transport.worlds)
+			for (const packet of list) for (const e of P.decodeWorld(packet)?.events ?? []) out.push([slot, e]);
+		return out;
+	};
+	const initsTo = slot => sent().filter(([to, e]) => to === slot && e.t === P.WorldEv.InitBegin);
+	arrive(0);
+	for (let i = 0; i < 30; i++) sim.step();
+	arrive(1);
+	for (let i = 0; i < 30; i++) sim.step();
+	const i0 = initsTo(0);
+	const i1 = initsTo(1);
+	check(
+		i0.length === 1 && i0[0][1].seed === S && i0[0][1].mapHash === mapHashOf(townS),
+		"the first survivor is told the server's seed and its map hash on entering",
+	);
+	check(
+		i1.length === 1 && i1[0][1].seed === S && i1[0][1].mapHash === i0[0][1].mapHash,
+		"…and one arriving half a second later is told the SAME town",
+	);
+	// MP-22: the world ends; the new town's news goes to everyone connected (worldAll), the join message again to each
+	// survivor in the world, directed, after it
+	transport.broadcasts.length = 0;
+	transport.worlds.clear();
+	rep.closeTown();
+	rep.openTown({ seed: T, mapHash: mapHashOf(townT), endedDay: 5, lives: [] });
+	const resets = sent().filter(([, e]) => e.t === P.WorldEv.WorldReset);
+	check(
+		resets.length === 1 && resets[0][0] === "all" && resets[0][1].seed === T && resets[0][1].endedDay === 5,
+		"the end of the world: ONE WorldReset with the new seed, to every connected client (the lobby too)",
+	);
+	check(
+		[0, 1].every(slot => {
+			const again = initsTo(slot);
+			return again.length === 1 && again[0][1].seed === T && again[0][1].mapHash === mapHashOf(townT);
+		}),
+		"…and each survivor in the world gets the join message again: the new seed, the new hash",
+	);
+	transport.broadcasts.length = 0;
+	transport.worlds.clear();
+	arrive(2);
+	for (let i = 0; i < 5; i++) sim.step();
+	const i2 = initsTo(2);
+	check(i2.length === 1 && i2[0][1].seed === T, "a newcomer after it is told the new town, never the old one");
+	// a replicator constructed without a seed (a harness) falls back to DESIGN.TOWN_SEED; the host always names one
+	const src = readFileSync(join(SRC, "server/net/mpHost.ts"), "utf8");
+	check(
+		/new Replicator\([\s\S]*?\{ tick0Time, mapHash: mapHashOf\(world\), seed: town\.seed \}/.test(src),
+		"the host always hands the replicator the town it picked (never the harness default)",
+	);
+}
+
 // ---------------------------------------------------------------- verdict
 
 console.log("");

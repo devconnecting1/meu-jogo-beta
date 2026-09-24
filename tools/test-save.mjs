@@ -1991,8 +1991,14 @@ section("30) o log de auditoria do admin: UserIds e texto filtrado, uma chave po
 	const storesTs = readFileSync(join(SRC, "server/save/stores.ts"), "utf8");
 	const perPlayer = [...storesTs.matchAll(/storeName\("([^"]+)"\)/g)].map(m => m[1]);
 	check(
-		perPlayer.every(s => s === "ProjectZ_Worlds" || RTBF.PLAYER_STORES.includes(s) || s === RTBF.ADMIN_LOG_STORE),
-		"todo store de stores.ts esta no erase (o ProjectZ_Worlds nao guarda dado de jogador)",
+		perPlayer.every(
+			s =>
+				s === "ProjectZ_Worlds" ||
+				s === "ProjectZ_PrivateTowns" ||
+				RTBF.PLAYER_STORES.includes(s) ||
+				s === RTBF.ADMIN_LOG_STORE,
+		),
+		"todo store de stores.ts esta no erase (ProjectZ_Worlds e ProjectZ_PrivateTowns nao guardam dado de jogador)",
 		perPlayer.join(", "),
 	);
 

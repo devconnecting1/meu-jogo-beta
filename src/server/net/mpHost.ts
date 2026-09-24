@@ -26,7 +26,6 @@
  * is its own category (`PZ.sim`) in the Developer Console.
  */
 import { GAME_NAME } from "shared/module";
-import { DESIGN } from "shared/engine/constants";
 import { TITLES } from "shared/data/titles";
 import { floodKickMessage, langTypeOfLocale } from "shared/data/rules";
 import {
@@ -35,6 +34,7 @@ import {
 	MAX_PLAYERS,
 	TIME_SYNC_BURST,
 	TIME_SYNC_RATE,
+	TOWN_SEED_PIN_ATTRIBUTE,
 	WORLD_SEED_ATTRIBUTE,
 } from "shared/net/mpConfig";
 import { IntentKind, decodeIntent, decodeTimePing, encodeTimePong } from "shared/net/protocol";
@@ -68,7 +68,8 @@ import {
 import { creditFirstSteps } from "../save/achievements";
 import { LifeKeeper, WipeReport } from "../sim/life";
 import { ServerSimulation } from "../sim/simulation";
-import { TownState, WorldEnd, endWorld } from "../sim/worldReset";
+import { WorldClock } from "../sim/waves";
+import { TownState, WorldEnd, bootTownSeed, endWorld } from "../sim/worldReset";
 import { newPhaseCosts, SIM_PHASES, SimProfiler } from "../sim/metrics";
 import * as Analytics from "../analytics/events";
 
@@ -104,8 +105,18 @@ export interface MpHostOptions {
 	saveOf: (player: Player) => PlayerSaveData | undefined;
 	/** the shared town; generated from `seed` when omitted (client and server build the same map, §4.5) */
 	world?: WorldData;
-	/** the seed of the first town (DESIGN.TOWN_SEED by default): InitBegin tells every client which it is (MP-22) */
+	/**
+	 * The seed of the first town. Omitted (the live server), the server picks it: a fresh one per server, unless a
+	 * developer pinned one on ServerStorage (`bootSeed`). The Workspace attribute tells every client which it is the
+	 * moment they join, and InitBegin again on entry.
+	 */
 	seed?: number;
+	/**
+	 * The world day the first town opens on (day 1 when omitted), at 07:00, and when that world began (now when
+	 * omitted): a private server picking up the town its last session left (server/save/privateTown.ts, MP-24).
+	 */
+	day?: number;
+	startedAt?: number;
 	/** false disables the periodic metric attributes (used by tests) */
 	metrics?: boolean;
 	/**
@@ -145,8 +156,10 @@ export interface MpHost {
 	remotes: MpRemotes;
 	/** the town the server is running NOW: it is replaced when a world ends (MP-22) */
 	world: WorldData;
-	/** the seed `world` was generated from (DESIGN.TOWN_SEED until the first world ends) */
+	/** the seed `world` was generated from: the one picked at boot, until the first world ends */
 	seed: number;
+	/** os.time() when the world on `seed` began (its boot, or the end of the previous one) */
+	startedAt: number;
 	/** every survivor's body, in the world and out of it: death, daybreak, Rebirth, New game (server/sim/life.ts) */
 	lives: LifeKeeper;
 	/** the server entity of a connected player, or undefined when they are not in the world */
@@ -198,7 +211,23 @@ export function activeMpHost(): MpHost | undefined {
 	return active;
 }
 
-/** per connected Player, whether or not they are in the world yet */
+/**
+ * The first town's seed, when the caller names none (server/main.server.ts): the server's own pick
+ * (server/sim/worldReset.ts `bootTownSeed`) -- fresh for every server, or the one a developer pinned on ServerStorage
+ * (TOWN_SEED_PIN_ATTRIBUTE: a town reproduced in Studio). ServerStorage never replicates, so no client can see or set
+ * it; a pin on a live server is worth a warning, because every server would then open on the same streets.
+ */
+function bootSeed(): number {
+	const [ok, pinned] = pcall(() => game.GetService("ServerStorage").GetAttribute(TOWN_SEED_PIN_ATTRIBUTE));
+	const seed = bootTownSeed(ok ? pinned : undefined);
+	if (ok && pinned === seed) {
+		const line = `[${GAME_NAME}] town seed ${seed} pinned by ServerStorage.${TOWN_SEED_PIN_ATTRIBUTE}`;
+		if (RunService.IsStudio()) print(line);
+		else warn(`${line} ON A LIVE SERVER: every server opens on this same town`);
+	}
+	return seed;
+}
+
 /** shortest gap between two accepted enter/leave intents from the same client (§8.2) */
 const WORLD_INTENT_COOLDOWN_S = 1;
 
@@ -234,10 +263,15 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	// a second host would fight the first one for the remotes and the Heartbeat: the newest one wins
 	if (active !== undefined) active.stop();
 	/** the world running now: its seed and when it began (MP-22 records it when it ends) */
-	let town: TownState = { seed: options.seed ?? DESIGN.TOWN_SEED, startedAt: os.time() };
+	// ONE authority on the town: the server picks its seed here, once for its lifetime -- only MP-22 replaces it
+	let town: TownState = { seed: options.seed ?? bootSeed(), startedAt: options.startedAt ?? os.time() };
 	const world = options.world ?? generateTown(town.seed);
 	const remotes = createMpRemotes();
-	const sim = new ServerSimulation({ world });
+	// a private server's town comes back on the day it was on, at 07:00 (server/save/privateTown.ts); else day 1
+	const sim = new ServerSimulation({
+		world,
+		clock: options.day !== undefined ? new WorldClock({ day: options.day }) : undefined,
+	});
 	const links = new Map<Player, Link>();
 	const bySlot = new Map<number, Player>();
 	const tick0Time = Workspace.GetServerTimeNow();
@@ -702,10 +736,11 @@ export function startMpHost(options: MpHostOptions): MpHost {
 
 	print(
 		`[${GAME_NAME}] MP host up: ${sim.simHz} Hz, ${MAX_PLAYERS} slots, town seed ${town.seed}, ` +
-			`map hash ${mapHashOf(world)}`,
+			`map hash ${mapHashOf(world)}, day ${sim.clock.day}`,
 	);
-	// MP-22: which town this server runs, for a client building its town before it enters (client/net/netClient.ts
-	// `netTownSeed`); InitBegin confirms it on entry
+	// which town this server runs, for every client from the moment it joins: the lobby draws it behind the menus and
+	// the match builds it (client/boot/serverTown.ts, client/net/netClient.ts `netTownSeed`); InitBegin confirms it on
+	// entry. Written here and in `onSwitched` below, and nowhere else
 	pcall(() => Workspace.SetAttribute(WORLD_SEED_ATTRIBUTE, town.seed));
 
 	let stopped = false;
@@ -715,6 +750,7 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		remotes,
 		world,
 		seed: town.seed,
+		startedAt: town.startedAt,
 		lives,
 		playerOf(player) {
 			const link = links.get(player);
@@ -838,6 +874,7 @@ export function startMpHost(options: MpHostOptions): MpHost {
 					town = { seed: newTown.seed, startedAt: now };
 					host.world = newTown.world;
 					host.seed = newTown.seed;
+					host.startedAt = now;
 					pcall(() => Workspace.SetAttribute(WORLD_SEED_ATTRIBUTE, newTown.seed));
 				},
 			}),

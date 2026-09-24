@@ -97,6 +97,33 @@ function install() {
 	};
 	globalThis.print = () => {};
 	globalThis.warn = (...a) => console.warn(...a);
+	/*
+	 * Luau's coroutines, as far as a JS function can be one: `create` + `resume` run the function, and `yield` cannot
+	 * suspend it, so it runs to its end in the first resume (a yield only counts, in `coroutine.yields`). The client's
+	 * town generated a slice per frame (client/boot/townCache.ts) is therefore whole the first frame its driver resumes
+	 * it -- the SAME town the slices build, which is what npm run test:seed checks with a pace that does yield work.
+	 */
+	globalThis.coroutine = {
+		yields: 0,
+		create: fn => ({ fn, state: "suspended" }),
+		resume(co, ...args) {
+			if (co.state !== "suspended") return [false, "cannot resume dead coroutine"];
+			co.state = "running";
+			try {
+				const value = co.fn(...args);
+				co.state = "dead";
+				return [true, value];
+			} catch (e) {
+				co.state = "dead";
+				return [false, e instanceof Error ? e.message : e];
+			}
+		},
+		yield() {
+			this.yields += 1;
+		},
+		status: co => co.state,
+		isyieldable: () => false,
+	};
 	// Luau's xpcall on top of the SUITE's own `pcall`, looked up at call time (each suite's fake scheduler decides what
 	// a yield inside one does), and a `debug.traceback` that only marks where Luau puts the stack: the server's save
 	// path and tick report their errors through them (server/main.server.ts, server/net/mpHost.ts). A suite that adds

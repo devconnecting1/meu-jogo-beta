@@ -132,6 +132,8 @@ de exclusão**: com eles, o Roblox apaga sozinho as chaves de quem pediu.
       que cite alguém pelo nome, em palavras, continua lá: se um pedido citar isso, procure o nome no painel de
       admin (Server › Audit log) e apague a entrada à mão pelo Data Stores Manager.
 - [ ] `ProjectZ_Worlds` não tem dado de jogador (semente, dias, JobId, uma contagem): fica de fora.
+- [ ] `ProjectZ_PrivateTowns` também não (MP-24: a semente, o dia do mundo e o início da cidade de um servidor privado,
+      com a chave = o `PrivateServerId`, sem UserId nem nome do dono): fica de fora.
 - [ ] **Uma chave de Open Cloud só para isto:** crie uma chave com **apenas** as permissões de data store —
       ler, listar, atualizar e apagar **entradas** — para o universo do jogo, restrita ao seu IP, e ponha no `.env`
       como `ROBLOX_ERASE_API_KEY`. É separada da `ROBLOX_API_KEY` do `publish` / `upload-art`: a chave que apaga

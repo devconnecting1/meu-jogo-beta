@@ -2,9 +2,15 @@
  * The town behind the menus (docs/DESIGN_RULES.md UI-10): the lobby and the Survivor screen stand on the REAL town
  * of the world the player is about to enter, seen from the air while a slow camera drifts past its landmarks.
  *
- *   - The town is `generateTown(seed)` with the server's seed (MP-22: `pz_world_seed`, or InitBegin's), drawn by
- *     client/view/worldView.ts -- the very code the run draws with -- through a Renderer (pooled Frames) and a
- *     Camera of its own. It never touches the run's renderer, camera or night layer.
+ *   - The town is `generateTown(seed)` with the SERVER's seed (MP-24: the server picks it and owns it; the client
+ *     hears it the moment it joins, client/boot/serverTown.ts), drawn by client/view/worldView.ts -- the very code the
+ *     run draws with -- through a Renderer (pooled Frames) and a Camera of its own. It never touches the run's
+ *     renderer, camera or night layer.
+ *   - Never a guessed town: until the seed is known and its town generated (a slice per frame, client/boot/
+ *     townCache.ts), the backdrop is the page colour; the town then fades in. When the server's town changes under a
+ *     menu (MP-22: the world ended), the old town keeps gliding while the new one is generated, then the page dips to
+ *     its colour, the town is swapped behind it and the new one fades in -- the very dip of a cut between two shots,
+ *     in the same pool (no Frame destroyed, no new flyover). Reduce Motion swaps the still frame at once.
  *   - A SHOT is a straight, eased glide along the facade of a landmark (the gas station, the hospital, a shop
  *     with its rooftop sign...), about SHOT_LEN long at 26-38 u/s on average (57 at the fastest). The last FADE_S of a shot dips to
  *     the page colour, the camera cuts to the next landmark there, and the next shot fades in: nothing ever
@@ -30,9 +36,10 @@
  * menus' (client/bootstrap.ts): the town changes every frame, and in the menus' ScreenGui it would invalidate every
  * screen's cached drawing with it. The run RELEASES it the moment it starts
  * (`releaseFlyover`): every Frame is destroyed and the next menu builds a new pool. Only the town's data is cached
- * between lobbies (a town takes a noticeable moment to generate), and `prewarmTown` builds it behind the logo. The
- * match TAKES that copy instead of generating the same town again (client/boot/townCache.ts): it moves to the match,
- * this flyover lets go of it first, and the next menu draws a freshly generated one -- never a street the match changed.
+ * between lobbies (a town takes a noticeable moment to generate), and it is generated a slice per frame, behind the logo
+ * the first time (client/boot/serverTown.ts asks for it the moment the server's seed is heard). The match TAKES that
+ * copy instead of generating the same town again (client/boot/townCache.ts): it moves to the match, this flyover lets
+ * go of it first, and the next menu draws a freshly generated one -- never a street the match changed.
  */
 import { Camera } from "shared/engine/camera";
 import { COLORS, Z } from "shared/engine/colors";
@@ -91,14 +98,15 @@ const Z_FADE = 4;
 // ---------------------------------------------------------------- the town's data (client/boot/townCache.ts)
 
 /**
- * The town of `seed` for the menus, generated once and kept until the match takes it (client/boot/townCache.ts: the
- * match gets this very copy instead of generating it again, and the next menu builds a fresh one).
+ * The town of `seed` for the menus, NOW (generated whole if it is not ready), kept until the match takes it
+ * (client/boot/townCache.ts: the match gets this very copy instead of generating it again, and the next menu builds a
+ * fresh one). The flyover itself never calls this: it asks for the town and waits for it, a slice per frame.
  */
 export function townFor(seed: number): WorldData {
 	return TownCache.townFor(seed);
 }
 
-/** builds the town now (behind the logo) so the first lobby does not stall on it */
+/** starts generating the town (behind the logo, a slice per frame) so the first lobby does not wait on it */
 export function prewarmTown(seed: number): void {
 	TownCache.prewarmTown(seed);
 }
@@ -167,14 +175,23 @@ interface Walker {
 export class TownFlyover {
 	/** the backdrop: town, night tint, scrim and fade, in that order */
 	readonly layer: Frame;
-	readonly seed: number;
-	private readonly world: WorldData;
+	/** the seed of the town on screen, or undefined while the page colour stands in for one */
+	seed: number | undefined;
+	/** the town the server runs: the one on screen, or the one this flyover waits for (undefined: not known yet) */
+	private want: number | undefined;
+	private world: WorldData | undefined;
 	private readonly renderer: Renderer;
 	private readonly cam = new Camera();
 	private readonly town: WorldView;
 	private readonly night: Frame;
 	private readonly fade: Frame;
-	private readonly landmarks: Array<Landmark>;
+	private landmarks: Array<Landmark> = [];
+	/**
+	 * The town on screen is being swapped for `want` (MP-22): the page colour rises over it (`swapCover`, 0 → 1 in
+	 * FADE_S), the town is swapped behind the opaque page, and the new one fades in like the start of any shot.
+	 */
+	private leaving = false;
+	private swapCover = 0;
 	private readonly walkers: Array<Walker> = [];
 	private readonly sun = createSun();
 	private readonly shadow = (x: number, y: number, len: number): { x: number; y: number } =>
@@ -198,10 +215,8 @@ export class TownFlyover {
 	private stillDrawn = false;
 	private destroyed = false;
 
-	constructor(seed: number) {
-		this.seed = seed;
-		this.world = townFor(seed);
-		this.landmarks = landmarksOf(this.world);
+	/** `seed`: the server's town, or undefined while the client has not heard it (the page colour until then) */
+	constructor(seed: number | undefined) {
 		const layer = new Instance("Frame");
 		layer.Name = "TownBackdrop";
 		layer.Size = UDim2.fromScale(1, 1);
@@ -223,13 +238,59 @@ export class TownFlyover {
 		// between the town and the menus: the page colour, so every label keeps its contrast (UI-10)
 		const scrim = this.sheet("Scrim", THEME.background, Z_SCRIM);
 		setWorldTransparency(scrim, TRANSPARENCY.backdrop);
+		// opaque until there is a town to show: the page colour, never a guessed town
 		this.fade = this.sheet("Fade", THEME.background, Z_FADE);
-		this.fade.BackgroundTransparency = 1;
+		this.fade.BackgroundTransparency = 0;
 		for (let i = 0; i < WALKERS; i++) {
 			this.walkers.push({ on: false, x: 0, y: 0, angle: 0, speed: 0, turnIn: 0, paused: false, phase: 0 });
 		}
 		onLayoutChange(layer, () => this.fit());
+		this.showTown(seed);
+	}
+
+	/**
+	 * The town this flyover should show: the server's (client/boot/serverTown.ts). Undefined changes nothing (the seed
+	 * is not known yet: what is on screen stays -- the page colour, or the last town). A town not generated yet is asked
+	 * for (a slice per frame, client/boot/townCache.ts) and taken the frame it is ready: straight away with nothing on
+	 * screen, through the dip of a cut with another town on screen.
+	 */
+	showTown(seed: number | undefined): void {
+		if (this.destroyed || seed === undefined) return;
+		this.want = seed;
+		if (seed === this.seed) {
+			// back to the town on screen before the swap happened: the page lifts again
+			this.leaving = false;
+			return;
+		}
+		TownCache.requestTown(seed);
+		const ready = TownCache.readyTown(seed);
+		if (ready !== undefined && this.world === undefined) this.adopt(seed, ready);
+	}
+
+	/** the town of `seed` is on screen from now on (a new shot, which fades in from the opaque page) */
+	private adopt(seed: number, world: WorldData): void {
+		this.world = world;
+		this.seed = seed;
+		this.landmarks = landmarksOf(world);
+		this.shot = -1;
+		this.leaving = false;
+		this.swapCover = 0;
+		this.stillDrawn = false;
 		this.nextShot();
+	}
+
+	/** once a frame: the town the server runs, once it is ready, takes the place of the one on screen */
+	private follow(still: boolean): void {
+		const want = this.want;
+		if (want === undefined || want === this.seed) return;
+		const ready = TownCache.readyTown(want);
+		if (ready === undefined) {
+			// not generated yet (or a match took it): keep asking; the old town glides on meanwhile
+			if (TownCache.pendingTown() !== want) TownCache.requestTown(want);
+			return;
+		}
+		if (this.world === undefined || still) this.adopt(want, ready);
+		else this.leaving = true;
 	}
 
 	private sheet(name: string, color: Color3, zIndex: number): Frame {
@@ -280,7 +341,7 @@ export class TownFlyover {
 		if (!this.destroyed) this.layer.Parent = undefined;
 	}
 
-	/** releases everything: the run starts, or the town changed */
+	/** releases everything: the run starts (a new town is cross-faded to in the same pool, never through this) */
 	destroy(): void {
 		if (this.destroyed) return;
 		this.detach();
@@ -304,15 +365,21 @@ export class TownFlyover {
 		return this.world === world;
 	}
 
+	/** a town on screen, drawn every frame (the generator of the next one leaves room for it: townCache.ts) */
+	drawingTown(): boolean {
+		return !this.destroyed && this.world !== undefined && this.conn !== undefined;
+	}
+
 	// ------------------------------------------------------------ the shot
 
 	private nextShot(): void {
+		const w = this.world;
+		if (w === undefined || this.landmarks.size() === 0) return;
 		this.shot = (this.shot + 1) % this.landmarks.size();
 		const lm = this.landmarks[this.shot];
 		// every other shot runs the other way along its street
 		const sign = this.shot % 2 === 0 ? 1 : -1;
 		const half = SHOT_LEN / 2;
-		const w = this.world;
 		this.fromX = math.clamp(lm.x - lm.dx * half * sign, 0, w.width);
 		this.fromY = math.clamp(lm.y - lm.dy * half * sign, 0, w.height);
 		this.toX = math.clamp(lm.x + lm.dx * half * sign, 0, w.width);
@@ -357,7 +424,7 @@ export class TownFlyover {
 
 	private blocked(x: number, y: number): boolean {
 		const w = this.world;
-		if (x < 0 || y < 0 || x > w.width || y > w.height) return true;
+		if (w === undefined || x < 0 || y < 0 || x > w.width || y > w.height) return true;
 		const s: Solid | undefined = rectHitsSolid(w, x, y, WALKER_RADIUS * 2, WALKER_RADIUS * 2);
 		return s !== undefined;
 	}
@@ -388,6 +455,12 @@ export class TownFlyover {
 	step(dt: number): void {
 		if (this.destroyed) return;
 		const still = reducedMotion();
+		this.follow(still);
+		if (this.world === undefined) {
+			// nothing known to show yet: the page colour (never a guessed town), not a single sprite
+			if (this.fade.BackgroundTransparency !== 0) this.fade.BackgroundTransparency = 0;
+			return;
+		}
 		if (still) {
 			if (this.stillDrawn) return;
 			this.stillDrawn = true;
@@ -396,20 +469,35 @@ export class TownFlyover {
 			this.cam.y = (this.fromY + this.toY) / 2;
 			this.fade.BackgroundTransparency = 1;
 		} else {
+			// a new town waiting (MP-22): the page rises over this one, the swap happens behind it, and the new town
+			// fades in as the first shot starts; a swap called off (the old town again) lifts the page the same way
+			this.swapCover = math.clamp(this.swapCover + ((this.leaving ? 1 : -1) * dt) / FADE_S, 0, 1);
+			let swapped = false;
+			if (this.leaving && this.swapCover >= 1) {
+				const want = this.want;
+				const ready = want !== undefined ? TownCache.readyTown(want) : undefined;
+				swapped = want !== undefined && ready !== undefined;
+				if (want !== undefined && ready !== undefined) this.adopt(want, ready);
+				else this.leaving = false;
+			}
 			this.clock += dt;
-			this.shotT += dt;
+			// the frame of the swap is the page itself, fully opaque: the new shot starts from there
+			if (!swapped) this.shotT += dt;
 			if (this.shotT >= this.shotDur) this.nextShot();
 			this.place(this.shotT);
 			for (const wk of this.walkers) if (wk.on) this.walk(wk, dt);
 			// the dip to the page colour at both ends of the shot: the cut happens while the page is opaque
 			const edge = math.min(this.shotT, this.shotDur - this.shotT);
-			const t = edge >= FADE_S ? 1 : math.clamp(edge / FADE_S, 0, 1);
+			const shotClear = edge >= FADE_S ? 1 : math.clamp(edge / FADE_S, 0, 1);
+			const t = math.min(shotClear, 1 - this.swapCover);
 			if (this.fade.BackgroundTransparency !== t) this.fade.BackgroundTransparency = t;
 		}
 		this.draw();
 	}
 
 	private draw(): void {
+		const world = this.world;
+		if (world === undefined) return;
 		const hour = this.dayTime ?? DUSK;
 		const cam = this.cam;
 		// shadows: the sun's direction for the hour, held at the low evening sun after dark (no light to run from)
@@ -424,8 +512,8 @@ export class TownFlyover {
 		const r = this.renderer;
 		r.beginFrame();
 		this.town.clock = this.clock;
-		this.town.drawGround(r, cam, v, this.world);
-		this.town.drawSolids(r, cam, v, this.world);
+		this.town.drawGround(r, cam, v, world);
+		this.town.drawSolids(r, cam, v, world);
 		const sc = WALKER_RADIUS / 18;
 		const so = this.shadowOpts;
 		for (const wk of this.walkers) {
@@ -469,18 +557,17 @@ export class TownFlyover {
 let current: TownFlyover | undefined;
 
 /**
- * The flyover behind `host`: the one already built when it shows the same town (a lobby coming back from the Shop
- * reuses its pool), a new one otherwise.
+ * The flyover behind `host`: the one already built (a lobby coming back from the Shop reuses its pool), told which
+ * town to show -- the same one is left alone, another one (MP-22) is cross-faded to in the same pool, and undefined (the
+ * server's seed not heard yet) changes nothing -- or a new one.
  */
-export function attachFlyover(host: GuiObject, seed: number, zIndex: number): TownFlyover {
+export function attachFlyover(host: GuiObject, seed: number | undefined, zIndex: number): TownFlyover {
 	let f = current;
-	if (f !== undefined && f.seed !== seed) {
-		f.destroy();
-		f = undefined;
-	}
 	if (f === undefined) {
 		f = new TownFlyover(seed);
 		current = f;
+	} else {
+		f.showTown(seed);
 	}
 	f.attach(host, zIndex);
 	return f;
@@ -492,11 +579,21 @@ export const MENU_BACKDROP_Z = 0;
 /**
  * The town behind the menus (UI-10): the flyover in the backdrop `layer` (ctx.backdropLayer, the world's ScreenGui, drawn
  * under the menus' one), where every menu screen -- the lobby, and whatever it opens -- stands on it. The one already
- * there keeps gliding (same town: nothing is touched); a new
- * town (MP-22) replaces it. Idempotent: every menu screen pins it, so none depends on which came first.
+ * there keeps gliding (same town: nothing is touched); a new town (MP-22) is cross-faded to. `seed` is the server's
+ * (client/boot/serverTown.ts `knownTownSeed`), undefined until the client has heard it: the page colour until then.
+ * Idempotent: every menu screen pins it, so none depends on which came first.
  */
-export function pinFlyover(layer: GuiObject, seed: number): TownFlyover {
+export function pinFlyover(layer: GuiObject, seed: number | undefined): TownFlyover {
 	return attachFlyover(layer, seed, MENU_BACKDROP_Z);
+}
+
+/**
+ * The server's town changed, or was heard for the first time (client/boot/serverTown.ts): a flyover on screen -- behind
+ * the lobby, the Shop, the Settings... -- goes to it (the page colour lifts on it, or it is cross-faded to). With no
+ * flyover (a match on screen) nothing happens: the next menu pins the town the server runs then.
+ */
+export function followTown(seed: number): void {
+	current?.showTown(seed);
 }
 
 /** stop drawing and take the backdrop off the screen (the pool is kept for the next attach) */
@@ -515,6 +612,8 @@ export function releaseFlyover(): void {
 TownCache.onTownTaken(world => {
 	if (current !== undefined && current.shows(world)) releaseFlyover();
 });
+// a town being generated while another glides on screen takes the smaller slice of each frame
+TownCache.onDrawingTown(() => current !== undefined && current.drawingTown());
 
 /** the flyover alive right now, if any (tests) */
 export function activeFlyover(): TownFlyover | undefined {

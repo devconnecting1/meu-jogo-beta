@@ -9,7 +9,8 @@
 
 /**
  * The stores that hold ONE player's data under the key `<UserId>` (src/server/save/stores.ts), each also with the
- * Studio suffix. ProjectZ_Worlds holds nobody's data (seed, days, JobId, a death tally) and is not touched.
+ * Studio suffix. ProjectZ_Worlds holds nobody's data (seed, days, JobId, a death tally) and is not touched; neither
+ * does ProjectZ_PrivateTowns (MP-24: a private server's seed, world day and start time, keyed by its PrivateServerId).
  */
 export const PLAYER_STORES = ["ProjectZ_Save_v2", "ProjectZ_Save_v1", "ProjectZ_Titles"];
 export const ADMIN_LOG_STORE = "ProjectZ_AdminLog";

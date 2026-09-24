@@ -32,7 +32,14 @@
  *   6. THE FLYOVER     the real town of the seed; after a warm-up over every landmark, 600 frames (and 600 more with
  *                      cuts) create no Instance; the camera glides at 25-60 u/s and only jumps while the page is
  *                      opaque; the night tint; a phone draws less and pans slower; Reduce Motion is a still frame;
- *                      the run releases every Frame and never touches its own renderer.
+ *                      a new town (MP-22) is cross-faded to by the SAME flyover in its own pool (the page dips, the
+ *                      town swaps behind it, the new one fades in; called off halfway, the page lifts again; Reduce
+ *                      Motion swaps at once); with no seed known, the page colour and no town; the run releases every
+ *                      Frame and never touches its own renderer.
+ *   6b. THE SERVER'S   (MP-24) the lobby draws the seed the server publishes (the Workspace attribute) and only it:
+ *       TOWN           the page colour before it, the town asked for and faded in when it arrives, the same solids the
+ *                      server builds, a WorldReset that overtakes the attribute moving nothing until it does, and an
+ *                      attribute that is not a seed ignored.
  *   7. SOURCE GUARDS   main.client.ts keeps the run semantics (no game-over popup, the flyover released when a run
  *                      mounts); the server publishes the attributes the lobby reads; tips.ts is gone.
  *
@@ -834,11 +841,17 @@ check(
 		.GetDescendants()
 		.every(d => !/ticker|^tip/i.test(d.Name)),
 );
-check(
-	"so duas conexoes de quadro: as previas e o voo sobre a cidade (nenhum letreiro rolando)",
-	RunService.RenderStepped.conns.length - renderBefore === 2,
-	`${RunService.RenderStepped.conns.length - renderBefore}`,
-);
+{
+	// the town is not generated yet the first time: the lobby asks for it, and a third connection -- the generator's
+	// slice per frame (client/boot/townCache.ts) -- lives only until it is done
+	const whileGenerating = RunService.RenderStepped.conns.length - renderBefore;
+	frame();
+	check(
+		"so duas conexoes de quadro: as previas e o voo sobre a cidade (nenhum letreiro rolando); a do gerador so ate a cidade ficar pronta",
+		whileGenerating === 3 && RunService.RenderStepped.conns.length - renderBefore === 2,
+		`${whileGenerating} gerando, ${RunService.RenderStepped.conns.length - renderBefore} depois`,
+	);
+}
 check(
 	"sem coluna do sobrevivente no menu: nada de Loadout, Current day, XP ou Wardrobe no cabecalho de um card",
 	survivorPage() === undefined &&
@@ -1654,16 +1667,146 @@ frame();
 	);
 }
 
-// a new town (MP-22): a new flyover, the old one gone
+// ---- a new town (MP-22) under the menus: the SAME flyover cross-fades to it, in its own pool (MP-24)
+setScreen(1920, 1080);
 {
-	const old = fly;
-	const other = Fly.attachFlyover(host, 424242, 1);
-	frame();
+	const A = DESIGN.TOWN_SEED;
+	const B = 424242;
+	const townA = Fly.townFor(A);
+	fly = Fly.attachFlyover(host, A, 1);
+	// warm over the town on screen, so what the swap costs is the swap's alone
+	for (let i = 0; i < 600; i++) frame(0.25);
+	const same = fly;
+	const fade = () => fly.layer.FindFirstChild("Fade").BackgroundTransparency;
+	let swapFrames = 0;
+	const made = measure(() => {
+		Fly.attachFlyover(host, B, 1);
+		// the new town is generated a slice per frame (here, in the next frame: Node does not suspend the generator)
+		// while the old one glides on; then the page rises over it, the town is swapped behind it and fades in
+		let opaqueBeforeSwap = false;
+		let cutInView = 0;
+		let last = fly.cameraAt();
+		frame(1 / 60);
+		swapFrames++;
+		const oldStillOn = fly.shows(townA) && fly.seed === A;
+		for (let i = 0; i < 60 * 6 && fly.seed !== B; i++) {
+			frame(1 / 60);
+			swapFrames++;
+			const now = fly.cameraAt();
+			if (Math.hypot(now[0] - last[0], now[1] - last[1]) > 20 && fade() > 0.05) cutInView++;
+			if (fade() === 0) opaqueBeforeSwap = true;
+			last = now;
+		}
+		check(
+			"uma cidade nova (MP-22) sob os menus: o MESMO voo, que continua deslizando pela velha e mergulha na cor da pagina",
+			fly === same && oldStillOn && opaqueBeforeSwap && fly.seed === B && !fly.shows(townA),
+			`${swapFrames} quadros ate a troca (${(swapFrames / 60).toFixed(2)} s), semente ${fly.seed}`,
+		);
+		check(
+			"...e a troca acontece com a pagina opaca: nenhum salto de camera a vista",
+			cutInView === 0,
+			`${cutInView}`,
+		);
+		frame(1 / 60);
+		const justAfter = fade();
+		for (let i = 0; i < 90; i++) frame(1 / 60);
+		check(
+			"...depois a cidade nova aparece, esmaecendo da cor da pagina (como o comeco de qualquer plano)",
+			justAfter < 0.1 && fade() === 1,
+			`${justAfter.toFixed(2)} -> ${fade().toFixed(2)}`,
+		);
+	});
 	check(
-		"uma cidade nova (outra semente) troca o voo e solta o antigo",
-		other !== old && old.layer.Parent === undefined && other.seed === 424242,
+		"...sem destruir o voo nem o pool: nenhuma Instance destruida (so as poucas que a cidade nova pede a mais)",
+		made.gone === 0 && fly.layer.Parent === host && made.made < 200,
+		cost(made),
 	);
-	fly = other;
+	// warm-up over the new town as over the first one: two loops over every landmark, then the cuts' own run
+	{
+		const marks = Fly.townFor(B).solids.filter(s => s.kind === "building" && (s.buildingType ?? 1) >= 3).length;
+		let cuts = 0;
+		let p = fly.cameraAt();
+		for (let i = 0; i < 20000 && cuts < marks * 2; i++) {
+			frame(1);
+			const now = fly.cameraAt();
+			if (Math.hypot(now[0] - p[0], now[1] - p[1]) > 200) cuts++;
+			p = now;
+		}
+		for (let i = 0; i < 600; i++) frame(0.25);
+	}
+	r = measure(() => {
+		for (let i = 0; i < 600; i++) frame(1 / 60);
+		for (let i = 0; i < 600; i++) frame(0.25);
+	});
+	check("...e aquecida na cidade nova, 1200 quadros (com cortes) sem criar Instance", zero(r), cost(r));
+
+	// the swap called off: A -> B -> A before the page is opaque lifts the page again, and nothing is swapped
+	const townB = Fly.townFor(B);
+	Fly.attachFlyover(host, A, 1);
+	frame(1 / 60);
+	for (let i = 0; i < 20; i++) frame(1 / 60);
+	const halfway = fade();
+	Fly.attachFlyover(host, B, 1);
+	for (let i = 0; i < 90; i++) frame(1 / 60);
+	check(
+		"uma troca desfeita no meio (A -> B -> A): a pagina volta a subir e a cidade na tela continua a mesma",
+		fly.shows(townB) && fly.seed === B && fade() === 1 && halfway < 1,
+		`meio do caminho ${halfway.toFixed(2)}, depois ${fade().toFixed(2)}`,
+	);
+
+	// Reduce Motion: no dip, no glide -- the still frame of the new town at once, drawn once
+	GuiService.ReducedMotionEnabled = true;
+	flush();
+	frame();
+	Fly.attachFlyover(host, A, 1);
+	frame();
+	const drawnA = fly.shows(Fly.townFor(A));
+	r = measure(() => {
+		for (let i = 0; i < 60; i++) frame(1 / 60);
+	});
+	check(
+		"Reduzir Movimento: a cidade nova entra de uma vez, quadro parado, sem esmaecer, e depois nada e reescrito",
+		drawnA && fade() === 1 && r.writes === 0 && zero(r),
+		cost(r),
+	);
+	GuiService.ReducedMotionEnabled = false;
+	flush();
+}
+
+// ---- never a guessed town: with the server's seed not heard yet, the page colour; the town fades in once it is
+{
+	Fly.releaseFlyover();
+	flush();
+	const U = 777001;
+	const pending0 = require(join(SRC, "client/boot/townCache.ts")).pendingTown();
+	fly = Fly.attachFlyover(host, undefined, 1);
+	for (let i = 0; i < 30; i++) frame(1 / 60);
+	const fadeNow = fly.layer.FindFirstChild("Fade").BackgroundTransparency;
+	check(
+		"sem a semente do servidor: o fundo e a cor da pagina, opaca -- nenhuma cidade desenhada, nenhuma pedida",
+		fly.seed === undefined &&
+			fadeNow === 0 &&
+			fly.spriteCount() === 0 &&
+			require(join(SRC, "client/boot/townCache.ts")).pendingTown() === pending0,
+		`fade ${fadeNow}, ${fly.spriteCount()} sprites`,
+	);
+	// the seed arrives (client/boot/serverTown.ts -> followTown): asked for, generated, and faded in
+	Fly.followTown(U);
+	frame(1 / 60);
+	const first = fly.layer.FindFirstChild("Fade").BackgroundTransparency;
+	for (let i = 0; i < 90; i++) frame(1 / 60);
+	check(
+		"...a semente chega: a cidade dela e gerada e aparece esmaecendo, a partir da pagina opaca",
+		fly.seed === U &&
+			fly.shows(Fly.townFor(U)) &&
+			first < 0.1 &&
+			fly.layer.FindFirstChild("Fade").BackgroundTransparency === 1 &&
+			fly.spriteCount() > 50,
+		`${first.toFixed(2)} -> ${fly.layer.FindFirstChild("Fade").BackgroundTransparency}, ${fly.spriteCount()} sprites`,
+	);
+	Fly.attachFlyover(host, undefined, 1);
+	frame();
+	check("...e um pino sem semente depois disso nao apaga a cidade na tela", fly.seed === U && fly.spriteCount() > 50);
 }
 
 // the run starts
@@ -1683,11 +1826,142 @@ check(
 );
 setScreen(1120, 630);
 
+// ================================================================ 8b. the SERVER's town (MP-24)
+
+console.log("\n8b) a cidade do servidor: o lobby desenha a semente que o servidor publica, e so ela (MP-24)\n");
+{
+	// client/boot/serverTown.ts listens to the Workspace attribute the server writes and to the InitBegin / WorldReset
+	// notices of client/net/netClient.ts -- which talks to remotes Node does not have: a stand-in with its one hook
+	const townNotices = [];
+	const netPath = join(SRC, "client/net/netClient.ts");
+	require.cache[netPath] = {
+		id: netPath,
+		filename: netPath,
+		loaded: true,
+		exports: { netOnTown: fn => townNotices.push(fn) },
+	};
+	const Town = require(join(SRC, "client/boot/serverTown.ts"));
+	const Cache = require(join(SRC, "client/boot/townCache.ts"));
+	const World = require(join(SRC, "shared/game/world.ts"));
+	const { WORLD_SEED_ATTRIBUTE } = require(join(SRC, "shared/net/mpConfig.ts"));
+	const solidsOf = w => JSON.stringify(w.solids.map(s => [s.id, s.kind, s.x, s.y, s.w, s.h, s.parentId ?? 0]));
+	const S1 = 1234567;
+	const S2 = 7654321;
+	const fadeOf = f => f.layer.FindFirstChild("Fade").BackgroundTransparency;
+	Fly.releaseFlyover();
+	Cache.takeTown(0);
+	flush();
+	check(
+		"antes do servidor dizer a semente, o cliente nao a sabe (nunca um palpite)",
+		Workspace.GetAttribute(WORLD_SEED_ATTRIBUTE) === undefined && Town.knownTownSeed() === undefined,
+	);
+	// the lobby as main.client.ts opens it: its status carries knownTownSeed()
+	const unknown = showLobby(ctx, handlers, status({ seed: Town.knownTownSeed() }));
+	flush();
+	Town.startServerTown();
+	for (let i = 0; i < 20; i++) frame(1 / 60);
+	const f0 = Fly.activeFlyover();
+	check(
+		"o lobby abre sobre a cor da pagina: nenhuma cidade desenhada, nenhuma gerada",
+		f0 !== undefined &&
+			f0.seed === undefined &&
+			fadeOf(f0) === 0 &&
+			f0.spriteCount() === 0 &&
+			Cache.pendingTown() === undefined,
+		`fade ${f0 && fadeOf(f0)}, ${f0?.spriteCount()} sprites`,
+	);
+	// the server's attribute replicates: the town is asked for, generated a slice per frame, and faded in
+	Workspace.SetAttribute(WORLD_SEED_ATTRIBUTE, S1);
+	const asked = Cache.pendingTown();
+	for (let i = 0; i < 100; i++) frame(1 / 60);
+	const shownS1 = Cache.readyTown(S1);
+	check(
+		"o servidor publica a semente: o lobby pede ESSA cidade na hora e a mostra quando fica pronta",
+		Town.knownTownSeed() === S1 &&
+			asked === S1 &&
+			f0.seed === S1 &&
+			shownS1 !== undefined &&
+			f0.shows(shownS1) &&
+			fadeOf(f0) === 1 &&
+			f0.spriteCount() > 50,
+		`semente ${f0.seed}, ${f0.spriteCount()} sprites`,
+	);
+	check(
+		"...e e a cidade que o servidor gera com a mesma semente, solido por solido (npm run test:seed compara tudo, semente a semente)",
+		Cache.townFingerprint(shownS1) === Cache.townFingerprint(World.generateTown(S1)) &&
+			solidsOf(shownS1) === solidsOf(World.serverWorld(World.generateTown(S1))),
+	);
+	// MP-22: a WorldReset overtakes the attribute by a moment. The attribute is the state: nothing moves until it says so
+	for (const fn of townNotices) fn({ seed: S2, endedDay: 4, newLife: false });
+	frame(1 / 60);
+	check(
+		"fim do mundo: o WorldReset chega antes do atributo -- o lobby espera o atributo (o estado), nada pisca",
+		Town.knownTownSeed() === S1 && f0.seed === S1,
+	);
+	Workspace.SetAttribute(WORLD_SEED_ATTRIBUTE, S2);
+	let back = false;
+	for (let i = 0; i < 60 * 5 && f0.seed !== S2; i++) {
+		frame(1 / 60);
+		if (f0.seed !== S1 && f0.seed !== S2) back = true;
+	}
+	for (let i = 0; i < 90; i++) frame(1 / 60);
+	check(
+		"...o atributo muda: o MESMO voo atras do lobby faz a transicao para a cidade nova, sem voltar",
+		Fly.activeFlyover() === f0 && f0.seed === S2 && f0.shows(Cache.readyTown(S2)) && fadeOf(f0) === 1 && !back,
+		`semente ${f0.seed}`,
+	);
+	// garbage in the attribute (never the server's, but a client must not draw it): the last seed heard stands
+	for (const bad of [0, -3, 1.5, 2147483647, "7331", true]) {
+		Workspace.SetAttribute(WORLD_SEED_ATTRIBUTE, bad);
+		frame(1 / 60);
+	}
+	check(
+		"um atributo que nao e semente (0, negativo, fracao, acima do teto, texto) nunca vira cidade: vale a ultima ouvida",
+		Town.knownTownSeed() === S2 && f0.seed === S2 && Cache.pendingTown() === undefined,
+		`${Town.knownTownSeed()}`,
+	);
+	Workspace.SetAttribute(WORLD_SEED_ATTRIBUTE, S2);
+	unknown.close();
+	Fly.releaseFlyover();
+	flush();
+	delete require.cache[netPath];
+}
+
 // ================================================================ 9. source guards
 
 console.log("\n9) guardas de fonte (o que o Node nao roda)\n");
 const read = rel => readFileSync(join(SRC, rel), "utf8");
 const main = read("client/main.client.ts");
+{
+	// the lobby and every menu draw the SERVER's town, known or not -- never netTownSeed's guess, never a random one
+	const code = src => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+	const mainCode = code(main);
+	check(
+		"main.client.ts: o status do lobby e toda tela de menu levam knownTownSeed() (a semente do servidor, ou nenhuma)",
+		/seed: Boot\.knownTownSeed\(\)/.test(mainCode) &&
+			/Flyover\.pinFlyover\(ctx\.backdropLayer, Boot\.knownTownSeed\(\)\)/.test(mainCode) &&
+			!/netTownSeed/.test(mainCode),
+	);
+	check(
+		"...e comeca a ouvir a cidade do servidor no boot (Boot.startServerTown), sem o prewarm sincrono de antes",
+		/Boot\.startServerTown\(\)/.test(mainCode) && !/prewarmTown\(/.test(mainCode),
+	);
+	const clientCode = [
+		"client/boot/serverTown.ts",
+		"client/boot/townCache.ts",
+		"client/view/townFlyover.ts",
+		"client/ui/lobby.ts",
+	]
+		.map(rel => code(read(rel)))
+		.join("\n");
+	check(
+		"nenhum codigo da cidade do lobby sorteia semente, gera cidade aleatoria ou escreve o atributo do servidor",
+		!/generateTown\(\s*(0|\))/.test(clientCode) &&
+			!/math\.random\(\)[^\n]*[Ss]eed/.test(clientCode) &&
+			!/SetAttribute\(\s*WORLD_SEED_ATTRIBUTE/.test(clientCode) &&
+			!/FireServer|InvokeServer/.test(clientCode),
+	);
+}
 check(
 	"main.client.ts: o fim de partida nao e mais um popup sobre o lobby",
 	!/showGameOverChoice/.test(main) && !/popup\(ctx, tr\("Your run is over"\)/.test(main),

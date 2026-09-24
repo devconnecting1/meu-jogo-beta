@@ -138,15 +138,25 @@ export const MAX_BUILDS_PER_SERVER = 600;
 /**
  * Largest town seed (MP-22). shared/game/world.ts `TownRng` is MINSTD: it reduces a seed modulo 2^31 − 1 and maps 0
  * to 1, so 1 … 2^31 − 2 are exactly the seeds that each build a town of their own. InitBegin and WorldReset carry
- * one; the server draws a new one when a world ends (server/sim/worldReset.ts).
+ * one; the server draws one at boot and a new one when a world ends (server/sim/worldReset.ts).
  */
 export const TOWN_SEED_MAX = 2147483646;
 /**
- * Workspace attribute holding the seed of the town the server runs NOW (MP-22). Replicated state, so a client that
- * connected after a world ended builds the right town when it presses Play; the InitBegin it gets on entry confirms
- * it, and a WorldReset tells a client that is already connected at the moment it changes.
+ * Workspace attribute holding the seed of the town the server runs NOW. The server is the one authority on its town
+ * (it picks the seed at boot and again when a world ends, MP-22); this is how every client hears it, the moment it
+ * joins and before it presses anything: the lobby draws THAT town behind the menus (client/boot/serverTown.ts, UI-10),
+ * and the match builds it. Replicated state, written only by the server (server/net/mpHost.ts, at boot and when a new
+ * town stands); the InitBegin a client gets on entry confirms it, and a WorldReset tells every connected client the
+ * moment it changes. No client ever proposes a seed: nothing a client sends carries one.
  */
 export const WORLD_SEED_ATTRIBUTE = "pz_world_seed";
+/**
+ * ServerStorage attribute a developer may set to PIN the first town's seed (a town reproduced in Studio; the node
+ * suites that play on the validated DESIGN.TOWN_SEED). Server-only: ServerStorage is never replicated, so no client can
+ * read or write it. Unset (the published game), every server opens on a fresh seed. server/main.server.ts reads it;
+ * a pin on a live server is logged as a warning (every server would open on the same town).
+ */
+export const TOWN_SEED_PIN_ATTRIBUTE = "pz_town_seed";
 
 // ---------------------------------------------------------------- input (§2.2, §8.1)
 

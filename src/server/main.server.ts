@@ -40,6 +40,7 @@ import { runActionRefusal, stripClientLife } from "./sim/life";
 import { stripClientAchievements } from "./save/achievements";
 import { startProximityChat } from "./chat/proximityChat";
 import { startWorldLog } from "./save/worldLog";
+import { keepPrivateTown } from "./save/privateTown";
 import * as Analytics from "./analytics/events";
 
 /*
@@ -1402,7 +1403,19 @@ admin = startAdminServer({
 if (MP_PHASE >= 1) {
 	// the worlds that ended and how many days each lasted (MP-22): a small bounded DataStore document
 	const worldLog = startWorldLog();
+	// MP-24: the server picks its town and owns it (server/net/mpHost.ts); a PRIVATE server with an owner also keeps it
+	// across its sessions -- read here, before the town is generated, so it never swaps (server/save/privateTown.ts).
+	// A public server keeps nothing: undefined, and the host picks a fresh seed
+	const keptTown = keepPrivateTown(() =>
+		mpHost !== undefined
+			? { seed: mpHost.seed, day: mpHost.simulation.clock.day, startedAt: mpHost.startedAt }
+			: undefined,
+	);
+	const kept = keptTown?.initial;
 	mpHost = startMpHost({
+		seed: kept?.seed,
+		day: kept?.day,
+		startedAt: kept?.startedAt,
 		saveOf: player => {
 			const s = sessions.get(player);
 			// a read-only session (status "error", lock lost) still plays; it just never persists, exactly as
@@ -1417,7 +1430,11 @@ if (MP_PHASE >= 1) {
 		// MP-22: everybody in the world died and nobody paid inside the window (server/sim/life.ts rule 6), so the
 		// host has already built a new town on day 1 (server/sim/worldReset.ts). What is left for the session layer
 		// is the record of the world that ended — persisted off this thread, the reset never waits for it
-		onWorldWiped: (report, outcome) => worldLog.record(outcome.ended),
+		onWorldWiped: (report, outcome) => {
+			worldLog.record(outcome.ended);
+			// the next session of a private server opens on the NEW town, day 1
+			keptTown?.note({ seed: outcome.seed, day: 1, startedAt: outcome.startedAt });
+		},
 	});
 	const sim = mpHost.simulation;
 	// §9.3: a run an admin helped along keeps playing and stops paying. The simulation has no notion of an

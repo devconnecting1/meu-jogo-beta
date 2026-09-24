@@ -6,7 +6,11 @@
  *                 then the sounds
  *   warmup        idle-time building of the screens the player opens next: the Bag in a run, the Survivor page in the
  *                 lobby
- *   townCache     the lobby's town handed to the match instead of generated again (used by GameLoop and the flyover)
+ *   townCache     the lobby's town handed to the match instead of generated again (used by GameLoop and the flyover),
+ *                 generated a slice per frame
+ *   serverTown    the town the SERVER runs (its seed, heard the moment the client joins): asked for at once, and
+ *                 followed by the flyover behind the menus (MP-24)
  */
 export { startPreload } from "./preloadPlan";
 export { warmLobby, warmRun } from "./warmup";
+export { knownTownSeed, startServerTown } from "./serverTown";

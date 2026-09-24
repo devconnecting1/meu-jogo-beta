@@ -2145,6 +2145,111 @@ const DECODERS = [
 	["decodeIntentMessage", P.decodeIntentMessage],
 ];
 
+test("the town's seed (MP-24): only the server says it, S→C; no client message can carry or move one", () => {
+	// 1. on the wire it exists only in two World events, which the SERVER encodes and every client decodes
+	const init = {
+		t: P.WorldEv.InitBegin,
+		tick0Time: 12.5,
+		simHz: 60,
+		mapHash: 424242,
+		seed: 99991,
+		chunk: 0,
+		chunks: 1,
+	};
+	const reset = { t: P.WorldEv.WorldReset, seed: 2147483646, endedDay: 7, lives: [{ userId: 5, runRev: 3 }] };
+	const back = P.decodeWorld(P.encodeWorld({ tick: 3, events: [init, reset] }).packets[0])?.events ?? [];
+	eq("InitBegin carries the seed", back[0]?.seed, 99991);
+	eq("WorldReset carries the new seed", back[1]?.seed, 2147483646);
+	// 2. none of the decoders the server runs on a CLIENT's payload ever produces a seed, whatever the bytes
+	// (valid packets with their bytes mutated past the header: random bytes almost never get past it)
+	const c2s = {
+		decodeInput: [P.decodeInput, () => P.encodeInput(randInputPacket())],
+		decodeIntentMessage: [
+			P.decodeIntentMessage,
+			() =>
+				rint(0, 1) === 0
+					? P.encodeIntent(pick(PRESENCE_VERBS))
+					: P.encodeIntentArgs(P.IntentKind.SwitchWeapon, rint(0, 65535), 1, rint(0, 65535)),
+		],
+		decodeTimePing: [P.decodeTimePing, () => P.encodeTimePing({ seq: rint(0, 65535), clientTime: rint(0, 1e6) })],
+	};
+	let decoded = 0;
+	for (const [name, [decode, valid]] of Object.entries(c2s)) {
+		for (let i = 0; i < 4000; i++) {
+			const b = valid();
+			const len = buffer.len(b);
+			for (let m = rint(1, 3); m > 0 && len > 1; m--) buffer.writeu8(b, rint(1, len - 1), rint(0, 255));
+			const d = decode(b);
+			if (d === undefined) continue;
+			decoded += 1;
+			if (JSON.stringify(d).toLowerCase().includes("seed")) fail(`${name} produced a seed: ${JSON.stringify(d)}`);
+		}
+		checks += 1;
+	}
+	// valid ones too: a real input packet, every intent, a time ping
+	for (const d of [
+		P.decodeInput(P.encodeInput(randInputPacket())),
+		...PRESENCE_VERBS.map(k => P.decodeIntentMessage(P.encodeIntent(k))),
+		P.decodeTimePing(P.encodeTimePing({ seq: 1, clientTime: 2 })),
+	]) {
+		ok(d !== undefined && !JSON.stringify(d).toLowerCase().includes("seed"), "a valid C→S message has no seed");
+	}
+	ok(decoded > 0, `the fuzz reached the decoders (${decoded} payloads decoded, none with a seed)`);
+	// 3. the source: the Workspace attribute is written by the server's host alone (boot, and the new town of MP-22);
+	// the boot seed comes from the server's own pick or a ServerStorage pin -- never from a remote handler
+	const code = rel =>
+		readFileSync(join(SRC, rel), "utf8")
+			.replace(/\/\*[\s\S]*?\*\//g, "")
+			.replace(/^\s*\/\/.*$/gm, "");
+	const host = code("server/net/mpHost.ts");
+	eq(
+		"mpHost.ts writes WORLD_SEED_ATTRIBUTE exactly twice (boot, onSwitched)",
+		(host.match(/SetAttribute\(WORLD_SEED_ATTRIBUTE/g) ?? []).length,
+		2,
+	);
+	ok(/bootTownSeed\(ok \? pinned : undefined\)/.test(host), "the boot seed is bootTownSeed(the ServerStorage pin)");
+	ok(
+		/GetService\("ServerStorage"\)\.GetAttribute\(TOWN_SEED_PIN_ATTRIBUTE\)/.test(host),
+		"…and the pin is read from ServerStorage, which never replicates (no client can set it)",
+	);
+	const endCall = host.slice(host.indexOf("endWorld({"), host.indexOf("onSwitched:"));
+	ok(
+		endCall.length > 0 && !/\bseed:/.test(endCall),
+		"the host never hands endWorld a seed: a new town's seed is drawn inside",
+	);
+	const { readdirSync, statSync } = require("node:fs");
+	const walk = dir =>
+		readdirSync(dir).flatMap(n => {
+			const p = join(dir, n);
+			return statSync(p).isDirectory() ? walk(p) : p.endsWith(".ts") ? [p] : [];
+		});
+	const rel = p => p.slice(SRC.length + 1).replace(/\\/g, "/");
+	const writers = walk(SRC).filter(p => /SetAttribute\(\s*(WORLD_SEED_ATTRIBUTE|"pz_world_seed")/.test(code(rel(p))));
+	eq(
+		"no other file writes the town's attribute (the client least of all)",
+		writers.map(rel).join(","),
+		"server/net/mpHost.ts",
+	);
+	const handlers = walk(join(SRC, "server")).filter(p => /OnServerEvent|OnServerInvoke/.test(code(rel(p))));
+	ok(handlers.length > 0, `the server's remote handlers were found (${handlers.map(rel).join(", ")})`);
+	for (const p of handlers) {
+		ok(
+			!/\b(pickTownSeed|bootTownSeed|endWorld|restartWorld)\(/.test(code(rel(p))) ||
+				rel(p) === "server/net/mpHost.ts",
+			`${rel(p)}: no remote handler picks a seed, ends a world or restarts one`,
+		);
+	}
+	// in mpHost itself the remote handlers (Input, Intent, TimeSync) are closures that never touch `town`
+	for (const name of ["onInput(remotes", "onIntent(remotes", "onTimeSync(remotes"]) {
+		const at = host.indexOf(name);
+		const body = host.slice(at, host.indexOf("\n\t});", at));
+		ok(
+			at >= 0 && !/\btown\b|seed|endWorld|WORLD_SEED/.test(body),
+			`mpHost ${name.split("(")[0]}: never touches the town`,
+		);
+	}
+});
+
 test(`fuzz: ${FUZZ_N} random/truncated buffers per decoder never throw`, () => {
 	let decoded = 0;
 	for (const [name, decode] of DECODERS) {

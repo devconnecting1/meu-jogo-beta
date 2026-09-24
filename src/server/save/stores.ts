@@ -58,6 +58,11 @@ export const ADMIN_LOG_STORE = storeName("ProjectZ_AdminLog");
 /** the worlds that ended, how many days each lasted (MP-22, server/save/worldLog.ts) */
 export const WORLD_LOG_STORE = storeName("ProjectZ_Worlds");
 /**
+ * MP-24: a private (VIP) server's town -- its seed, its world day and when it began -- kept across the sessions of that
+ * server (server/save/privateTown.ts). Keyed by the PrivateServerId, never by a player: no personal data in it.
+ */
+export const PRIVATE_TOWN_STORE = storeName("ProjectZ_PrivateTowns");
+/**
  * MON-05: the titles and the kill count each player EARNED, kept outside the save so a server rolled back to v4
  * code (which rewrites the save without them) cannot erase them (server/save/titleRecord.ts). Keyed by UserId.
  */
