@@ -395,6 +395,9 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		life(slot, state) {
 			replicator.life(slot, state);
 		},
+		died(slot, arg) {
+			replicator.died(slot, arg);
+		},
 	});
 	// the death goes out reliably (§4.5), `runOver` goes into the save the same tick, and the daybreak countdown
 	// starts — on every server kind (server/sim/life.ts rules 4 and 5)

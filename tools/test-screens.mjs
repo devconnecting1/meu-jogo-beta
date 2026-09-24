@@ -1210,14 +1210,49 @@ console.log(
 		return g !== undefined && shownIn(g, deathRoot());
 	};
 	const base = { days: 3, bestDay: 12, level: 7, kills: 20, bosses: 0, first: false, record: false };
-	/** a state: what the save holds, and what the run loop and the roster tell the screen */
+	const DC = require(join(SRC, "shared/data/deathCause.ts"));
+	const K = DC.DeathKind;
+	/** a state: what the save holds, what the run loop and the roster tell the screen, and why the server said they died */
 	const CASES = [
-		{ name: "espera, alguem de pe", wait: true, standing: 2, seconds: 197, night: true, money: 99 },
-		{ name: "espera de dia", wait: true, standing: 1, seconds: 180, night: false, money: 99 },
-		{ name: "a cidade cai", wait: true, standing: 0, seconds: 150, night: true, money: 99, later: 6 },
+		{
+			name: "espera, alguem de pe",
+			wait: true,
+			standing: 2,
+			seconds: 197,
+			night: true,
+			money: 99,
+			cause: { kind: K.Horde, night: true },
+		},
+		{
+			name: "espera de dia",
+			wait: true,
+			standing: 1,
+			seconds: 180,
+			night: false,
+			money: 99,
+			cause: { kind: K.Horde, night: false },
+		},
+		{
+			name: "a cidade cai",
+			wait: true,
+			standing: 0,
+			seconds: 150,
+			night: true,
+			money: 99,
+			later: 6,
+			cause: { kind: K.Boss, night: true },
+		},
 		{ name: "vida nova", wait: true, standing: 2, seconds: 120, night: true, money: 0, newLife: true },
-		{ name: "sem moedas", wait: true, standing: 1, seconds: 100, night: true, money: 0 },
-		{ name: "fim (ninguem te levanta)", wait: false, money: 99 },
+		{
+			name: "sem moedas",
+			wait: true,
+			standing: 1,
+			seconds: 100,
+			night: true,
+			money: 0,
+			cause: { kind: K.Hunger, night: true },
+		},
+		{ name: "fim (ninguem te levanta)", wait: false, money: 99, cause: { kind: K.Poison, night: false } },
 		{ name: "fim sem moedas", wait: false, money: 0 },
 		{
 			name: "primeira morte, recorde",
@@ -1227,6 +1262,7 @@ console.log(
 			night: true,
 			money: 20,
 			summary: { ...base, days: 13, bestDay: 13, first: true, record: true },
+			cause: { kind: K.Horde, night: true },
 		},
 	];
 	/** opens a case as main.client.ts does; returns { tick, close, calls, standing } */
@@ -1239,6 +1275,7 @@ console.log(
 			onRebirth: () => calls.rebirth++,
 			onNewRun: c.newLife ? undefined : () => calls.newRun++,
 			onHome: () => calls.home++,
+			cause: c.causeOf ?? (c.cause === undefined ? undefined : () => c.cause),
 		};
 		const summary = c.summary ?? base;
 		const who = { standing: c.standing };
@@ -1542,6 +1579,122 @@ console.log(
 			asked && confirmed && cleaned,
 			JSON.stringify({ asked, confirmed, cleaned }),
 		);
+	}
+
+	// ---- the lesson (UI-13 / BEM-08): the cause the server told this survivor, and one tip for it -- never a blame
+	{
+		const { THEME } = require(join(SRC, "client/ui/theme.ts"));
+		const { LANG_TABLE } = require(join(SRC, "shared/data/lang.ts"));
+		const bold = g => String(g.FontFace?.Weight?.Name ?? g.FontFace?.Weight ?? "").includes("Bold");
+		save.lifeDeaths = 1;
+		save.runRev = 2;
+		const told = { note: undefined };
+		// the server's word lands a frame after the screen opened (netClient.ts netDeathNote): the general tip until then
+		const s = openCase({ ...CASES[0], cause: undefined, causeOf: () => told.note });
+		const general = `Tip: ${DC.deathTip({ kind: K.Unknown, night: false }, false, 3)}`;
+		const before = { cause: text("Cause"), tip: text("Tip"), bold: bold(inDeath("Cause")) };
+		told.note = { kind: K.Horde, night: true };
+		const arrive = measure(() => s.tick());
+		const want = `Tip: ${DC.deathTip(told.note, false, save.lifeDeaths + save.runRev)}`;
+		check(
+			'a causa chega depois de a tela abrir: ate la a dica geral na primeira linha; depois "Killed by the horde at night." (negrito, claro) e a dica dela, sem criar Instance',
+			before.cause === general &&
+				before.tip === "" &&
+				!before.bold &&
+				text("Cause") === "Killed by the horde at night." &&
+				bold(inDeath("Cause")) &&
+				sameColor(inDeath("Cause").TextColor3, THEME.foreground) &&
+				text("Tip") === want &&
+				sameColor(inDeath("Tip").TextColor3, THEME.mutedForeground) &&
+				arrive.created === 0,
+			`${before.cause} -> ${text("Cause")} / ${text("Tip")}`,
+		);
+		const idle = measure(() => {
+			for (let f = 0; f < 60; f++) s.tick();
+		});
+		check("...e 60 quadros com a mesma causa nao escrevem nada", idle.writes === 0, `${idle.writes} escritas`);
+		s.close();
+		// L4 of the review of ca9494a: "You died" (nobody stands you up) is refreshed by nobody -- the screen reads the
+		// server's word itself, every frame it is up (RunService.Heartbeat), and lets go of the frame when it closes
+		{
+			const over = CASES.find(c => !c.wait);
+			const late = { note: undefined };
+			const beats = () => RunService.Heartbeat.conns.length;
+			const beatsBefore = beats();
+			const o = openCase({ ...over, cause: undefined, causeOf: () => late.note });
+			const opened = { cause: text("Cause"), beats: beats() };
+			for (let f = 0; f < 30; f++) RunService.Heartbeat.Fire(1 / 60);
+			flush();
+			const stillGeneral = text("Cause") === general;
+			late.note = { kind: K.Hunger, night: false };
+			const arrive2 = measure(() => {
+				RunService.Heartbeat.Fire(1 / 60);
+				flush();
+			});
+			const got = { cause: text("Cause"), tip: text("Tip") };
+			const quiet = measure(() => {
+				for (let f = 0; f < 60; f++) RunService.Heartbeat.Fire(1 / 60);
+				flush();
+			});
+			o.close();
+			check(
+				'"You died": a causa que chega depois (reconexao, rede lenta) aparece no quadro seguinte -- "Starved." e a dica dela --, sem criar Instance; nada escrito sem mudanca; a leitura acaba com a tela',
+				opened.cause === general &&
+					stillGeneral &&
+					opened.beats === beatsBefore + 1 &&
+					got.cause === "Starved." &&
+					got.tip.startsWith("Tip: ") &&
+					arrive2.created === 0 &&
+					quiet.writes === 0 &&
+					beats() === beatsBefore,
+				JSON.stringify({ opened, got, beats: beats(), before: beatsBefore, quiet: quiet.writes }),
+			);
+		}
+		// every cause says what happened in its words, and a first death always gets the most basic tip of its cause
+		const lines = [];
+		for (const [kind, night, line] of [
+			[K.Horde, true, "Killed by the horde at night."],
+			[K.Horde, false, "Killed by zombies."],
+			[K.Hunger, true, "Starved."],
+			[K.Poison, false, "Poisoned."],
+			[K.Boss, true, "Killed by a boss."],
+		]) {
+			const c = openCase({ ...CASES[7], cause: { kind, night } });
+			lines.push([
+				text("Cause") === line,
+				text("Tip") === `Tip: ${DC.deathTipsOf({ kind, night })[0]}`,
+				text("Epitaph") === "Everyone's first night ends this way. The second one goes better.",
+			]);
+			c.close();
+		}
+		check(
+			"cada causa na sua frase (horda de noite / de dia, fome, veneno, chefe) e, na primeira morte, a dica mais basica dela, sob a linha do onboarding",
+			lines.every(l => l.every(Boolean)),
+			JSON.stringify(lines),
+		);
+		// the curated list: short enough for one line of a phone, in lang.ts, facts and not blame
+		const all = [...DC.ALL_DEATH_TIPS, ...DC.ALL_DEATH_CAUSES];
+		const long = DC.ALL_DEATH_TIPS.filter(t => t.length > DC.DEATH_TIP_MAX_CHARS);
+		const missing = [...all, "Tip:"].filter(t => !LANG_TABLE.includes(t));
+		const blame = all.filter(t =>
+			/\b(fault|blame|should have|failed|mistake|careless|stupid|noob|lazy)\b/i.test(t),
+		);
+		const walks = [K.Horde, K.Hunger, K.Poison, K.Boss].every(kind => {
+			const tips = DC.deathTipsOf({ kind, night: true });
+			const seen = [];
+			for (let turn = 0; turn < tips.length * 2; turn++) {
+				const tip = DC.deathTip({ kind, night: true }, false, turn);
+				if (!seen.includes(tip)) seen.push(tip);
+			}
+			return seen.length === tips.length;
+		});
+		check(
+			`as dicas: no maximo ${DC.DEATH_TIP_MAX_CHARS} caracteres (uma linha no celular), todas na lang.ts, nenhuma culpa; mortes seguidas passam pela lista toda`,
+			long.length === 0 && missing.length === 0 && blame.length === 0 && walks,
+			JSON.stringify({ long, missing, blame, walks }),
+		);
+		save.lifeDeaths = 0;
+		save.runRev = 0;
 	}
 
 	// ---- no churn: a whole wait, with the roster and the coins moving, creates nothing; an idle frame writes nothing

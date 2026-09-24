@@ -30,7 +30,8 @@ export type PixelIconKind =
 	| "heart"
 	| "restart"
 	| "home"
-	| "save";
+	| "save"
+	| "close";
 
 /** bitmap side (pixels) */
 const N = 9;
@@ -228,6 +229,18 @@ const BITMAPS: Record<PixelIconKind, Array<string>> = {
 		"#.......#",
 		"#.......#",
 		"#########",
+	],
+	// a thin cross: "this goes away" on a card that is dismissed by a tap (the dawn card, BEM-04), not a red X button
+	close: [
+		".........",
+		".#.....#.",
+		"..#...#..",
+		"...#.#...",
+		"....#....",
+		"...#.#...",
+		"..#...#..",
+		".#.....#.",
+		".........",
 	],
 };
 

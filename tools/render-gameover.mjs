@@ -16,7 +16,8 @@
  * here: test:screens measures the same drawing (section 7).
  *
  * The cases are the states gameOver.ts has to tell apart (an older checkout ignores what it does not know: the
- * survivors still standing, the record): the first death, waiting with an ally up, the last one down (the town falls
+ * survivors still standing, the record, the cause the server told -- UI-13's lesson): the first death, waiting with an
+ * ally up, the last one down (the town falls
  * unless someone pays), a New game waiting for first light, no Rebirth money, and the end of a run with nobody to wake
  * you (offline).
  */
@@ -106,7 +107,18 @@ function useDevice(touch) {
 }
 
 const noop = () => {};
-const handlers = (newRun = true) => ({ onRebirth: noop, onNewRun: newRun ? noop : undefined, onHome: noop });
+/** the handlers main.client.ts passes; `cause`: why the server said this survivor died (UI-13, an older checkout ignores it) */
+const handlers = (newRun = true, cause = undefined) => ({
+	onRebirth: noop,
+	onNewRun: newRun ? noop : undefined,
+	onHome: noop,
+	cause: cause === undefined ? undefined : () => cause,
+});
+/** shared/data/deathCause.ts DeathKind */
+const HORDE = 1;
+const HUNGER = 2;
+const POISON = 3;
+const BOSS = 4;
 
 /**
  * name, what the save holds, and how to open it. `standing`: the other survivors still up in town (undefined: the
@@ -119,18 +131,21 @@ const CASES = [
 		save: { money: 20, deathCount: 0, runRev: 0, lifeDeaths: 0, day: 1, bestDay: 1 },
 		summary: { days: 1, bestDay: 1, level: 1, kills: 11, bosses: 0, first: true, record: false },
 		wait: { seconds: 197, night: true, standing: 2 },
+		cause: { kind: HORDE, night: true },
 	},
 	{
 		name: "wait-broke",
 		save: { money: 4, deathCount: 0, runRev: 3, lifeDeaths: 1, day: 3, bestDay: 12 },
 		summary: { days: 3, bestDay: 12, level: 7, kills: 20, bosses: 0, first: false, record: false },
 		wait: { seconds: 102, night: true, standing: 1 },
+		cause: { kind: HUNGER, night: true },
 	},
 	{
 		name: "town-falls",
 		save: { money: 60, deathCount: 1, runRev: 4, lifeDeaths: 1, day: 5, bestDay: 5 },
 		summary: { days: 5, bestDay: 5, level: 6, kills: 64, bosses: 0, first: false, record: true },
 		wait: { seconds: 150, night: true, standing: 0, later: 6 },
+		cause: { kind: BOSS, night: true },
 	},
 	{
 		name: "new-life",
@@ -142,6 +157,7 @@ const CASES = [
 		name: "offline",
 		save: { money: 20, deathCount: 0, runRev: 2, lifeDeaths: 1, day: 4, bestDay: 6 },
 		summary: { days: 4, bestDay: 6, level: 3, kills: 30, bosses: 0, first: false, record: false },
+		cause: { kind: POISON, night: false },
 	},
 	{
 		name: "offline-broke",
@@ -160,14 +176,14 @@ const SCREENS = [
 function open(c) {
 	Object.assign(save, c.save);
 	if (c.wait === undefined) {
-		const close = GO.showRunSummary(ctx, c.summary, handlers());
+		const close = GO.showRunSummary(ctx, c.summary, handlers(true, c.cause));
 		return { close, frame: () => {} };
 	}
 	const w = c.wait;
 	const handle = GO.showDaybreakWait(
 		ctx,
 		c.summary,
-		handlers(w.newLife !== true),
+		handlers(w.newLife !== true, c.cause),
 		w.newLife === true,
 		() => w.standing,
 	);

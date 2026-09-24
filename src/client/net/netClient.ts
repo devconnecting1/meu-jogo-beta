@@ -56,6 +56,7 @@ import { getCtx } from "../bootstrap";
 import { unwrapTick } from "shared/net/codec";
 import { DESIGN } from "shared/engine/constants";
 import { titleFromWire } from "shared/data/titles";
+import { DeathNote, deathFromWire } from "shared/data/deathCause";
 import {
 	DYNAMIC_ID_BASE,
 	MAX_PLAYERS,
@@ -328,6 +329,16 @@ let lastSelfTick = -math.huge;
 /** the local survivor's last reliable life state (§7.3), and whether it still has to reach refs.player */
 let localLife = LifeState.Up as number;
 let localLifeDirty = false;
+/**
+ * UI-13: why the local survivor last died, as the server told them alone (`Announce{Died}`, protocol note 24) -- the
+ * death screen's cause line and tip. Forgotten when they stand up again and on a new session.
+ */
+let deathNote: DeathNote | undefined;
+/**
+ * BEM-04: the server gave this survivor the dawn card's break line (`Announce{BreakNudge}`, protocol note 24), not yet
+ * taken by client/main.client.ts. The client never decides it: it shows what it was told, once.
+ */
+let breakNudge = false;
 let staleSelfBlocks = 0;
 let timeSeq = 0;
 let timeAt = 0;
@@ -524,6 +535,8 @@ function applyWorldEvent(e: WorldEvent, batchTick: number): void {
 		if (e.slot === mySlot) {
 			localLife = e.state;
 			localLifeDirty = true;
+			// back on their feet: the last death's cause is not the next one's
+			if (e.state === LifeState.Up) deathNote = undefined;
 		}
 		return;
 	}
@@ -547,6 +560,16 @@ function applyWorldEvent(e: WorldEvent, batchTick: number): void {
 		// MON-05: a title this survivor just earned is their news, not the round banner's (the decoder checked the id)
 		if (e.msg === AnnounceKind.TitleUnlocked) {
 			noticeTitle(titleFromWire(e.arg));
+			return;
+		}
+		// UI-13: why this survivor just died -- for the death screen, never the round banner (the decoder checked it)
+		if (e.msg === AnnounceKind.Died) {
+			deathNote = deathFromWire(e.arg);
+			return;
+		}
+		// BEM-04: the dawn card's break line, decided by the server for this survivor alone -- never a banner
+		if (e.msg === AnnounceKind.BreakNudge) {
+			breakNudge = true;
 			return;
 		}
 		pendingAnnounce.push(announceText(e.msg, e.arg));
@@ -933,6 +956,33 @@ export function netOnTown(fn: (notice: TownNotice) => void): void {
 }
 
 /**
+ * UI-13: why the local survivor last died, as the server read it off the body and told them alone (`Announce{Died}`):
+ * undefined before it arrives, offline, and once they stand up again. client/onboarding/gameOver.ts polls it.
+ */
+export function netDeathNote(): DeathNote | undefined {
+	return deathNote;
+}
+
+/**
+ * BEM-04: did the server give this survivor the dawn card's break line since the last call? True once per
+ * `Announce{BreakNudge}` (the server sends it once a session); client/main.client.ts puts it on the card, or on the feed.
+ */
+export function netTakeBreakNudge(): boolean {
+	const told = breakNudge;
+	breakNudge = false;
+	return told;
+}
+
+/**
+ * BEM-04: the local survivor's HP as the server's last self block had it, while the server owns the body (undefined
+ * offline, before the first block and where the vitals are not the server's -- prediction.ts ADOPT_VITALS): the dawn
+ * card counts the damage the server's body took, not the prediction's.
+ */
+export function netSelfHp(): number | undefined {
+	return prediction.serverHp();
+}
+
+/**
  * MON-05: `fn` hears each title the SERVER granted this survivor (a TITLES id), once, the moment it did -- the
  * `Announce{TitleUnlocked}` sent to this client alone. client/ui/titleNotice.ts mirrors it into the save's display
  * copy and shows the toast.
@@ -957,6 +1007,8 @@ export function netReset(): void {
 	lastSelfTick = -math.huge;
 	localLife = LifeState.Up;
 	localLifeDirty = false;
+	deathNote = undefined;
+	breakNudge = false;
 	boundWorld = undefined;
 	boundPlayer = undefined;
 	boundSave = undefined;
