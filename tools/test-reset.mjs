@@ -65,6 +65,11 @@
  *                              WorldReset, the host's seed and attribute are the simulation's town, nobody is left
  *                              dead, the failure is logged, and rule 6 is armed again.
  *
+ * The review of the F5 save-path fix:
+ *
+ *  18. OWED, THEN A THROW      the load step that meets the kept body (lives.adopt) grants the owed new life and then
+ *                              throws: the new life stays on the save the session keeps (it is granted only once).
+ *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs, plus the small fake Roblox below (the
  * same one tools/test-body.mjs uses).
  */
@@ -2081,6 +2086,58 @@ section("17) the reset's own time is not the new world's to repay, and the clien
 		row !== undefined && typeof row.rewindClamped === "number" && typeof row.shots === "number",
 		"the admin view's row for a survivor carries the rewind clamps and the shots they are out of (MP-16)",
 		row === undefined ? "no row" : `${row.rewindClamped} of ${row.shots}`,
+	);
+});
+
+// ================================================================ 18: the review of the F5 save-path fix
+
+section("18) an owed new life is not lost when the load step that grants it throws (F5 review)", () => {
+	const { WIPE_DECISION_S } = require(join(SRC, "server/sim/life.ts"));
+	const s = bootServer();
+	const wipes = s.wipes();
+	const idA = newUser();
+	let a = s.join(idA, "owed");
+	veteran(s.save(a));
+	s.enter(a);
+	const b = s.join(newUser(), "stayer");
+	veteran(s.save(b));
+	s.enter(b);
+	s.sim.clock.setClock(20, 3);
+	s.kill(a);
+	s.kill(b);
+	s.run(5);
+	s.quit(a); // gone before the window closes: the world that ends owes them the new life
+	s.run(WIPE_DECISION_S);
+	check(wipes.length === 1, "the world ended while the fallen survivor was away");
+	// back within the 5 min: the keeper grants the owed life on the loaded save, and then the step throws
+	const adopt = s.host.adopt;
+	s.host.adopt = (...args) => {
+		adopt(...args);
+		throw new Error("injected: adopt failed after granting");
+	};
+	try {
+		a = s.join(idA, "owed");
+	} finally {
+		s.host.adopt = adopt;
+	}
+	// a load that was thrown away would be retried after LOAD_RETRY_COOLDOWN: give it the time
+	s.run(11, 0.5);
+	const save = s.save(a);
+	check(
+		save !== undefined && save.day === 1 && save.invenWeapon[PISTOL] === 0 && save.runOver === false,
+		"the owed new life is on the save the session keeps: life day 1, the starter kit, alive",
+		save === undefined
+			? "no LoadAck"
+			: `day ${save.day}, pistol ${save.invenWeapon[PISTOL]}, runOver ${save.runOver}`,
+	);
+	const sp = s.enter(a);
+	check(sp !== undefined && !sp.state.dead, "…and the survivor walks into the new town standing");
+	s.quit(a);
+	const doc = s.stored(idA);
+	check(
+		doc?.day === 1 && doc?.runOver === false && doc?.level === 14,
+		"…and that is what reaches the DataStore (level kept)",
+		`day ${doc?.day}, runOver ${doc?.runOver}, level ${doc?.level}`,
 	);
 });
 

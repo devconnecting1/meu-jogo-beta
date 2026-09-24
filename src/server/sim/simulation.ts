@@ -26,8 +26,8 @@
  * millisecond reading per tick for the §12.2 metrics.
  */
 import { isFiniteNumber } from "shared/net/codec";
-import { MAX_PLAYERS, MP_PHASE, SIM_HZ } from "shared/net/mpConfig";
-import { EdgeShift, edgeCount, FxEvent, IntentKind, IntentMessage } from "shared/net/protocol";
+import { MAX_PLAYERS, MP_PHASE, SIM_HZ, WORLD_SERVER_PHASE } from "shared/net/mpConfig";
+import { EdgeShift, edgeCount, FxEvent, HeldBit, IntentMessage } from "shared/net/protocol";
 import { serverWorld, updateGroundItems, WorldData } from "shared/game/world";
 import { PlayerState } from "shared/game/player";
 import { ZombieState } from "shared/game/entities";
@@ -35,6 +35,7 @@ import { gameHours } from "shared/sim/clock";
 import { InputCommand } from "shared/net/protocol";
 import { stepPlayer } from "shared/sim/playerMove";
 import { emitSound, reactToHit } from "shared/sim/ai/zombieBrain";
+import { ServerBackpack } from "./backpack";
 import { ServerBuild } from "./build";
 import { TickAccumulator } from "./heartbeat";
 import { ServerCombat } from "./combat";
@@ -53,18 +54,12 @@ import { ZombieWorld } from "./zombies";
 
 /**
  * MP_PHASE from which the SERVER owns the interactive world too: ground items, loot, doors, lights,
- * constructions, crafting and the backpack (docs/MULTIPLAYER.md §11.3 F3).
- *
- * It is deliberately one phase ABOVE the shipped `MP_PHASE`, because flipping it is a two-sided move: the
- * moment the server owns the items, the client must stop making its own and start drawing the `ItemAdd` /
- * `DoorSet` / `SolidAdd` deltas it currently ignores (client/net/netClient.ts, F3 front 3B/3C). Turning this
- * on before that lands would empty the town instead of sharing it. Everything below is written, wired and
- * tested at `world: true`; the switch is the last line of F3, not the first.
+ * constructions, crafting and the backpack (docs/MULTIPLAYER.md §11.3 F3). It lives in shared/net/mpConfig.ts
+ * because it is a two-sided switch — the client mirrors the `World` deltas and sends the backpack verbs from the
+ * same phase — and is re-exported here for the callers that always read it from the simulation.
  */
-export const WORLD_SERVER_PHASE = 3;
+export { WORLD_SERVER_PHASE } from "shared/net/mpConfig";
 
-/** backpack intents one survivor may have waiting for their next tick (§8.2 caps the wire rate anyway) */
-const INTENT_QUEUE_MAX = 8;
 /** what an absent horde falls back to, so the queries never allocate a list per tick */
 const EMPTY_ZOMBIES: ReadonlyArray<ZombieState> = [];
 
@@ -222,8 +217,13 @@ export class ServerSimulation {
 	readonly worldOut = new WorldOut();
 	/** the result of a survivor's action press, for the caller's sounds and toasts */
 	onInteract?: (sp: ServerPlayer, outcome: InteractOutcome) => void;
-	/** the result of a backpack intent (craft, use, equip, learn) */
+	/** the result of a backpack intent (craft, use, equip, learn, switch), or of a pack delivered on the server */
 	onBackpack?: (sp: ServerPlayer, outcome: BackpackOutcome) => void;
+	/**
+	 * The backpack verbs (server/sim/backpack.ts): queued per survivor, applied right before the command they were
+	 * made during (§2.4), acknowledged by nonce. It outlives a town (MP-22): the acks are about the connection.
+	 */
+	readonly backpack: ServerBackpack;
 	/**
 	 * A cosmetic effect the simulation asked for, already in wire form (§4.1 Fx). server/net/mpHost.ts points
 	 * it at the replicator; a caller that leaves it undefined simply drops the effects, which is what the
@@ -240,8 +240,6 @@ export class ServerSimulation {
 	private readonly bodies = new Array<PlayerState>();
 	/** the slot of each entry of `bodies`, in the same order: the roster index is NOT the slot */
 	private readonly bodySlots = new Array<number>();
-	/** backpack intents waiting for their slot's next step (§2.4) */
-	private readonly intents = new Map<number, Array<IntentMessage>>();
 	/** §3.6: who was alive and at the controls during the current world day, by UserId */
 	private readonly presence = new Map<number, Presence>();
 	/** the filtered ping of whoever played on this server lately, by UserId, and the tick it was last sampled (`setPing`) */
@@ -257,6 +255,8 @@ export class ServerSimulation {
 	/** what the boot decided this server owns; a world that ends is rebuilt with the very same answers (MP-22) */
 	private readonly ownsHorde: boolean;
 	private readonly ownsInteractive: boolean;
+	/** the survivor whose weapon machine is running this instant (the `chop` hook spills toward them) */
+	private swinger?: ServerPlayer;
 
 	constructor(options: SimulationOptions) {
 		this.world = options.world;
@@ -280,6 +280,16 @@ export class ServerSimulation {
 		};
 		this.ownsInteractive = options.interactive ?? MP_PHASE >= WORLD_SERVER_PHASE;
 		this.ownsHorde = options.zombies ?? MP_PHASE >= 2;
+		this.backpack = new ServerBackpack({
+			craft: () => this.craft,
+			placing: slot => this.build?.placing(slot) === true,
+			simHz: this.simHz,
+			// the pack's items land in the server's save only where the server owns the backpack; below that phase the
+			// client still delivers them into its own copy and reports it
+			deliversPacks: this.ownsInteractive,
+		});
+		this.backpack.onOutcome = (sp, msg, outcome) => this.onBackpack?.(sp, outcome);
+		this.backpack.onPacks = (sp, opened) => this.onBackpack?.(sp, { kind: "delivered", packs: opened });
 		this.adoptSystems(this.buildAround(this.world));
 	}
 
@@ -314,7 +324,7 @@ export class ServerSimulation {
 		this.items?.detach();
 		this.build?.detach();
 		this.worldOut.clear();
-		this.intents.clear();
+		this.backpack.clear();
 		// §3.6 counts the new world's first day from its first tick, exactly as a midnight would start it (the last
 		// real input is about minutes, not days, and is kept); a night half-lived in the old town is no Survivor's
 		for (const [, p] of this.presence) {
@@ -358,6 +368,8 @@ export class ServerSimulation {
 			// tell "the server made this" from "we both generated this from the seed"
 			serverWorld(world);
 			const items = new ServerItems({ world, out: this.worldOut });
+			// the survivors' bodies, as refreshed every tick: who is near an item when it appears (§4.5)
+			items.watch(this.bodies, this.bodySlots);
 			out.items = items;
 			const build = new ServerBuild({
 				world,
@@ -367,7 +379,6 @@ export class ServerSimulation {
 				onSolidChanged: (x, y, w, h) => this.horde?.refs.onSolidChanged?.(x, y, w, h),
 			});
 			out.build = build;
-			out.craft = new ServerCraft({ world, build });
 			out.interaction = new ServerInteraction({
 				world,
 				items,
@@ -375,6 +386,9 @@ export class ServerSimulation {
 				fx: event => this.onFx?.(event),
 			});
 		}
+		// the backpack verbs work with or without the interactive world (server/sim/backpack.ts): only a build recipe
+		// needs `build`, and ServerCraft refuses one without it before anything is spent
+		out.craft = new ServerCraft({ world, build: out.build });
 
 		if (!this.ownsHorde) return out;
 		const horde = new ZombieWorld(world, this.clock);
@@ -415,6 +429,15 @@ export class ServerSimulation {
 				fx: event => this.onFx?.(event),
 				// a bow and a flamethrower do not fire a ray: they ask the world to fly something (§2.3)
 				projectile: request => projectiles.launch(horde.refs, request),
+				// F3: a blade that crosses a tree, a car or a bin may knock something out of it, toward whoever swung
+				// (server/sim/items.ts). Only where the server owns the items; the swinger is the survivor whose
+				// weapon machine is running
+				chop: (s, chopping) => {
+					const items = this.items;
+					const by = this.swinger;
+					if (items === undefined || by === undefined) return false;
+					return items.hitMapItem(s, chopping, by.state.x, by.state.y);
+				},
 			},
 		});
 		out.combat = combat;
@@ -540,6 +563,8 @@ export class ServerSimulation {
 	add(sp: ServerPlayer): boolean {
 		if (this.bySlot.has(sp.slot)) return false;
 		this.bySlot.set(sp.slot, sp);
+		// the welcome that follows (server/sim/life.ts) hands this client every item around the spawn point
+		this.items?.welcomed(sp.slot, sp.state.x, sp.state.y);
 		this.order.push(sp.slot);
 		let i = this.order.size() - 1;
 		while (i > 0 && this.order[i - 1] > sp.slot) {
@@ -562,7 +587,8 @@ export class ServerSimulation {
 		this.build?.remove(slot, sp.save);
 		this.craft?.remove(slot);
 		this.interaction?.remove(slot);
-		this.intents.delete(slot);
+		this.items?.forget(slot);
+		this.backpack.remove(slot);
 		this.bySlot.delete(slot);
 		for (let i = 0; i < this.order.size(); i++) {
 			if (this.order[i] === slot) {
@@ -581,6 +607,8 @@ export class ServerSimulation {
 			const sp = this.bySlot.get(slot);
 			if (sp !== undefined) this.roster.push(sp);
 		}
+		// ...and the bodies with it, so something made between two ticks (an admin's drop) already knows who is near
+		this.refreshBodies();
 	}
 
 	get(slot: number): ServerPlayer | undefined {
@@ -706,6 +734,9 @@ export class ServerSimulation {
 		for (const sp of this.roster) {
 			const consumed = sp.counters.consumed;
 			const cmd = takeCommand(sp);
+			// §2.4: the backpack verbs made during this command land BEFORE it is simulated -- its movement (armour,
+			// a skill) and its weapon machine (a switch) already see them, exactly as the client predicted them
+			this.backpack.beforeCommand(sp, cmd, this.tick);
 			const res = stepPlayer(this.world, sp.state, sp.save, cmd, this.tickDt);
 			noteStep(sp, cmd, res.walking);
 			// a filled tick consumes nothing (players.ts), so only a command the client really sent can count — and
@@ -715,8 +746,13 @@ export class ServerSimulation {
 				sp.counters.consumed > consumed && ((cmd.moveMag > 0 && res.walking) || cmd.edges !== 0),
 			);
 			// the weapon machine runs on the SAME command as the movement: the aim a shot is fired along is
-			// the one the player was holding when they walked that step, never the one two ticks later
-			this.combat?.stepPlayer(sp, cmd, this.tick, this.tickDt);
+			// the one the player was holding when they walked that step, never the one two ticks later. While a
+			// construction is on the cursor the attack and reload edges are the builder's (place, rotate): the weapon
+			// stays holstered, exactly as the client's `updatePredicted` holds it (§2.3 "posição de construção")
+			this.swinger = sp;
+			const armed = this.build?.placing(sp.slot) === true ? holstered(cmd) : cmd;
+			this.combat?.stepPlayer(sp, armed, this.tick, this.tickDt);
+			this.swinger = undefined;
 			// ...and so do the discrete actions (§2.4): the E press and the build edges belong to the command
 			// the player made them during, which is the one just consumed
 			this.stepWorldActions(sp, cmd);
@@ -746,26 +782,17 @@ export class ServerSimulation {
 	// ---------------------------------------------------------------- the interactive world (F3)
 
 	/**
-	 * A backpack intent (craft, use, equip, learn) from one survivor (§2.4, §8.1). It is queued rather than
-	 * applied on arrival, so it lands inside a tick, in order, next to the command it belongs to -- a craft
-	 * and the movement that carried the player to the desk never interleave the wrong way round.
+	 * A backpack verb (switch, use, equip, unequip, learn, craft) from one survivor (§2.4, §8.1). It is queued rather
+	 * than applied on arrival, so it lands inside a tick, in order, right before the command it was made during
+	 * (server/sim/backpack.ts) -- a switch and the shot after it, a craft and the step that carried the player to the
+	 * desk, never interleave the wrong way round. It works whether or not this server owns the interactive world.
 	 *
 	 * The presence verbs are NOT handled here: server/net/mpHost.ts owns who is in the world.
 	 */
 	queueIntent(slot: number, msg: IntentMessage): boolean {
-		if (this.craft === undefined) return false;
-		if (msg.kind === IntentKind.EnterWorld || msg.kind === IntentKind.LeaveWorld) return false;
-		if (!this.bySlot.has(slot)) return false;
-		let list = this.intents.get(slot);
-		if (list === undefined) {
-			list = new Array<IntentMessage>();
-			this.intents.set(slot, list);
-		}
-		// one tick's worth: a client that floods is already rate-limited on the wire (§8.2), and the
-		// per-verb cooldowns in server/sim/craft.ts refuse the rest anyway
-		if (list.size() >= INTENT_QUEUE_MAX) return false;
-		list.push(msg);
-		return true;
+		const sp = this.bySlot.get(slot);
+		if (sp === undefined) return false;
+		return this.backpack.queue(sp, msg, this.tick);
 	}
 
 	/** the bodies array the interaction and placement queries take, rebuilt once per tick */
@@ -784,19 +811,9 @@ export class ServerSimulation {
 	 * action press is the E key and the server picks the target itself.
 	 */
 	private stepWorldActions(sp: ServerPlayer, cmd: InputCommand): void {
-		const craft = this.craft;
 		const build = this.build;
 		const interaction = this.interaction;
-		if (craft === undefined || build === undefined || interaction === undefined) return;
-		const queued = this.intents.get(sp.slot);
-		if (queued !== undefined && queued.size() > 0) {
-			// a dead survivor does not craft, eat or re-equip: the asks are dropped, not held, so they
-			// cannot all fire at once on the tick they are revived (F4)
-			if (!sp.state.dead) {
-				for (const msg of queued) this.applyIntent(sp, msg, craft);
-			}
-			queued.clear();
-		}
+		if (build === undefined || interaction === undefined) return;
 		if (sp.state.dead) return;
 		const action = edgeCount(cmd.edges, EdgeShift.ActionPress);
 		const attack = edgeCount(cmd.edges, EdgeShift.AttackPress);
@@ -823,26 +840,18 @@ export class ServerSimulation {
 		if (this.onInteract !== undefined) this.onInteract(sp, outcome);
 	}
 
-	private applyIntent(sp: ServerPlayer, msg: IntentMessage, craft: ServerCraft): void {
-		let outcome: BackpackOutcome;
-		if (msg.kind === IntentKind.Craft) outcome = craft.craft(sp.slot, sp.state, sp.save, msg.arg);
-		else if (msg.kind === IntentKind.UseItem) outcome = craft.useItem(sp.slot, sp.state, sp.save, msg.arg);
-		else if (msg.kind === IntentKind.Equip) outcome = craft.equip(sp.save, msg.arg);
-		else if (msg.kind === IntentKind.Unequip) outcome = craft.unequip(sp.save, msg.arg);
-		else if (msg.kind === IntentKind.LearnSkill) outcome = craft.learnSkill(sp.save, msg.arg);
-		else return;
-		if (this.onBackpack !== undefined) this.onBackpack(sp, outcome);
-	}
-
 	/** the world's own upkeep: items in flight, loot that may respawn, fires burning down, cooldowns */
 	private stepInteractiveWorld(): void {
+		// the §8.1 cooldowns decay whether or not this server owns the interactive world: the backpack verbs run
+		// through `craft` either way, and a cooldown that never decays is a verb held forever (review #11)
+		this.craft?.step(this.tickDt);
+		this.build?.step(this.tickDt);
 		const items = this.items;
 		if (items === undefined) return;
 		updateGroundItems(this.world, this.tickDt);
-		this.craft?.step(this.tickDt);
-		this.build?.step(this.tickDt);
 		if (this.roster.size() === 0) return;
 		items.rollNearby(this.bodies, gameHours(this.clock.day, this.clock.dayTime), this.tickDt);
+		items.sweepInterest(this.tickDt);
 		this.interaction?.step(this.bodies, this.bodySlots, this.tickDt);
 	}
 
@@ -877,4 +886,23 @@ export class ServerSimulation {
 		copy.sort((a, b) => a < b);
 		return copy[math.min(n - 1, math.floor(n * 0.95))];
 	}
+}
+
+/** HeldBit.Attack and HeldBit.SniperAim: the weapon's own buttons */
+const WEAPON_HELD = HeldBit.Attack + HeldBit.SniperAim;
+
+/**
+ * The command as the weapon machine sees it while a construction is on the cursor: the attack and reload edges and
+ * the weapon's held buttons are the builder's (place, rotate), so the gun sees none of them. The action edge (cancel)
+ * is not the weapon's either, and the movement and the aim are untouched: this is only what `combat.stepPlayer` reads.
+ */
+function holstered(cmd: InputCommand): InputCommand {
+	return {
+		seq: cmd.seq,
+		moveAng: cmd.moveAng,
+		moveMag: cmd.moveMag,
+		aim: cmd.aim,
+		held: cmd.held - (cmd.held & WEAPON_HELD),
+		edges: 0,
+	};
 }

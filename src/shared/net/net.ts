@@ -19,8 +19,13 @@ export const REMOTE_SHOP_ACTION = "ShopAction";
 
 /** the server processes at most one progress report per player in this window (seconds) */
 export const SAVE_MIN_INTERVAL = 10;
-/** maximum JSON length of a progress report */
-export const MAX_SAVE_PAYLOAD = 100000;
+/**
+ * Maximum JSON length of a progress report. From WORLD_SERVER_PHASE the report moves only the settings, the
+ * achievements and a few flags, and the whole save with every counter at its ceiling is ~2.2 KB (+ ≤ 1 KB of
+ * settings; tools/test-save.mjs measures it): 8 KB keeps more than 2× headroom and stops a 100 KB junk report
+ * being parsed at all (security review of 5967a18, #12).
+ */
+export const MAX_SAVE_PAYLOAD = 8192;
 
 /**
  * ok          existing save loaded; progress is persisted

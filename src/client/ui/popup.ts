@@ -1,4 +1,5 @@
 import { GameContext } from "shared/game/context";
+import { registerBack } from "./backStack";
 import { TEXT, THEME, TRANSPARENCY, space } from "./theme";
 import {
 	BUTTON_SIZE,
@@ -99,6 +100,10 @@ export function popup(ctx: GameContext, title: string, body: string, buttons: Ar
 	// a pad player lands on the dialog: its primary action, or -- a help or a Records popup, whose one button is a
 	// secondary "Close" -- its last button. Left on the "?" behind the scrim, the next A opened a second popup
 	const focus = primary ?? last;
+	// B / Backspace dismisses the popup WITHOUT answering it (backStack.ts): what its Close / Cancel / Back does, and
+	// never a real answer -- "watch the tutorial?" is left open to ask again, not answered "No". Registered before the
+	// focus moves, so the pad goes back to the control that opened it (the "?")
+	registerBack(card, (): void => dialog.close());
 	if (focus !== undefined) autoFocus(focus);
 	return dialog.root;
 }

@@ -97,6 +97,32 @@ function install() {
 	};
 	globalThis.print = () => {};
 	globalThis.warn = (...a) => console.warn(...a);
+	// Luau's xpcall on top of the SUITE's own `pcall`, looked up at call time (each suite's fake scheduler decides what
+	// a yield inside one does), and a `debug.traceback` that only marks where Luau puts the stack: the server's save
+	// path and tick report their errors through them (server/main.server.ts, server/net/mpHost.ts). A suite that adds
+	// other `debug` members (profilebegin, …) extends this object instead of replacing it.
+	globalThis.xpcall = (fn, handler, ...args) => {
+		const [ok, value] =
+			typeof globalThis.pcall === "function"
+				? globalThis.pcall(fn, ...args)
+				: (() => {
+						try {
+							return [true, fn(...args)];
+						} catch (e) {
+							return [false, e instanceof Error ? e.message : e];
+						}
+					})();
+		if (ok) return [true, value];
+		try {
+			return [false, handler(value)];
+		} catch {
+			// Luau: a handler that errors makes xpcall answer false and a fixed message
+			return [false, "error in error handling"];
+		}
+	};
+	globalThis.debug = {
+		traceback: message => `${message ?? ""}\nstack traceback:\n\t[luau-shim: no Luau stack under Node]`,
+	};
 
 	class Color3 {
 		constructor(r = 0, g = 0, b = 0) {
