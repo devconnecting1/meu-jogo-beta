@@ -1195,11 +1195,11 @@ export class Replicator {
 				if (e.x !== undefined && e.y !== undefined) this.place(en, e.x, e.y);
 			} else {
 				this.place(en, e.x, e.y);
-				// what shows a zombie: its green blood, its debris (a chewed wall, an exploder), a spit, a sound. A survivor's
-				// red blood, an explosion (its own light), a boss's needle, a survivor's arrow: sent in range, as a survivor
-				// or a boss is
+				// what shows a zombie: its blood (BloodKind.Horde), its debris (a chewed wall, an exploder), a spit, a sound.
+				// A survivor's blood (Red), an explosion (its own light), a boss's needle, a survivor's arrow: sent in range,
+				// as a survivor or a boss is
 				if (e.t === FxType.Blood) {
-					en.sight = e.kind === BloodKind.Green;
+					en.sight = e.kind === BloodKind.Horde;
 				} else if (e.t === FxType.Debris) {
 					// a window's glass giving way (EDI-18) is heard in range whoever broke it: its DoorSet is global already
 					// (every client predicts against the frame), so hiding the crash in the dark would hide nothing from a

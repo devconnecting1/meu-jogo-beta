@@ -2144,19 +2144,25 @@ section("17) the reset's own time is not the new world's to repay, and the clien
 		"the admin view's row for a survivor carries the rewind clamps and the shots they are out of (MP-16)",
 		row === undefined ? "no row" : `${row.rewindClamped} of ${row.shots}`,
 	);
-	// ...and the window glass's refusals (EDI-18, review of ef98768 L5): an attempt from across the town is counted there
+	// ...and the window glass's refusals (EDI-18, review of ef98768 L5): an E press from across the town is counted
+	// there; a blade's swing is not evidence (the review of b61425a)
 	{
 		const WIN = require(join(SRC, "shared/game/windows.ts"));
 		const pane = s.host.world.solids.find(q => WIN.windowIntact(q));
 		const me = s.sim.players().find(q => q.userId === a.UserId);
 		const was = row?.windowRefused ?? -1;
-		const got =
-			pane !== undefined && me !== undefined ? s.sim.windows?.byHand(me.slot, me.state, pane, 30) : "none";
+		const byHand = pressed =>
+			pane !== undefined && me !== undefined
+				? s.sim.windows?.byHand(me.slot, me.state, pane, 30, pressed)
+				: "none";
+		const swung = byHand(false);
+		const mid = s.host.anomalies().find(r => r.userId === a.UserId)?.windowRefused ?? -1;
+		const got = byHand(true);
 		const after = s.host.anomalies().find(r => r.userId === a.UserId)?.windowRefused ?? -1;
 		check(
-			was === 0 && got === "range" && after === 1,
-			"...and the window glass's refused attempts by hand (EDI-18): one from across the town shows in the row",
-			`${was} -> ${got} -> ${after}`,
+			was === 0 && swung === "range" && mid === 0 && got === "range" && after === 1,
+			"...and the window glass's refused E presses (EDI-18): one from across the town shows in the row, a swing's does not",
+			`${was} -> swing ${swung} -> ${mid} -> press ${got} -> ${after}`,
 		);
 	}
 });

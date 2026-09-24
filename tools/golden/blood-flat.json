@@ -1,0 +1,6 @@
+{
+	"note": "draw-call digest of the flat combat blood of a seeded fight (tools/test-world-art.mjs --golden-blood, legacyBloodDraw); the horde's colour by name",
+	"recordedFrom": "92f6543",
+	"count": 117515,
+	"sha1": "4143859ab3229e238fe4879045622559d7e47744"
+}

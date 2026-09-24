@@ -130,6 +130,10 @@
  *     admin, asked for a new town; server/match/townRestart.ts). The client words the news by it -- a town that was
  *     restarted did not fall. Anything above WORLD_RESET_CAUSE_MAX drops the event, like a bad seed. The town's NAME
  *     is not on the wire: every side derives it from the seed (shared/data/townNames.ts).
+ * 22. (ART-15, the blood's direction) `Blood`'s kind byte carries BLOOD_UNDIRECTED (0x80) when the blood has no
+ *     direction -- a kill, a bite the simulation gave no angle --, and its angle byte (still sent, 0) means nothing:
+ *     the client sprays it all round. No byte more. Before, "no direction" travelled as angle 0 and every such spray
+ *     and stain went to +x. `BloodKind.Green` is now `BloodKind.Horde` (same value, 1): the horde bleeds dark red.
  * 23. (EDI-18, the window glass) No new message and no byte more.
  *       - S→C: a window's glass breaking is the `DoorSet` every door already takes, with the window's STATIC id and
  *         `state` = Open (the open frame: shared/game/windows.ts); GLOBAL like a door's, since it changes everybody's
@@ -142,19 +146,19 @@
  *         broadcast first -- which the newcomer drops, being before its InitBegin -- and is repeated after the welcome,
  *         at the end of its own batch after its WorldInit, with every other global change of the town's state in that
  *         broadcast (SolidAdd, SolidRemove, DoorSet, SolidHp, LightSet, PowerSet: all idempotent; server/net/
- *         replication.ts `flushWorld`). The crash
- *         is the `Debris` Fx with the material "glass", appended as wire id 6 (fxWire.ts `GLASS_DEBRIS`): an older
- *         client reads an unknown material as "impact". It is heard in range but, unlike a thud or a hit, not held
- *         back by the sight filter (MP-07): the DoorSet already told everybody that pane broke. A zombie's blows on
- *         the glass are the "structure" debris of a blow on a barricade, sight-filtered as before.
+ *         replication.ts `flushWorld`). The crash is the `Debris` Fx with the material "glass", appended as wire
+ *         id 6 (fxWire.ts `GLASS_DEBRIS`): an older client reads an unknown material as "impact". It is heard in
+ *         range but, unlike a thud or a hit, not held back by the sight filter (MP-07): the DoorSet already told
+ *         everybody that pane broke. A zombie's blows on the glass are the "structure" debris of a blow on a
+ *         barricade, sight-filtered as before.
  *       - C→S: breaking glass with E is an EXPLICIT intent, `HeldBit.Glass` (8) on the command that carries the
  *         ActionPress edge -- set only when the client's hint was the window (client/systems/interaction.ts, the
  *         edge and the bit travel together through client/net/commands.ts). HELD_MASK becomes 15: a bit above it is
  *         still malformed. The server breaks a pane only on a press with the bit, and a press with it does nothing
  *         else (server/sim/interaction.ts `act`): E meant for an item, a search, a door or a repair never smashes
  *         glass, whatever the server's own query finds; E meant for the glass never picks something up, nor gets on a
- *         vehicle parked in reach (server/sim/simulation.ts `stepWorldActions`), instead. The
- *         bit follows its edge when a dropped command's edges are carried on (server/sim/players.ts `carryEdges`).
+ *         vehicle parked in reach (server/sim/simulation.ts `stepWorldActions`), instead. The bit follows its edge
+ *         when a dropped command's edges are carried on (server/sim/players.ts `carryEdges`).
  */
 import {
 	NetReader,
@@ -1060,11 +1064,19 @@ export const ProjEndHow = {
 } as const;
 const PROJ_END_MAX = 4;
 
+/** whose blood: a survivor's bright red, or the horde's dark red (it was `Green`, the colour before ART-15, LEG-02) */
 export const BloodKind = {
 	Red: 0,
-	Green: 1,
+	Horde: 1,
 } as const;
+/** must stay below BLOOD_UNDIRECTED: that bit of the same byte is the "no direction" flag (test:net checks it) */
 const BLOOD_KIND_MAX = 1;
+/**
+ * Set on a Blood event's kind byte when it has no direction (a kill, a bite the simulation gave no angle): its angle
+ * byte is then 0 and means nothing, and the client sprays it all round. Without it a kill's spray and its stain were
+ * thrown to +x on every client (the angle 0 of "no angle").
+ */
+const BLOOD_UNDIRECTED = 0x80;
 
 /** pellets per ShotResult (shotgun: 5) */
 export const FX_SHOT_MAX_HITS = 16;
@@ -1122,7 +1134,8 @@ export interface FxBlood {
 	t: typeof FxType.Blood;
 	x: number;
 	y: number;
-	angle: number;
+	/** the way the blood was thrown (attacker -> target); undefined: no way, all round */
+	angle?: number;
 	/** particles, 0..255 */
 	amount: number;
 	/** BloodKind */
@@ -1245,9 +1258,9 @@ function writeFxEvent(w: NetWriter, e: FxEvent): void {
 		case FxType.Blood:
 			w.pos(e.x);
 			w.pos(e.y);
-			w.angle8(e.angle);
+			w.angle8(e.angle ?? 0);
 			w.u8(e.amount);
-			w.u8(clampInt(e.kind, 0, BLOOD_KIND_MAX));
+			w.u8(clampInt(e.kind, 0, BLOOD_KIND_MAX) + (e.angle === undefined ? BLOOD_UNDIRECTED : 0));
 			break;
 		case FxType.Debris:
 			w.pos(e.x);
@@ -1328,9 +1341,11 @@ function readFxEvent(r: NetReader): FxEvent | undefined {
 		const y = r.pos();
 		const angle = r.angle8();
 		const amount = r.u8();
-		const kind = r.u8();
+		const flags = r.u8();
+		const undirected = flags >= BLOOD_UNDIRECTED;
+		const kind = undirected ? flags - BLOOD_UNDIRECTED : flags;
 		if (kind > BLOOD_KIND_MAX) return undefined;
-		return { t: FxType.Blood, x, y, angle, amount, kind };
+		return { t: FxType.Blood, x, y, angle: undirected ? undefined : angle, amount, kind };
 	} else if (t === FxType.Debris) {
 		const x = r.pos();
 		const y = r.pos();

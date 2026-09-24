@@ -142,7 +142,7 @@ export function seqNewer(a: number, b: number): boolean {
 
 // ---------------------------------------------------------------- cosmetic effects (§4.1 Fx)
 
-/** whose blood: zombies (and bosses) bleed green, survivors red (LEG-02) */
+/** whose blood: zombies (and bosses) bleed the horde's dark red, survivors a bright red (LEG-02, ART-15) */
 export type BloodSource = "zombie" | "player";
 /**
  * What a debris burst is made of; the view picks the colour and the sound. "glass": a window's pane giving way

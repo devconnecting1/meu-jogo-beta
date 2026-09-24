@@ -112,7 +112,7 @@ export function drawHumanoid(
 	const head = HEAD;
 	head.color = headColor;
 	head.alpha = alpha;
-	head.stroke = k > 0 ? COLORS.bloodZombie : undefined;
+	head.stroke = k > 0 ? COLORS.acidRim : undefined;
 	head.strokeThickness = 2;
 	head.strokeAlpha = alpha * k;
 	head.zIndex = z + 3;

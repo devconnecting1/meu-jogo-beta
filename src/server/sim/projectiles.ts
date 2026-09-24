@@ -192,7 +192,7 @@ export class ServerProjectiles {
 			if (Ctx.hurtPlayer(refs, p, refs.saveOf(p), b.damage)) {
 				// pushed ALONG the needle's flight (the original threw the survivor back at the boss)
 				p.reactionDir = b.angle;
-				Ctx.fxBlood(refs, p.x, p.y, 3, "player");
+				Ctx.fxBlood(refs, p.x, p.y, 3, "player", b.angle);
 			}
 			return true;
 		}

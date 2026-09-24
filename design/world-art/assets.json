@@ -136,7 +136,8 @@
 		"bossRafflesia": "rbxassetid://108221250630981",
 		"bossRafflesiaFill": "rbxassetid://90583146522584",
 		"bossRafflesiaRim": "rbxassetid://88546042032232",
-		"furniture": "rbxassetid://122442706684073"
+		"furniture": "rbxassetid://122442706684073",
+		"blood": "rbxassetid://115387837711444"
 	},
 	"sha1": {
 		"asphalt": "1fdd11ece41556e020ccd9dce6df52694cf3fc1f",
@@ -273,6 +274,7 @@
 		"bossRafflesia": "7bfae6e45aa6e80a4d48316209d710450072ec70",
 		"bossRafflesiaFill": "f482b2445b0539eb2032a749c182ec15c8a48a6d",
 		"bossRafflesiaRim": "e953b8f3b11554cf2a9445a7f92c7ab6db35b4e5",
-		"furniture": "c126ece5bd6b2fd4944f16bc1f2147a492f2ad95"
+		"furniture": "c126ece5bd6b2fd4944f16bc1f2147a492f2ad95",
+		"blood": "111128bd279481adb1fd71bdc4362b6e537cd44a"
 	}
 }

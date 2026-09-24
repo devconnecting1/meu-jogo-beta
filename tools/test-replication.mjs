@@ -1880,7 +1880,7 @@ section(
 	check(!drawn.has(hiddenId) && drawn.has(heardId), "the snapshot withholds `hidden` and sends `heard` (section b)");
 	for (const [, c] of server.clients) c.fxLog.length = 0;
 	const R = server.replicator;
-	const G = P.BloodKind.Green;
+	const G = P.BloodKind.Horde;
 	R.queueFx({ t: P.FxType.Blood, x: hidden.x, y: hidden.y, angle: 0, amount: 3, kind: G });
 	R.queueFx({ t: P.FxType.Blood, x: heard.x, y: heard.y, angle: 0, amount: 3, kind: G });
 	// a survivor's blood: a survivor is sent in range whatever the light, and so is theirs
@@ -1929,9 +1929,9 @@ section(
 	run(CFG.SNAP_NEAR_EVERY_TICKS);
 	const near = (e, z) => Math.hypot(e.x - z.x, e.y - z.y) < 1;
 	const wl = watcher.fxLog;
-	const greenAt = (log, z) => log.some(e => e.t === P.FxType.Blood && e.kind === G && near(e, z));
-	check(!greenAt(wl, hidden), "the watcher is not sent the blood of the zombie it cannot see");
-	check(greenAt(wl, heard), "but is sent the blood of the one it hears");
+	const hordeBloodAt = (log, z) => log.some(e => e.t === P.FxType.Blood && e.kind === G && near(e, z));
+	check(!hordeBloodAt(wl, hidden), "the watcher is not sent the blood of the zombie it cannot see");
+	check(hordeBloodAt(wl, heard), "but is sent the blood of the one it hears");
 	check(
 		wl.some(e => e.t === P.FxType.Blood && e.kind === P.BloodKind.Red),
 		"and a survivor's blood in range",

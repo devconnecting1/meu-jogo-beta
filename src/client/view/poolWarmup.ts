@@ -6,16 +6,18 @@
  * the sprites a night fight peaks at are created here a few per frame, hidden, at their ZIndex, while the lobby and
  * its menus are on screen and the world renderer draws nothing (shared/engine/renderer.ts: reserve + warm).
  *
- * The counts are a 1920 x 1080 night fight -- 40 walkers, 4 survivors, 40 blood decals, 60 sparks, 12 tracers --
- * per ZIndex, as the real drawers produce them (npm run test:pool draws that fight and holds these numbers to it),
- * flat or pixel art (client/view/charArt.ts) as the uploaded sheets decide. With the characters' sheets live, a
- * character's sprite is a Frame and its ImageLabel: both are built here, the label hidden and without a picture
- * (renderer.ts: ensureImage), so the fight creates neither. The town itself is not reserved: it is drawn at the
- * run's first frame, behind the mount of the HUD, not in the middle of a fight.
+ * The counts are a 1920 x 1080 night fight -- 40 walkers, 4 survivors, 40 blood decals, 60 droplets of blood, 40
+ * chips of debris, 12 tracers -- per ZIndex, as the real drawers produce them (npm run test:pool draws that fight and
+ * holds these numbers to it), flat or pixel art (client/view/charArt.ts, client/view/bloodView.ts) as the uploads decide. With the characters'
+ * sheets live, a character's sprite is a Frame and its ImageLabel: both are built here, the label hidden and without
+ * a picture (renderer.ts: ensureImage), so the fight creates neither; so is a blood stain's once the blood's atlas is
+ * (ART-15). The town itself is not reserved: it is drawn at the run's first frame, behind the mount of the HUD, not in
+ * the middle of a fight.
  */
 import { Z } from "shared/engine/colors";
 import { Renderer } from "shared/engine/renderer";
 import { GameContext } from "shared/game/context";
+import { bloodArtLive } from "./bloodView";
 import { survivorArtLive, zombieArtLive } from "./charArt";
 
 /**
@@ -24,13 +26,30 @@ import { survivorArtLive, zombieArtLive } from "./charArt";
  */
 export type PoolLayer = readonly [number, number, number, number, number?];
 
-/** what every look shares: blood on the ground, acid puddles, body shadows, tracers and sparks */
+/** what every look shares: body shadows and tracers */
 export const FIGHT_FX: ReadonlyArray<PoolLayer> = [
-	[Z.decal, 40, 40, 0],
-	[Z.decal + 1, 4, 4, 4],
 	[Z.actorShadow, 44, 44, 0],
 	[Z.projectile, 12, 0, 0],
-	[Z.particle, 60, 60, 0],
+];
+
+/**
+ * The flat blood (client/view/bloodView.ts): round stains, the acid puddles, and over the bodies the round droplets
+ * and the debris (chips off a chewed barricade, sparks off a car), 60 + 40, all of them circles
+ */
+export const BLOOD_FLAT: ReadonlyArray<PoolLayer> = [
+	[Z.decal, 40, 40, 0],
+	[Z.decal + 1, 4, 4, 4],
+	[Z.particle, 100, 100, 0],
+];
+
+/**
+ * The blood once its atlas is uploaded (ART-15): a stain is one cell, an image; the 60 droplets are plain squares
+ * under the bodies, after the 4 acid puddles of the same layer; the 40 chips plain squares over them
+ */
+export const BLOOD_ART: ReadonlyArray<PoolLayer> = [
+	[Z.decal, 40, 0, 0, 40],
+	[Z.decal + 1, 64, 4, 4],
+	[Z.particle, 40, 0, 0],
 ];
 
 /** 40 flat walkers (humanoidView.drawHumanoid): feet, arms, body, head */
@@ -75,6 +94,7 @@ export function reserveFightPool(
 	viewH: number,
 	zombieArt: boolean,
 	survivorArt: boolean,
+	bloodArt = false,
 ): void {
 	const k = math.clamp((viewW * viewH) / REF_AREA, 0.5, 1);
 	const add = (layers: ReadonlyArray<PoolLayer>): void => {
@@ -89,6 +109,7 @@ export function reserveFightPool(
 		}
 	};
 	add(FIGHT_FX);
+	add(bloodArt ? BLOOD_ART : BLOOD_FLAT);
 	add(zombieArt ? HORDE_ART : HORDE_FLAT);
 	add(survivorArt ? SURVIVORS_ART : SURVIVORS_FLAT);
 }
@@ -111,7 +132,7 @@ export function warmFightPool(ctx: GameContext): RBXScriptConnection {
 		if (!idle(ctx)) return;
 		if (!reserved) {
 			reserved = true;
-			reserveFightPool(ctx.renderer, ctx.viewW, ctx.viewH, zombieArtLive(), survivorArtLive());
+			reserveFightPool(ctx.renderer, ctx.viewW, ctx.viewH, zombieArtLive(), survivorArtLive(), bloodArtLive());
 		}
 		if (ctx.renderer.warm(WARM_PER_FRAME) === 0) conn.Disconnect();
 	});
