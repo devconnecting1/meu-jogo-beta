@@ -1,6 +1,6 @@
 {
 	"note": "draw-call digests of WorldView.drawGround + drawSolids with no world art (tools/test-world-art.mjs --golden); noSigns: the same with the building-signage hook stubbed out",
-	"recordedFrom": "the entrances (ART-17), re-recorded on purpose: each doorway's flat entrance by its type -- at most two Frames on the ground (a house's step and coir mat, a shop's rubber mat and nosing, a hospital's ramp and warning strip, a school's steps, a bay's hazard paint and drain...) and the eave in the type's colour; with the entrances' flat drawing patched back to the old doormat, every scene is 7c78b36's golden, call for call",
+	"recordedFrom": "the entrances (ART-17), re-recorded on purpose on c638602 (main after #47 and #48): each doorway's flat entrance by its type -- at most two Frames on the ground (a house's step and coir mat, a shop's rubber mat and nosing, a hospital's ramp and warning strip, a school's steps, a bay's hazard paint and drain...) and the eave in the type's colour; with the entrances' flat drawing patched back to the old doormat, every scene is c638602's golden, call for call",
 	"scenes": {
 		"street": {
 			"count": 1163,

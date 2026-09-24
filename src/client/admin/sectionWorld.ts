@@ -6,6 +6,7 @@ import * as Kit from "../ui/window";
 import { logLocal } from "./net";
 import { CONTENT_H, CONTENT_W, PanelCtx, SectionHandle, region } from "./panelTypes";
 import { ActionResult, BUILDING_KINDS, OverlayKind } from "./world";
+import { Weather, weatherName } from "shared/sim/weather";
 
 /*
  * World, Camera and Debug, all through AdminWorld. Where the server owns the world (MP_PHASE 2) every tool here is a
@@ -44,9 +45,6 @@ export function buildWorld(p: PanelCtx, content: Frame): SectionHandle {
 	const body = region(content, "Body", 0, bodyY, CONTENT_W, bodyH);
 	let slider: SliderHandle | undefined;
 	let statusLabel: TextLabel | undefined;
-	let rain: SwitchHandle | undefined;
-	/** a rain request on its way: the switch keeps the value asked for until the answer (and the clock) arrive */
-	let rainBusy = false;
 	let draggingHour: number | undefined;
 	const switches: Array<[SwitchHandle, () => boolean]> = [];
 
@@ -54,7 +52,6 @@ export function buildWorld(p: PanelCtx, content: Frame): SectionHandle {
 		slider?.disconnect();
 		slider = undefined;
 		statusLabel = undefined;
-		rain = undefined;
 		switches.clear();
 	};
 
@@ -102,25 +99,35 @@ export function buildWorld(p: PanelCtx, content: Frame): SectionHandle {
 		act("Night", "Skip to night", 0, () => p.world.skipToNight(), "clock");
 		act("Dawn", "Dawn", 1, () => p.world.skipToDawn(), "clock");
 		act("Wave", "Force next wave", 2, () => p.world.forceWave(), "wave");
-		rain = Switch(body, "Rain", {
-			x: 0,
-			y: 148,
-			w: CONTENT_W,
-			label: "Rain",
-			description: "Darker; every zombie hunts till next day",
-			value: p.world.ready() && p.world.clock().raining,
-			onChange: v => {
-				if (!needRun(p)) {
-					rain?.set(!v);
-					return;
-				}
-				rainBusy = true;
-				const res = p.world.setRain(v);
-				rainBusy = false;
-				if (!res.ok) rain?.set(!v);
-				report(p, res, "weather");
-			},
-		});
+		// the day's weather (LUZ-05), for everyone on the server, until midnight rolls the next day's
+		makeLabel(
+			body,
+			"WeatherLabel",
+			"Weather today (fog blinds both sides, thunder hides noise)",
+			0,
+			142,
+			CONTENT_W,
+			18,
+			TEXT.xs,
+			THEME.mutedForeground,
+			{ align: "left" },
+		);
+		const weathers = [Weather.Clear, Weather.Rain, Weather.Storm, Weather.DawnFog, Weather.Fog];
+		const ww = (CONTENT_W - space(1) * (weathers.size() - 1)) / weathers.size();
+		for (let i = 0; i < weathers.size(); i++) {
+			const kind = weathers[i];
+			Button(body, `Weather${i + 1}`, weatherName(kind), {
+				x: i * (ww + space(1)),
+				y: 162,
+				w: ww,
+				h: 36,
+				size: "sm",
+				variant: "secondary",
+				onClick: () => {
+					if (needRun(p)) report(p, p.world.setWeather(kind), "weather");
+				},
+			});
+		}
 		const hw = (CONTENT_W - space(2)) / 2;
 		Button(body, "Kill", "Kill all zombies", {
 			x: 0,
@@ -332,8 +339,7 @@ export function buildWorld(p: PanelCtx, content: Frame): SectionHandle {
 					const c = p.world.clock();
 					const phase = c.night ? "Night" : "Day";
 					const wave = c.wave > 0 ? ` · wave ${c.wave}` : "";
-					statusLabel.Text = `Day ${c.day} · ${hhmm(c.hour)} · ${phase}${wave} · ${c.raining ? "Rain" : "Clear"}`;
-					if (rain !== undefined && !rainBusy && rain.get() !== c.raining) rain.set(c.raining);
+					statusLabel.Text = `Day ${c.day} · ${hhmm(c.hour)} · ${phase}${wave} · ${weatherName(c.weather)}`;
 				} else {
 					statusLabel.Text = "No run on screen: start a run to use the world tools.";
 				}

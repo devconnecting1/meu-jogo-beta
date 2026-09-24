@@ -84,6 +84,12 @@ export interface AiClock {
 	darkAlpha: number;
 	isNight: boolean;
 	isRaining: boolean;
+	/** the day's weather (shared/sim/weather.ts `Weather`; the server's, mirrored by the client) */
+	weather: number;
+	/** fog density now, 0..1 (LUZ-05): it shortens the eyes like the rain (perception.ts) */
+	fog: number;
+	/** what a noise carries now besides the rain: THUNDER_HEARING while a thunderclap rolls, else 1 (LUZ-05) */
+	thunderMask: number;
 	/** +1 every time the clock passes 7:00: non-wave zombies lose the trail then */
 	morningCount: number;
 	/**
@@ -194,6 +200,15 @@ export interface AiRefs {
 	 * and a drop, exactly there) or the population recycled it far from everyone (nothing at all).
 	 */
 	onZombieGone?: (z: ZombieState, killed: boolean) => void;
+	/**
+	 * The population is about to MOVE this zombie across the map: a wave walker or a special that fell out of every
+	 * survivor's spawn square, put back on the ring of the nearest one (shared/sim/ai/population.ts `cleanup`). Called
+	 * while it still stands where it was. To the clients it is a different body from here on: the server gives it a new
+	 * identity (server/sim/zombies.ts), so the old one leaves in silence where it stood and the new one fades in where it
+	 * lands -- under its old netId every screen that still had it drew it racing across the town in one snapshot
+	 * (docs/MULTIPLAYER.md §4.4, the owner's report of 2026-09-24, tools/test-zombie-motion.mjs (h)).
+	 */
+	onZombieMoved?: (z: ZombieState) => void;
 	/**
 	 * How a bite, a blast or a boss takes HP off a survivor (§2.3 "Dano em jogadores", MP-00).
 	 *

@@ -23,7 +23,7 @@ import { Renderer, SpriteOpts } from "shared/engine/renderer";
 import type { Opening } from "shared/game/interiors";
 import { querySolids, Solid, WorldData } from "shared/game/world";
 import { overlaps } from "./drawKit";
-import { ENTRANCE_CELLS, ENTRANCE_LOOKS } from "./entranceAtlas";
+import { ENTRANCE_CELLS, ENTRANCE_LOOKS, ENTRANCE_SINGLE_LEAF } from "./entranceAtlas";
 import { doorPick, doorShattered, doorWear, entranceStyle } from "./entrances";
 import { artId } from "./worldArt";
 import { WORLD_TEXEL } from "./worldArtAssets";
@@ -50,6 +50,13 @@ const IGNORED: Record<string, boolean> = {
 };
 /** decoration on a wall that a leaf pinned against it would cover */
 const ON_WALL: Record<string, boolean> = { board: true, notice: true, curtain: true };
+/** the jambs a leaf may hang from, in the order tried */
+const BOTH: ReadonlyArray<string> = ["a", "b"];
+const BOTH_B: ReadonlyArray<string> = ["b", "a"];
+const ONLY_A: ReadonlyArray<string> = ["a"];
+const ONLY_B: ReadonlyArray<string> = ["b"];
+/** inside, where a leaf rests: flat against the wall, else square at its jamb */
+const IN_MODES: ReadonlyArray<string> = ["inFlat", "inSquare"];
 
 /** a cell drawn at a world rect (x, y: its top-left; w, h with its baked shadow) */
 export interface Piece {
@@ -226,12 +233,22 @@ export class EntranceArt {
 			const base = leaf.look ?? doorPick(o, 85, n);
 			if (leaf.kind === "wood") paint = base;
 			else if (leaf.kind === "plank") paint = (ENTRANCE_LOOKS["leaf:wood"] ?? 0) + base;
-			for (const hand of ["a", "b"]) {
+			const outsideOnly = leaf.outsideOnly === true;
+			if (ENTRANCE_SINGLE_LEAF[leaf.kind] === true) {
+				// a single door: ONE leaf, hung at the jamb its place picks -- or, where that side has no room, the other
+				// (a door torn off leaves none: it lies on the step)
+				if (torn !== undefined) continue;
+				const first = doorPick(o, 99, 2) === 0 ? "a" : "b";
+				const hands = first === "a" ? BOTH : BOTH_B;
+				this.restOf(world, plan, b, o, leaf.kind, leaf.inward, outsideOnly, hands, base);
+				continue;
+			}
+			for (const hand of BOTH) {
 				if (hand === torn) continue;
 				// a shop's glass: one leaf's shattered (look 1), the other as the door's
 				const k =
 					leaf.kind === "glass" && shattered !== 0 ? ((shattered === 1) === (hand === "a") ? 1 : 0) : base;
-				this.restOf(world, plan, b, o, leaf.kind, leaf.inward, leaf.outsideOnly === true, hand, k);
+				this.restOf(world, plan, b, o, leaf.kind, leaf.inward, outsideOnly, hand === "a" ? ONLY_A : ONLY_B, k);
 			}
 		}
 		if (torn !== undefined) {
@@ -261,11 +278,12 @@ export class EntranceArt {
 	}
 
 	/**
-	 * Where one leaf of doorway `o` rests, the first place that is free: a door that opens out, pinned flat against
-	 * the wall outside; else (and a door that opens in) pinned flat against the wall inside; else square to the wall at
-	 * its jamb, inside, in the doorway's own clear floor (EDI-12); else nowhere. Pinned flat needs that stretch of wall
-	 * whole under the leaf (no window, no other door, no corner) and nothing standing there. Never square outside: a
-	 * leaf sticking out over the sidewalk would read as a post in the way.
+	 * Where ONE leaf of doorway `o` rests, the first place that is free, hung at the jambs `hands` in that order (a
+	 * double door's leaf has its own jamb; a single door's may hang from either): a door that opens out, pinned flat
+	 * against the wall outside; else (and a door that opens in) pinned flat against the wall inside; else square to the
+	 * wall at its jamb, inside; else nowhere. Pinned flat needs that stretch of wall whole under the leaf (no window,
+	 * no other door, no corner) and nothing standing there; square, nothing of the building in its way. Never square
+	 * outside: a leaf sticking out over the sidewalk would read as a post in the way.
 	 */
 	private restOf(
 		world: WorldData,
@@ -275,25 +293,30 @@ export class EntranceArt {
 		kind: string,
 		inward: boolean,
 		outsideOnly: boolean,
-		hand: string,
+		hands: ReadonlyArray<string>,
 		look: number,
 	): void {
 		const side = o.side;
 		if (!inward) {
-			const out = this.piece(o, `leaf:${kind}:outFlat:${hand}:${side}:${look}`);
-			if (out !== undefined && this.wallRunsOn(world, b, o, out) && this.clear(world, b, out, false)) {
-				plan.outside.push(out);
-				return;
+			for (const hand of hands) {
+				const out = this.piece(o, `leaf:${kind}:outFlat:${hand}:${side}:${look}`);
+				if (out !== undefined && this.wallRunsOn(world, b, o, out) && this.clear(world, b, out, false)) {
+					plan.outside.push(out);
+					return;
+				}
 			}
 			if (outsideOnly) return;
 		}
-		const flat = this.piece(o, `leaf:${kind}:inFlat:${hand}:${side}:${look}`);
-		if (flat !== undefined && this.wallRunsOn(world, b, o, flat) && this.clear(world, b, flat, true)) {
-			plan.inside.push(flat);
-			return;
+		for (const mode of IN_MODES) {
+			for (const hand of hands) {
+				const p = this.piece(o, `leaf:${kind}:${mode}:${hand}:${side}:${look}`);
+				if (p === undefined) continue;
+				if (mode === "inFlat" && !this.wallRunsOn(world, b, o, p)) continue;
+				if (!this.clear(world, b, p, true)) continue;
+				plan.inside.push(p);
+				return;
+			}
 		}
-		const square = this.piece(o, `leaf:${kind}:inSquare:${hand}:${side}:${look}`);
-		if (square !== undefined && this.clear(world, b, square, true)) plan.inside.push(square);
 	}
 
 	/** the body of a piece (its baked shadow left out) */

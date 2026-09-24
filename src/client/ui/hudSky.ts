@@ -7,7 +7,8 @@
  *   .-------------------------------.        touch:   a plate in the top corner, under Menu and Bag -- the thumbs
  *   |          .  .  O  .           |                 own the bottom (hudConsole.ts placeTouchSky)
  *   |      .    the sun, or the moon .  |
- *   |   .     travels the arc      ! |    <- red pips: where the horde comes (nightfall by day; the three waves at night)
+ *   | ~       travels the arc      ! |    <- red pips: where the horde comes (nightfall by day; the three waves at night);
+ *   |                               |       top left, the weather when there is some (LUZ-05): rain, storm, fog
  *   |_______________________________|    <- the horizon
  *   |            Day 5              |    <- the WORLD's day (MP-20), ExtraBold
  *   |        Night in 2:10          |    <- real seconds to 19:00 by day, to daybreak (06:00) at night
@@ -31,6 +32,11 @@
  * Every text sits on the dark groove, where the light text, the muted grey, the yellow and the red all read (UI-05,
  * `npm run test:contrast`); the sun and the moon are the game colours the day plate used (GAME.sun / GAME.moon).
  *
+ * The weather (LUZ-05): a pixel icon in the groove's top-left corner, where the arc never passes -- a cloud with drops
+ * (rain), a cloud with a bolt (storm), three bands (fog, only while there is fog: a morning fog's icon comes at 04:00 and
+ * goes by 09:00). Nothing on a clear day. The server's weather, as the client's clock mirrors it; theme colours only
+ * (GAME.weatherCloud / weatherRain / weatherBolt).
+ *
  * Built once; `update()` runs every frame, creates no Instance and writes only what changed: the body moves in half-unit
  * steps (every ~2 s by day), a dot or a pip repaints when it is passed, the countdown once a second.
  */
@@ -43,6 +49,7 @@ import {
 	isNightAt,
 	secondsUntilHour,
 } from "shared/sim/clock";
+import { Weather, weatherRains } from "shared/sim/weather";
 import { countdown } from "../onboarding/gameOver";
 import { GAME, STAT, SURFACE, TEXT, THEME, fontOf, hex } from "./theme";
 import { Groove, Section } from "./window";
@@ -72,6 +79,33 @@ const MOON: Array<Px> = [
 	[1, 5, 2, 1],
 	[2, 6, 3, 1],
 ];
+
+/** the weather's icons (LUZ-05), each in two colours: a cloud and what falls from it, or the fog's bands */
+const CLOUD: Array<Px> = [
+	[2, 0, 3, 1],
+	[1, 1, 5, 1],
+	[0, 2, 7, 2],
+];
+const DROPS: Array<Px> = [
+	[1, 5, 1, 1],
+	[3, 5, 1, 1],
+	[5, 5, 1, 1],
+	[0, 6, 1, 1],
+	[2, 6, 1, 1],
+	[4, 6, 1, 1],
+];
+const BOLT: Array<Px> = [
+	[3, 4, 2, 1],
+	[2, 5, 2, 1],
+	[3, 6, 1, 1],
+];
+const FOG: Array<Px> = [
+	[1, 1, 5, 1],
+	[0, 3, 5, 1],
+	[2, 5, 5, 1],
+];
+/** fog thinner than this shows no icon (a morning fog's first and last minutes) */
+const FOG_ICON_MIN = 0.05;
 
 /** draws `rects` (a 7 x 7 grid) in `color`, filling `host`; returns the icon's frame (shown / hidden as one) */
 export function pixelIcon(host: GuiObject, name: string, rects: Array<Px>, color: Color3, zIndex: number): Frame {
@@ -124,6 +158,8 @@ interface SkyGeom {
 	/** the horizon line's ends */
 	h0: number;
 	h1: number;
+	/** the weather icon, in the corner the arc never reaches */
+	weather: Box;
 	day: Box;
 	count: Box;
 	/** the same two with the extra line under them */
@@ -154,6 +190,7 @@ const STACK: SkyGeom = {
 	dots: 15,
 	h0: 4,
 	h1: 116,
+	weather: [2, 2, 9, 9],
 	day: [2, 33, 116, 20],
 	count: [2, 55, 116, 17],
 	dayX: [2, 31, 116, 19],
@@ -180,6 +217,7 @@ const ROW: SkyGeom = {
 	dots: 11,
 	h0: 3,
 	h1: 61,
+	weather: [1, 1, 9, 9],
 	day: [66, 3, 116, 18],
 	count: [66, 21, 116, 16],
 	dayX: [66, 3, 54, 18],
@@ -219,6 +257,9 @@ export interface SkyState {
 	dayTime: number;
 	/** a watch is equipped: HH:MM under the countdown */
 	showClock: boolean;
+	/** the day's weather (shared/sim/weather.ts `Weather`) and the fog's density now; left out = clear */
+	weather?: number;
+	fog?: number;
 }
 
 export type SkyShape = "stack" | "row";
@@ -243,6 +284,13 @@ export class HudSky {
 	private readonly moon: Frame;
 	private readonly dots: Array<Frame> = [];
 	private readonly pips: Array<Frame> = [];
+	/** the weather icon's host and its three pictures (built once, shown / hidden as the weather changes) */
+	private readonly weatherIcon: Frame;
+	private readonly rainIcon: Frame;
+	private readonly stormIcon: Frame;
+	private readonly fogIcon: Frame;
+	/** which one shows: 0 none, 1 rain, 2 storm, 3 fog */
+	private shownWeather = -1;
 	private day = -1;
 	private extraText = "";
 	private extraShown: boolean | undefined;
@@ -290,6 +338,27 @@ export class HudSky {
 		this.moon = pixelIcon(body, "Moon", MOON, GAME.moon, z + 2);
 		this.moon.Visible = false;
 
+		// the weather (LUZ-05): three pictures in one corner, none of them shown on a clear day
+		const [wx, wy, wsz] = g.weather;
+		const icon = W.makeFrame(groove, "Weather", wx, wy, wsz, wsz, THEME.background, {
+			transparency: 1,
+			zIndex: z + 1,
+		});
+		icon.Visible = false;
+		this.weatherIcon = icon;
+		const two = (name: string, a: Array<Px>, ca: Color3, b: Array<Px>, cb: Color3): Frame => {
+			const f = W.makeFrame(icon, name, 0, 0, wsz, wsz, THEME.background, { transparency: 1, zIndex: z + 1 });
+			f.Size = UDim2.fromScale(1, 1);
+			pixelIcon(f, "Cloud", a, ca, z + 1);
+			pixelIcon(f, "Fall", b, cb, z + 1);
+			f.Visible = false;
+			return f;
+		};
+		this.rainIcon = two("Rain", CLOUD, GAME.weatherCloud, DROPS, GAME.weatherRain);
+		this.stormIcon = two("Storm", CLOUD, GAME.weatherCloud, BOLT, GAME.weatherBolt);
+		this.fogIcon = pixelIcon(icon, "Fog", FOG, GAME.weatherCloud, z + 1);
+		this.fogIcon.Visible = false;
+
 		const [dx, dy, dw, dh] = g.day;
 		this.dayLabel = W.makeLabel(groove, "Day", "", dx, dy, dw, dh, g.daySize, THEME.foreground, {
 			font: EXTRA_BOLD,
@@ -335,6 +404,19 @@ export class HudSky {
 		if (state.day !== this.day) {
 			this.day = state.day;
 			this.dayLabel.Text = `${this.tr("Day")} ${state.day}`;
+		}
+
+		// the weather's icon: rain or storm all day, fog while there is fog (LUZ-05)
+		const kind = state.weather ?? Weather.Clear;
+		let pic = 0;
+		if (weatherRains(kind)) pic = kind === Weather.Storm ? 2 : 1;
+		else if ((state.fog ?? 0) >= FOG_ICON_MIN) pic = 3;
+		if (pic !== this.shownWeather) {
+			this.shownWeather = pic;
+			this.weatherIcon.Visible = pic !== 0;
+			this.rainIcon.Visible = pic === 1;
+			this.stormIcon.Visible = pic === 2;
+			this.fogIcon.Visible = pic === 3;
 		}
 
 		// the phase, how much of it is gone and how long is left, in the real seconds the player waits them

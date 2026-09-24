@@ -1,6 +1,6 @@
 {
 	"note": "draw-call digests of each building type's first building seen from inside with no world art (tools/test-world-art.mjs --golden-interiors)",
-	"recordedFrom": "the entrances (ART-17), re-recorded on purpose: the flat entrance outside each doorway by its type; with the entrances' flat drawing patched back to the old doormat, each of the 26 buildings is 7c78b36's, call for call",
+	"recordedFrom": "the entrances (ART-17), re-recorded on purpose on c638602: the flat entrance outside each doorway by its type; with the entrances' flat drawing patched back to the old doormat, each of the 26 buildings is c638602's, call for call",
 	"scenes": {
 		"type1": {
 			"building": 51,

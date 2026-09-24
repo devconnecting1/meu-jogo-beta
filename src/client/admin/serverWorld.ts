@@ -182,6 +182,10 @@ export class AdminWorldHost extends LocalAdminWorld {
 		return this.serverWorld() ? this.send({ op: "rain", on }) : super.setRain(on);
 	}
 
+	setWeather(kind: number): ActionResult {
+		return this.serverWorld() ? this.send({ op: "weather", weather: kind }) : super.setWeather(kind);
+	}
+
 	// ------------------------------------------------------------ population
 
 	killAll(): ActionResult {

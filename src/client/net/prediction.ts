@@ -186,6 +186,11 @@ export class Prediction {
 	/** when the last hit flash started */
 	private flashAt = -math.huge;
 	private flashes = 0;
+	/**
+	 * A self block has been adopted since `attach`: the position is the server's, not the one the client started from
+	 * (client/net/entryHold.ts holds the drawing until then).
+	 */
+	private isPlaced = false;
 
 	/** bind to the world and survivor the game loop owns; call again after a respawn or a world rebuild */
 	attach(world: WorldData, player: PlayerState, save: PlayerSaveData): void {
@@ -203,6 +208,7 @@ export class Prediction {
 		// another survivor, or the same one in another town: its first block is compared with nothing
 		this.seenHp = undefined;
 		this.flashAt = -math.huge;
+		this.isPlaced = false;
 	}
 
 	detach(): void {
@@ -210,10 +216,21 @@ export class Prediction {
 		this.player = undefined;
 		this.save = undefined;
 		this.history.clear();
+		this.isPlaced = false;
 	}
 
 	attached(): boolean {
 		return this.player !== undefined;
+	}
+
+	/** has the server's position been adopted since `attach` (a first self block reconciled)? */
+	placed(): boolean {
+		return this.isPlaced;
+	}
+
+	/** `stats().snaps` without the percentiles: cheap enough for every frame (client/net/entryHold.ts) */
+	snapCount(): number {
+		return this.snaps;
 	}
 
 	/**
@@ -323,10 +340,16 @@ export class Prediction {
 			if (ADOPT_VITALS) this.replayVitals(p, save, unacked);
 		}
 
-		// hide whatever moved: the screen keeps the old position and eases to the new one over ~τ
+		// hide whatever moved: the screen keeps the old position and eases to the new one over ~τ -- except on the first
+		// block after `attach`, where "the old position" is only where the client started (a guess, a town's centre):
+		// the body is PUT where the server says, and nothing is drawn gliding from the guess (client/net/entryHold.ts)
 		this.offX = drawnX - this.exactX;
 		this.offY = drawnY - this.exactY;
-		if (this.offX * this.offX + this.offY * this.offY > VISUAL_SNAP_DIST * VISUAL_SNAP_DIST) {
+		if (!this.isPlaced) {
+			this.isPlaced = true;
+			this.offX = 0;
+			this.offY = 0;
+		} else if (this.offX * this.offX + this.offY * this.offY > VISUAL_SNAP_DIST * VISUAL_SNAP_DIST) {
 			this.offX = 0;
 			this.offY = 0;
 			this.snaps += 1;

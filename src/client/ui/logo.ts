@@ -72,6 +72,8 @@ class Mark implements WordmarkView {
 	private art: Frame | undefined;
 	private readonly layers: Array<ImageLabel> = [];
 	private transparency = 0;
+	/** a recheck of the layers' IsLoaded is scheduled */
+	private polling = false;
 	private readonly w: number;
 	private readonly h: number;
 	private readonly align: "left" | "center";
@@ -129,6 +131,15 @@ class Mark implements WordmarkView {
 		let loaded = true;
 		for (const l of this.layers) if (l.IsLoaded !== true) loaded = false;
 		this.text.Visible = !loaded;
+		// IsLoaded is not reliably signalled (the creator docs poll it), so an image that lands without a Changed
+		// event would leave the text drawn behind the art: look again until it is in, or the mark is gone
+		if (!loaded && !this.polling) {
+			this.polling = true;
+			task.delay(0.25, () => {
+				this.polling = false;
+				if (live.has(this)) this.refresh();
+			});
+		}
 	}
 
 	private build(): Frame {

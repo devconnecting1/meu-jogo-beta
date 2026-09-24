@@ -16,7 +16,11 @@ import { hash01 } from "shared/game/world";
 const WHITE = COLORS.white;
 const BLACK = COLORS.shadow;
 
-/** one set of leaves of a doorway's double door (ESC-02): which kind, and which way it swings */
+/**
+ * The door in a doorway: which kind of leaf, and which way it swings. The kind says how many leaves: a single door's
+ * one leaf closes the whole gap (a house's front and back door, the gas station's, a service door); the others are a
+ * double door's two (ESC-02) -- ./entranceAtlas.ts ENTRANCE_SINGLE_LEAF, painted by tools/entrance-art.mjs.
+ */
 export interface LeafSpec {
 	kind: string;
 	/** swings into the building (drawn with the interior, the roof off) or out (drawn on the ground outside) */
@@ -238,7 +242,7 @@ const SERVICE: EntranceStyle = {
 	stoop: "service",
 	frame: "steel",
 	roof: "steelhead",
-	leaves: [{ kind: "steel", inward: false, look: 2 }],
+	leaves: [{ kind: "service", inward: false }],
 	wear: false,
 	shatter: false,
 	base: { along: 8, depth: 16, off: 8, color: STEP_OLD, edge: true },

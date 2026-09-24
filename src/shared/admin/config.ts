@@ -10,10 +10,10 @@
  */
 
 /** UserIds allowed to use the admin panel */
-export const ADMIN_USER_IDS: ReadonlyArray<number> = [8013052784];
+export const ADMIN_USER_IDS: ReadonlyArray<number> = [8424325451];
 
 /** display names of the ids above (informative only — never used for authorization) */
-export const ADMIN_LABELS: ReadonlyMap<number, string> = new Map([[8013052784, "Editor3D_Official"]]);
+export const ADMIN_LABELS: ReadonlyMap<number, string> = new Map([[8424325451, "Luvitlua"]]);
 
 /** Player attribute set by the server on confirmed admins (the client builds the panel only when present) */
 export const ADMIN_ATTRIBUTE = "PZAdmin";

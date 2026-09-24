@@ -561,30 +561,35 @@ function panels(c, spans, m) {
 	}
 }
 
-/** a house's front door: painted, two sunk panels, the brass knob standing off the face by its free edge */
+/**
+ * A house's front door, ONE leaf the width of the doorway: painted, two sunk panels either side of the middle rail,
+ * the brass knob standing off the face by its free edge, the hinges at the other
+ */
 function leafWood(c, L, D, look, r, K) {
 	const paint = PAINTS[look % PAINTS.length];
 	leafBody(c, L, D, paint);
+	const mid = Math.floor(L / 2);
 	panels(
 		c,
 		[
-			[2, 6],
-			[7, 11],
+			[2, mid - 1],
+			[mid + 1, L - 4],
 		],
 		paint,
 	);
 	c.inkAt(L - 2, 3, K.knob);
 	c.inkAt(L - 2, D - 1, K.knob);
-	c.inkAt(0, 1, K.hinge);
+	for (const u of [0, 1]) c.inkAt(u, 1, K.hinge);
 }
 
-/** a back door: glazed over a sunk panel, painted teal or cream */
+/** a back door, one leaf: glazed along its lock side over a sunk panel, painted teal or cream */
 function leafPlank(c, L, D, look, r, K) {
 	const paint = look === 0 ? "paintTeal" : "paintCream";
 	leafBody(c, L, D, paint);
-	c.box(2, 2, 7, 1, "glassLeaf", 2);
-	panels(c, [[2, 9]], paint);
-	c.box(2, 2, 7, 1, "glassLeaf", 2);
+	const mid = Math.floor(L / 2);
+	panels(c, [[2, mid - 1]], paint);
+	c.box(mid + 1, 2, L - mid - 4, 2, "glassLeaf", 2);
+	c.dot(mid + 2, 2, "glassLeaf", 2, 2);
 	c.inkAt(L - 2, 3, K.knob);
 	c.inkAt(L - 2, D - 1, K.knob);
 }
@@ -625,11 +630,13 @@ function leafGlass(c, L, D, look, r, K, sticker = false) {
 	// the push bar, standing off the face
 	for (let u = 3; u < L - 3; u++) c.inkAt(u, D - 1, K.nail);
 	if (sticker) {
-		// a gas station's: the hours card and the little OPEN sign stuck to the glass (no letters: CON-02)
-		c.inkAt(8, 2, K.sticker);
-		c.inkAt(9, 2, K.sticker);
-		c.inkAt(8, 3, K.stickerInk);
-		c.inkAt(6, 2, K.open);
+		// a gas station's: the hours card and the little OPEN sign stuck to the glass by the push bar's end (no
+		// letters: CON-02)
+		const s = L - 9;
+		c.inkAt(s, 2, K.sticker);
+		c.inkAt(s + 1, 2, K.sticker);
+		c.inkAt(s, 3, K.stickerInk);
+		c.inkAt(s - 2, 2, K.open);
 	}
 }
 
@@ -676,15 +683,22 @@ function leafGrille(c, L, D, look, r, K) {
 	if (look === 1) c.inkAt(L - 1, D - 1, K.nail);
 }
 
+/**
+ * The leaves by kind. `single`: the door has ONE leaf, the width of the doorway (a house's front and back door, the
+ * gas station's glass door, a service door); the others are the double doors of ESC-02, two leaves of half the gap
+ * (a shop's glass doors, a school's steel doors, the bank's, the town hall's, the police station's, the gun shop's
+ * grille).
+ */
 const LEAVES = {
-	wood: { looks: 4, draw: leafWood },
-	plank: { looks: 2, draw: leafPlank },
+	wood: { looks: 4, draw: leafWood, single: true },
+	plank: { looks: 2, draw: leafPlank, single: true },
 	oak: { looks: 1, draw: leafOak },
 	glass: { looks: 2, draw: leafGlass },
-	gas: { looks: 1, draw: (c, L, D, look, r, K) => leafGlass(c, L, D, 0, r, K, true) },
+	gas: { looks: 1, draw: (c, L, D, look, r, K) => leafGlass(c, L, D, 0, r, K, true), single: true },
 	dark: { looks: 1, draw: leafDark },
 	wired: { looks: 1, draw: leafWired },
-	steel: { looks: 3, draw: leafSteel },
+	steel: { looks: 2, draw: leafSteel },
+	service: { looks: 1, draw: (c, L, D, look, r, K) => leafSteel(c, L, D, 2, r, K), single: true },
 	grille: { looks: 2, draw: leafGrille },
 };
 
@@ -692,9 +706,8 @@ const LEAVES = {
  * Where a leaf rests in the canonical frame, and how its own (u, v) land there: pinned flat against the wall's face
  * beside the gap (outside it or inside), or swung square to the wall at its jamb with its face to the passage.
  */
-function leafPlace(mode, hand) {
+function leafPlace(mode, hand, L) {
 	const a = hand === "a";
-	const L = LEAF_LEN;
 	const T = LEAF_T;
 	if (mode === "outFlat" || mode === "inFlat") {
 		const out = mode === "outFlat";
@@ -837,17 +850,18 @@ export const SHEET_STYLES = [
 	["garage bay", { stoop: "bay", stoopLook: 1, frame: "bay", roof: "hood", roofLook: 1, leaves: [] }],
 	[
 		"service door",
-		{ stoop: "service", frame: "steel", roof: "steelhead", roofLook: 1, leaves: [["steel", false, 2]] },
+		{ stoop: "service", frame: "steel", roof: "steelhead", roofLook: 1, leaves: [["service", false, 0]] },
 	],
 ];
 
-/** the whole atlas: `{ atlas: { w, h, toCanvas }, cells, looks, dims, report }`; `C` the palette ([r, g, b] by name) */
+/** the whole atlas: `{ atlas: { w, h, toCanvas }, cells, looks, singles, dims, report }`; `C` the palette ([r, g, b] by name) */
 export function entranceArt({ C }) {
 	const MAT = doorMaterials(C);
 	const K = doorInks(C);
 	const entries = [];
 	const offsets = {};
 	const looks = {};
+	const singles = {};
 	const report = { cells: 0 };
 	/** a canonical canvas `cv` over [x0, x0 + L) × [y0, y0 + D), turned to `side`, shaded and packed as `key` */
 	const bake = (key, cv, x0, y0, side, shadow, outline = true) => {
@@ -887,17 +901,20 @@ export function entranceArt({ C }) {
 	}
 	for (const [kind, f] of Object.entries(LEAVES)) {
 		looks[`leaf:${kind}`] = f.looks;
+		// a single door's one leaf closes the whole gap; each of a double door's two, half of it (ESC-02)
+		const len = f.single === true ? GAP : LEAF_LEN;
+		if (f.single === true) singles[kind] = true;
 		for (let look = 0; look < f.looks; look++) {
 			// one picture of the leaf, laid in each of its places
-			const own = new Canvas(LEAF_LEN, LEAF_T);
-			f.draw(own, LEAF_LEN, LEAF_T, look, rng(hashStr(`leaf:${kind}:${look}`)), K);
+			const own = new Canvas(len, LEAF_T);
+			f.draw(own, len, LEAF_T, look, rng(hashStr(`leaf:${kind}:${look}`)), K);
 			for (const mode of ["inFlat", "inSquare", "outFlat", "outSquare"]) {
 				for (const hand of ["a", "b"]) {
-					const p = leafPlace(mode, hand);
+					const p = leafPlace(mode, hand, len);
 					const cv = new Canvas(p.w, p.h);
 					for (let v = 0; v < LEAF_T; v++) {
-						for (let u = 0; u < LEAF_LEN; u++) {
-							const i = v * LEAF_LEN + u;
+						for (let u = 0; u < len; u++) {
+							const i = v * len + u;
 							if (own.mat[i] === null) continue;
 							const [x, y] = p.map(u, v);
 							const j = (y - p.y0) * p.w + (x - p.x0);
@@ -938,6 +955,7 @@ export function entranceArt({ C }) {
 		atlas: { w: packed.w, h: packed.h, toCanvas: () => ({ w: packed.w, h: packed.h, data: packed.data }) },
 		cells,
 		looks,
+		singles,
 		dims: { GAP, WALL, LEAF_LEN, LEAF_T, JAMB },
 		report,
 	};
@@ -962,6 +980,13 @@ export function entranceAtlasModule(art, name) {
 	L.push("export const ENTRANCE_LOOKS: Record<string, number> = {");
 	// quoted only where it must be (prettier's quote-props "as-needed": the module is written as prettier leaves it)
 	for (const [k, n] of Object.entries(art.looks).sort()) L.push(`\t${/^\w+$/.test(k) ? k : `"${k}"`}: ${n},`);
+	L.push("};");
+	L.push("");
+	L.push(
+		"/** the leaves of a SINGLE door: one leaf the width of the gap (ENTRANCE_GAP); the others are half of a double door */",
+	);
+	L.push("export const ENTRANCE_SINGLE_LEAF: Record<string, boolean> = {");
+	for (const k of Object.keys(art.singles).sort()) L.push(`\t${k}: true,`);
 	L.push("};");
 	L.push("");
 	L.push("/**");
@@ -994,7 +1019,7 @@ export function entranceAtlasModule(art, name) {
 export function entranceSheet(art, drawText, C, styles) {
 	const Z = 3;
 	const canvas = art.atlas.toCanvas();
-	const tile = { w: 64, h: 56 };
+	const tile = { w: 92, h: 56 };
 	const cols = 4;
 	const rows = Math.ceil((styles.length * 2) / cols);
 	const W = cols * (tile.w * Z + 12) + 12;
@@ -1046,8 +1071,8 @@ export function entranceSheet(art, drawText, C, styles) {
 			const k = i * 2 + (off ? 1 : 0);
 			const x0 = 12 + (k % cols) * (tile.w * Z + 12);
 			const y0 = 12 + Math.floor(k / cols) * (tile.h * Z + 28);
-			// the gap at (18, 18): the building above it, the street below
-			const gx = 18;
+			// the gap at (32, 18): the building above it, the street below (room beside it for a whole-gap leaf)
+			const gx = 32;
 			const gy = 18;
 			fill(x0, y0 + 14, 0, 0, tile.w, gy, off ? floor : roof);
 			fill(x0, y0 + 14, 0, gy, tile.w, tile.h - gy, walk);
@@ -1061,7 +1086,8 @@ export function entranceSheet(art, drawText, C, styles) {
 			cell(x0, Y, gx, gy, `stoop:${s.stoop}:bottom:${s.stoopLook ?? 0}`);
 			for (const [kind, inward, look] of s.leaves) {
 				if (inward && !off) continue;
-				for (const hand of ["a", "b"])
+				// a single door's one leaf (hinged at jamb a), a double door's two
+				for (const hand of art.singles[kind] === true ? ["a"] : ["a", "b"])
 					cell(x0, Y, gx, gy, `leaf:${kind}:${inward ? "inFlat" : "outFlat"}:${hand}:bottom:${look ?? 0}`);
 			}
 			if (off) cell(x0, Y, gx, gy, `frame:${s.frame}:bottom`);

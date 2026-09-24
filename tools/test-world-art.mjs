@@ -87,7 +87,8 @@
  *  15. THE ENTRANCES (ART-17, client/view/entrances.ts + entranceArt.ts). With no id of the entrances' atlas the art
  *      draws nothing and every doorway is flat, at most two Frames on the ground and one on the roof's edge, the kinds
  *      told apart; with it, in five towns every doorway has its stoop, frame and lintel; the stoop starts at the wall's
- *      outside face, the lintel lies inside the footprint (LEG-03), no leaf stands in the passage (the gap less 20 u at
+ *      outside face, the lintel lies inside the footprint (LEG-03), a single door draws one leaf and a double door at
+ *      most its two (ESC-02), no leaf stands in the passage (the gap less 20 u at
  *      each jamb, 72 u in and 48 u out: EDI-09) nor on anything of the town, every leaf rests somewhere, a few house
  *      doors are torn off or were boarded up (APO-01), a doorway costs at most 4 / 1 / 3 sprites, and the four sides
  *      are four bakes (the light never turns with a door). §5 measures the bodies on every kind of doorstep.
@@ -1334,6 +1335,83 @@ section("6) the art pipeline: manifest, PNGs, worldArtAssets.ts, palette");
 		const b = lab(...c255(COLORS.floorConcrete));
 		const dE = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 		check(dE <= 6, "concrete tinted for a back room keeps floorConcrete", `mean ΔE ${dE.toFixed(1)}`);
+	}
+	// the rain's puddles (LUZ-05, client/view/weatherView.ts): pixel art in four tones, the vertical road's texture the
+	// same picture mirrored on its diagonal, and every drop's ring on the water
+	const WTV = require(join(SRC, "client/view/weatherView.ts"));
+	if (WTV.PUDDLE_ART !== undefined && decoded.puddle0 !== undefined) {
+		const px = (img, x, y) => [...img.data.subarray((y * img.w + x) * 4, (y * img.w + x) * 4 + 4)];
+		const onWater = (img, x, y) => x >= 0 && y >= 0 && x < img.w && y < img.h && px(img, x, y)[3] > 200;
+		const bad = [];
+		WTV.PUDDLE_ART.forEach((name, v) => {
+			const h = decoded[name];
+			const vt = decoded[WTV.PUDDLE_ART_V[v]];
+			// the tones: every opaque colour the texture uses, and the halo (the one translucent tone)
+			const tones = new Set();
+			const halo = new Set();
+			for (let y = 0; y < h.h; y++) {
+				for (let x = 0; x < h.w; x++) {
+					const [r, g, b, a] = px(h, x, y);
+					if (a === 0) continue;
+					(a > 200 ? tones : halo).add(`${r},${g},${b}`);
+					const t = px(vt, y, x);
+					if (t.join() !== [r, g, b, a].join()) bad.push(`${name}V is not ${name} mirrored at ${x},${y}`);
+				}
+			}
+			if (vt.w !== h.h || vt.h !== h.w) bad.push(`${name}V size`);
+			// (a Set's size is a method under the Luau shims: count its entries)
+			const nTones = [...tones].length;
+			const nHalo = [...halo].length;
+			if (nTones !== 3 || nHalo !== 1) bad.push(`${name}: ${nTones} water tones, ${nHalo} halo`);
+			// the lit rim on the light side: the first water texel of every column from the top is the lightest tone
+			let lit = 0;
+			let cols = 0;
+			for (let x = 0; x < h.w; x++) {
+				for (let y = 0; y < h.h; y++) {
+					if (!onWater(h, x, y)) continue;
+					cols++;
+					const [r, g, b] = px(h, x, y);
+					if (r + g + b >= Math.max(...[...tones].map(t => t.split(",").reduce((a, c) => a + Number(c), 0))))
+						lit++;
+					break;
+				}
+			}
+			if (lit < cols * 0.6) bad.push(`${name}: the top shore is lit in ${lit} of ${cols} columns`);
+			for (const [sx, sy] of WTV.PUDDLE_DROPS[v]) {
+				// the ring (3 x 3) and the texels beside it on the water, in both textures
+				for (const [dx, dy] of [
+					[0, 0],
+					[-1, 0],
+					[1, 0],
+					[0, -1],
+					[0, 1],
+					[-2, 0],
+					[2, 0],
+					[0, -2],
+					[0, 2],
+				]) {
+					if (!onWater(h, sx + dx, sy + dy)) bad.push(`${name}: drop ${sx},${sy} off the water`);
+					if (!onWater(vt, sy + dy, sx + dx)) bad.push(`${name}V: drop ${sy},${sx} off the water`);
+				}
+			}
+		});
+		check(
+			bad.length === 0,
+			"puddles: dark water, sky streaks and a lit rim on the top shore (3 tones) and a wet halo; the vertical ones mirrored on the diagonal; every drop lands on the water",
+			bad.slice(0, 4).join("; "),
+		);
+		const ring = decoded.puddleDrop;
+		const ringTexels =
+			ring === undefined ? 0 : [...Array(ring.w * ring.h).keys()].filter(i => ring.data[i * 4 + 3] > 0).length;
+		check(
+			ring !== undefined &&
+				ring.w === 3 &&
+				ring.h === 3 &&
+				ringTexels === 4 &&
+				ring.data[(1 * 3 + 1) * 4 + 3] === 0,
+			"a drop's ring: four texels round an empty one (a static picture: it moves on a beat, and not at all with Reduce Motion)",
+			`${ringTexels} texels`,
+		);
 	}
 }
 
@@ -3991,7 +4069,7 @@ section("15) the entrances (ART-17): each doorway its own, the gap left open, ev
 	} else {
 		const EA = require(EA_MODULE);
 		const EN = require(join(SRC, "client/view/entrances.ts"));
-		const { ENTRANCE_CELLS } = require(join(SRC, "client/view/entranceAtlas.ts"));
+		const { ENTRANCE_CELLS, ENTRANCE_SINGLE_LEAF: SINGLE } = require(join(SRC, "client/view/entranceAtlas.ts"));
 		const { InteriorView } = require(join(SRC, "client/view/interiorView.ts"));
 		const { insideBuilding, querySolids } = require(join(SRC, "shared/game/world.ts"));
 		const cam = new Camera();
@@ -4059,6 +4137,9 @@ section("15) the entrances (ART-17): each doorway its own, the gap left open, ev
 			shattered: 0,
 			styles: new Set(),
 			worst: { out: 0, inside: 0 },
+			leafCount: [],
+			singles: 0,
+			doubles: 0,
 		};
 		const hitsRect = (a, b) =>
 			a.x < b.x + b.w - 0.5 && a.x + a.w > b.x + 0.5 && a.y < b.y + b.h - 0.5 && a.y + a.h > b.y + 0.5;
@@ -4136,8 +4217,30 @@ section("15) the entrances (ART-17): each doorway its own, the gap left open, ev
 							}
 						}
 					}
+					// a single door has one leaf, a double door two (a torn-off door lies on the step: one fewer)
+					const perKind = {};
+					for (const list of [plan.outside, plan.inside]) {
+						for (const p of list) {
+							if (!p.key.startsWith("leaf:")) continue;
+							const kind = p.key.split(":")[1];
+							(perKind[kind] ??= []).push(p.key.split(":")[3]);
+						}
+					}
+					for (const [kind, hands] of Object.entries(perKind)) {
+						const single = SINGLE[kind] === true;
+						const bad = single
+							? hands.length > 1
+							: hands.length > 2 || [...new Set(hands)].length !== hands.length;
+						if (bad && stat.leafCount.length < 5)
+							stat.leafCount.push(
+								`${kind} x${hands.length} (${single ? "single" : "double"}) at #${b.id}`,
+							);
+						if (single) stat.singles++;
+						else stat.doubles++;
+					}
 					const want =
-						style.leaves.length * 2 - (plan.outside.some(p => p.key.startsWith("fallen:")) ? 1 : 0);
+						style.leaves.reduce((n, l) => n + (SINGLE[l.kind] === true ? 1 : 2), 0) -
+						(plan.outside.some(p => p.key.startsWith("fallen:")) ? 1 : 0);
 					stat.modes.none += Math.max(0, want - leaves);
 					stat.worst.out = Math.max(stat.worst.out, plan.outside.length);
 					stat.worst.inside = Math.max(stat.worst.inside, plan.inside.length);
@@ -4160,6 +4263,11 @@ section("15) the entrances (ART-17): each doorway its own, the gap left open, ev
 			stat.roofOff.join("; "),
 		);
 		check(stat.frameOff.length === 0, "each frame lies across its gap", stat.frameOff.slice(0, 4).join("; "));
+		check(
+			stat.leafCount.length === 0 && stat.singles > 0 && stat.doubles > 0,
+			"a single door (a house's, the gas station's, a service door) draws exactly one leaf, a double door (ESC-02) at most its two",
+			stat.leafCount.join("; ") || `${stat.singles} single doors, ${stat.doubles} double doors drawn`,
+		);
 		check(
 			stat.passage.length === 0,
 			"the gap stays open (EDI-09): no leaf stands in the passage, 72 u in and 48 u out",
