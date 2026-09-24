@@ -1417,6 +1417,14 @@
 			"description": "the town's fixtures: 306 cells of market, street, park, backyard and building-site pieces and their ground (client/view/townPropArt.ts)"
 		},
 		{
+			"name": "entrances",
+			"file": "entrances.png",
+			"kind": "atlas",
+			"w": 1023,
+			"h": 175,
+			"description": "the buildings' entrances: 836 cells of stoops, door leaves, frames and lintels, each side baked on its own (client/view/entranceArt.ts)"
+		},
+		{
 			"name": "wordmark",
 			"file": "wordmark.png",
 			"kind": "ui",

@@ -615,6 +615,113 @@ function signScenes(world) {
 	return out;
 }
 
+/**
+ * The entrances (DESIGN_RULES ART-17, `--preset doors`): the main door of one building of each kind -- a house, a row
+ * of shops, the hospital, the school, the bank, a gas station, the gun shop, the fire station and the rest of the
+ * everyday town's -- at 1.5x the game's zoom, from its street with the roof on and with the roof off (`roofOff`), by
+ * day and at 22:00 with the survivor at the door. Framed from the world alone, so an older checkout (--src, --scenes)
+ * renders the same scenes for the "before".
+ */
+const DOOR_KINDS = [
+	["house", "House", [1]],
+	["shops", "Shop row", [6, 7, 8, 10, 16, 18, 19, 20, 21, 26]],
+	["hospital", "Hospital", [4]],
+	["school", "School", [3]],
+	["bank", "Bank", [22]],
+	["gas", "Gas station", [5]],
+	["gunshop", "Gun shop", [9]],
+	["firestation", "Fire station", [24]],
+	["diner", "Restaurant", [11]],
+	["police", "Police station", [25]],
+	["townhall", "Town hall", [23]],
+	["campus", "Campus hall", [12]],
+	["garage", "Auto repair", [17]],
+	["bakery", "Bakery", [19]],
+];
+function doorScenes(world) {
+	const out = [];
+	const buildings = world.solids.filter(s => s.kind === "building" && s.openings !== undefined);
+	const mainOf = b => b.openings.find(o => o.main);
+	const scale = 1.5;
+	const rw = Math.round(W / scale);
+	const rh = Math.round(H / scale);
+	for (const [name, title, types] of DOOR_KINDS) {
+		const cands = buildings.filter(b => types.includes(b.buildingType) && mainOf(b) !== undefined);
+		if (cands.length === 0) continue;
+		let at;
+		let span = 0;
+		if (name === "shops") {
+			// two shop doors side by side on one street, the closest pair: the row between them
+			let best = Infinity;
+			for (const a of cands) {
+				for (const b of cands) {
+					if (a.id >= b.id) continue;
+					const oa = mainOf(a);
+					const ob = mainOf(b);
+					if (oa.side !== ob.side) continue;
+					const vertical = oa.side === "left" || oa.side === "right";
+					if (Math.abs(vertical ? oa.x - ob.x : oa.y - ob.y) > 40) continue;
+					const d = Math.hypot(oa.x - ob.x, oa.y - ob.y);
+					if (d < best && d < 1100) {
+						best = d;
+						span = d;
+						at = { o: oa, x: (oa.x + ob.x + oa.w) / 2, y: (oa.y + ob.y + oa.h) / 2 };
+					}
+				}
+			}
+		}
+		if (at === undefined) {
+			// the kind's first building whose door faces the street at the bottom, else its first
+			cands.sort((a, b) => a.id - b.id);
+			const b = cands.find(c => mainOf(c).side === "bottom") ?? cands[0];
+			const o = mainOf(b);
+			at = { o, x: o.x + o.w / 2, y: o.y + o.h / 2 };
+		}
+		const n = doorNormal(at.o.side);
+		const cx = at.x + n.x * 70;
+		const cy = at.y + n.y * 70;
+		// a row: wide (or tall) enough for both its doors, drawn smaller to fit
+		const k = span > 0 ? Math.max(1, (span + 420) / (n.x !== 0 ? rh : rw)) : 1;
+		const rect = sceneAround(cx, cy, Math.round(rw * k), Math.round(rh * k));
+		const sceneScale = scale / k;
+		// the survivor on the doorstep, a walker coming up the street behind
+		const survivor = {
+			x: Math.round(at.x + n.x * 110 + n.y * 90),
+			y: Math.round(at.y + n.y * 110 + n.x * 90),
+			angle: 0,
+		};
+		const zombies = [];
+		const zx = at.x + n.x * 190 - n.y * 150;
+		const zy = at.y + n.y * 190 - n.x * 150;
+		if (pointInSolid(world, zx, zy, 18) === undefined)
+			zombies.push({
+				x: Math.round(zx),
+				y: Math.round(zy),
+				type: 1,
+				angle: Math.atan2(survivor.y - zy, survivor.x - zx),
+			});
+		const actors = { survivor, zombies };
+		for (const [suffix, extra, hour] of [
+			["", "from its street", 10],
+			["-night", "from its street, 22:00", 22],
+			["-inside", "roof off", 10],
+			["-inside-night", "roof off, 22:00", 22],
+		]) {
+			out.push({
+				name: `door-${name}${suffix}`,
+				title: `${title}'s entrance, ${extra}`,
+				rect,
+				hour,
+				scale: sceneScale,
+				actors,
+				focus: { x: Math.round(at.x), y: Math.round(at.y) },
+				...(suffix.includes("inside") ? { roofOff: true } : {}),
+			});
+		}
+	}
+	return out;
+}
+
 function scenes(world) {
 	const street = findStreet(world);
 	const downtown = findDowntown(world);
@@ -1032,7 +1139,7 @@ function drawScene(world, scene, opts) {
 	}
 	// roofs off: every building of the scene (--roof-off), or the one the survivor is inside (an interior scene)
 	const lifted = [];
-	if (args.flags.has("roof-off")) {
+	if (args.flags.has("roof-off") || scene.roofOff === true) {
 		for (const s of solidsIn(world, scene.rect)) if (s.kind === "building") lifted.push(s);
 	}
 	if (scene.inside !== undefined) {
@@ -1209,6 +1316,8 @@ if (args.preset !== undefined || args.scenes !== undefined) {
 		wanted = interiorScenes(world, match);
 	} else if (args.preset === "rooms") {
 		wanted = roomScenes(world);
+	} else if (args.preset === "doors") {
+		wanted = doorScenes(world);
 	} else {
 		const all = scenes(world);
 		const signs = signScenes(world);
@@ -1238,6 +1347,8 @@ if (args.preset !== undefined || args.scenes !== undefined) {
 			...(scene.inside !== undefined ? { inside: scene.inside } : {}),
 			...(scene.actors !== undefined ? { actors: scene.actors } : {}),
 			...(scene.noActors === true ? { noActors: true } : {}),
+			...(scene.roofOff === true ? { roofOff: true } : {}),
+			...(scene.focus !== undefined ? { focus: scene.focus } : {}),
 			counts: res.counts,
 		};
 	}
