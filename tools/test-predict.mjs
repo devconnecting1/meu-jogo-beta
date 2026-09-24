@@ -236,6 +236,13 @@ shim("remove", function (i) {
 shim("clear", function () {
 	this.length = 0;
 });
+// swap-with-last removal (the solid grid when the campus clears its block, EDI-17)
+shim("unorderedRemove", function (i) {
+	const v = this[i];
+	const last = this.pop();
+	if (i < this.length) this[i] = last;
+	return v;
+});
 const jsSort = AP.sort;
 shim("sort", function (cmp) {
 	if (!cmp) return jsSort.call(this);
