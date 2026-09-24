@@ -202,7 +202,16 @@ export function auditIdentity(e: AuditRecord): string {
  * announcement) is an action on players, and is what the log is for.
  */
 function isToolEntry(e: AuditRecord): boolean {
-	return e.action.sub(1, 6) === "local:" || e.action === "assist" || e.action === "DENIED";
+	return e.action.sub(1, 6) === "local:" || e.action === "assist" || e.action === "DENIED" || isAutoEntry(e);
+}
+
+/**
+ * What the server did on its own (`auto:`, a flood kick): the audit keeps it, but it is cheap to cause -- one alt
+ * rejoining and flooding again is one more line -- so it trims like a tool entry, and one per action and UserId per
+ * key is enough (`appendAudit` keeps the newest). The security review of the net hardening, L6.
+ */
+function isAutoEntry(e: AuditRecord): boolean {
+	return e.action.sub(1, 5) === "auto:";
 }
 
 /**
@@ -225,7 +234,16 @@ export function trimAudit(list: Array<AuditRecord>, max: number): void {
 /** a key's document with `batch` appended, cut to AUDIT_PER_KEY (trimAudit: tool entries go first) */
 export function appendAudit(doc: unknown, batch: ReadonlyArray<AuditRecord>): Array<AuditRecord> {
 	const list = readAuditList(doc);
-	for (const e of batch) list.push(e);
+	for (const e of batch) {
+		// an automatic action repeated on the same UserId replaces its older line (`isAutoEntry`)
+		if (isAutoEntry(e)) {
+			for (let i = list.size() - 1; i >= 0; i--) {
+				const old = list[i];
+				if (old.action === e.action && old.targetId === e.targetId) list.remove(i);
+			}
+		}
+		list.push(e);
+	}
 	trimAudit(list, AUDIT_PER_KEY);
 	return list;
 }

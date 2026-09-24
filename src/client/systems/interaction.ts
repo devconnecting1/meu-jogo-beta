@@ -1,7 +1,7 @@
 import { DESIGN } from "shared/engine/constants";
 import { rndRange } from "shared/engine/rng";
 import type { PlayerState } from "shared/game/player";
-import { GroundItem, Solid, querySolids, spawnGroundItem } from "shared/game/world";
+import { GroundItem, Solid, querySolids, removeGroundItem, spawnGroundItem } from "shared/game/world";
 import { gameHours } from "shared/sim/clock";
 import { addItem, countItem, removeItem } from "shared/sim/inventory";
 import { mapItemLoot, rollBuildingLoot, rollMapItemDrop, thiefFind } from "shared/sim/loot";
@@ -169,8 +169,7 @@ function takeItem(refs: GameRefs, it: GroundItem): number {
 		it.count -= take;
 		return take;
 	}
-	const idx = refs.world.items.indexOf(it);
-	if (idx >= 0) refs.world.items.remove(idx);
+	removeGroundItem(refs.world, it);
 	return take;
 }
 
@@ -235,7 +234,7 @@ function hintFor(refs: GameRefs, target: InteractTarget): string | undefined {
 		const it = target.item;
 		const lang = refs.save.settings.langType;
 		const n = langGet(itemName(it.kind, it.itemId), lang);
-		// the save's ceiling (ITM-06): a full item says so instead of promising a press that takes nothing
+		// the save's ceiling (ITM-07): a full item says so instead of promising a press that takes nothing
 		if (pickupRoom(refs.save, it.kind, it.itemId) <= 0) {
 			return `${n} ${langGet("full", lang)} (${itemCap(it.kind, it.itemId)})`;
 		}

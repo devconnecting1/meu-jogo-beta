@@ -109,6 +109,22 @@
  *       - Other survivors: the vehicle KIND in bits 4-5 of the slot byte (slot + kind · 16, slot still 0..5), and
  *         while riding `moveAng` (the feet direction, meaningless on a saddle) is the vehicle's heading. Kind 3 or a
  *         slot byte ≥ 48 drops the part.
+ * 20. (ITM-06, the weapon put away: empty hands, like Dead Town) No new message and no byte more per survivor.
+ *       - C→S: one more backpack verb, `Holster` (9), 8 B like the others: arg HOLSTER_DRAW (0) or HOLSTER_AWAY (1) --
+ *         a state, never a toggle, so a replayed prediction lands the same. `intentArgRange` is [0, 1]; any other arg,
+ *         and a verb above 9, is malformed as before. It takes the same road as every verb of note 16: the token
+ *         bucket (INTENT_RATE / INTENT_BURST), the queue (INTENT_QUEUE_MAX; the client never has more in flight),
+ *         `atSeq`, a dead survivor's verbs refused, the ack only ever forward -- and the server holds it behind the
+ *         weapon switch's own cadence (SWITCH_COOLDOWN_S, one clock for both, server/sim/backpack.ts). Out of the
+ *         world it is refused (server/net/intentGate.ts: the lobby has no hands). SwitchWeapon keeps its bytes and now
+ *         also draws: choosing a weapon takes it out.
+ *       - Other survivors: the `weapon` byte of their record carries WEAPON_HOLSTERED (255) while the weapon is put
+ *         away, a value no WEAPONS id takes (30 rows). The byte was never range-checked on decode, and an older client
+ *         draws the blade for an id it does not know (survivorView.ts `weaponById`). The self block's `weapon` stays
+ *         the weapon in the holster: the prediction's hand and the magazine keep their meaning.
+ *       - The survivor's own hands: the wallet's `bag` (shared/game/save.ts `BagMirror`) carries `holster` 0 / 1 next
+ *         to `ack`, so the client's prediction is laid over the server's answer by the nonce, like every verb's
+ *         (client/net/bagPrediction.ts `rebase`). `readBag` clamps it; a bag without it reads 0, drawn. Never saved.
  */
 import {
 	NetReader,
@@ -485,6 +501,11 @@ export interface SelfSnap {
 
 /** (VEI-05) slot byte of another survivor: the slot below RIDE_SLOT_SCALE, the vehicle kind times it above */
 const RIDE_SLOT_SCALE = 16;
+/**
+ * (ITM-06, decision 20) the `weapon` byte of another survivor whose weapon is put away: empty hands. A value no WEAPONS
+ * id takes, in the byte every record already had.
+ */
+export const WEAPON_HOLSTERED = 255;
 /** VehicleKind 0..2 (shared/data/buildings.ts) */
 export const RIDE_KIND_MAX = 2;
 
@@ -497,6 +518,7 @@ export interface PlayerSnap {
 	aim: number;
 	/** PlayerFlag */
 	flags: number;
+	/** the WEAPONS id in their hands, or WEAPON_HOLSTERED (255) while it is put away (decision 20) */
 	weapon: number;
 	/** blade angle relative to the aim, radians (±178°) */
 	swing: number;
@@ -1088,6 +1110,12 @@ export interface FxSolidShake {
 	angle: number;
 	/** 0..1 */
 	strength: number;
+	/**
+	 * SERVER ONLY, never on the wire: the centre of the solid, so the interest filter can place the effect (§4.3). A
+	 * shake without it went to every client in the world, near or not (audit L2).
+	 */
+	x?: number;
+	y?: number;
 }
 
 export interface FxExplosion {
@@ -1130,6 +1158,12 @@ export interface FxTracer {
 	kind: number;
 	/** 0..2.55 s in FX_TIME_STEP */
 	life: number;
+	/**
+	 * SERVER ONLY, never on the wire: the line starts at a construction (a turret's muzzle), whose place is no news. A
+	 * chained zap starts at the zombie before it, and its start is news like its end (§4.3; the security review of the
+	 * net hardening, L7).
+	 */
+	machine?: boolean;
 }
 
 export type FxEvent =
@@ -2080,6 +2114,8 @@ export function decodeTimePong(payload: unknown): TimePong | undefined {
  * importing the protocol from one place.
  */
 export {
+	HOLSTER_AWAY,
+	HOLSTER_DRAW,
 	INTENT_ARGS_BYTES,
 	INTENT_BYTES,
 	INTENT_HEADER,

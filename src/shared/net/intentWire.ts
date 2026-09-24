@@ -8,10 +8,10 @@
  *
  *   presence   2 B   kind, verb                                   EnterWorld, LeaveWorld
  *   backpack   8 B   kind, verb, atSeq u16, arg u16, nonce u16    Craft, UseItem, Equip, Unequip, LearnSkill,
- *                                                                 SwitchWeapon
+ *                                                                 SwitchWeapon, Holster
  *
  * A decoder tells them apart by size, and anything else is malformed: a Craft packed as 2 bytes, an EnterWorld
- * padded to 8, a verb above SwitchWeapon, an `arg` outside the verb's table (`intentArgMax`), a trailing byte.
+ * padded to 8, a verb above Holster, an `arg` outside the verb's table (`intentArgRange`), a trailing byte.
  *
  * Note what is NOT here. There is no `pickup(itemId)`, no `interact(solidId)`, no `place(x, y)` and no `reload`:
  * those ride the input command's own edges (§2.2 `edges`: attack, action, reload) and the server picks the target
@@ -43,11 +43,21 @@ export const IntentKind = {
 	Unequip: 6,
 	/** F3, §8.1: arg = SKILLS id */
 	LearnSkill: 7,
-	/** §8.1 `switchWeapon`: arg = WEAPONS id (the number keys, the hotbar, the Bag's Equip on a weapon) */
+	/** §8.1 `switchWeapon`: arg = WEAPONS id (the number keys, the hotbar, the Bag's Equip on a weapon). It also DRAWS */
 	SwitchWeapon: 8,
+	/**
+	 * (DESIGN_RULES ITM-06, protocol.ts note 20) the weapon in hand put away or drawn again: arg = HOLSTER_AWAY (1) or
+	 * HOLSTER_DRAW (0). A state, not a toggle, so a replayed prediction or a verb the server handles twice lands the
+	 * same. The key of the weapon in hand pressed again, its hotbar tile, the Bag's Put away / Equip on it
+	 */
+	Holster: 9,
 } as const;
 export type IntentKind = (typeof IntentKind)[keyof typeof IntentKind];
-const INTENT_KIND_MAX = 8;
+const INTENT_KIND_MAX = 9;
+
+/** `IntentKind.Holster`'s two args: the weapon drawn again, or put away */
+export const HOLSTER_DRAW = 0;
+export const HOLSTER_AWAY = 1;
 
 /** presence verbs: kind + verb */
 export const INTENT_BYTES = 2;
@@ -99,6 +109,7 @@ export function intentArgRange(kind: number): [number, number] | undefined {
 	if (kind === IntentKind.Unequip) return [1, Equips.EQUIP_SLOT_MAX];
 	if (kind === IntentKind.LearnSkill) return [0, SKILLS.size() - 1];
 	if (kind === IntentKind.SwitchWeapon) return [0, WEAPONS.size() - 1];
+	if (kind === IntentKind.Holster) return [HOLSTER_DRAW, HOLSTER_AWAY];
 	return undefined;
 }
 

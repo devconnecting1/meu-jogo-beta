@@ -23,6 +23,7 @@ import { DYNAMIC_ID_BASE } from "shared/net/mpConfig";
 import { SolidState, WorldEv, WorldEvent } from "shared/net/protocol";
 import {
 	addSolid,
+	clearGroundItems,
 	GroundItem,
 	removeGroundItem,
 	removeSolid,
@@ -133,7 +134,7 @@ export function applyMirrorEvent(world: WorldData, e: WorldEvent): void {
 	if (e.t === WorldEv.ItemAdd) {
 		const known = ix.items.get(e.id);
 		if (known !== undefined) {
-			// fewer than before: somebody took what their backpack had room for and left the rest (ITM-06, the save's
+			// fewer than before: somebody took what their backpack had room for and left the rest (ITM-07, the save's
 			// ceiling) -- for the pickup feedback that is a take like any other (client/systems/pickups.ts)
 			const taken = known.count - e.count;
 			known.x = e.x;
@@ -184,7 +185,7 @@ export function resetMirror(world: WorldData): void {
 		ix.solids.delete(s.id);
 		removeSolid(world, s);
 	}
-	world.items.clear();
+	clearGroundItems(world);
 	ix.items.clear();
 }
 

@@ -1,5 +1,5 @@
 /*
- * What a survivor takes off the ground, and how (docs/DESIGN_RULES.md ITM-06). ONE rule, read by the server
+ * What a survivor takes off the ground, and how (docs/DESIGN_RULES.md ITM-07). ONE rule, read by the server
  * (server/sim/items.ts: the E press and the walk-over sweep), by the client's own world offline
  * (client/systems/interaction.ts), by the "E: …" hint and by the ground items' look (client/view/groundItemsView.ts).
  *
@@ -23,7 +23,7 @@ import { BOSS_TROPHIES } from "shared/data/spawns";
 import { WEAPONS } from "shared/data/weapons";
 import { PLAYER_RADIUS } from "shared/game/physics";
 import { PlayerSaveData, SAVE_LIMITS } from "shared/game/save";
-import type { GroundItem, WorldData } from "shared/game/world";
+import { GroundItem, queryGroundItems, WorldData } from "shared/game/world";
 import { countItem } from "./inventory";
 
 /** the body over the item: its centre within the survivor's radius and a hand's breadth (18 + 8 u) */
@@ -49,9 +49,14 @@ export function pickupRoom(save: PlayerSaveData, kind: number, id: number): numb
 	return math.max(0, itemCap(kind, id) - countItem(save, kind, id));
 }
 
+/** reused by every `walkPickupTarget` (the server asks ten times a second per survivor): no table per answer */
+const NEAR = new Array<GroundItem>();
+
 /**
  * The supply a body at (x, y) walks up now: the nearest walk-up item within WALK_PICKUP_RANGE that `ready` allows
- * (it has lain long enough) and that the save has room for. Ties go to the oldest id, as the E target's do.
+ * (it has lain long enough) and that the save has room for. Ties go to the oldest id, as the E target's do. Only the
+ * items in the reach's box are read -- on the server the item grid's cells under the body (shared/game/world.ts
+ * `queryGroundItems`), on a client its own short list.
  */
 export function walkPickupTarget(
 	world: WorldData,
@@ -63,7 +68,10 @@ export function walkPickupTarget(
 	const reach = WALK_PICKUP_RANGE;
 	let best: GroundItem | undefined;
 	let bestD2 = reach * reach;
-	for (const it of world.items) {
+	const found = NEAR;
+	found.clear();
+	queryGroundItems(world, x - reach, y - reach, x + reach, y + reach, found);
+	for (const it of found) {
 		const dx = it.x - x;
 		if (dx > reach || dx < -reach) continue;
 		const dy = it.y - y;
@@ -74,6 +82,7 @@ export function walkPickupTarget(
 		bestD2 = d2;
 		best = it;
 	}
+	found.clear();
 	return best;
 }
 

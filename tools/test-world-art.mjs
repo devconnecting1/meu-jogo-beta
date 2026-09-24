@@ -51,7 +51,7 @@
  *      their pets, 300 frames -- flat against art: sprites, Instances, property writes, time, and no churn.
  *  11. THE INTERIORS (EDI-04, ART-12). With every roof on, nothing of any interior is drawn; walking in and out of
  *      the largest building creates no Instance; its sprites inside and the writes of a walk across it (printed).
- *  12. THE GROUND ITEMS (ITM-06, client/view/groundItemsView.ts). An item of every kind on each of 18 grounds, flat and
+ *  12. THE GROUND ITEMS (ITM-07, client/view/groundItemsView.ts). An item of every kind on each of 18 grounds, flat and
  *      with the icons' atlas, rasterised: by day and in the survivor's light every icon steps 3:1 or 35 ΔE off its
  *      ground, and on every ground the weakest icon reads at least as well as the weakest flat look it replaces; out
  *      of every light no item steps more than 1.5:1 off its ground (nothing glows), and every sprite of the view is
@@ -1945,7 +1945,7 @@ section("11) interiors: nothing under a closed roof is drawn, walking in and out
 	setArt({});
 }
 
-section("12) ground items (ITM-06): every item on every ground, by day, in the survivor's light and in the dark");
+section("12) ground items (ITM-07): every item on every ground, by day, in the survivor's light and in the dark");
 {
 	const { GroundItemsView } = require(join(SRC, "client/view/groundItemsView.ts"));
 	const WHITE = COLORS.white;

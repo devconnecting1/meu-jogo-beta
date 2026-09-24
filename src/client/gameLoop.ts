@@ -650,6 +650,8 @@ export class GameLoop {
 		look.y = p.y;
 		look.angle = p.angle;
 		look.weapon = currentWeapon(p);
+		// ITM-06: the weapon put away is drawn as empty hands, as everyone else sees it
+		look.holstered = p.holstered === true;
 		look.feetPhase = this.walkPhase;
 		look.feetAmp = this.walkAmp;
 		look.flash = clamp(p.hitFlash ?? 0, 0, 1);
@@ -911,7 +913,7 @@ export class GameLoop {
 
 	/**
 	 * The ground item the E press would take now (client/systems/interaction.ts `hintedItem`, -1 for none): the one
-	 * that wears the brackets (ITM-06). client/main.client.ts sets it with the "E: …" hint, under the same conditions.
+	 * that wears the brackets (ITM-07). client/main.client.ts sets it with the "E: …" hint, under the same conditions.
 	 */
 	setItemTarget(id: number): void {
 		this.groundItems.target = id;

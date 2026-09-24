@@ -1,7 +1,7 @@
 /*
  * "The survivor picked something up": the pickup sound (client/audio/gameAudio.ts), the "Pick something up" lesson
  * (client/onboarding/objectives.ts) and the pickup feedback -- the "+12 Shotgun ammo" chip over the prompt and the Bag
- * button's flash (client/ui/pickupToast.ts, DESIGN_RULES ITM-06) -- all hang on this module, and on nothing else.
+ * button's flash (client/ui/pickupToast.ts, DESIGN_RULES ITM-07) -- all hang on this module, and on nothing else.
  *
  * They used to watch the backpack grow. From WORLD_SERVER_PHASE the backpack is the server's and this client's copy
  * is its bag plus the predictions it has not answered yet (client/net/backpackSync.ts), and that copy grows for other

@@ -1,5 +1,5 @@
 /*
- * What was just picked up (docs/DESIGN_RULES.md ITM-06): "+12 Shotgun ammo" with the item's pixel icon, in a chip
+ * What was just picked up (docs/DESIGN_RULES.md ITM-07): "+12 Shotgun ammo" with the item's pixel icon, in a chip
  * over the "E: …" prompt -- where the eye already is when E is pressed, and where a walked-up supply is announced
  * without a prompt at all -- and a flash on the Bag button (client/ui/hudConsole.ts on desktop, the touch layer's
  * Bag in client/ui/hud.ts), the place it went.

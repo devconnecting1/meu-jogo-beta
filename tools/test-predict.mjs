@@ -242,6 +242,18 @@ Object.defineProperty(String.prototype, "size", {
 	configurable: true,
 	writable: true,
 });
+// roblox-ts Map/Set expose size() as a method (client/net/snapshotBuffer.ts counts its tombs and pending deaths with
+// it every frame); keep the native count behind it
+for (const C of [Map, Set]) {
+	const nativeSize = Object.getOwnPropertyDescriptor(C.prototype, "size").get;
+	Object.defineProperty(C.prototype, "size", {
+		value: function () {
+			return nativeSize.call(this);
+		},
+		configurable: true,
+		writable: true,
+	});
+}
 
 // "shared/x" / "client/x" / "server/x" → SRC/x.ts, transpiled with the project's TypeScript
 const resolveFilename = Module._resolveFilename;

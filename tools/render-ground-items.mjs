@@ -7,7 +7,7 @@
  *   node tools/render-ground-items.mjs --out <dir>                      # the whole set
  *   node tools/render-ground-items.mjs --out <dir> --src <checkout>/src  # another checkout's code (the "before")
  *
- * The set (docs/DESIGN_RULES.md ITM-06):
+ * The set (docs/DESIGN_RULES.md ITM-07):
  *   grounds-day-flat.png   grounds-day-art.png      one row per ground (grass, asphalt, concrete, pavers, dirt, the
  *   grounds-night-flat.png grounds-night-art.png    interior floors...), an item of every kind across it; at night a
  *                                                   survivor's light on the left of each row, the dark on the right
@@ -41,7 +41,7 @@ if (opt("out") === undefined) {
 	console.error("usage: node tools/render-ground-items.mjs --out <dir> [--src <checkout>/src] [--art <dir>]");
 	process.exit(2);
 }
-// (docs/art/ground-items keeps a chosen few of these, before and after: DESIGN_RULES ITM-06)
+// (docs/art/ground-items keeps a chosen few of these, before and after: DESIGN_RULES ITM-07)
 const OUT = resolve(opt("out"));
 const ART_DIR = resolve(opt("art") ?? join(ROOT, "design", "world-art"));
 mkdirSync(OUT, { recursive: true });

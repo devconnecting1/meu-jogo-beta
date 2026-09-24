@@ -372,8 +372,7 @@ export const LANG_TABLE: Array<string> = [
 	"Interact (appears when you can)",
 	"Size, height, floating stick and left-handed: Settings › Touch controls.",
 	"Interact",
-	"Menus",
-	"Menus: the stick moves the focus ring, B goes back.",
+	"Menus: the stick or D-pad moves the focus ring, B goes back.",
 	"Game",
 	"Genre",
 	"Top-down zombie survival",
@@ -545,6 +544,10 @@ export const LANG_TABLE: Array<string> = [
 	"Click",
 	"Tap",
 	"Unequip",
+	// DESIGN_RULES ITM-06: the Bag's action on the weapon in hand (empty hands, like Dead Town), the line under it once
+	// it is away, and the HUD's weapon column while it is
+	"Put away",
+	"Your hands are empty. Equip draws it again.",
 	"Open Craft",
 	// the wardrobe (client/ui/wardrobe.ts, DESIGN_RULES MON-04); "Buy for" and "coins" frame a price: "Buy for 30 coins"
 	"Wardrobe",
@@ -635,6 +638,8 @@ export const LANG_TABLE: Array<string> = [
 	"TITLE",
 	"USE",
 	"RELOAD",
+	// the Survivor screen's loadout (UI-10): a slot the lobby cannot change says where it is changed
+	"Change in the Bag during a match",
 	"Not owned",
 	"Currently equipped.",
 	"Nothing is worn in this slot now.",
@@ -719,7 +724,7 @@ export const LANG_TABLE: Array<string> = [
 	"Launch drone",
 	"Call back drone",
 	"Drone charging",
-	// the ground items (client/systems/interaction.ts, client/ui/pickupToast.ts, DESIGN_RULES ITM-06): the prompt
+	// the ground items (client/systems/interaction.ts, client/ui/pickupToast.ts, DESIGN_RULES ITM-07): the prompt
 	// ("E: Pick up Shotgun ammo ×8"), an item the save already holds as many of as it can keep ("Wood full (9999)"),
 	// and the lesson that teaches the two ways -- walked up for supplies, E for weapons and gear. The feedback line is
 	// a number and an item's name ("+12 Wood"), both already here

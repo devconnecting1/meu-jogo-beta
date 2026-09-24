@@ -4,6 +4,7 @@ import { isChoppingTool, meleeReach, usesMagazine, WeaponDef, WEAPONS } from "sh
 import { angleDiff } from "shared/engine/vec2";
 import { choose, damageCal, rndRange } from "shared/engine/rng";
 import { currentWeapon, damageIsServerOwned, damageToPlayer, PlayerState } from "shared/game/player";
+import { heldWeaponOf } from "shared/game/save";
 import { weaponKeyOrder } from "shared/game/weaponSlots";
 import { querySolids, Solid } from "shared/game/world";
 import { blocksShots, PLAYER_RADIUS, raycast, rayCircle, segmentClear } from "shared/game/physics";
@@ -14,7 +15,8 @@ import { hitMapItem } from "./interaction";
 import { took } from "./pickups";
 import { fxBlood, fxDebris, fxShake, fxTracer, GameRefs, SPEED_SCALE } from "./types";
 import { isHitscan, predictedSpread, WeaponFx } from "../predict/weaponFx";
-import { IntentKind } from "shared/net/intentWire";
+import { HOLSTER_AWAY, HOLSTER_DRAW, IntentKind } from "shared/net/intentWire";
+import { meleeSweepLeftS, meleeSweepStep } from "shared/sim/meleeSweep";
 import { noteReserveSpent, sendBagVerb, serverOwnsWorld } from "../net/authority";
 
 /*
@@ -266,11 +268,57 @@ export function switchWeapon(refs: GameRefs, weaponId: number, refund = true): v
  * The survivor CHOOSES a weapon: the 1–5 keys, the hotbar, the Bag. From WORLD_SERVER_PHASE the choice is also a
  * `SwitchWeapon` verb (client/net/authority.ts): the server's weapon machine switches in the tick it lands in
  * (server/sim/backpack.ts), instead of at the next save report (QA sweep NET-1). Offline it is only the local switch.
+ *
+ * DESIGN_RULES ITM-06: choosing the weapon ALREADY in hand puts it away (empty hands) or, put away, draws it again --
+ * the key, its hotbar tile and the Bag's Put away / Equip are one path. Choosing any other weapon draws it.
  */
 export function chooseWeapon(refs: GameRefs, weaponId: number): void {
-	if (weaponId === refs.player.weapon.pointer && weaponId === refs.save.equipWeapon) return;
+	const p = refs.player;
+	if (weaponId === p.weapon.pointer && weaponId === heldWeaponOf(refs.save)) {
+		holsterWeapon(refs, p.holstered !== true);
+		return;
+	}
 	if (serverOwnsWorld() && !sendBagVerb(IntentKind.SwitchWeapon, weaponId)) return;
 	switchWeapon(refs, weaponId);
+	// (from WORLD_SERVER_PHASE the prediction of the SwitchWeapon verb already drew it: client/net/bagPrediction.ts)
+	p.holstered = undefined;
+}
+
+/**
+ * ITM-06: puts the weapon in hand away (`away`) or draws it again. The body's state (`PlayerState.holstered`), never
+ * the save's. From WORLD_SERVER_PHASE it is the server's `Holster` verb, predicted at once on this body by the
+ * server's own rule (client/net/bagPrediction.ts) and laid over by the wallet's `bag.holster`; offline it is only
+ * local. A dead body has no hands to put anything away with.
+ */
+export function holsterWeapon(refs: GameRefs, away: boolean): void {
+	const p = refs.player;
+	if ((p.holstered === true) === away || p.dead) return;
+	if (serverOwnsWorld()) {
+		sendBagVerb(IntentKind.Holster, away ? HOLSTER_AWAY : HOLSTER_DRAW);
+		return;
+	}
+	p.holstered = away ? true : undefined;
+}
+
+/**
+ * The pad's D-pad (`InputState.weaponCycle`: -1 left, +1 right): the previous / next weapon of the list keys 1–5 pick
+ * from -- all of it, the sixth weapon on included, which the keyboard reaches only from the Bag -- and drawn. It never
+ * puts a weapon away (that is the Bag's Put away on the pad): with one weapon, or put away, a press only draws it.
+ */
+export function cycleWeapon(refs: GameRefs, dir: number): void {
+	const list = ownedWeapons(refs);
+	const n = list.size();
+	if (n === 0 || dir === 0) return;
+	const p = refs.player;
+	const at = list.indexOf(p.weapon.pointer);
+	const step = dir > 0 ? 1 : -1;
+	const from = at >= 0 ? at : step > 0 ? -1 : 0;
+	const pick = list[(((from + step) % n) + n) % n];
+	if (pick === p.weapon.pointer && pick === heldWeaponOf(refs.save)) {
+		holsterWeapon(refs, false);
+		return;
+	}
+	chooseWeapon(refs, pick);
 }
 
 /**
@@ -305,12 +353,17 @@ interface Swing {
 	reach: number;
 	hits: number;
 	delay: number;
+	/** the cooldown of the weapon that started it: what a sweep cut short still owes (ITM-06) */
+	cooldown: number;
 	hitIds: Set<number>;
 	solidIds: Set<number>;
 }
 
 export class Combat {
-	/** seconds until the next shot/swing may start (weapon_relaunch_time_count) */
+	/**
+	 * Seconds until the next shot/swing may start (weapon_relaunch_time_count): the survivor's "no new attack before"
+	 * clock, as the server keeps it (server/sim/combat.ts): neither a switch nor the holster clears it (ITM-06)
+	 */
 	private fireCd = 0;
 	/** fractional fuel owed by the flamethrower / stun gun / chainsaw (paid in whole units) */
 	private fuelDebt = 0;
@@ -328,6 +381,7 @@ export class Combat {
 		reach: 0,
 		hits: 0,
 		delay: 0,
+		cooldown: 0,
 		hitIds: new Set<number>(),
 		solidIds: new Set<number>(),
 	};
@@ -345,12 +399,58 @@ export class Combat {
 		return this.fx;
 	}
 
-	resetWeaponState(): void {
-		this.fireCd = 0;
+	/**
+	 * A switch (`switchSerial`): the bow's draw and the sweep go, but the cadence does not (ITM-06, the server's rule in
+	 * server/sim/combat.ts `weaponOf`): the sweep in the air pays the rest of itself, and what was still owed is kept.
+	 * With nothing in the air and nothing owed the new weapon is ready at once.
+	 */
+	resetWeaponState(dt = 1 / 60): void {
+		this.payCutSwing(dt);
+		this.fireCd = math.max(this.fireCd, 0);
 		this.drawTime = 0;
 		this.swing.active = false;
 		this.swing.hitIds.clear();
 		this.swing.solidIds.clear();
+	}
+
+	/** a sweep still in the air when the hands let go of it pays the rest of its arc and its cooldown (ITM-06) */
+	private payCutSwing(dt: number): void {
+		const s = this.swing;
+		if (!s.active) return;
+		this.fireCd = math.max(this.fireCd, 0) + meleeSweepLeftS(s.angle, s.limit, s.speed, s.delay, dt) + s.cooldown;
+	}
+
+	/**
+	 * This frame's weapon keys: a number key (or a hotbar tile) and the pad's D-pad. Not with a construction on the
+	 * cursor (its clicks are the builder's). A dead body drops the holster (ITM-06: the next one stands up drawn).
+	 */
+	private readWeaponKeys(refs: GameRefs): void {
+		const input = refs.input;
+		const p = refs.player;
+		if (p.dead && p.holstered === true) p.holstered = undefined;
+		if (refs.pendingPlace >= 0) return;
+		if (input.weaponSlotPressed >= 0) {
+			const id = ownedWeapons(refs)[input.weaponSlotPressed];
+			if (id !== undefined) chooseWeapon(refs, id);
+		}
+		if (input.weaponCycle !== 0) cycleWeapon(refs, input.weaponCycle);
+	}
+
+	/**
+	 * The hands are busy or empty (a construction, the bars of a vehicle, death, a weapon put away): no sweep, no draw.
+	 * A sweep cut short by putting the blade away pays the rest of itself and its cooldown -- the server's rule
+	 * (server/sim/combat.ts `payCutSwing`), so the predicted feel does not restart a swing the server will not.
+	 */
+	private holdFire(refs: GameRefs, dt: number): void {
+		const p = refs.player;
+		if (p.holstered === true) this.payCutSwing(dt);
+		this.swing.active = false;
+		this.drawTime = 0;
+		p.swingerActive = false;
+		if (p.holstered === true) {
+			p.weapon.bowCount = 0;
+			p.weapon.chainCount = 0;
+		}
 	}
 
 	// ---- reload -------------------------------------------------------------------------------
@@ -597,6 +697,7 @@ export class Combat {
 		s.reach = meleeReach(w);
 		s.hits = 0;
 		s.delay = 0;
+		s.cooldown = w.cooldown;
 		s.hitIds.clear();
 		s.solidIds.clear();
 	}
@@ -613,8 +714,7 @@ export class Combat {
 			s.delay -= dt;
 		} else {
 			const prev = s.angle;
-			const step = s.speed * SPEED_SCALE * dt * (math.abs(s.angle - s.limit - 20) / 80);
-			s.angle = math.min(s.limit + 1, s.angle + math.max(step, 0.5));
+			s.angle = meleeSweepStep(s.angle, s.limit, s.speed, dt);
 			this.sweep(refs, w, aim, prev, s.angle);
 		}
 		p.swingerActive = true;
@@ -1052,8 +1152,7 @@ export class Combat {
 			s.delay -= dt;
 		} else {
 			const prev = s.angle;
-			const step = s.speed * SPEED_SCALE * dt * (math.abs(s.angle - s.limit - 20) / 80);
-			s.angle = math.min(s.limit + 1, s.angle + math.max(step, 0.5));
+			s.angle = meleeSweepStep(s.angle, s.limit, s.speed, dt);
 			for (const z of refs.zombies) {
 				if (z.hp <= 0 || s.hitIds.has(z.id)) continue;
 				const dx = z.x - p.x;
@@ -1091,23 +1190,19 @@ export class Combat {
 		const input = refs.input;
 		const aim = p.angle;
 		if (serverOwnsWorld()) followServerWeapon(refs);
-		if (input.weaponSlotPressed >= 0 && refs.pendingPlace < 0) {
-			const id = ownedWeapons(refs)[input.weaponSlotPressed];
-			if (id !== undefined) chooseWeapon(refs, id);
-		}
+		this.readWeaponKeys(refs);
 		if (this.seenSwitch !== switchSerial) {
 			this.seenSwitch = switchSerial;
-			this.resetWeaponState();
+			this.resetWeaponState(dt);
 		}
 		const w = currentWeapon(p);
 		const rt = p.weapon;
 		this.fireCd = math.max(this.fireCd - dt, -dt);
 		this.recoverRecoil(refs, dt);
-		// a rider has both hands on the bars (VEI-05): the attack button is the bell or the horn, on the server
-		if (refs.pendingPlace >= 0 || p.dead || p.ride !== undefined) {
-			this.swing.active = false;
-			this.drawTime = 0;
-			p.swingerActive = false;
+		// a rider has both hands on the bars (VEI-05): the attack button is the bell or the horn, on the server. A weapon
+		// PUT AWAY (ITM-06) is predicted as the server runs it: nothing -- no sweep, no draw, no reload
+		if (refs.pendingPlace >= 0 || p.dead || p.ride !== undefined || p.holstered === true) {
+			this.holdFire(refs, dt);
 			return;
 		}
 		const blocked = input.attackBlocked;
@@ -1187,25 +1282,19 @@ export class Combat {
 		this.updateBullets(refs, dt);
 		this.updateTurrets(refs, dt);
 
-		if (input.weaponSlotPressed >= 0 && refs.pendingPlace < 0) {
-			const list = ownedWeapons(refs);
-			const id = list[input.weaponSlotPressed];
-			if (id !== undefined) chooseWeapon(refs, id);
-		}
+		this.readWeaponKeys(refs);
 
 		if (this.seenSwitch !== switchSerial) {
 			this.seenSwitch = switchSerial;
-			this.resetWeaponState();
+			this.resetWeaponState(dt);
 		}
 		const w = currentWeapon(p);
 		const rt = p.weapon;
 		this.fireCd = math.max(this.fireCd - dt, -dt);
 		this.recoverRecoil(refs, dt);
 
-		if (refs.pendingPlace >= 0 || p.dead || p.ride !== undefined) {
-			this.swing.active = false;
-			this.drawTime = 0;
-			p.swingerActive = false;
+		if (refs.pendingPlace >= 0 || p.dead || p.ride !== undefined || p.holstered === true) {
+			this.holdFire(refs, dt);
 			return;
 		}
 

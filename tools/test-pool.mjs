@@ -36,6 +36,9 @@
  *      a fight's blood reuses its particle and decal records; GameLoop.shadowOffset answers in one scratch.
  *  11. THE CANOPY ASKS A GRID (L6). "Is a body under this crown?" answered from the cells under it, exactly as the
  *      walk over the whole horde answered it, with the grid's arrays kept from frame to frame.
+ *  12. THE HORDE'S ORDER (perf audit M2). The real SnapshotBuffer, with its netId table walked in Luau's order: a
+ *      spawn under a recycled low netId moves no walker already drawn, and a death at the front moves one walker
+ *      into its place (it used to move the whole horde: 280 sprites, 867 writes for 40 walkers).
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -373,8 +376,8 @@ section("2) a birth or a death costs O(1), and never a ZIndex");
 		`${death.writes} writes on ${death.touched.size()} sprites; the town, the blood and the survivors untouched`,
 	);
 	console.log(
-		"       (the horde's order is the snapshot's: a death at its front still moves every walker after it, in its own" +
-			" layers -- client/net/snapshotBuffer.ts decides that order, not the renderer)",
+		"       (this horde is a plain list, so a death at its front moves every walker after it, in its own layers; the" +
+			" game's order is client/net/snapshotBuffer.ts's, where a death moves one walker: section 12)",
 	);
 }
 
@@ -1050,9 +1053,154 @@ section("11) a tree's canopy asks the cells under its crown, not the whole horde
 	);
 }
 
-// ================================================================ 12. the ground items (ITM-06)
+// ================================================================ 12. the horde's own order
 
-section("12) ground items (ITM-06): drops, a pile, the target and the glint -- no Instance after the warm-up");
+section("12) the horde's draw order is the snapshot buffer's: a spawn or a death moves one walker, not the horde");
+{
+	/*
+	 * perf audit M2. The view draws `SnapshotBuffer.zombieStates()` in its order, and the renderer hands out sprite
+	 * slots by it. That order was the iteration order of the buffer's netId -> track table: in Luau a table keyed by
+	 * small integers walks them in key order (its array part), so a recycled LOW netId -- or a rehash -- put a new
+	 * body in front of the horde and moved every walker's sprites; a death at the front did the same. The Node Map
+	 * walks in insertion order, so the table is given Luau's order here (ascending keys) to measure what Roblox does.
+	 */
+	const { SnapshotBuffer } = require(join(SRC, "client/net/snapshotBuffer.ts"));
+	const root = gui.make("Frame");
+	const r = new Renderer(root, "Sprites");
+	const cam = new Camera();
+	cam.setView(1280, 720);
+	r.setView(1280, 720);
+	cam.x = AT.x;
+	cam.y = AT.y;
+	const buf = new SnapshotBuffer();
+	buf.setRate(60);
+	const table = buf.zombies;
+	if (table instanceof Map) {
+		table[Symbol.iterator] = function* luauOrder() {
+			for (const k of [...Map.prototype.keys.call(this)].sort((a, b) => a - b)) yield [k, this.get(k)];
+		};
+	}
+	const bodies = new Map();
+	const place = id => ({
+		x: AT.x - 500 + ((id * 97) % 1000),
+		y: AT.y - 280 + ((id * 53) % 560),
+		angle: (id % 8) * 0.7,
+		type: 1 + (id % 5),
+	});
+	// netIds 2..41: netId 1 died a while ago and is free again (§4.4: reused after 2 s)
+	for (let id = 2; id <= 41; id++) bodies.set(id, place(id));
+	let tick = 3000;
+	let now = 0;
+	const feed = () => {
+		const zombies = [];
+		for (const [netId, b] of bodies) {
+			zombies.push({
+				netId,
+				x: b.x,
+				y: b.y,
+				angle: b.angle,
+				flags: 0,
+				type: b.type,
+				big: false,
+				mid: false,
+				aware: 0,
+			});
+		}
+		buf.receive({ tick: tick % 65536, part: 0, parts: 1, players: [], zombies, bosses: [] }, tick, now);
+	};
+	const frame = () => {
+		tick += 1;
+		now += 1 / 60;
+		if (tick % 3 === 0) feed();
+		buf.advance(1 / 60, tick, now);
+		r.beginFrame();
+		for (const z of buf.zombieStates()) {
+			r.drawCircle(cam, z.x + 3, z.y + 9, 38, {
+				color: COLORS.shadow,
+				alpha: 0.3 * z.alpha,
+				zIndex: Z.actorShadow,
+			});
+			HV.drawZombie(
+				r,
+				cam,
+				z.x,
+				z.y,
+				z.angle,
+				1,
+				z.type,
+				0,
+				z.alpha,
+				z.feetCycle,
+				Z.zombie,
+				0,
+				false,
+				false,
+				false,
+			);
+		}
+		r.endFrame();
+	};
+	const sprites = () => {
+		const out = new Set();
+		const walk = f => {
+			for (const c of f.GetChildren()) {
+				if (c.ClassName === "Frame") out.add(c);
+				walk(c);
+			}
+		};
+		walk(r.layer);
+		return out;
+	};
+	/** runs `fn` and counts the sprites that EXISTED before it and had a property changed */
+	const moved = fn => {
+		const before = sprites();
+		const w = watch(fn);
+		let n = 0;
+		for (const f of w.touched) if (before.has(f)) n += 1;
+		return { n, writes: w.writes, zWrites: w.zWrites };
+	};
+	for (let i = 0; i < 180; i++) frame(); // every body in, faded in, standing still
+	const perWalker = r.drawCount() / bodies.size();
+	const idle = moved(() => {
+		for (let i = 0; i < 30; i++) frame();
+	});
+	check(idle.writes === 0, "a still horde of 40 writes nothing", `${idle.writes} writes in 30 frames`);
+
+	// a spawn under the recycled netId 1: the lowest of all
+	bodies.set(1, place(1));
+	const spawn = moved(() => {
+		for (let i = 0; i < 3; i++) frame();
+	});
+	check(
+		spawn.n === 0 && spawn.zWrites === 0,
+		"a spawn under a recycled low netId moves no walker already drawn (it is drawn after them)",
+		`${spawn.n} existing sprites changed, ${spawn.writes} writes; one walker is ${perWalker.toFixed(0)} sprites`,
+	);
+	for (let i = 0; i < 60; i++) frame();
+
+	// a death at the front of the order: the reliable ZombieDied takes the body away at once
+	const first = buf.zombieStates()[0].netId;
+	bodies.delete(first);
+	const death = moved(() => {
+		buf.forgetZombie(first, tick);
+		frame();
+	});
+	check(
+		death.n <= 2 * perWalker && death.zWrites === 0,
+		"a death at the front moves one walker into its place (two walkers' sprites at most), not the horde",
+		`${death.n} existing sprites changed, ${death.writes} writes; the horde is ${r.drawCount()} sprites`,
+	);
+	const ids = buf.zombieStates().map(z => z.netId);
+	check(
+		ids.length === bodies.size() && new Set(ids).size() === ids.length && !ids.includes(first),
+		"and the order still holds every body once, and not the dead one",
+		`${ids.length} drawn`,
+	);
+}
+
+// ================================================================ 13. the ground items (ITM-07)
+
+section("13) ground items (ITM-07): drops, a pile, the target and the glint -- no Instance after the warm-up");
 {
 	const { GroundItemsView, hopHeight, HOP_TIME, PILE_SPREAD } = require(join(SRC, "client/view/groundItemsView.ts"));
 	const RULE = require(join(SRC, "shared/sim/pickupRule.ts"));

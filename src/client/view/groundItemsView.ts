@@ -1,5 +1,5 @@
 /*
- * Ground items: what lies in the street to be picked up (docs/DESIGN_RULES.md ITM-06). Drawn by
+ * Ground items: what lies in the street to be picked up (docs/DESIGN_RULES.md ITM-07). Drawn by
  * client/gameLoop.ts every frame, and by tools/render-ground-items.mjs onto every ground for the pictures.
  *
  * What an item looks like on the ground:

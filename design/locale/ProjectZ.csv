@@ -351,8 +351,7 @@ Appeals: contact the developer through the group linked on this experience's pag
 ,,,Interact (appears when you can)
 ,,,"Size, height, floating stick and left-handed: Settings › Touch controls."
 ,,,Interact
-,,,Menus
-,,,"Menus: the stick moves the focus ring, B goes back."
+,,,"Menus: the stick or D-pad moves the focus ring, B goes back."
 ,,,Game
 ,,,Genre
 ,,,Top-down zombie survival
@@ -529,6 +528,8 @@ Waves come at 19:00, 22:00 and 01:00. Be somewhere you chose."
 ,,,Click
 ,,,Tap
 ,,,Unequip
+,,,Put away
+,,,Your hands are empty. Equip draws it again.
 ,,,Open Craft
 ,,,Wardrobe
 ,,,Outfits
@@ -609,6 +610,7 @@ New game starts a new life at day 1, woken at first light. Level, skills, coins 
 ,,,TITLE
 ,,,USE
 ,,,RELOAD
+,,,Change in the Bag during a match
 ,,,Not owned
 ,,,Currently equipped.
 ,,,Nothing is worn in this slot now.

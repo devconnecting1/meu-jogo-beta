@@ -289,7 +289,7 @@ export class Hud {
 	private hintBox: Frame | undefined;
 	private hintKey: Frame | undefined;
 	private hintLabel: TextLabel | undefined;
-	/** "+12 Wood" over the prompt and the Bag's flash (ITM-06, client/ui/pickupToast.ts) */
+	/** "+12 Wood" over the prompt and the Bag's flash (ITM-07, client/ui/pickupToast.ts) */
 	private toast: PickupToast | undefined;
 	private readonly notes = new Array<PickupNote>();
 	/** touch: the light laid over the Bag button when something went into the backpack, and how bright it is now */
@@ -653,7 +653,7 @@ export class Hud {
 		});
 		this.touchCaption(layer, "ReloadCap", L.reload, this.tr("RELOAD"));
 		const bag = this.touchButton(layer, "BagBtn", L.bag, "bag", "secondary", () => this.onBackpack?.());
-		// ITM-06: the light that flashes over the Bag when something goes into it (hidden until then)
+		// ITM-07: the light that flashes over the Bag when something goes into it (hidden until then)
 		const size = math.max(L.bag.r * 2, MIN_TOUCH_PX);
 		this.bagFlash = makeFrame(bag, "PickupFlash", 0, 0, size, size, THEME.foreground, {
 			transparency: 1,
@@ -938,9 +938,10 @@ export class Hud {
 		this.updatePickups(now);
 		const hpRatio = state.hpMax > 0 ? state.hp / state.hpMax : 0;
 
-		// a melee weapon has nothing to reload: the touch button says so instead of doing nothing when pressed
+		// a melee weapon has nothing to reload, nor a weapon put away (ITM-06): the touch button says so instead of doing
+		// nothing when pressed
 		if (this.reloadBtn !== undefined) {
-			const canReload = state.magSize > 0;
+			const canReload = state.magSize > 0 && state.holstered !== true;
 			if ((this.reloadBtn.GetAttribute("Disabled") !== true) !== canReload) {
 				setButtonEnabled(this.reloadBtn, canReload);
 			}
@@ -986,7 +987,7 @@ export class Hud {
 		}
 	}
 
-	/** the pickup chips of this mount (ITM-06), for tests */
+	/** the pickup chips of this mount (ITM-07), for tests */
 	pickupToast(): PickupToast | undefined {
 		return this.toast;
 	}

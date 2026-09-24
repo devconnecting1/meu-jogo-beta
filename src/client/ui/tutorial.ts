@@ -100,10 +100,13 @@ export const SCHEMES: Array<Scheme> = [
 			["Start", "Menu"],
 			// Back / Select opens and closes the scoreboard; the D-pad sorts it while it is open (MP-23)
 			["Back", "Survivors in town"],
-			["D-pad", "Menus"],
+			// left / right: the previous / next weapon, drawn (ITM-06; client/systems/combat.ts cycleWeapon). No tenth
+			// row for putting it away: Settings › Controls has no room, and the Bag's Put away does it on the pad
+			["D-pad", "Switch weapon"],
 		],
-		// B backs out of the screen on top (client/ui/backStack.ts): the one line Settings > Controls has room for
-		note: "Menus: the stick moves the focus ring, B goes back.",
+		// B backs out of the screen on top (client/ui/backStack.ts): the one line Settings > Controls has room for; in a
+		// menu the D-pad is the engine's navigation, as the stick is
+		note: "Menus: the stick or D-pad moves the focus ring, B goes back.",
 	},
 ];
 

@@ -33,16 +33,18 @@
  *    keys 1-5 pick from (client/systems/combat.ts), in the same order. The weapon in hand is the raised BLUE tile
  *    ("what is chosen is blue", UI-07), another owned weapon is flat dark iron, a key with no weapon is an empty
  *    socket on the groove. Each tile shows the item's pixel icon (UI-11: the Bag's and the item card's), the key that
- *    picks it on this device (keyboard 1-5; the pad has no such key and touch taps the tile itself, so neither
- *    shows one) and, for a gun, its ammo in the item card's yellow: magazine / reserve on the gun in hand, the
+ *    picks it on this device (keyboard 1-5; the pad steps through them with the D-pad and touch taps the tile
+ *    itself, so neither shows one) and, for a gun, its ammo in the item card's yellow: magazine / reserve on the gun in hand, the
  *    reserve alone on the others (a gun you are not holding keeps its rounds in the pool: combat.ts switchWeapon
  *    empties the magazine back into it). A reload refills the tile in hand from the bottom up. The icon sits in the
  *    MIDDLE of what the tile leaves it -- what it draws, not its 16 x 16 grid (itemIcon.ts fit "drawn") -- the face
  *    on a melee weapon's tile, the face above the ammo chip on a gun's; the key is a small cap in the very corner,
  *    and no pixel of any weapon's icon lands under it or on the chip; and the icon is drawn at a side the tile's
- *    pixels carry evenly (16 / 24 / 32 / 40 / 48... px: fitTileIcon), the same for every weapon;
+ *    pixels carry evenly (16 / 24 / 32 / 40 / 48... px: fitTileIcon), the same for every weapon; with the weapon PUT
+ *    AWAY (DESIGN_RULES ITM-06: empty hands) no tile is blue;
  *  - a click or a tap on tile k writes `InputState.weaponSlotPressed = k`, the field key k writes
- *    (client/bootstrap.ts): combat has one way to switch weapons, not two;
+ *    (client/bootstrap.ts): combat has one way to switch weapons, not two -- and the tile in hand, pressed again,
+ *    puts it away (or draws it back);
  *  - the Bag and Menu plates are the in-run actions that have a button today, each a pixel icon and its key on this
  *    device (B / LB, P / Start), and after them the third: the match scoreboard's survivors chip (MP-23,
  *    scoreboard.ts builds it in `chipSlot`: the people icon, how many are in town and Q / Back). Nothing else is
@@ -100,6 +102,8 @@ export interface HudState {
 	showClock: boolean;
 	/** the weapon in hand (PlayerState.weapon.pointer): the blue tile of the hotbar */
 	weaponId: number;
+	/** (ITM-06) that weapon is put away: empty hands, no blue tile, and the column says so */
+	holstered?: boolean;
 	weaponName: string;
 	mag: number;
 	magSize: number;
@@ -259,7 +263,8 @@ function keyFor(scheme: number, what: string): string {
 
 /**
  * The legend of hotbar tile `k` on `scheme`: the keyboard's "1 – 5" row gives each tile its digit; a scheme whose
- * "Switch weapon" row is not a digit (touch: "Tap a weapon") or that has no such row (the pad) shows no key.
+ * "Switch weapon" chip is not a digit shows no key -- touch taps the tile itself ("Tap a weapon"), and the pad steps
+ * through the weapons with the D-pad ("D-pad", ITM-06), which picks no tile in particular.
  */
 export function slotLegend(scheme: number, k: number): string {
 	const chip = keyFor(scheme, "Switch weapon");
@@ -708,6 +713,8 @@ export class HudConsole {
 	/** the weapon column's section height (design units) */
 	private sideH = 0;
 	private sideId = -2;
+	/** the weapon column last written for a weapon put away (ITM-06) */
+	private sideAway = false;
 	private readMag = -1;
 	private readSize = -1;
 	private readPool = -1;
@@ -727,7 +734,7 @@ export class HudConsole {
 	 * its survivors chip (scoreboard.ts, MP-23). undefined on touch (hud.ts places the chip with Menu and Bag)
 	 */
 	readonly chipSlot: Frame | undefined;
-	/** desktop: the light over the Bag plate when something goes into the backpack (ITM-06), and its transparency now */
+	/** desktop: the light over the Bag plate when something goes into the backpack (ITM-07), and its transparency now */
 	private bagFlash: Frame | undefined;
 	private bagFlashT = 1;
 
@@ -1108,7 +1115,7 @@ export class HudConsole {
 		});
 		b.Selectable = false;
 		if (name === "Bag") {
-			// ITM-06: the light that flashes over the Bag when something goes into it (client/ui/pickupToast.ts)
+			// ITM-07: the light that flashes over the Bag when something goes into it (client/ui/pickupToast.ts)
 			this.bagFlash = W.makeFrame(b, "PickupFlash", 0, 0, ICON_W, ICON_H, THEME.foreground, {
 				transparency: 1,
 				zIndex: b.ZIndex + 3,
@@ -1269,7 +1276,8 @@ export class HudConsole {
 			if (t.key.Visible !== showKey) t.key.Visible = showKey;
 		}
 
-		const inHand = t.id >= 0 && t.id === state.weaponId;
+		// ITM-06: a weapon put away is in no hand -- no tile is blue
+		const inHand = t.id >= 0 && t.id === state.weaponId && state.holstered !== true;
 		const reloading = inHand && state.reloading && state.magSize > 0;
 		if (repaint || inHand !== t.inHand || reloading !== t.reloading) {
 			t.inHand = inHand;
@@ -1308,10 +1316,13 @@ export class HudConsole {
 		if (name === undefined || kind === undefined || readout === undefined || label === undefined) return;
 		const w = WEAPONS[state.weaponId] ?? WEAPONS[0];
 		const gun = state.magSize > 0;
-		if (state.weaponId !== this.sideId) {
+		const away = state.holstered === true;
+		if (state.weaponId !== this.sideId || away !== this.sideAway) {
 			this.sideId = state.weaponId;
+			this.sideAway = away;
 			name.Text = state.weaponName;
-			kind.Text = this.tr(weaponKindName(w.kind));
+			// ITM-06: put away, the type line says why nothing fires
+			kind.Text = away ? this.tr("Put away") : this.tr(weaponKindName(w.kind));
 			// a melee weapon has no magazine: its name and type take the column's middle instead of a readout
 			const h = this.sideH;
 			const top = gun ? this.layout.inset : (h - 36) / 2;

@@ -133,8 +133,10 @@ export function preloadWorldArt(): void {
 			missing = fetchMissing(missing);
 		}
 		if (missing.size() === 0) return;
+		// fixed messages: the Error Report groups by message (docs/ANALYTICS.md §10), the counts are the log line
+		print(`[world] art textures missing: ${missing.size()}/${ids.size()}`);
 		if (missing.size() >= ids.size()) {
-			warn(`[world] art textures unavailable (${missing.size()}/${ids.size()}): drawing the town flat`);
+			warn("[world] art textures unavailable: drawing the town flat");
 			fetched = false;
 			changed();
 			return;
@@ -150,6 +152,6 @@ export function preloadWorldArt(): void {
 			warn("[world] the item icon atlas did not load: the icons are drawn with Frames");
 		}
 		if (lost.size() > 0) changed();
-		warn(`[world] ${missing.size()}/${ids.size()} art textures are slow; keeping the art`);
+		warn("[world] some art textures are slow; keeping the art");
 	});
 }

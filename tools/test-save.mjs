@@ -1653,7 +1653,7 @@ section("27) os caminhos reais do servidor chamam o credito (craft, madeira, mor
 	// the source of the other callers: one line each, where the server decides
 	const src = f => readFileSync(join(SRC, f), "utf8");
 	check(
-		// a pickup credits what went INTO the backpack: all of it, or what fitted under the save's ceiling (ITM-06)
+		// a pickup credits what went INTO the backpack: all of it, or what fitted under the save's ceiling (ITM-07)
 		/creditTaken\(save, item\.kind, item\.itemId, take\)/.test(src("server/sim/items.ts")) &&
 			/creditTaken\(save, drop\.kind, drop\.id, drop\.count\)/.test(src("server/sim/items.ts")) &&
 			/creditTaken\(save, extra\.kind, extra\.id, extra\.count\)/.test(src("server/sim/items.ts")),
@@ -2310,7 +2310,7 @@ section("31) regras e mensagens de moderacao: pela lang.ts, e o ban aponta para 
 		[0, 1, 2, 3, 0, 0],
 		"a lingua do jogador sai do LocaleId da conta",
 	);
-	const sources = ["server/admin/adminServer.ts", "server/net/mpHost.ts"].map(f =>
+	const sources = ["server/admin/adminServer.ts", "server/net/mpHost.ts", "server/net/backpackIntents.ts"].map(f =>
 		readFileSync(join(SRC, f), "utf8"),
 	);
 	check(
