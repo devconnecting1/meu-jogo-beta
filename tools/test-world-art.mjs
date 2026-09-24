@@ -159,13 +159,58 @@ function setArt(ids) {
 
 // ================================================================ 1. no art, no change
 
+/**
+ * The scenes are framed on what they are named for, found in the town (the fixed rects of before showed an empty yard,
+ * a bare crossing and a house where the forecourt used to be once the everyday town moved the buildings round and the
+ * mix got its quotas, EDI-18/EDI-19, 2026-09-24): a house of the street with its ridge along x and its front yard, a
+ * shop's door at the sidewalk, a park's middle, the first school, a gas station's forecourt whose street is at the top
+ * (its canopy is `gasCanopyN`), framed like render-map's `findGas`.
+ */
+const sceneOn = (name, x, y, night = false) => ({
+	name,
+	x: Math.round(x - 640),
+	y: Math.round(y - 400),
+	w: 1280,
+	h: 800,
+	zoom: 1,
+	night,
+});
+const HOUSE = world.solids.find(
+	s =>
+		s.kind === "building" && s.buildingType === 1 && s.w > s.h && (s.doorSide === "top" || s.doorSide === "bottom"),
+);
+const SHOP = world.solids.find(
+	s =>
+		s.kind === "building" &&
+		[6, 8, 9, 10].includes(s.buildingType) &&
+		world.lots.some(l => l.zone === "commercial" && s.x >= l.x && s.x < l.x + l.w && s.y >= l.y && s.y < l.y + l.h),
+);
+const PARK = world.lots.find(l => l.kind === "park");
+const SCHOOL = world.solids.find(s => s.kind === "building" && s.buildingType === 3);
+const STREET_AT =
+	HOUSE !== undefined
+		? [HOUSE.x + HOUSE.w / 2, HOUSE.doorY + (HOUSE.doorSide === "top" ? -160 : 160)]
+		: [17116, 12122];
+const GAS_SCENE = (() => {
+	const canopies = world.solids.filter(s => s.kind === "canopy" && s.tags === "canopy");
+	const c = canopies.find(s => s.face === "top") ?? canopies[0];
+	if (c === undefined) return sceneOn("gas", 1581, 9201);
+	const b = world.solids
+		.filter(s => s.kind === "building" && s.buildingType === 5)
+		.sort((p, q) => Math.hypot(p.x - c.x, p.y - c.y) - Math.hypot(q.x - c.x, q.y - c.y))[0];
+	const cx = b !== undefined ? (b.x + b.w / 2) * 0.35 + (c.x + c.w / 2) * 0.65 : c.x + c.w / 2;
+	const cy = b !== undefined ? (b.y + b.h / 2) * 0.35 + (c.y + c.h / 2) * 0.65 : c.y + c.h / 2;
+	return sceneOn("gas", cx, cy);
+})();
 const SCENES = [
-	{ name: "street", x: 16476, y: 11722, w: 1280, h: 800, zoom: 1, night: false },
-	{ name: "downtown", x: 7764, y: 9854, w: 1280, h: 800, zoom: 1, night: false },
-	{ name: "park", x: 2724, y: 14928, w: 1280, h: 800, zoom: 1, night: false },
-	{ name: "school", x: 4445, y: 2742, w: 1280, h: 800, zoom: 1, night: false },
-	{ name: "gas", x: 941, y: 8801, w: 1280, h: 800, zoom: 1, night: false },
-	{ name: "street-night", x: 16476, y: 11722, w: 1280, h: 800, zoom: 1, night: true },
+	sceneOn("street", STREET_AT[0], STREET_AT[1]),
+	SHOP !== undefined ? sceneOn("downtown", SHOP.doorX, SHOP.doorY) : sceneOn("downtown", 8404, 10254),
+	PARK !== undefined ? sceneOn("park", PARK.x + PARK.w / 2, PARK.y + PARK.h / 2) : sceneOn("park", 3364, 15328),
+	SCHOOL !== undefined
+		? sceneOn("school", SCHOOL.x + SCHOOL.w / 2, SCHOOL.y + SCHOOL.h / 2)
+		: sceneOn("school", 5085, 3142),
+	GAS_SCENE,
+	sceneOn("street-night", STREET_AT[0], STREET_AT[1], true),
 	{ name: "overview", x: 12200, y: 5000, w: 3000, h: 2000, zoom: 0.5, night: false },
 	{ name: "border", x: 0, y: 5000, w: 1280, h: 800, zoom: 1, night: false },
 ];
@@ -407,12 +452,15 @@ const texOf = Object.fromEntries(ALL.manifest.textures.map(t => [t.name, t]));
 		"shadowBox",
 		"bin",
 		"dispenser",
-		"gasCanopyN",
+		"gasCanopy",
 		"manhole",
 		"dirt",
 		"apron",
 	];
-	const missing = want.filter(n => !(counts[n] > 0));
+	// a gas canopy of whichever street side the town put a station on (gasCanopyN, S, W or E)
+	const missing = want.filter(n =>
+		n === "gasCanopy" ? !["N", "S", "W", "E"].some(d => counts[`gasCanopy${d}`] > 0) : !(counts[n] > 0),
+	);
 	check(
 		missing.length === 0,
 		"ground, kerbs, paint, roofs, rims, soft shadows, bins, pumps, manholes all drawn",
@@ -422,13 +470,13 @@ const texOf = Object.fromEntries(ALL.manifest.textures.map(t => [t.name, t]));
 	// the town is exactly its texture at 4 units a texel (the generator's 113 x 29 is world.ts's 452 x 116)
 	{
 		const side = { top: "gasCanopyN", bottom: "gasCanopyS", left: "gasCanopyW", right: "gasCanopyE" };
-		const bad = world.solids
-			.filter(s => s.kind === "canopy")
-			.filter(s => {
-				const t = texOf[side[s.face]];
-				return t === undefined || t.w * 4 !== s.w || t.h * 4 !== s.h;
-			});
-		const n = world.solids.filter(s => s.kind === "canopy").length;
+		// the gas stations' (tags "canopy"): a market tent, a bus shelter and the bank's portico are canopies of their own
+		const gasCanopy = s => s.kind === "canopy" && s.tags === "canopy";
+		const bad = world.solids.filter(gasCanopy).filter(s => {
+			const t = texOf[side[s.face]];
+			return t === undefined || t.w * 4 !== s.w || t.h * 4 !== s.h;
+		});
+		const n = world.solids.filter(gasCanopy).length;
 		check(
 			n > 0 && bad.length === 0,
 			"every gas station canopy is its street side's roof texture at 4 units a texel",

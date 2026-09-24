@@ -1214,10 +1214,13 @@ const OFFICES: Array<Template> = [
 	},
 ];
 
-/** the church (808 × 684): the entrance tower on the street, the nave behind it with a side door each way */
+/**
+ * the church (808 × 684): the entrance tower on the street -- wide enough for its sign beside the doors (ART-07) --
+ * the nave behind it with a side door each way
+ */
 const CHURCH: Array<Template> = [
 	{
-		cols: [28, 44, 28],
+		cols: [26, 48, 26],
 		rows: [24, 76],
 		map: [
 			[".", "E", "."],
