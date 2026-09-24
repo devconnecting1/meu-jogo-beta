@@ -66,8 +66,8 @@ function item(kind: ItemKind, name: string, count: number): PackItem {
 export const SHOP_PACKS: Array<ShopPack> = [
 	{
 		id: 0,
-		name: "Starter pack",
-		contents: "Cotton clothes X 1#Axe X 1#Flashlight X 1",
+		name: "First Night Kit",
+		contents: "1 × Cotton clothes#1 × Axe#1 × Flashlight",
 		price: 20,
 		items: [
 			item(ItemKind.Equip, "Cotton clothes", 1),
@@ -77,8 +77,8 @@ export const SHOP_PACKS: Array<ShopPack> = [
 	},
 	{
 		id: 1,
-		name: "Food aid",
-		contents: "Cooked meat X 3#Pizza X 3#Cooked meal X 3",
+		name: "Pantry Crate",
+		contents: "3 × Cooked meat#3 × Pizza#3 × Cooked meal",
 		price: 20,
 		items: [
 			item(ItemKind.Use, "Cooked meat", 3),
@@ -88,8 +88,8 @@ export const SHOP_PACKS: Array<ShopPack> = [
 	},
 	{
 		id: 2,
-		name: "Emergency kit",
-		contents: "First aid kit X 2#Bandage X 3#Adrenaline X 2",
+		name: "Medic Bag",
+		contents: "2 × First aid kit#3 × Bandage#2 × Adrenaline",
 		price: 30,
 		items: [
 			item(ItemKind.Use, "First aid kit", 2),
@@ -99,15 +99,15 @@ export const SHOP_PACKS: Array<ShopPack> = [
 	},
 	{
 		id: 3,
-		name: "Basic craft kit",
-		contents: "Wood X 20#Cloth X 10#Stone X 20",
+		name: "Builder's Basics",
+		contents: "20 × Wood#10 × Cloth#20 × Stone",
 		price: 10,
 		items: [item(ItemKind.Etc, "Wood", 20), item(ItemKind.Etc, "Cloth", 10), item(ItemKind.Etc, "Stone", 20)],
 	},
 	{
 		id: 4,
-		name: "Pro craft kit",
-		contents: "Blueprint X 5#Steel X 20#Machine parts X 10",
+		name: "Workshop Supplies",
+		contents: "5 × Blueprint#20 × Steel#10 × Machine parts",
 		price: 20,
 		items: [
 			item(ItemKind.Etc, "Blueprint", 5),
@@ -117,8 +117,8 @@ export const SHOP_PACKS: Array<ShopPack> = [
 	},
 	{
 		id: 5,
-		name: "Electric craft kit",
-		contents: "Battery X 5#Computer chip X 2#Bulb X 2",
+		name: "Electronics Box",
+		contents: "5 × Battery#2 × Computer chip#2 × Bulb",
 		price: 20,
 		items: [
 			item(ItemKind.Etc, "Battery", 5),
@@ -128,22 +128,22 @@ export const SHOP_PACKS: Array<ShopPack> = [
 	},
 	{
 		id: 6,
-		name: "Ammo craft kit",
-		contents: "Steel X 10#Gunpowder X 10",
+		name: "Ammo Makings",
+		contents: "10 × Steel#10 × Gunpowder",
 		price: 20,
 		items: [item(ItemKind.Etc, "Steel", 10), item(ItemKind.Etc, "Gunpowder", 10)],
 	},
 	{
 		id: 7,
-		name: "Pigeon the bird",
-		contents: "Pigeon the bird X 1",
+		name: "Pet Pigeon",
+		contents: "1 × Pigeon",
 		price: 10,
 		items: [item(ItemKind.Equip, "Pigeon", 1)],
 	},
 	{
 		id: 8,
-		name: "Carolina the dog",
-		contents: "Carolina the dog X 1",
+		name: "Pet Carolina",
+		contents: "1 × Carolina",
 		price: 10,
 		items: [item(ItemKind.Equip, "Carolina", 1)],
 	},

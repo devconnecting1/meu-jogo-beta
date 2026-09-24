@@ -1,6 +1,6 @@
 # Project Z
 
-Port 2D top-down de **Dead Town: Zombie Survival** para Roblox, 100% renderizado em GUI (`ScreenGui`).
+Sobrevivência zumbi 2D top-down para Roblox, **inspirada em Dead Town**, 100% renderizada em GUI (`ScreenGui`). Código, arte e textos são nossos (`docs/DESIGN_RULES.md` CON-01).
 
 ## Stack
 
