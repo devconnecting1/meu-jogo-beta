@@ -71,6 +71,11 @@ export interface TownState {
 	seed: number;
 	/** os.time() when this world began */
 	startedAt: number;
+	/**
+	 * The world day it opened on: 1 (every public town, and every town after a world end), or the owner's LIFE day in a
+	 * solo or private town (MP-13, server/net/mpHost.ts `startTownOn`). Absent = 1. The record counts from it.
+	 */
+	startDay?: number;
 }
 
 /** what the end of a world touches, all of it pure (server/net/mpHost.ts hands its own) */
@@ -154,7 +159,9 @@ export function endWorld(
 ): WorldEnd {
 	const ended: EndedWorld = {
 		seed: current.seed,
-		days: math.max(1, math.floor(report.day)),
+		// how many days it LASTED, its first one counted: a town that opened on the owner's day 23 (MP-13) and fell on
+		// day 24 lasted 2
+		days: math.max(1, math.floor(report.day) - math.max(0, math.floor(current.startDay ?? 1) - 1)),
 		startedAt: current.startedAt,
 		endedAt: options.now,
 		reason: report.reason,

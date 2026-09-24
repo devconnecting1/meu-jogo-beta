@@ -8,6 +8,7 @@
 		"serve": "rojo serve",
 		"theme": "node tools/gen-theme.mjs",
 		"art:world": "node tools/gen-world-art.mjs",
+		"audio:sfx": "node tools/gen-sfx.mjs",
 		"render:map": "node tools/render-map.mjs",
 		"cloud": "node tools/cloud.mjs",
 		"locale": "node tools/gen-locale.mjs",
@@ -30,6 +31,7 @@
 		"test:waves": "node tools/test-waves.mjs",
 		"test:reset": "node tools/test-reset.mjs",
 		"test:analytics": "node tools/test-analytics.mjs",
+		"test:match": "node tools/test-match.mjs",
 		"test:footsteps": "node tools/test-footsteps.mjs",
 		"test:smoothness": "node tools/test-smoothness.mjs",
 		"test:zombie-motion": "node tools/test-zombie-motion.mjs",
@@ -58,6 +60,7 @@
 		"test:audio": "node tools/test-audio.mjs",
 		"test:power": "node tools/test-power.mjs",
 		"test:cache": "node tools/test-cache.mjs",
+		"test:assets-ci": "node tools/test-assets-ci.mjs",
 		"lint": "eslint \"src/**/*.ts\" --max-warnings 0",
 		"format": "prettier --write \"src/**/*.ts\"",
 		"format:check": "prettier --check \"src/**/*.ts\""

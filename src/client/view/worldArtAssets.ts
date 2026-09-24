@@ -97,6 +97,17 @@ export type WorldArtName =
 	| "signLibrary"
 	| "signLab"
 	| "signDorm"
+	| "signHardware"
+	| "signAutoRepair"
+	| "signElectronics"
+	| "signBakery"
+	| "signPawn"
+	| "signPost"
+	| "signBank"
+	| "signChurch"
+	| "signFire"
+	| "signPolice"
+	| "signOffice"
 	| "helipad"
 	| "gasCanopyN"
 	| "gasCanopyS"
@@ -123,6 +134,7 @@ export type WorldArtName =
 	| "floorCarpet"
 	| "floorKitchen"
 	| "floorBath"
+	| "wallShade"
 	| "survivorsA"
 	| "survivorsAFill"
 	| "survivorsARim"
@@ -147,7 +159,8 @@ export type WorldArtName =
 	| "bossRafflesia"
 	| "bossRafflesiaFill"
 	| "bossRafflesiaRim"
-	| "itemIcons";
+	| "itemIcons"
+	| "furniture";
 
 export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** tile: road asphalt: grain and tar blotches (cracks are decals: a crack here would repeat every tile) */
@@ -312,6 +325,28 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	signLab: { id: "", w: 24, h: 16 },
 	/** sprite: storefront sign (type 15): a bunk bed, pillows and blankets on both bunks, on the college's maroon */
 	signDorm: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 16): a claw hammer, its steel head over a wooden handle, on hardware orange */
+	signHardware: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 17): a wheel: the black tyre, its white rim and the hub, on slate blue */
+	signAutoRepair: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 18): a yellow lightning bolt, on indigo */
+	signElectronics: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 19): a scored loaf of bread, on rose */
+	signBakery: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 20): the pawnbroker's three gold balls hanging from their bar, on dark brown */
+	signPawn: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 21): an envelope, its flap folded down, on post blue */
+	signPost: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 22): a classical front: pediment, four columns and the steps, on bronze */
+	signBank: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 23): a church bell hanging from its yoke, on lavender */
+	signChurch: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 24): a yellow flame, its white-hot heart, on fire-engine red */
+	signFire: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 25): a navy shield with a gold star, on pale blue */
+	signPolice: { id: "", w: 24, h: 16 },
+	/** sprite: storefront sign (type 26): a briefcase, its brass clasp, on sea-glass green */
+	signOffice: { id: "", w: 24, h: 16 },
 	/** sprite: hospital roof: the heliport's red H on a white cross */
 	helipad: { id: "rbxassetid://103885604953798", w: 64, h: 64 },
 	/** sprite: gas station canopy roof, street to the N: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather */
@@ -364,6 +399,8 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	floorKitchen: { id: "rbxassetid://133105571252943", w: 16, h: 16 },
 	/** tile: bathroom / cold room: small tiles */
 	floorBath: { id: "rbxassetid://101622459905347", w: 16, h: 16 },
+	/** slice: the shadow at the foot of an interior wall (round every wall) */
+	wallShade: { id: "", w: 7, h: 7, slice: [3, 3, 4, 4] },
 	/** sheet: survivors, plain and Santa: 4 grips x 3 strides, 5 swings, 3 crawls, whole body and arms in one cell (ART-09) */
 	survivorsA: { id: "rbxassetid://99286479004899", w: 640, h: 800 },
 	/** mask: survivorsA: white silhouettes of the same cells (tint: hit flash, poison) */
@@ -412,8 +449,10 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	bossRafflesiaFill: { id: "", w: 816, h: 68 },
 	/** mask: bossRafflesia: white outlines of the same cells (tint: the hit outline) */
 	bossRafflesiaRim: { id: "", w: 816, h: 68 },
-	/** atlas: item icons: 97 icons, their dimmed copies and 11 glyphs (client/ui/itemIcon.ts) */
-	itemIcons: { id: "rbxassetid://120552233891720", w: 288, h: 244 },
+	/** atlas: item icons: 99 icons, their dimmed copies and 11 glyphs (client/ui/itemIcon.ts) */
+	itemIcons: { id: "", w: 288, h: 244 },
+	/** atlas: interiors: 1635 cells of furniture, decoration and frames (client/view/interiorArt.ts) */
+	furniture: { id: "", w: 1024, h: 872 },
 };
 
 /** every texture of the world art (the item icon atlas too), for the preload pass */
@@ -499,6 +538,17 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"signLibrary",
 	"signLab",
 	"signDorm",
+	"signHardware",
+	"signAutoRepair",
+	"signElectronics",
+	"signBakery",
+	"signPawn",
+	"signPost",
+	"signBank",
+	"signChurch",
+	"signFire",
+	"signPolice",
+	"signOffice",
 	"helipad",
 	"gasCanopyN",
 	"gasCanopyS",
@@ -525,6 +575,7 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"floorCarpet",
 	"floorKitchen",
 	"floorBath",
+	"wallShade",
 	"survivorsA",
 	"survivorsAFill",
 	"survivorsARim",
@@ -550,4 +601,5 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"bossRafflesiaFill",
 	"bossRafflesiaRim",
 	"itemIcons",
+	"furniture",
 ];

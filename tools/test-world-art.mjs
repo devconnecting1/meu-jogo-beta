@@ -50,7 +50,13 @@
  *      sheets a survivor is two sprites, a zombie and a pet one. The cost of a night -- 60 zombies, 4 survivors and
  *      their pets, 300 frames -- flat against art: sprites, Instances, property writes, time, and no churn.
  *  11. THE INTERIORS (EDI-04, ART-12). With every roof on, nothing of any interior is drawn; walking in and out of
- *      the largest building creates no Instance; its sprites inside and the writes of a walk across it (printed).
+ *      the largest building creates no Instance; its sprites inside and the writes of a walk across it (printed), the
+ *      art costing no more sprites than the flat drawing. 11b, their pixel art: with no id, the first building of each
+ *      of the 15 types seen from inside makes the flat interiors' very draw calls (tools/golden/interiors-flat.json,
+ *      `--golden-interiors` with PZ_SRC on the commit before the art); in 5 towns every piece of furniture is drawn
+ *      from the atlas, exactly on its solid's rect (plus its baked shadow), in at most 4 sprites; every decoration and
+ *      every doorway and window has its art; a chair faces its table. §5 measures the bodies on every room floor and
+ *      every rug, §6 the floors' mean colours.
  *  12. THE GROUND ITEMS (ITM-07, client/view/groundItemsView.ts). An item of every kind on each of 18 grounds, flat and
  *      with the icons' atlas, rasterised: by day and in the survivor's light every icon steps 3:1 or 35 ΔE off its
  *      ground, and on every ground the weakest icon reads at least as well as the weakest flat look it replaces; out
@@ -328,6 +334,53 @@ if (process.argv.includes("--golden-chars")) {
 	};
 	writeFileSync(GOLDEN_CHARS, `${JSON.stringify(out, undefined, "\t")}\n`);
 	console.log(`wrote ${GOLDEN_CHARS} (${d.count} calls)`);
+	process.exit(0);
+}
+
+/**
+ * ART-01 inside (ART-12): the first building of each type with its roof off, the camera on it and a short pan, with
+ * no world art -- the draw calls hashed. tools/golden/interiors-flat.json holds them as recorded from the flat
+ * interiors of the commit before their pixel art (`--golden-interiors`, with PZ_SRC on that commit).
+ */
+const GOLDEN_INTERIORS = join(ROOT, "tools", "golden", "interiors-flat.json");
+function interiorBuildings(w) {
+	const out = [];
+	for (let t = 1; t <= 15; t++) {
+		const list = w.solids.filter(s => s.kind === "building" && s.buildingType === t && s.rooms !== undefined);
+		list.sort((a, b) => a.id - b.id);
+		if (list[0] !== undefined) out.push(list[0]);
+	}
+	return out;
+}
+function interiorDigest(b) {
+	const st = stage(1920, 1080, 1);
+	const view = new WorldView(shadowFn(false));
+	b.roofAlpha = 0;
+	calls.length = 0;
+	capturing = true;
+	const cx = b.x + b.w / 2;
+	const cy = b.y + b.h / 2;
+	drawTown(st, view, cx, cy);
+	for (let f = 1; f <= 6; f++) drawTown(st, view, cx + f * 29, cy + f * 13);
+	capturing = false;
+	b.roofAlpha = undefined;
+	return { count: calls.length, sha1: createHash("sha1").update(JSON.stringify(calls)).digest("hex") };
+}
+if (process.argv.includes("--golden-interiors")) {
+	setArt({});
+	const scenes = {};
+	for (const b of interiorBuildings(world)) {
+		const d = interiorDigest(b);
+		scenes[`type${b.buildingType}`] = { building: b.id, x: b.x, y: b.y, count: d.count, sha1: d.sha1 };
+	}
+	const out = {
+		note: "draw-call digests of each building type's first building seen from inside with no world art (tools/test-world-art.mjs --golden-interiors)",
+		recordedFrom: process.env.PZ_GOLDEN_FROM ?? "the src it was run on",
+		scenes,
+	};
+	mkdirSync(join(ROOT, "tools", "golden"), { recursive: true });
+	writeFileSync(GOLDEN_INTERIORS, `${JSON.stringify(out, undefined, "\t")}\n`);
+	console.log(`wrote ${GOLDEN_INTERIORS}`);
 	process.exit(0);
 }
 
@@ -840,6 +893,93 @@ function silhouette(ground, withBody) {
 			`walker ${f("zombie", "chars")}, survivor ${f("survivor", "chars")} ΔE`,
 		);
 	}
+}
+{
+	// ART-12: inside, the roof off, on every kind of room floor and on a rug -- the floors' textures, the shadow at
+	// the walls' foot and the furniture around keep both silhouettes, and the bars of the open ground hold
+	const buildings = world.solids
+		.filter(s => s.kind === "building" && s.rooms !== undefined)
+		.sort((a, b) => a.id - b.id);
+	const clear = (b, x, y, rugOk) => {
+		if (pointInSolid(world, x, y, 70) !== undefined) return false;
+		for (const d of b.decor ?? []) {
+			if (rugOk && d.kind === "rug") continue;
+			if (x > d.x - 60 && x < d.x + d.w + 60 && y > d.y - 60 && y < d.y + d.h + 60) return false;
+		}
+		return true;
+	};
+	// which of the rugs' colours a rug is (client/view/interiorArt.ts: by where it lies)
+	const FA = join(SRC, "client/view/furnitureAtlas.ts");
+	const RUGS = existsSync(FA) ? (require(FA).RUG_COLOURS ?? 1) : 1;
+	const rugColour = d => Math.floor(hash01(d.x, d.y, 37) * RUGS) % RUGS;
+	/** a point of `floor` (or on a rug of colour n: "rug<n>") with free floor round it, and its building */
+	const roomSpot = floor => {
+		for (const b of buildings) {
+			if (floor.startsWith("rug")) {
+				for (const d of b.decor ?? []) {
+					if (d.kind !== "rug" || d.w < 110 || d.h < 60 || `rug${rugColour(d)}` !== floor) continue;
+					const x = Math.round(d.x + d.w / 2);
+					const y = Math.round(d.y + d.h / 2);
+					if (clear(b, x, y, true)) return { b, x, y };
+				}
+				continue;
+			}
+			for (const q of b.rooms) {
+				if (q.floor !== floor || q.w < 220 || q.h < 220) continue;
+				for (let y = q.y + 90; y < q.y + q.h - 90; y += 24) {
+					for (let x = q.x + 90; x < q.x + q.w - 90; x += 24) if (clear(b, x, y, false)) return { b, x, y };
+				}
+			}
+		}
+		return undefined;
+	};
+	const worst = { zt: Infinity, st: Infinity, zc: Infinity, sc: Infinity };
+	const floors = ["wood", "carpet", "kitchen", "bath", "tile", "shop", "concrete"];
+	for (let n = 0; n < RUGS; n++) floors.push(`rug${n}`);
+	for (const floor of floors) {
+		const spot = roomSpot(floor);
+		if (spot === undefined) {
+			check(false, `a free spot of ${floor} floor inside a building`);
+			continue;
+		}
+		spot.b.roofAlpha = 0;
+		const res = {};
+		for (const actor of ["zombie", "survivor"]) {
+			for (const look of ["flat", "town", "chars"]) {
+				const base = shot(spot, actor === "zombie" ? "zombieShadow" : "none", look);
+				res[`${actor}.${look}`] = silhouette(base, shot(spot, actor, look));
+			}
+		}
+		spot.b.roofAlpha = undefined;
+		const f = (actor, look) => res[`${actor}.${look}`].toFixed(1);
+		worst.zt = Math.min(worst.zt, res["zombie.town"]);
+		worst.st = Math.min(worst.st, res["survivor.town"]);
+		worst.zc = Math.min(worst.zc, res["zombie.chars"]);
+		worst.sc = Math.min(worst.sc, res["survivor.chars"]);
+		// a floor's texture keeps what its flat colour gave; a rug is a colour of its own with the art (the flat one is
+		// always the red), so each rug colour is held to the open ground's bars instead
+		const rug = floor.startsWith("rug");
+		check(
+			rug
+				? res["zombie.town"] >= 25 &&
+						res["survivor.town"] >= 30 &&
+						res["zombie.chars"] >= 40 &&
+						res["survivor.chars"] >= 35
+				: res["zombie.town"] >= res["zombie.flat"] * 0.9 && res["survivor.town"] >= res["survivor.flat"] * 0.9,
+			`inside, ${floor.padEnd(8)}: ${rug ? "a rug of this colour clears the open ground's bars" : "the interiors' art keeps both silhouettes"}`,
+			`walker ${f("zombie", "flat")} -> ${f("zombie", "town")} -> art ${f("zombie", "chars")}, survivor ${f("survivor", "flat")} -> ${f("survivor", "town")} -> art ${f("survivor", "chars")} ΔE`,
+		);
+	}
+	check(
+		worst.zt >= 25 && worst.st >= 30,
+		"inside, on the worst floor, a walker and the survivor clear the open ground's bars",
+		`walker ${worst.zt.toFixed(1)}, survivor ${worst.st.toFixed(1)} ΔE`,
+	);
+	check(
+		worst.zc >= 40 && worst.sc >= 35,
+		"and with the characters' art too",
+		`walker ${worst.zc.toFixed(1)}, survivor ${worst.sc.toFixed(1)} ΔE`,
+	);
 }
 setArt({});
 
@@ -2262,6 +2402,15 @@ section("11) interiors: nothing under a closed roof is drawn, walking in and out
 	const reset = () => {
 		for (const k of Object.keys(drawn)) drawn[k] = 0;
 	};
+	// a wall of an open building in the pixel art (ART-12) goes through the interior's art: counted as a wall
+	if (IV !== undefined && "drawWallArt" in IV.InteriorView.prototype) {
+		const real = IV.InteriorView.prototype.drawWallArt;
+		IV.InteriorView.prototype.drawWallArt = function (...a) {
+			drawn.walls++;
+			return real.apply(this, a);
+		};
+	}
+	const insideCost = {};
 	// the town's largest building, and a camera on it
 	let big;
 	for (const s of world.solids) {
@@ -2319,8 +2468,147 @@ section("11) interiors: nothing under a closed roof is drawn, walking in and out
 			`       ${label.padEnd(4)} ${big.tags} #${big.id} (${big.w} x ${big.h}), 1920 x 1080: ${outside} sprites from outside, ` +
 				`${inside.sprites} inside (${inside.flat} flat, ${inside.images} images); ${writes.toFixed(0)} property writes a frame walking across it`,
 		);
+		insideCost[label] = inside.sprites;
 	}
 	setArt({});
+	// the pixel art of the rooms (ART-12) costs no more sprites than their Frames did
+	if (insideCost.art !== undefined) {
+		check(
+			insideCost.art <= insideCost.flat,
+			"art: the largest building seen from inside costs no more sprites than the flat drawing",
+			`${insideCost.art} vs ${insideCost.flat}`,
+		);
+	}
+}
+
+section("11b) the interiors' pixel art: no id no change, every piece in the atlas, the art on the solid's own rect");
+{
+	const IA_MODULE = join(SRC, "client/view/interiorArt.ts");
+	// ART-01 inside: with no id, each building type's rooms make the flat interiors' very draw calls
+	setArt({});
+	const golden = existsSync(GOLDEN_INTERIORS) ? JSON.parse(readFileSync(GOLDEN_INTERIORS, "utf8")) : undefined;
+	console.log(`  (golden: ${golden?.recordedFrom ?? "none"})`);
+	for (const b of interiorBuildings(world)) {
+		const g = golden?.scenes?.[`type${b.buildingType}`];
+		const d = interiorDigest(b);
+		check(
+			g !== undefined && g.building === b.id && d.count === g.count && d.sha1 === g.sha1,
+			`no id: ${b.tags} #${b.id} from inside is the flat interior of the golden, call for call`,
+			g === undefined ? "no golden" : `${d.count} calls, ${d.sha1.slice(0, 10)} vs ${g.sha1.slice(0, 10)}`,
+		);
+	}
+	if (existsSync(IA_MODULE)) {
+		const IA = require(IA_MODULE);
+		const { FURNITURE_CELLS } = require(join(SRC, "client/view/furnitureAtlas.ts"));
+		setArt(ALL.ids);
+		const nullR = { drawRect() {} };
+		const cam = new Camera();
+		const seeds = [DESIGN.TOWN_SEED, 1, 42, 99991, 123456];
+		const stat = { pieces: 0, exact: 0, cropped: 0, missing: [], off: [], decor: 0, decorMissing: [], frames: 0 };
+		const frameMissing = [];
+		let chairs = 0;
+		let seated = 0;
+		const SEATED = new Set(["table", "desk", "schooldesk", "teacherdesk", "labbench"]);
+		for (const seed of seeds) {
+			const w = seed === DESIGN.TOWN_SEED ? world : generateTown(seed);
+			const art = new IA.InteriorArt();
+			art.useWorld(w);
+			const byId = new Map();
+			for (const s of w.solids) if (s.kind === "building") byId.set(s.id, s);
+			const pieces = new Map();
+			for (const s of w.solids) {
+				if (s.kind !== "furniture") continue;
+				const b = byId.get(s.parentId);
+				if (!pieces.has(b.id)) pieces.set(b.id, []);
+				pieces.get(b.id).push(s);
+				stat.pieces++;
+				if (!art.furniture(nullR, cam, s, b.buildingType)) {
+					if (stat.missing.length < 6)
+						stat.missing.push(`${s.tags} ${s.w}x${s.h} ${s.face} in type ${b.buildingType}`);
+					continue;
+				}
+				const plan = art.plans.get(s);
+				const n = plan.length / 8;
+				if (n === 1) stat.exact++;
+				else stat.cropped++;
+				// the art stands on the piece's own rect (collision unchanged), plus at most two texels of shadow
+				let x0 = Infinity;
+				let y0 = Infinity;
+				let x1 = -Infinity;
+				let y1 = -Infinity;
+				for (let i = 0; i < plan.length; i += 8) {
+					x0 = Math.min(x0, plan[i] - plan[i + 2] / 2);
+					y0 = Math.min(y0, plan[i + 1] - plan[i + 3] / 2);
+					x1 = Math.max(x1, plan[i] + plan[i + 2] / 2);
+					y1 = Math.max(y1, plan[i + 1] + plan[i + 3] / 2);
+				}
+				const good =
+					Math.abs(x0 - s.x) < 0.01 &&
+					Math.abs(y0 - s.y) < 0.01 &&
+					x1 >= s.x + s.w - 0.01 &&
+					y1 >= s.y + s.h - 0.01 &&
+					x1 <= s.x + s.w + 10 &&
+					y1 <= s.y + s.h + 10 &&
+					n <= 4;
+				if (!good && stat.off.length < 6) stat.off.push(`${s.tags} ${s.w}x${s.h} (${n} sprites)`);
+			}
+			for (const b of byId.values()) {
+				for (const d of b.decor ?? []) {
+					stat.decor++;
+					if (!art.decor(nullR, cam, b, d) && stat.decorMissing.length < 6)
+						stat.decorMissing.push(`${d.kind} ${Math.round(d.w)}x${Math.round(d.h)}`);
+					if (d.kind !== "chair" && d.kind !== "chairDown") continue;
+					chairs++;
+					const cx = d.x + d.w / 2;
+					const cy = d.y + d.h / 2;
+					const near = (pieces.get(b.id) ?? []).some(
+						p =>
+							SEATED.has(p.tags) &&
+							((cx >= p.x &&
+								cx <= p.x + p.w &&
+								(Math.abs(cy - p.y + 16) <= 4 || Math.abs(cy - p.y - p.h - 16) <= 4)) ||
+								(cy >= p.y &&
+									cy <= p.y + p.h &&
+									(Math.abs(cx - p.x + 16) <= 4 || Math.abs(cx - p.x - p.w - 16) <= 4))),
+					);
+					if (near) seated++;
+				}
+				for (const o of b.openings ?? []) {
+					stat.frames++;
+					if (!art.opening(nullR, cam, o) && frameMissing.length < 6)
+						frameMissing.push(`${o.kind} ${o.w}x${o.h}`);
+				}
+			}
+		}
+		check(
+			stat.missing.length === 0,
+			`every piece of furniture of ${seeds.length} towns is drawn from the atlas (${stat.pieces}: ${stat.exact} its own cell, ${stat.cropped} cropped from its kind's template)`,
+			stat.missing.join("; "),
+		);
+		check(
+			stat.off.length === 0,
+			"every piece's art stands exactly on its solid (the collision box), with at most its baked shadow past it",
+			stat.off.join("; "),
+		);
+		check(
+			stat.decorMissing.length === 0,
+			`every decoration (${stat.decor}) has its art: rugs, chairs, papers, glass, mats, curtains, boards, blood`,
+			stat.decorMissing.join("; "),
+		);
+		check(
+			frameMissing.length === 0,
+			`every doorway and window (${stat.frames}) has its frame`,
+			frameMissing.join("; "),
+		);
+		check(
+			chairs > 0 && seated / chairs >= 0.95,
+			"a chair faces the table it stands at (the art turns it by the table beside it)",
+			`${seated} of ${chairs}`,
+		);
+		const cells = Object.keys(FURNITURE_CELLS).length;
+		console.log(`       atlas: ${cells} cells; a piece is 1 sprite (its cell) or 2-4 (a template cropped)`);
+		setArt({});
+	}
 }
 
 section("12) ground items (ITM-07): every item on every ground, by day, in the survivor's light and in the dark");

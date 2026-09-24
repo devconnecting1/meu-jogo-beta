@@ -208,6 +208,11 @@ export const TRANSPARENCY = {
 	/** HUD cards / popovers drawn over the world: background at 85% */
 	hud: 0.15,
 	/**
+	 * DESIGN_RULES ITM-08: the use cooldown's veil over a quick plate (client/ui/hudQuick.ts), the dark well at 65%:
+	 * the plate reads as "not yet" while its icon still shows under the veil draining away
+	 */
+	cooldown: 0.35,
+	/**
 	 * a thin gauge drawn over the world: the ally's HP / bleed-out track, between their body and their name
 	 * (client/view/allyPlate.ts), background at 75%. (The nameplate itself has NO background any more: see OVER_WORLD
 	 * and textShadow below.)

@@ -51,6 +51,32 @@ lança-chamas, motor, buzina e campainha — foram checados por três APIs públ
 O que essa checagem **não** faz: ouvir. Os takes foram escolhidos pela descrição da biblioteca e cortados pelo
 envelope; a passada de escuta no Studio é a pendência F.
 
+**Reconferência de todos os ids (auditoria de áudio, 2026-09-24, sessão na nuvem):** os **37** `rbxassetid://` do
+catálogo passaram de novo pelas APIs públicas: `economy.roblox.com/v2/assets/{id}/details` → `AssetTypeId = 3`
+(Audio), criador **Roblox** (3), **ProSoundEffects** (31) ou **APMOfficial** (3), `IsPublicDomain = true` em todos; e
+`assetdelivery.roblox.com/v2/assetId/{id}` devolve a localização do arquivo, sem autenticação, para todos (um áudio
+privado ou removido seria recusado ali). **Nenhum id quebrado.** Os 16 arquivos `rbxasset://sounds/*` são conteúdo do
+cliente e foram conferidos no Studio (acima); não há API pública que os liste, e o espelho do cliente na web não
+publica a pasta `content/sounds`.
+
+## Os nossos sons (sintetizados)
+
+Desde a auditoria de 2026-09-24 o jogo tem **sons próprios**: 40 eventos, 67 takes, gerados por código em
+`tools/gen-sfx.mjs` (osciladores, ruído filtrado, envelopes, uma corda de Karplus-Strong, um reverb pequeno; nenhuma
+amostra, nenhuma biblioteca, nenhuma dependência) e empacotados em cinco bancos WAV em `design/audio/banks/`. São
+**nossos** — nada a creditar, nada que uma biblioteca possa retirar. A tabela evento → banco → takes → loudness → por
+que soa assim está em `design/audio/README.md`; para ouvir, `docs/audio/preview.html`. As regras (estilo, loudness,
+variação, limites, a volta à biblioteca) são a seção **SND** de `docs/DESIGN_RULES.md`.
+
+- **Até o dono subir os bancos** (`npm run cloud -- upload-audio`), **cada evento toca a entrada desta tabela**, a da
+  biblioteca: é o fallback de cada um (SND-01). Um banco que não carrega no cliente volta à biblioteca na sessão.
+- **O que continua na biblioteca, de propósito:** o que é orgânico — vozes da horda, rugido de chefe, mordida, dor e
+  morte do sobrevivente, portas, comer, bandagem, zíper, comprimidos, lança-chamas, motor, buzina, campainha,
+  explosão, vidro, música da noite e ambientes (SND-02).
+- **Eventos novos** (existem para os nossos sons; até o upload tocam o fallback indicado): `pickupAmmo`,
+  `pickupFood`, `pickupMaterial` (o `clickfast.wav` do motor em alturas diferentes), `levelUp` (`victory.wav` a
+  1,12×), `buildPlace` (`snap.wav` grave), `buildDeny` (`bass.wav` agudo).
+
 ## Catálogo
 
 ### SFX — armas
@@ -193,8 +219,10 @@ explosão, a `0,195`. Com os sliders no máximo: `0,45` e `0,55`.
 - Toast informativo ("i") é silencioso de propósito: aparece muito e não merece atenção.
 - Cada disparo sorteia o pitch dentro de uma faixa estreita (±6 % na pistola), então um carregador inteiro não
   soa como o mesmo sample repetido.
-- Teto de vozes: 20 espaciais + 10 planas; por som, no máximo 4 tiros sobrepostos (3 na escopeta/MG, 2 no
-  sniper), roubando sempre a mais antiga.
+- Teto de vozes: 20 espaciais + 14 planas (a UI e os sons do próprio sobrevivente, que são centrados: SND-05);
+  por som, no máximo 4 tiros sobrepostos (3 na escopeta/MG, 2 no sniper), roubando sempre a mais antiga; o mesmo som
+  de novo dentro do seu `minGap` (30 ms; 50 ms impacto, 80 ms morte de zumbi, 120 ms explosão) não toca (SND-04).
+- Tiros, impactos, passos, gemidos e detritos variam também o volume (`volJitter`, até −12 %…−20 %).
 
 ## Pendências
 
@@ -214,9 +242,12 @@ explosão, a `0,195`. Com os sliders no máximo: `0,45` e `0,55`.
   e de criatura nas categorias "Voices - Misc" / "Voices - Beasts" (tabela do P0-4 acima). A busca aberta continua
   devolvendo upload de usuário com origem em COD/Minecraft — rejeitados, como antes.
 - **C — dor do jogador.** `playerHurt` e `playerDeath` reaproveitam o `uuhhh.mp3` do engine com pitch
-  diferente. Passa, mas o ideal é um take humano próprio da biblioteca oficial.
-- **D — slots vazios: `useInject` (a adrenalina).** O evento existe e dispara (o servidor manda o `Fx Sound`
-  quando aceita o uso), mas o slot tem `id: ""` e fica em **silêncio**: "syringe", "injection", "needle" e "shot"
+  diferente. Passa, mas o ideal é um take humano próprio da biblioteca oficial. (Voz não se sintetiza: SND-02.)
+  Desde a auditoria, a dor só toca num **golpe** (≥ 1 HP num quadro, no máximo a cada 0,35 s): antes, veneno e fome
+  a repetiam a cada quadro.
+- **D — slots vazios: `useInject` (a adrenalina).** **Resolvida pelos nossos sons**: o banco `impacts` tem a injeção
+  (um estalo de plástico, um "pssht", um tilintar de vidro); toca assim que o dono subir os bancos. Até lá, o slot da
+  biblioteca continua `id: ""` e em **silêncio**, pelo motivo de sempre: "syringe", "injection", "needle" e "shot"
   na biblioteca da ProSoundEffects só acham "Pressure Blast" e robôs, e upload de usuário não entra. **Para o dono
   preencher:** achar um take oficial (ProSoundEffects / APMOfficial / Roblox) de seringa ou autoinjetor, conferir
   `Creator` e `IsPublicDomain` (acima), pôr o id em `src/shared/data/sounds.ts` `useInject` e uma linha nesta

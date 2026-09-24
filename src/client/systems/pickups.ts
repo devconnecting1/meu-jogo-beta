@@ -26,6 +26,8 @@
  * Offline (no MP host, or below WORLD_SERVER_PHASE) the client's own interaction takes the item and says so directly
  * (`took`). Pure: no Instances, no services but os.clock.
  */
+import { ItemKind } from "shared/data/kinds";
+import { useSoundOf } from "shared/data/usables";
 import { DESIGN } from "shared/engine/constants";
 import type { BagMirror } from "shared/game/save";
 import { walkPickup, WALK_PICKUP_RANGE } from "shared/sim/pickupRule";
@@ -47,6 +49,32 @@ export interface PickupNote {
 	count: number;
 }
 
+/**
+ * What the last pickup was, for its sound (client/audio/gameAudio.ts, DESIGN_RULES SND-02): ammo (and arrows and oil),
+ * food, a material, or anything else -- gear, a device, a medicine, a searched building's mixed loot.
+ */
+export type PickupKind = "item" | "ammo" | "food" | "material";
+
+/** ETC items 44..48: normal, shotgun and machine-gun ammo, arrows, oil (shared/sim/inventory.ts keeps them apart) */
+const ETC_AMMO_FIRST = 44;
+const ETC_AMMO_LAST = 48;
+/** ETC items 23..37, 41 and 43: wood, stone, steel, gold, parts, battery, bulb, gunpowder, cloth, chip, leather... */
+const ETC_MATERIAL_FIRST = 23;
+const ETC_MATERIAL_LAST = 37;
+const ETC_LEATHER = 41;
+const ETC_RADIOACTIVE = 43;
+
+/** what an item of `kind` / `itemId` sounds like when it goes into the bag */
+export function pickupKindOf(kind: number | undefined, itemId: number | undefined): PickupKind {
+	if (kind === undefined || itemId === undefined) return "item";
+	if (kind === ItemKind.Use) return useSoundOf(itemId) === "useEat" ? "food" : "item";
+	if (kind !== ItemKind.Etc) return "item";
+	if (itemId >= ETC_AMMO_FIRST && itemId <= ETC_AMMO_LAST) return "ammo";
+	if (itemId >= ETC_MATERIAL_FIRST && itemId <= ETC_MATERIAL_LAST) return "material";
+	if (itemId === ETC_LEATHER || itemId === ETC_RADIOACTIVE) return "material";
+	return "item";
+}
+
 /** an item that left the world for this survivor, waiting for the bag that proves it */
 interface Pending {
 	kind: number;
@@ -56,6 +84,8 @@ interface Pending {
 }
 
 let count = 0;
+/** what the last counted pickup was (read together with the count) */
+let lastKind: PickupKind = "item";
 /** the E press waiting for the server's answer: "item", "loot", or "" for none */
 let waiting = "";
 let pressAt = 0;
@@ -79,6 +109,17 @@ const notes = new Array<PickupNote>();
 /** pickups so far, this session: a reader compares it with the value it last saw */
 export function pickupCount(): number {
 	return count;
+}
+
+/** what the last counted pickup was, for its sound (a search: "item", its loot is a mix) */
+export function lastPickupKind(): PickupKind {
+	return lastKind;
+}
+
+/** one pickup counted: of this item, or (no item) a search or a pump */
+function counted(kind?: number, itemId?: number): void {
+	count += 1;
+	lastKind = pickupKindOf(kind, itemId);
 }
 
 /** the feedback lines since the last call, oldest first, moved into `out` (the HUD drains it every frame) */
@@ -105,7 +146,7 @@ function note(kind: number, itemId: number, n: number): void {
  * its feedback line too.
  */
 export function took(kind?: number, itemId?: number, n = 1): void {
-	count += 1;
+	counted(kind, itemId);
 	if (kind !== undefined && itemId !== undefined) note(kind, itemId, n);
 }
 
@@ -163,13 +204,13 @@ export function lootGone(): void {
 	waiting = "";
 	// the bag may have come first: then that growth was the search
 	if (now - grownAt <= PICKUP_WINDOW_S && grown !== "any" && grown.size() > 0) {
-		count += 1;
+		counted();
 		for (const [key, v] of grown) noteKey(key, v);
 		grown.clear();
 		return;
 	}
 	if (now - grownAt <= PICKUP_WINDOW_S && grown === "any") {
-		count += 1;
+		counted();
 		grownAt = -math.huge;
 		return;
 	}
@@ -188,7 +229,7 @@ function noteKey(key: number, n: number): void {
 /** an item gone for this survivor meets the bag's growth: true (and counted) when the bag holds some of it */
 function claim(kind: number, itemId: number, n: number): boolean {
 	if (grown === "any") {
-		count += 1;
+		counted(kind, itemId);
 		note(kind, itemId, n);
 		return true;
 	}
@@ -198,7 +239,7 @@ function claim(kind: number, itemId: number, n: number): boolean {
 	const taken = math.min(got, math.max(n, 1));
 	if (got - taken > 0) grown.set(key, got - taken);
 	else grown.delete(key);
-	count += 1;
+	counted(kind, itemId);
 	note(kind, itemId, taken);
 	return true;
 }
@@ -234,7 +275,7 @@ export function bagGrew(before?: BagMirror, after?: BagMirror): void {
 	// a search whose flag already went down: this growth is what it found
 	if (now - lootAt <= PICKUP_WINDOW_S) {
 		lootAt = -math.huge;
-		count += 1;
+		counted();
 		if (grown !== "any") {
 			for (const [key, v] of grown) noteKey(key, v);
 			grown.clear();

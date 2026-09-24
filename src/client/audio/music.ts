@@ -17,6 +17,8 @@ import { audio, AudioTrack } from "./audio";
 const HEART_L1 = 0.35;
 const HEART_L2 = 0.22;
 const HEART_L3 = 0.1;
+/** how far above its threshold the HP has to climb before a heartbeat level is left */
+export const HEART_HYSTERESIS = 0.03;
 
 /** dawn bird layer: full between these hours, faded at the edges */
 const DAWN_FROM = 6;
@@ -68,17 +70,27 @@ export class GameMusic {
 		this.updateHeartbeat(s);
 	}
 
+	/**
+	 * A level is entered under its threshold and left only HEART_HYSTERESIS above it: the HP of a survivor regenerating
+	 * against a drain, or the server's HP interpolated between snapshots, wanders across 35 % for seconds, and every
+	 * crossing used to swap the heartbeat's clip.
+	 */
 	private updateHeartbeat(s: MusicState): void {
 		let level = 0;
 		if (!s.dead && s.hpRatio > 0) {
-			if (s.hpRatio < HEART_L3) level = 3;
-			else if (s.hpRatio < HEART_L2) level = 2;
-			else if (s.hpRatio < HEART_L1) level = 1;
+			if (this.under(s.hpRatio, HEART_L3, 3)) level = 3;
+			else if (this.under(s.hpRatio, HEART_L2, 2)) level = 2;
+			else if (this.under(s.hpRatio, HEART_L1, 1)) level = 1;
 		}
 		if (level === this.heartLevel) return;
 		this.heartLevel = level;
 		if (level === 0) this.heart.stop();
 		else this.heart.set(level === 1 ? "heartbeat1" : level === 2 ? "heartbeat2" : "heartbeat3");
+	}
+
+	/** is `hp` inside heartbeat level `lvl` (under `threshold`, or under it + the hysteresis while already in it)? */
+	private under(hp: number, threshold: number, lvl: number): boolean {
+		return hp < threshold + (this.heartLevel >= lvl ? HEART_HYSTERESIS : 0);
 	}
 
 	/** wave 1, 2 or 3 was announced */

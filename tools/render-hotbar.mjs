@@ -11,7 +11,8 @@
  * Writes, per screen: hotbar-<screen>.png -- the five tiles (dagger, axe, bat, pistol, semi auto rifle) with the
  * dagger in hand, then with the pistol in hand, each row once with Frames and once with the atlas, 4x nearest -- and
  * tiles-<screen>.png, one tile per weapon of the game (all 30) with the atlas, 4x. Nothing is checked here: part 7 of
- * tools/test-hud.mjs measures the same drawing.
+ * tools/test-hud.mjs measures the same drawing. And hud-<screen>.png: the whole console with the quick HEAL / EAT plates
+ * (DESIGN_RULES ITM-08; on touch the whole screen, with the quick deck) in two states -- part 10 of test:hud checks them.
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -158,6 +159,113 @@ for (const screen of SCREENS) {
 	const all = join(OUT, `tiles-${screen.name}.png`);
 	writeFileSync(all, encodePNG(upscale(vstack(grid, 4), 3), true));
 	console.log(`${all}  (all ${WEAPONS.length} weapons, in hand, atlas)`);
+}
+hud.unmount();
+flush();
+
+// ---------------------------------------------------------------- the whole console (ITM-08: the quick HEAL / EAT)
+
+/*
+ * hud-<screen>.png: the desktop console (and the strip above it, where the plates' tooltip shows) or, on touch, the whole
+ * screen (the thumbs' controls, the console, the quick deck, the corner) -- in two states, stacked: (1) a hurt, hungry
+ * survivor with 2 Bandages, a First aid kit and 3 Canned food, healing (VIT-01: the glow round the HP bar); (2) the same
+ * with no food left (EAT greyed) and FOOD under 15 (VIT-01's fork at the FOOD bar's end, at its pop), HEAL in the use
+ * cooldown (the veil half drained), three pickup chips over the prompt (ITM-07) and, on desktop, the mouse over EAT (its
+ * reason on the tooltip). Run it on another checkout (PZ_SRC) for the "before": a HUD without the plates draws the same
+ * states without them.
+ */
+const HUD_SCREENS = [
+	{ name: "owner-1365x567", w: 1365, h: 567, touch: false, zoom: 2 },
+	{ name: "1920x1080", w: 1920, h: 1080, touch: false, zoom: 1 },
+	{ name: "touch-1120x630", w: 1120, h: 630, touch: true, zoom: 1 },
+];
+const USE = (() => {
+	try {
+		return require(join(SRC, "shared/data/usables.ts")).USABLES;
+	} catch {
+		return [];
+	}
+})();
+const useId = n => USE.findIndex(u => u.name === n);
+function stockQuick(food) {
+	for (let i = 0; i < save.invenUse.length; i++) save.invenUse[i] = 0;
+	save.invenUse[useId("Bandage")] = 2;
+	save.invenUse[useId("First aid kit")] = 1;
+	save.invenUse[useId("Canned food")] = food;
+}
+/** the two quick views a run would hand the HUD (client/systems/quickUse.ts), when this checkout has them */
+function quickViews(heal, eat) {
+	try {
+		const Q = require(join(SRC, "shared/game/quickUse.ts"));
+		const v = { hp: 60, hpMax: 100, hunger: 58, hungerMax: 100, dead: false };
+		return [
+			{ ...Q.quickPick(0, save, v), ...heal },
+			{ ...Q.quickPick(1, save, v), ...eat },
+		];
+	} catch {
+		return undefined;
+	}
+}
+/** three pickups on the way into the HUD (client/systems/pickups.ts), when this checkout has them (ITM-07) */
+function pickups() {
+	try {
+		const PK = require(join(SRC, "client/systems/pickups.ts"));
+		PK.took(4, 45, 12);
+		PK.took(3, 12, 1);
+		PK.took(1, 16, 1);
+	} catch {
+		// a checkout from before the ground items: no chips
+	}
+}
+for (const screen of HUD_SCREENS) {
+	const rows = [];
+	for (const busy of [false, true]) {
+		hud.unmount();
+		setIconAtlas("");
+		useDevice(screen.touch);
+		setViewport(screen.w, screen.h, screen.touch ? 58 : 36);
+		own(HOTBAR);
+		stockQuick(busy ? 0 : 3);
+		hud.mount();
+		const quick = quickViews({ cooldown: busy ? 0.5 : 0, pulse: 0 }, { cooldown: busy ? 0.5 : 0, pulse: 0 });
+		// VIT-01: rested since the last hit, so the body heals (the glow) -- or, under 15 food, cannot (the fork)
+		const regen = { sinceHurt: 60, ...(busy ? { hunger: 10 } : {}) };
+		const st = state(10, { hp: 60, hunger: 58, ...regen, ...(quick !== undefined ? { quick } : {}) });
+		if (busy) pickups();
+		hud.update(st);
+		for (let i = 0; i < 3; i++) {
+			layoutGame(ui, ctx);
+			hud.update(st);
+		}
+		const eat = deep(hudRoot(), "QuickEat");
+		if (busy && eat !== undefined && !screen.touch) {
+			eat.GuiState = Enum.GuiState.Hover;
+			flush();
+			hud.update(st);
+			layoutGame(ui, ctx);
+		}
+		let view = { x: 0, y: 0, w: screen.w, h: screen.h };
+		if (!screen.touch) {
+			const r = rectOf(deep(hudRoot(), "Console"));
+			// the strip over the console: the plates' tooltip and, when up, the pickup chips over the prompt
+			const chips = (deep(hudRoot(), "PickupToast")?.GetChildren() ?? [])
+				.filter(c => c.Visible === true && c.Name.startsWith("Chip"))
+				.map(c => rectOf(c).y);
+			const above = Math.ceil(Math.max(r.h * 0.45, ...chips.map(y => r.y - y + 6)));
+			view = {
+				x: Math.floor(r.x) - 8,
+				y: Math.floor(r.y) - above,
+				w: Math.ceil(r.w) + 16,
+				h: Math.ceil(r.h) + above + 8,
+			};
+		}
+		rows.push(rasterPaint(paintList(hudRoot()), view, [58, 66, 52], resolve));
+	}
+	const file = join(OUT, `hud-${screen.name}.png`);
+	writeFileSync(file, encodePNG(upscale(vstack(rows, 6), screen.zoom), true));
+	console.log(
+		`${file}  (rows: a hurt, hungry survivor, healing; then no food, the fork, HEAL cooling, pickups${screen.touch ? "" : ", the mouse on EAT"})`,
+	);
 }
 hud.unmount();
 flush();
