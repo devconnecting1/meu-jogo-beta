@@ -36,7 +36,11 @@
  *    picks it on this device (keyboard 1-5; the pad has no such key and touch taps the tile itself, so neither
  *    shows one) and, for a gun, its ammo in the item card's yellow: magazine / reserve on the gun in hand, the
  *    reserve alone on the others (a gun you are not holding keeps its rounds in the pool: combat.ts switchWeapon
- *    empties the magazine back into it). A reload refills the tile in hand from the bottom up;
+ *    empties the magazine back into it). A reload refills the tile in hand from the bottom up. The icon sits in the
+ *    MIDDLE of what the tile leaves it -- what it draws, not its 16 x 16 grid (itemIcon.ts fit "drawn") -- the face
+ *    on a melee weapon's tile, the face above the ammo chip on a gun's; the key is a small cap in the very corner,
+ *    and no pixel of any weapon's icon lands under it or on the chip; and the icon is drawn at a side the tile's
+ *    pixels carry evenly (16 / 24 / 32 / 40 / 48... px: fitTileIcon), the same for every weapon;
  *  - a click or a tap on tile k writes `InputState.weaponSlotPressed = k`, the field key k writes
  *    (client/bootstrap.ts): combat has one way to switch weapons, not two;
  *  - the Bag and Menu plates are the in-run actions that have a button today, each a pixel icon and its key on this
@@ -57,8 +61,8 @@ import { MIN_TOUCH_PX, TouchLayout } from "shared/engine/input";
 import { weaponReserve } from "shared/game/player";
 import { PlayerSaveData } from "shared/game/save";
 import { WEAPON_KEY_COUNT, weaponKeyOrder } from "shared/game/weaponSlots";
-import { iconKeys } from "shared/data/itemIcons";
-import { IconView, drawItemIcon, maxFrameCount } from "./itemIcon";
+import { iconKeys, iconOf } from "shared/data/itemIcons";
+import { IconView, drawItemIcon, drawnRects, maxFrameCount } from "./itemIcon";
 import { weaponKindName } from "./itemInfo";
 import { PlateState, paintPlate, reliefPx } from "./plate";
 import { BAR, STAT, SURFACE, TEXT, THEME, fontOf, hex } from "./theme";
@@ -212,9 +216,6 @@ const FILL_UNIT = 2;
 const TILE_UNIT = 4;
 /** the ring of an empty socket */
 const SOCKET_UNIT = 2;
-/** a tile's icon: its side and its top as shares of the tile (a gun's ammo chip takes the bottom) */
-const ICON_SHARE = 0.6;
-const ICON_TOP = 0.04;
 /** the Frames of the costliest weapon icon: every tile holds that many from the start */
 const WEAPON_ICON_FRAMES = maxFrameCount(iconKeys(ItemKind.Weapon));
 
@@ -528,6 +529,8 @@ function sizeFill(bar: ConsoleBar): void {
 interface HotbarTile {
 	button: TextButton;
 	icon: IconView;
+	/** where the icon's square was last put (placeIcon writes only a change) */
+	iconAt: string;
 	key: Frame;
 	keyLabel: TextLabel;
 	ammo: Frame;
@@ -569,6 +572,107 @@ function paintTile(t: HotbarTile): void {
 	}
 }
 
+// ---------------------------------------------------------------- inside a tile: the icon, the key, the ammo
+
+/** the key badge in a tile's top-left corner: its side and its distance from the corner (design units) */
+const KEY_SIDE = 10;
+const KEY_INSET = 0;
+/** a gun's ammo chip along the bottom: its height as a share of the tile, its distance from the bottom and sides */
+const CHIP_SHARE = 0.22;
+const CHIP_BOTTOM = 2;
+const CHIP_SIDE = 4;
+/** px kept between an icon's drawn pixels and the edge of its room, and between them and the key badge */
+const ICON_CLEAR = 1;
+
+/** the ammo chip's height (design units) on a tile `size` design units square */
+function chipHeight(size: number): number {
+	return math.round(size * CHIP_SHARE);
+}
+
+/** a weapon icon the hotbar can show, and whether it shows on a gun's tile (over the ammo chip) */
+interface WeaponIcon {
+	key: string;
+	gun: boolean;
+}
+let weaponIcons: Array<WeaponIcon> | undefined;
+
+/** every weapon's icon (iconOf: its own or its category's), once per kind of tile it can be on */
+function weaponIconList(): Array<WeaponIcon> {
+	if (weaponIcons !== undefined) return weaponIcons;
+	const out: Array<WeaponIcon> = [];
+	for (let id = 0; id < WEAPONS.size(); id++) {
+		const key = iconOf(ItemKind.Weapon, id).key;
+		const gun = WEAPONS[id].mag > 0;
+		if (!out.some(e => e.key === key && e.gun === gun)) out.push({ key, gun });
+	}
+	weaponIcons = out;
+	return out;
+}
+
+/** where a tile's icon goes, in the tile's own pixels: the square's side and its top-left on each kind of tile */
+export interface TileIconFit {
+	side: number;
+	/** a melee weapon's tile: the square centred on the face */
+	melee: [number, number];
+	/** a gun's tile: the square centred on the face above the ammo chip */
+	gun: [number, number];
+}
+
+/**
+ * The icon of a hotbar tile `T` px square, `design` design units in the layout, whose face starts `u` px in (the
+ * plate's relief): the LARGEST side at which EVERY weapon icon -- the box of what it draws centred in its room (the
+ * face on a melee weapon's tile, the face above the ammo chip on a gun's) -- stays ICON_CLEAR px inside that room and,
+ * with `key` (a keyboard's digit on the corner), ICON_CLEAR px clear of the key badge, pixel by pixel. One side for
+ * every weapon, so picking one up never resizes the hotbar's icons.
+ *
+ * The sides tried are those the drawer keeps as they are (itemIcon.ts measure) and draws evenly: whole screen pixels
+ * per icon pixel (16, 32, 48, 64...) or a regular one and a half / two and a half (24, 40: every other icon pixel one
+ * screen pixel wider). Any other side makes some icon pixels wider than their neighbours at random, and turns a
+ * diagonal blade into a crooked staircase -- what the owner saw on a 41 px tile drawn at 25 px (1,56 px per pixel).
+ * When nothing fits (a tile under ~30 px), the smallest side.
+ */
+export function fitTileIcon(T: number, u: number, design: number, key: boolean): TileIconFit {
+	const s = T / design;
+	const chipTop = T - (CHIP_BOTTOM + chipHeight(design)) * s;
+	const k0 = KEY_INSET * s - ICON_CLEAR;
+	const k1 = (KEY_INSET + KEY_SIDE) * s + ICON_CLEAR;
+	const icons = weaponIconList();
+	let last: TileIconFit | undefined;
+	for (let side = math.floor((T - 2 * u) / 8) * 8; side >= 16; side -= 8) {
+		if (side % 16 !== 0 && side !== 24 && side !== 40) continue;
+		const at = (top: number, bottom: number): [number, number] => [
+			math.floor((T - side) / 2 + 0.5),
+			math.floor((top + bottom - side) / 2 + 0.5),
+		];
+		const fit: TileIconFit = { side, melee: at(u, T - u), gun: at(u, chipTop) };
+		last = fit;
+		let ok = true;
+		for (const w of icons) {
+			const [ox, oy] = w.gun ? fit.gun : fit.melee;
+			const bottom = w.gun ? chipTop : T - u;
+			let x0 = math.huge;
+			let y0 = math.huge;
+			let x1 = -math.huge;
+			let y1 = -math.huge;
+			for (const [rx0, ry0, rx1, ry1] of drawnRects(w.key, side)) {
+				x0 = math.min(x0, ox + rx0);
+				y0 = math.min(y0, oy + ry0);
+				x1 = math.max(x1, ox + rx1);
+				y1 = math.max(y1, oy + ry1);
+				if (key && ox + rx0 < k1 && k0 < ox + rx1 && oy + ry0 < k1 && k0 < oy + ry1) ok = false;
+			}
+			const inside =
+				x0 >= u + ICON_CLEAR && x1 <= T - u - ICON_CLEAR && y0 >= u + ICON_CLEAR && y1 <= bottom - ICON_CLEAR;
+			if (!ok || !inside) {
+				ok = false;
+				break;
+			}
+		}
+		if (ok) return fit;
+	}
+	return last ?? { side: 16, melee: [0, 0], gun: [0, 0] };
+}
+
 // ---------------------------------------------------------------- the console
 
 export interface ConsoleCallbacks {
@@ -607,6 +711,14 @@ export class HudConsole {
 	private readSize = -1;
 	private readPool = -1;
 	private readReloading = false;
+	/**
+	 * the tiles' icon (fitTileIcon), for the size they have: in the tile's pixels once it has one on screen, in its
+	 * design units before (`iconT` = what the numbers are measured in, `iconPx` = pixels)
+	 */
+	private iconFit: TileIconFit | undefined;
+	private iconT = 0;
+	private iconPx = false;
+	private iconFor = "";
 	/** the sky at the left end (desktop; on touch hud.ts places its own plate under Menu and Bag) */
 	private sky: HudSky | undefined;
 	/**
@@ -676,6 +788,11 @@ export class HudConsole {
 			const x = BED_PAD + slot * (L.tile + TILE_GAP);
 			this.tiles.push(this.makeTile(bed, slot, x, BED_PAD, L.tile, bed.ZIndex + 1, () => cb.onSlot(slot)));
 		}
+		// the icons follow the tiles' size on screen (the five are one size): a resize, the touch console placed, the
+		// UI scale -- never a frame
+		const first = this.tiles[0].button;
+		first.GetPropertyChangedSignal("AbsoluteSize").Connect(() => this.layoutIcons());
+		W.onLayoutChange(first, () => this.layoutIcons());
 
 		if (!L.full) return;
 
@@ -864,31 +981,34 @@ export class HudConsole {
 		reload.ZIndex = -4;
 		reload.Parent = reloadBox;
 
-		// the item's pixel icon, the same drawing as the Bag's tile and the item card (UI-11), right of the key badge.
-		// It holds as many Frames as the costliest weapon icon from the start: a weapon picked up or lost rewrites the
-		// tile's Frames and never creates one (update() runs every frame and creates nothing, UI-09)
-		const g = math.round(size * ICON_SHARE);
-		const icon = IconView(b, "ItemIcon", size - g - 3, size * ICON_TOP, g, z + 1, WEAPON_ICON_FRAMES);
+		// the item's pixel icon, the same drawing as the Bag's tile and the item card (UI-11), what it draws centred in
+		// the tile (fit "drawn"; the square is placed by placeIcon, clear of the key badge and the ammo chip). It holds
+		// as many Frames as the costliest weapon icon from the start: a weapon picked up or lost rewrites the tile's
+		// Frames and never creates one (update() runs every frame and creates nothing, UI-09)
+		const icon = IconView(b, "ItemIcon", 0, 0, size, z + 1, WEAPON_ICON_FRAMES, "drawn");
 		icon.frame.Visible = false;
 
 		// the key that picks it: the kit's key look (a raised dark-iron plate, light legend), on the corner
-		const keyS = math.round(size * 0.34);
-		const key = W.makeFrame(b, "Key", 3, 3, keyS, keyS, THEME.background, { transparency: 1, zIndex: z + 3 });
+		const key = W.makeFrame(b, "Key", KEY_INSET, KEY_INSET, KEY_SIDE, KEY_SIDE, THEME.background, {
+			transparency: 1,
+			zIndex: z + 3,
+		});
 		paintPlate(key, SURFACE.key, "idle", 2);
-		const keyLabel = this.text(key, "Legend", "", 0, 0, keyS, keyS, TEXT.xs, THEME.foreground, {
+		const keyLabel = this.text(key, "Legend", "", 0, 0, KEY_SIDE, KEY_SIDE, TEXT.xs, THEME.foreground, {
 			font: BOLD,
 			zIndex: z + 4,
 		});
 		key.Visible = false;
 
 		// the ammo: a dark chip along the bottom, the number in the item card's yellow
-		const chipH = math.round(size * 0.28);
-		const ammo = W.makeFrame(b, "Ammo", 4, size - chipH - 4, size - 8, chipH, THEME.background, {
+		const chipH = chipHeight(size);
+		const chipW = size - 2 * CHIP_SIDE;
+		const ammo = W.makeFrame(b, "Ammo", CHIP_SIDE, size - chipH - CHIP_BOTTOM, chipW, chipH, THEME.background, {
 			transparency: 1,
 			zIndex: z + 3,
 		});
 		paintPlate(ammo, SURFACE.well, "flat", 1);
-		const ammoLabel = this.text(ammo, "Count", "", 2, 0, size - 12, chipH, TEXT.xs, STAT.value, {
+		const ammoLabel = this.text(ammo, "Count", "", 2, 0, chipW - 4, chipH, TEXT.xs, STAT.value, {
 			font: NUMERIC,
 			zIndex: z + 4,
 		});
@@ -897,6 +1017,7 @@ export class HudConsole {
 		const t: HotbarTile = {
 			button: b,
 			icon,
+			iconAt: "",
 			key,
 			keyLabel,
 			ammo,
@@ -918,6 +1039,46 @@ export class HudConsole {
 		paintTile(t);
 		b.Parent = bed;
 		return t;
+	}
+
+	/**
+	 * Fits the tiles' icon to the size the tiles have (fitTileIcon): on screen, in whole pixels of the tile; before the
+	 * engine has sized them (the first frame, a Node suite), in design units, placed in Scale. Runs when that size, the
+	 * relief or the screen changes -- never per frame -- and rewrites only what moved.
+	 */
+	private layoutIcons(): void {
+		const L = this.layout;
+		const first = this.tiles[0];
+		if (first === undefined) return;
+		const T = first.button.AbsoluteSize.X;
+		const px = T > 0;
+		const u = px ? reliefPx(TILE_UNIT) : TILE_UNIT;
+		const at = px ? `${T},${u}` : "design";
+		if (at === this.iconFor) return;
+		this.iconFor = at;
+		this.iconPx = px;
+		this.iconT = px ? T : L.tile;
+		this.iconFit = fitTileIcon(this.iconT, u, L.tile, L.full);
+		for (const t of this.tiles) this.placeIcon(t);
+	}
+
+	/** puts tile `t`'s icon square where its kind of tile has it (melee / gun), writing only a change */
+	private placeIcon(t: HotbarTile): void {
+		const fit = this.iconFit;
+		if (fit === undefined) return;
+		const [x, y] = t.gun ? fit.gun : fit.melee;
+		const at = `${this.iconFor}|${x},${y}`;
+		if (at === t.iconAt) return;
+		t.iconAt = at;
+		const f = t.icon.frame;
+		if (this.iconPx) {
+			f.Position = UDim2.fromOffset(x, y);
+			f.Size = UDim2.fromOffset(fit.side, fit.side);
+		} else {
+			const T = this.iconT;
+			f.Position = UDim2.fromScale(x / T, y / T);
+			f.Size = UDim2.fromScale(fit.side / T, fit.side / T);
+		}
 	}
 
 	/** a small iron plate under the hotbar: a pixel icon and the key of this device ("B", "LB") */
@@ -1070,14 +1231,9 @@ export class HudConsole {
 			t.id = w !== undefined ? id : -1;
 			t.gun = w !== undefined && w.mag > 0;
 			if (w !== undefined) {
+				// a melee weapon's icon in the middle of the face, a gun's in the middle of the face above its chip
+				this.placeIcon(t);
 				drawItemIcon(t.icon, ItemKind.Weapon, id);
-				const size = this.layout.tile;
-				const g = math.round(size * ICON_SHARE);
-				// a melee weapon has no ammo chip: its icon sits in the middle of the tile's height
-				t.icon.frame.Position = UDim2.fromScale(
-					(size - g - 3) / size,
-					t.gun ? ICON_TOP : (size - g) / 2 / size,
-				);
 			}
 			t.icon.frame.Visible = w !== undefined;
 			t.mag = -2;
