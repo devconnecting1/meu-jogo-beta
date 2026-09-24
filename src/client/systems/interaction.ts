@@ -15,11 +15,13 @@ import {
 	repairMaterial,
 } from "shared/sim/interactQuery";
 import { engineRuns, isRideable, vehicleBroken, vehicleDef, vehicleKindOfSolid } from "shared/sim/vehicle";
+import { itemCap, pickupRoom, WALK_PICKUP_DELAY_S, WALK_PICKUP_RATE_S, walkPickupTarget } from "shared/sim/pickupRule";
+import { langGet } from "shared/data/lang";
 import { flinch } from "../view/solidFlinch";
 import { serverOwnsWorld } from "../net/authority";
 import { itemName } from "./craftSystem";
 import { machineHint } from "./machineHints";
-import { pressed, took } from "./pickups";
+import { gained, pressed, survivorAt, took } from "./pickups";
 import { fxMessage, GameRefs } from "./types";
 
 /*
@@ -155,10 +157,21 @@ function burnFires(refs: GameRefs, dt: number): void {
 	}
 }
 
-function takeItem(refs: GameRefs, it: GroundItem): void {
-	addItem(refs.save, it.kind, it.itemId, it.count);
+/**
+ * The offline pickup: what fits under the save's ceiling (shared/sim/pickupRule.ts) goes into the backpack, the rest
+ * stays on the ground -- the server's own rule (server/sim/items.ts `pickup`). Answers how many were taken.
+ */
+function takeItem(refs: GameRefs, it: GroundItem): number {
+	const take = math.min(it.count, pickupRoom(refs.save, it.kind, it.itemId));
+	if (take <= 0) return 0;
+	addItem(refs.save, it.kind, it.itemId, take);
+	if (take < it.count) {
+		it.count -= take;
+		return take;
+	}
 	const idx = refs.world.items.indexOf(it);
 	if (idx >= 0) refs.world.items.remove(idx);
+	return take;
 }
 
 /** the shared roll (shared/sim/loot.ts), the one server/sim/items.ts rollLoot makes */
@@ -220,8 +233,15 @@ function rideHint(refs: GameRefs, by: PlayerState): string {
 function hintFor(refs: GameRefs, target: InteractTarget): string | undefined {
 	if (target.kind === "item") {
 		const it = target.item;
-		const n = itemName(it.kind, it.itemId);
-		return it.count > 1 ? `E: Pick up ${n} x${it.count}` : `E: Pick up ${n}`;
+		const lang = refs.save.settings.langType;
+		const n = langGet(itemName(it.kind, it.itemId), lang);
+		// the save's ceiling (ITM-06): a full item says so instead of promising a press that takes nothing
+		if (pickupRoom(refs.save, it.kind, it.itemId) <= 0) {
+			return `${n} ${langGet("full", lang)} (${itemCap(it.kind, it.itemId)})`;
+		}
+		hinted = it.id;
+		const verb = langGet("Pick up", lang);
+		return it.count > 1 ? `E: ${verb} ${n} ×${it.count}` : `E: ${verb} ${n}`;
 	}
 	if (target.kind === "door") {
 		const s = target.solid;
@@ -261,11 +281,19 @@ function hintFor(refs: GameRefs, target: InteractTarget): string | undefined {
 	return `E: Search ${BUILDING_NAMES[b.tags] ?? b.tags}`;
 }
 
+/** the ground item the last `interactHint` promised E takes, or -1 (client/view/groundItemsView.ts brackets it) */
+let hinted = -1;
+
+export function hintedItem(): number {
+	return hinted;
+}
+
 /**
  * What the action button (E) would do right now, for the HUD — same priority as tryInteract.
  * undefined = nothing to do (hide the button).
  */
 export function interactHint(refs: GameRefs, by: PlayerState = refs.player): string | undefined {
+	hinted = -1;
 	// on a vehicle E means one thing, whatever is in reach (server/sim/vehicles.ts takes the press first)
 	if (by.ride !== undefined) return rideHint(refs, by);
 	if (refs.pendingPlace >= 0) return undefined;
@@ -293,8 +321,10 @@ export class Interaction {
 		}
 		if (target.kind === "vehicle") return;
 		if (target.kind === "item") {
-			takeItem(refs, target.item);
-			took();
+			const it = target.item;
+			const got = takeItem(refs, it);
+			if (got > 0) took(it.kind, it.itemId, got);
+			else fxMessage(refs, `${itemName(it.kind, it.itemId)} full (${itemCap(it.kind, it.itemId)})`, by);
 			return;
 		}
 		if (target.kind === "door") {
@@ -322,10 +352,14 @@ export class Interaction {
 		if (loot === undefined) return;
 		for (const drop of loot) {
 			addItem(refs.save, drop.kind, drop.id, drop.count);
+			gained(drop.kind, drop.id, drop.count);
 		}
 		// Thief: one more slot of this building's table, for this searcher alone (shared/sim/loot.ts)
 		const extra = thiefFind(refs.save, b.buildingType ?? 0);
-		if (extra !== undefined) addItem(refs.save, extra.kind, extra.id, extra.count);
+		if (extra !== undefined) {
+			addItem(refs.save, extra.kind, extra.id, extra.count);
+			gained(extra.kind, extra.id, extra.count);
+		}
 		if (loot.size() > 0 || extra !== undefined) took();
 		b.lootItems = [];
 		// respawn after ITEM_RESPAWN_HOURS of GAME time (was 12 real hours, i.e. never)
@@ -333,8 +367,11 @@ export class Interaction {
 	}
 
 	update(refs: GameRefs, dt: number): void {
-		// F3: the fires burn on the server (LightSet), and the loot is rolled there (LootFlag)
+		// where this survivor is: a supply the server takes from under their feet is theirs (./pickups.ts)
+		survivorAt(refs.player.x, refs.player.y);
+		// F3: the fires burn on the server (LightSet), and the loot is rolled there (LootFlag); the walk-over too
 		if (serverOwnsWorld()) return;
+		this.walkOver(refs, dt);
 		burnFires(refs, dt);
 		for (const [solid, t] of hitCooldowns) {
 			if (solid.removed === true) {
@@ -350,6 +387,40 @@ export class Interaction {
 		}
 		this.rollNearbyLoot(refs, dt);
 	}
+
+	/**
+	 * Offline, the supplies under the survivor's feet are walked up here, by the server's rule (shared/sim/pickupRule.ts,
+	 * server/sim/items.ts `walkOver`): once lying WALK_PICKUP_DELAY_S, one every WALK_PICKUP_RATE_S, what fits.
+	 */
+	private walkOver(refs: GameRefs, dt: number): void {
+		this.clock += dt;
+		const born = this.born;
+		for (const it of refs.world.items) {
+			if (!born.has(it.id)) born.set(it.id, this.clock);
+		}
+		if (this.clock < this.walkNext) return;
+		this.walkNext = this.clock + WALK_PICKUP_RATE_S;
+		// the table forgets the items that are gone, once it holds many more than the world
+		if (born.size() > refs.world.items.size() * 2 + 32) {
+			const live = new Set<number>();
+			for (const it of refs.world.items) live.add(it.id);
+			for (const [id] of born) if (!live.has(id)) born.delete(id);
+		}
+		const p = refs.player;
+		if (p.dead || p.ride !== undefined) return;
+		const it = walkPickupTarget(refs.world, p.x, p.y, refs.save, this.walkReady);
+		if (it === undefined) return;
+		const got = takeItem(refs, it);
+		if (got > 0) took(it.kind, it.itemId, got);
+	}
+
+	/** offline walk-over: its clock, when each item was first seen, and when the next one may be taken */
+	private clock = 0;
+	private readonly born = new Map<number, number>();
+	private walkNext = 0;
+	/** has this item lain WALK_PICKUP_DELAY_S since this client first saw it? (bound once: no closure a check) */
+	private readonly walkReady = (item: GroundItem): boolean =>
+		this.clock - (this.born.get(item.id) ?? this.clock) >= WALK_PICKUP_DELAY_S;
 
 	/*
 	 * Loot is rolled lazily, when a survivor comes near a building that has none — but "near" was tested

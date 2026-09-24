@@ -368,6 +368,9 @@ const PAIRS = [
 	["THEME.secondaryForeground", "THEME.secondary", MIN_TEXT, "console: icone e tecla (B / P, LB / Start) nas chapas"],
 	["THEME.foreground", "SURFACE.section", MIN_TEXT, "console: nome e tipo da arma na mao, sobre a secao (claros)"],
 	["THEME.foreground", "SURFACE.window", MIN_TEXT, 'a dica "E: ..." logo acima do console'],
+	// ITM-06 (client/ui/pickupToast.ts): the chip of what was picked up, on the prompt's graphite plate
+	["STAT.value", "SURFACE.window", MIN_TEXT, 'coleta: o "+12" em amarelo no chip sobre a dica'],
+	["THEME.foreground", "SURFACE.window", MIN_TEXT, "coleta: o nome do item no chip sobre a dica"],
 	["STAT.value", "SURFACE.groove", MIN_TEXT, "console: o pente no leitor da coluna da arma"],
 	["STAT.penalty", "SURFACE.groove", MIN_TEXT, "console: o pente vazio no leitor"],
 	["THEME.mutedForeground", "SURFACE.groove", MIN_TEXT, "console: a reserva e o Reloading... no leitor"],

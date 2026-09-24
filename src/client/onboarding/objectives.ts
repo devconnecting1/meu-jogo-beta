@@ -267,7 +267,8 @@ export const OBJECTIVES: Array<Objective> = [
 	{
 		id: "pickup",
 		title: "Pick something up",
-		hint: "Walk over loot on the ground, or press the use button next to it.",
+		// ITM-06: supplies are walked up (the server's sweep), weapons and gear take the use button
+		hint: "Walk over food, ammo and materials. For weapons and gear, press use.",
 		// a pickup the game (offline) or the server (a server-owned world) made for this survivor: the backpack growing
 		// was also a craft's bonus, a construction handed back or a prediction undone (client/systems/pickups.ts)
 		begin(refs, mem): void {

@@ -5204,10 +5204,397 @@ section('G8. the pickup sound and the "Pick something up" lesson hear pickups, n
 	);
 	check(
 		/if \(target\.kind === "item"\) pressed\("item", by\.x, by\.y\)/.test(inter) &&
-			/takeItem\(refs, target\.item\);\s*took\(\);/.test(inter) &&
-			/bagTotal\(bag\) > bagTotal\(lastBag\)/.test(sync),
-		"fed by the E press, the offline pickup and the server's bag against its last one (never the predicted copy)",
+			/const got = takeItem\(refs, it\);\s*if \(got > 0\) took\(it\.kind, it\.itemId, got\);/.test(inter) &&
+			/survivorAt\(refs\.player\.x, refs\.player\.y\)/.test(inter) &&
+			/bagTotal\(bag\) > bagTotal\(lastBag\)/.test(sync) &&
+			/bagGrew\(lastBag, bag\)/.test(sync),
+		"fed by the E press, the survivor's feet (ITM-06), the offline pickup and the server's bag against its last one " +
+			"(never the predicted copy)",
 	);
+});
+
+section("G9. supplies are walked up, weapons and gear take E: one rule on the server and offline (ITM-06)", () => {
+	const RULE = require(join(SRC, "shared/sim/pickupRule.ts"));
+	const { ServerItems } = require(join(SRC, "server/sim/items.ts"));
+	const { WorldOut } = require(join(SRC, "server/sim/worldOut.ts"));
+	const CInter = require(join(SRC, "client/systems/interaction.ts"));
+	const PK = require(join(SRC, "client/systems/pickups.ts"));
+	const WALK = RULE.WALK_PICKUP_RANGE;
+	const DELAY = RULE.WALK_PICKUP_DELAY_S;
+	const RATE = RULE.WALK_PICKUP_RATE_S;
+	check(
+		WALK < DESIGN.ITEM_GET_DISTANCE && WALK >= 18 && DELAY > 0 && RATE > 0,
+		`the walk-over reach (${WALK} u) is inside E's (${DESIGN.ITEM_GET_DISTANCE} u) and covers the body (18 u)`,
+	);
+	// the rule by kind: the Bag's Usables and Materials are walked up, its Weapons and Gear take E
+	check(
+		RULE.walkPickup(ItemKind.Use) &&
+			RULE.walkPickup(ItemKind.Etc) &&
+			!RULE.walkPickup(ItemKind.Weapon) &&
+			!RULE.walkPickup(ItemKind.Equip),
+		"supplies (usables, materials, ammunition) are walked up; weapons and equipment are not",
+	);
+
+	/** a server with the interactive world and one survivor at (1000, 1000); `n` ticks of nothing pressed */
+	const server = () => {
+		const world = W.serverWorld(W.createWorld(4000, 4000));
+		const sim = new ServerSimulation({
+			world,
+			clock: new WorldClock({ day: 1, dayTime: 12 }),
+			zombies: false,
+			interactive: true,
+		});
+		const save = bareSave();
+		const sp = PL.createServerPlayer({ slot: 0, userId: 1, name: "walker" }, save, 1000, 1000, sim.tick, sim.simHz);
+		sim.add(sp);
+		sp.state.x = 1000;
+		sp.state.y = 1000;
+		let dirty = 0;
+		sim.onInteract = () => (dirty += 1);
+		const run = seconds => {
+			for (let i = 0; i < Math.round(seconds * CFG.SIM_HZ); i++) sim.step();
+		};
+		let seq = 1;
+		const pressE = () => {
+			const cmd = P.makeCommand(seq++, 0, 0, 0, 0, P.packEdges(0, 0, 1, 0));
+			PL.ingestInput(sp, P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [cmd] }), sim.tick / 60);
+			sim.step();
+		};
+		return { world, sim, save, sp, run, pressE, dirty: () => dirty };
+	};
+
+	// 1. every supply a table, a zombie or a boss drops: under the body it is taken, after the delay and not before
+	const supplies = [];
+	const seen = new Set();
+	for (const s of itemSources()) {
+		if (!RULE.walkPickup(s.kind) || s.from.startsWith("recipe") || s.from.startsWith("costume")) continue;
+		const key = `${s.kind}:${s.index}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		supplies.push({ name: `${nameOf(s.kind, s.index)} (${s.from})`, kind: s.kind, index: s.index });
+	}
+	checkRows(
+		"every supply that can lie on the ground is walked up by the SERVER, into its counter, after the delay",
+		supplies,
+		s => {
+			const t = server();
+			const had = INV.countItem(t.save, s.kind, s.index);
+			W.spawnGroundItem(t.world, s.kind, s.index, 3, 1008, 1004);
+			t.run(DELAY * 0.6);
+			if (t.world.items.length !== 1) return "taken before the delay";
+			t.run(DELAY);
+			const got = INV.countItem(t.save, s.kind, s.index) - had;
+			if (got !== 3 || t.world.items.length !== 0) return `+${got}, ${t.world.items.length} on the ground`;
+			return t.dirty() === 1 || `the save was marked dirty ${t.dirty()} times`;
+		},
+	);
+	// 2. weapons and gear: walked over, they stay; E takes them
+	const gear = [
+		{ name: "Pistol", kind: ItemKind.Weapon, index: 10 },
+		{ name: "Pump action shotgun", kind: ItemKind.Weapon, index: 16 },
+		{ name: "Flamethrower (a trophy)", kind: ItemKind.Weapon, index: 25 },
+		{ name: "Steel armor", kind: ItemKind.Equip, index: 4 },
+		{ name: "Flashlight", kind: ItemKind.Equip, index: 13 },
+	];
+	checkRows("weapons and equipment under the body stay on the ground; E takes them", gear, s => {
+		const t = server();
+		W.spawnGroundItem(t.world, s.kind, s.index, 1, 1006, 1000);
+		t.run(2);
+		if (t.world.items.length !== 1 || INV.countItem(t.save, s.kind, s.index) !== 0) return "walked up";
+		t.pressE();
+		return (t.world.items.length === 0 && INV.countItem(t.save, s.kind, s.index) === 1) || "E did not take it";
+	});
+	// 3. E still takes a supply in its reach but out of the body's
+	{
+		const t = server();
+		W.spawnGroundItem(t.world, ItemKind.Etc, 23, 5, 1000 + WALK + 8, 1000);
+		t.run(1);
+		const stayed = t.world.items.length === 1;
+		t.pressE();
+		check(
+			stayed && INV.countItem(t.save, ItemKind.Etc, 23) === 5 && t.world.items.length === 0,
+			`a supply ${WALK + 8} u away is not walked up (out of the body's reach), and E takes it (E takes anything)`,
+		);
+	}
+	// 4. a wall between: the E press's own clear line
+	{
+		const t = server();
+		W.addSolid(t.world, {
+			kind: "wall",
+			x: 1019,
+			y: 900,
+			w: 4,
+			h: 200,
+			hp: 1,
+			hpMax: 1,
+			destructible: false,
+			tags: "wall",
+		});
+		W.spawnGroundItem(t.world, ItemKind.Etc, 23, 2, 1024, 1000);
+		t.run(2);
+		check(
+			t.world.items.length === 1 && INV.countItem(t.save, ItemKind.Etc, 23) === 0,
+			"a supply 24 u away behind a wall is not walked up through it (the clear line of the E press)",
+		);
+	}
+	// 5. the rate: a pile goes in at WALK_PICKUP_RATE_S an item, never a pile a tick
+	{
+		const t = server();
+		for (let i = 0; i < 30; i++) W.spawnGroundItem(t.world, ItemKind.Etc, 23, 1, 1004, 1000);
+		t.run(DELAY);
+		const before = INV.countItem(t.save, ItemKind.Etc, 23);
+		t.run(1);
+		const inASecond = INV.countItem(t.save, ItemKind.Etc, 23) - before;
+		t.run(3);
+		check(
+			inASecond <= Math.ceil(1 / RATE) + 1 && inASecond >= Math.floor(1 / RATE) - 1,
+			`30 items on one spot: ${inASecond} walked up in one second (one per ${RATE} s)`,
+		);
+		check(
+			INV.countItem(t.save, ItemKind.Etc, 23) === 30 && t.world.items.length === 0,
+			"...and all 30 once the survivor has stood there long enough",
+		);
+	}
+	// 6. two survivors on the same item: one gets it, whole (the atomic removal)
+	{
+		const t = server();
+		const other = PL.createServerPlayer({ slot: 1, userId: 2, name: "b" }, bareSave(), 1010, 1000, t.sim.tick, 60);
+		t.sim.add(other);
+		other.state.x = 1010;
+		other.state.y = 1000;
+		W.spawnGroundItem(t.world, ItemKind.Etc, 44, 12, 1005, 1000);
+		t.run(1);
+		const a = t.save.ammoNormal - bareSave().ammoNormal;
+		const b = other.save.ammoNormal - bareSave().ammoNormal;
+		check(a + b === 12 && (a === 0 || b === 0), `two survivors on 12 rounds: ${a} + ${b} (one gets them all)`);
+	}
+	// 7. dead or riding: nothing (ServerItems.walkOver on its own)
+	{
+		const world = W.serverWorld(W.createWorld(4000, 4000));
+		const items = new ServerItems({ world, out: new WorldOut() });
+		const save = bareSave();
+		const state = Ply.createPlayer(save, 1000, 1000);
+		W.spawnGroundItem(world, ItemKind.Etc, 23, 1, 1004, 1000);
+		const who = [{ slot: 0, state, save }];
+		state.dead = true;
+		items.walkOver(who, 2);
+		items.walkOver(who, 0.2);
+		const deadKept = world.items.length === 1;
+		state.dead = false;
+		state.ride = { kind: 0 };
+		items.walkOver(who, 0.2);
+		const rideKept = world.items.length === 1;
+		state.ride = undefined;
+		items.walkOver(who, 0.2);
+		check(
+			deadKept && rideKept && world.items.length === 0,
+			"a dead survivor and one on a bike take nothing (the hands are on the bars, VEI-05); on foot, the item goes",
+		);
+	}
+	// 8. the save's ceiling: what fits goes in, the rest stays, and the prompt says the item is full
+	{
+		const t = server();
+		const LIM = SAVE.SAVE_LIMITS;
+		t.save.invenEtc[23] = LIM.ITEM_MAX - 4;
+		const it = W.spawnGroundItem(t.world, ItemKind.Etc, 23, 12, 1004, 1000);
+		t.run(1);
+		check(
+			t.save.invenEtc[23] === LIM.ITEM_MAX && t.world.items.length === 1 && it.count === 8,
+			`at ${LIM.ITEM_MAX - 4} wood, 12 walked over: 4 go in, 8 stay on the ground (the same item, count 8)`,
+			`${t.save.invenEtc[23]}, ${t.world.items.length} item(s), count ${it.count}`,
+		);
+		const got = t.sim.items.pickup(t.save, 1000, 1000, it);
+		check(!got.ok && got.why === "full", "a pickup of a full item is refused with why 'full' (E answers the same)");
+		t.run(1);
+		check(it.count === 8 && t.world.items.length === 1, "and the walk-over leaves it alone (no retry loop)");
+		// the ammunition's own ceiling
+		const u = server();
+		u.save.ammoShotgun = LIM.AMMO_MAX - 3;
+		W.spawnGroundItem(u.world, ItemKind.Etc, 45, 8, 1004, 1000);
+		u.run(1);
+		check(
+			u.save.ammoShotgun === LIM.AMMO_MAX && u.world.items[0]?.count === 5,
+			`shells: the ammunition's ceiling (${LIM.AMMO_MAX}), 3 of 8 in, 5 stay`,
+		);
+		// a partial take is a count on the same id, told to every client that saw the item (no new message)
+		const world = W.serverWorld(W.createWorld(4000, 4000));
+		const out = new WorldOut();
+		const items = new ServerItems({ world, out });
+		items.watch([{ x: 1000, y: 1000 }], [0]);
+		const pile = W.spawnGroundItem(world, ItemKind.Etc, 23, 10, 1004, 1000);
+		const s2 = bareSave();
+		s2.invenEtc[23] = LIM.ITEM_MAX - 6;
+		const pending = [];
+		out.take(pending);
+		items.pickup(s2, 1000, 1000, pile);
+		out.take(pending);
+		const re = pending.filter(p => p.ev.t === P.WorldEv.ItemAdd && p.ev.id === pile.id);
+		check(
+			re.length === 1 && re[0].ev.count === 4 && re[0].slot === 0,
+			"the rest of a partial take is re-announced as an ItemAdd of the same id with the new count",
+		);
+	}
+	// 9. the prompt names the item and the count, marks the one E takes, and says full at the ceiling
+	{
+		const world = W.createWorld(4000, 4000);
+		const save = bareSave();
+		const player = Ply.createPlayer(save, 1000, 1000);
+		const refs = {
+			world,
+			players: [player],
+			player,
+			save,
+			zombies: [],
+			pendingPlace: -1,
+			fx: [],
+			daynight: { day: 1, dayTime: 12 },
+		};
+		const shells = W.spawnGroundItem(world, ItemKind.Etc, 45, 8, 1030, 1000);
+		const hint = CInter.interactHint(refs);
+		check(
+			hint === "E: Pick up Shotgun ammo ×8" && CInter.hintedItem() === shells.id,
+			`the prompt names the item and the count, and the item it names is the one marked (${hint})`,
+		);
+		save.ammoShotgun = SAVE.SAVE_LIMITS.AMMO_MAX;
+		const full = CInter.interactHint(refs);
+		check(
+			full === `Shotgun ammo full (${SAVE.SAVE_LIMITS.AMMO_MAX})` && CInter.hintedItem() === -1,
+			`at the ceiling the prompt says so, is not an "E:" action, and marks nothing (${full})`,
+		);
+		check(
+			inLang("Pick up") &&
+				inLang("full") &&
+				inLang("Pick something up") &&
+				inLang("Walk over food, ammo and materials. For weapons and gear, press use."),
+			"the prompt's words and the lesson are in lang.ts (UI-03)",
+		);
+		const lesson = source("client/onboarding/objectives.ts");
+		check(
+			/hint: "Walk over food, ammo and materials\. For weapons and gear, press use\."/.test(lesson) &&
+				!/Walk over loot on the ground/.test(lesson),
+			"the lesson says what the game does: supplies are walked over, weapons and gear take use (was 'Walk over loot')",
+		);
+	}
+	// 10. offline, the client's own world walks up by the same rule
+	{
+		const world = W.createWorld(4000, 4000);
+		const save = bareSave();
+		const player = Ply.createPlayer(save, 1000, 1000);
+		const refs = {
+			world,
+			players: [player],
+			player,
+			save,
+			zombies: [],
+			pendingPlace: -1,
+			fx: [],
+			daynight: { day: 1, dayTime: 12, isNight: false },
+			fxQueue: [],
+		};
+		const inter = new CInter.Interaction();
+		const notes = [];
+		PK.takePickupNotes(notes);
+		notes.length = 0;
+		W.spawnGroundItem(world, ItemKind.Etc, 44, 12, 1006, 1000);
+		W.spawnGroundItem(world, ItemKind.Weapon, 10, 1, 1004, 1004);
+		const before = PK.pickupCount();
+		for (let i = 0; i < 8; i++) inter.update(refs, DELAY / 10);
+		const early = save.ammoNormal;
+		for (let i = 0; i < 30; i++) inter.update(refs, 1 / 30);
+		PK.takePickupNotes(notes);
+		check(
+			early === bareSave().ammoNormal &&
+				save.ammoNormal === bareSave().ammoNormal + 12 &&
+				world.items.length === 1 &&
+				world.items[0].kind === ItemKind.Weapon,
+			"offline: the rounds under the body are walked up after the delay, the pistol stays for E",
+		);
+		check(
+			PK.pickupCount() === before + 1 && notes.length === 1 && notes[0].count === 12 && notes[0].itemId === 44,
+			"...one pickup heard (the sound, the lesson) and one feedback line: +12 of the rounds",
+			JSON.stringify(notes),
+		);
+	}
+	// 11. with a server: whose pickup it was, and how many went in -- by the two bags, not by what lay there
+	{
+		const Mirror = require(join(SRC, "client/net/worldMirror.ts"));
+		const world = W.createWorld(4000, 4000);
+		Mirror.forgetMirrorIndex();
+		const hadOs = globalThis.os;
+		let t = 9000;
+		globalThis.os = { ...hadOs, clock: () => t };
+		const add = (id, kind, itemId, count, x, y) =>
+			Mirror.applyMirrorEvent(world, { t: P.WorldEv.ItemAdd, id, kind, itemId, count, x, y, vx: 0, vy: 0 });
+		const remove = id => Mirror.applyMirrorEvent(world, { t: P.WorldEv.ItemRemove, id });
+		const bag = (etc23, ammo0) => {
+			const s = bareSave();
+			s.invenEtc[23] = etc23;
+			s.ammoNormal = ammo0;
+			return SAVE.bagOf(s, -1, 0, 0);
+		};
+		const notes = [];
+		PK.takePickupNotes(notes);
+		const heard = fn => {
+			notes.length = 0;
+			const n0 = PK.pickupCount();
+			fn();
+			PK.takePickupNotes(notes);
+			return PK.pickupCount() - n0;
+		};
+		PK.survivorAt(2000, 2000);
+		const b0 = bag(0, 0);
+		const walked = heard(() => {
+			add(71, ItemKind.Etc, 23, 3, 2006, 2000);
+			t += 0.6;
+			remove(71);
+			t += 0.1;
+			PK.bagGrew(b0, bag(3, 0));
+		});
+		check(
+			walked === 1 && notes.length === 1 && notes[0].count === 3 && notes[0].itemId === 23,
+			"a supply under my feet leaves the world and my bag grows by it: one pickup, '+3 Wood'",
+			JSON.stringify(notes),
+		);
+		t += 5;
+		const allys = heard(() => {
+			add(72, ItemKind.Etc, 23, 3, 2006, 2000);
+			remove(72);
+			PK.bagGrew(b0, bag(0, 12));
+		});
+		check(
+			allys === 0 && notes.length === 0,
+			"an ally walks up the wood by me while my bag grows in rounds: not mine",
+		);
+		t += 5;
+		const weapon = heard(() => {
+			add(73, ItemKind.Weapon, 10, 1, 2004, 2000);
+			remove(73);
+			PK.bagGrew();
+		});
+		check(
+			weapon === 0,
+			"a weapon that leaves the world by me without my E press is somebody else's (no walk-over)",
+		);
+		t += 5;
+		const partial = heard(() => {
+			add(74, ItemKind.Etc, 23, 10, 2006, 2000);
+			add(74, ItemKind.Etc, 23, 6, 2006, 2000);
+			PK.bagGrew(b0, bag(4, 0));
+		});
+		check(
+			partial === 1 && notes[0]?.count === 4,
+			"a partial take (the ceiling: the count drops on the same id) is heard with what went in, '+4'",
+			JSON.stringify(notes),
+		);
+		t += 5;
+		const far = heard(() => {
+			add(75, ItemKind.Etc, 23, 3, 2600, 2000);
+			remove(75);
+			PK.bagGrew(b0, bag(3, 0));
+		});
+		check(far === 0, "a supply that left the world 600 u from me is not mine, whatever my bag did");
+		globalThis.os = hadOs;
+	}
 });
 
 // ---------------------------------------------------------------- verdict

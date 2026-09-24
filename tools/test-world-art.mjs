@@ -51,6 +51,11 @@
  *      their pets, 300 frames -- flat against art: sprites, Instances, property writes, time, and no churn.
  *  11. THE INTERIORS (EDI-04, ART-12). With every roof on, nothing of any interior is drawn; walking in and out of
  *      the largest building creates no Instance; its sprites inside and the writes of a walk across it (printed).
+ *  12. THE GROUND ITEMS (ITM-06, client/view/groundItemsView.ts). An item of every kind on each of 18 grounds, flat and
+ *      with the icons' atlas, rasterised: by day and in the survivor's light every icon steps 3:1 or 35 ΔE off its
+ *      ground, and on every ground the weakest icon reads at least as well as the weakest flat look it replaces; out
+ *      of every light no item steps more than 1.5:1 off its ground (nothing glows), and every sprite of the view is
+ *      under the night. The pictures: node tools/render-ground-items.mjs --out <dir>.
  *
  * Pure Node (>= 18) + the project's TypeScript on tools/luau-shim.mjs and the fake GUI tree of tools/fake-gui.mjs.
  */
@@ -1938,6 +1943,261 @@ section("11) interiors: nothing under a closed roof is drawn, walking in and out
 		);
 	}
 	setArt({});
+}
+
+section("12) ground items (ITM-06): every item on every ground, by day, in the survivor's light and in the dark");
+{
+	const { GroundItemsView } = require(join(SRC, "client/view/groundItemsView.ts"));
+	const WHITE = COLORS.white;
+	const rgb3 = (r, g, b) => Color3.fromRGB(r, g, b);
+	/** every ground an item lands on: client/view/worldView.ts's colour, texture and tint for it */
+	const GROUNDS = [
+		["grass", COLORS.grass, "grass"],
+		["long grass", COLORS.grass, "grassLong"],
+		["park grass", COLORS.parkGrass, "grass", rgb3(228, 246, 231)],
+		["asphalt", COLORS.road, "asphalt"],
+		["parking lot", COLORS.road.Lerp(COLORS.sidewalk, 0.14), "asphaltLot"],
+		["sidewalk", COLORS.sidewalk, "concrete"],
+		["plaza pavers", COLORS.sidewalk.Lerp(WHITE, 0.1), "plaza"],
+		["walk pavers", COLORS.sidewalk.Lerp(WHITE, 0.16), "pavers"],
+		["gas apron", COLORS.sidewalk.Lerp(COLORS.road, 0.3), "apron"],
+		["dirt path", COLORS.dirtPath, "dirt", rgb3(211, 198, 172)],
+		["playground", COLORS.dirtPath.Lerp(WHITE, 0.25), "dirt"],
+		["wood floor", COLORS.floorWood, "floorWood"],
+		["tile floor", COLORS.floorTile, "floorTile"],
+		["shop floor", COLORS.floorShop, "floorShop"],
+		["carpet", COLORS.floorCarpet, "floorCarpet"],
+		["kitchen", COLORS.floorKitchen, "floorKitchen"],
+		["bathroom", COLORS.floorBath, "floorBath"],
+		["back room", COLORS.floorConcrete, "concrete", rgb3(214, 214, 212)],
+	];
+	/** an item of every kind that lies on the ground: weapons, gear, ammunition, oil, food, medicine, materials, kits */
+	const ITEMS = [
+		[1, 0, "Dagger"],
+		[1, 2, "Axe"],
+		[1, 6, "Bat"],
+		[1, 10, "Pistol"],
+		[1, 14, "AK-40"],
+		[1, 16, "Shotgun"],
+		[1, 22, "Bow"],
+		[1, 25, "Flamethrower"],
+		[2, 4, "Steel armor"],
+		[2, 13, "Flashlight"],
+		[2, 14, "Robot suit"],
+		[4, 44, "Ammo"],
+		[4, 45, "Shells"],
+		[4, 47, "Arrows"],
+		[4, 48, "Oil"],
+		[3, 12, "Bandage"],
+		[3, 5, "First aid"],
+		[3, 17, "Apple"],
+		[3, 9, "Canned"],
+		[3, 0, "Raw meat"],
+		[3, 19, "Rotten meat"],
+		[4, 23, "Wood"],
+		[4, 24, "Stone"],
+		[4, 26, "Steel"],
+		[4, 34, "Cloth"],
+		[4, 41, "Leather"],
+		[4, 33, "Gunpowder"],
+		[4, 30, "Parts"],
+		[4, 14, "Campfire kit"],
+		[4, 36, "Voltage circuit"],
+	];
+	const lin = c => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+	const lum = ([r, g, b]) => 0.2126 * lin(r / 255) + 0.7152 * lin(g / 255) + 0.0722 * lin(b / 255);
+	const ratio = (a, b) => (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
+	const S = 64;
+	/** one item (or none) on one ground, rasterised: 64 x 64 px at zoom 1 */
+	const shot = (ground, art, night, lit, item) => {
+		const root = gui.make("Frame");
+		const r = new Renderer(root, "Sprites");
+		r.setView(S, S);
+		const dark = gui.make("Frame");
+		dark.Parent = root;
+		dark.BackgroundTransparency = 1;
+		const cam = new Camera();
+		cam.setView(S, S);
+		cam.x = 5000;
+		cam.y = 5000;
+		const view = new GroundItemsView(shadowFn(night, 5000, 4900));
+		view.reduceMotion = true;
+		r.beginFrame();
+		const id = art ? WA.artId(ground[2]) : undefined;
+		if (id !== undefined) {
+			const sz = WA.artSize(ground[2]);
+			r.drawRect(cam, 5000, 5000, {
+				w: 400,
+				h: 400,
+				zIndex: Z.ground,
+				image: id,
+				imageTint: ground[3],
+				scaleType: "tile",
+				tileW: sz.w * 4,
+				tileH: sz.h * 4,
+			});
+		} else r.drawRect(cam, 5000, 5000, { w: 400, h: 400, color: ground[1], zIndex: Z.ground });
+		if (item !== undefined) {
+			view.draw(
+				r,
+				cam,
+				cam.viewRect(32),
+				[{ id: 77, kind: item[0], itemId: item[1], count: 1, x: 5000, y: 5000, vx: 0, vy: 0 }],
+				1.3,
+				0,
+			);
+		}
+		r.endFrame();
+		if (night) {
+			const lm = new LightMap(dark, COLORS.overlayNight);
+			lm.update(cam, darkAlphaAt(22, false, false), lit ? [{ x: 5000, y: 5000, r: 250, inner: 0.4 }] : []);
+		}
+		return rasterise({ layer: r.layer, dark, vw: S, vh: S }, COLORS.bg, localImage);
+	};
+	/** the item's strongest step against the ground under it: WCAG ratio and ΔE, over the pixels the item changed */
+	const step = (a, b) => {
+		let best = 1;
+		let e = 0;
+		for (let i = 0; i < a.w * a.h; i++) {
+			const p = [a.data[i * 4], a.data[i * 4 + 1], a.data[i * 4 + 2]];
+			const q = [b.data[i * 4], b.data[i * 4 + 1], b.data[i * 4 + 2]];
+			if (p[0] === q[0] && p[1] === q[1] && p[2] === q[2]) continue;
+			best = Math.max(best, ratio(p, q));
+			e = Math.max(e, dE(p, q));
+		}
+		return { ratio: best, dE: e };
+	};
+	const results = {};
+	for (const art of [false, true]) {
+		setArt(art ? { ...ALL.ids } : {});
+		for (const [mode, night, lit] of [
+			["day", false, false],
+			["22:00 in the light", true, true],
+			["22:00 in the dark", true, false],
+		]) {
+			for (const g of GROUNDS) {
+				const base = shot(g, art, night, lit, undefined);
+				const row = ITEMS.map(it => ({ it, ...step(shot(g, art, night, lit, it), base) }));
+				results[`${art ? "art" : "flat"}|${mode}|${g[0]}`] = row;
+			}
+		}
+	}
+	setArt({});
+	const worst = (art, mode, key) => {
+		let w;
+		for (const g of GROUNDS) {
+			for (const x of results[`${art}|${mode}|${g[0]}`]) {
+				if (w === undefined || x[key] < w[key]) w = { ...x, ground: g[0] };
+			}
+		}
+		return w;
+	};
+	const name = w => `${w.it[2]} on ${w.ground}`;
+	// LEG-03 for loot: every item reads on every ground -- a step of 3:1 (WCAG 1.4.11, the awareness marks' bar) or,
+	// where a brown hide on grey asphalt is close in lightness, of 35 ΔE (the survivor's floor, LEG-03)
+	const readable = x => x.ratio >= 3 || x.dE >= 35;
+	for (const mode of ["day", "22:00 in the light"]) {
+		const bad = [];
+		for (const g of GROUNDS)
+			for (const x of results[`art|${mode}|${g[0]}`])
+				if (!readable(x)) bad.push(`${x.it[2]} on ${g[0]} ${x.ratio.toFixed(2)}:1 ${x.dE.toFixed(0)} ΔE`);
+		const wr = worst("art", mode, "ratio");
+		const we = worst("art", mode, "dE");
+		check(
+			bad.length === 0,
+			`with the icons, ${mode}: all ${ITEMS.length} items on all ${GROUNDS.length} grounds step ≥ 3:1 or ≥ 35 ΔE off the ground`,
+			bad.length > 0
+				? bad.slice(0, 4).join("; ")
+				: `weakest ${wr.ratio.toFixed(2)}:1 (${name(wr)}), ${we.dE.toFixed(1)} ΔE (${name(we)})`,
+		);
+	}
+	// better than the flat looks they replace: the weakest item of each ground reads at least as well
+	{
+		const worse = [];
+		for (const g of GROUNDS) {
+			const flat = Math.min(...results[`flat|day|${g[0]}`].map(x => x.dE));
+			const icon = Math.min(...results[`art|day|${g[0]}`].map(x => x.dE));
+			if (icon < flat) worse.push(`${g[0]} ${icon.toFixed(1)} < ${flat.toFixed(1)}`);
+		}
+		const f = worst("flat", "day", "dE");
+		const a = worst("art", "day", "dE");
+		const fr = worst("flat", "day", "ratio");
+		const ar = worst("art", "day", "ratio");
+		check(
+			worse.length === 0,
+			"on every ground the weakest icon reads at least as well as the weakest flat look (ΔE)",
+			worse.length > 0
+				? worse.join("; ")
+				: `weakest flat ${f.dE.toFixed(1)} ΔE / ${fr.ratio.toFixed(2)}:1 → icons ${a.dE.toFixed(1)} ΔE / ${ar.ratio.toFixed(2)}:1`,
+		);
+	}
+	// in the survivor's light an item reads as it does by day (the light's core is full light)
+	{
+		let off = 0;
+		for (const g of GROUNDS) {
+			const day = results[`art|day|${g[0]}`];
+			const lit = results[`art|22:00 in the light|${g[0]}`];
+			for (let i = 0; i < day.length; i++) off = Math.max(off, Math.abs(day[i].ratio - lit[i].ratio));
+		}
+		check(
+			off < 0.05,
+			"at 22:00 in the survivor's light every item reads as it does by day",
+			`largest difference ${off.toFixed(3)}`,
+		);
+	}
+	// out of every light, no item glows: it is as dark as the ground it lies on (LUZ-02)
+	for (const art of ["flat", "art"]) {
+		let most = { ratio: 0 };
+		for (const g of GROUNDS) {
+			for (const x of results[`${art}|22:00 in the dark|${g[0]}`])
+				if (x.ratio > most.ratio) most = { ...x, ground: g[0] };
+		}
+		check(
+			most.ratio < 1.5,
+			`${art === "art" ? "with the icons" : "flat"}, 22:00 out of every light: no item steps more than 1.5:1 off its ground (nothing glows)`,
+			`the most: ${most.ratio.toFixed(2)}:1 (${name(most)})`,
+		);
+	}
+	// every sprite of the view is under the night (the dark layer): what is not lit is not seen
+	{
+		const root = gui.make("Frame");
+		const r = new Renderer(root, "Sprites");
+		r.setView(200, 200);
+		const cam = new Camera();
+		cam.setView(200, 200);
+		cam.x = 1000;
+		cam.y = 1000;
+		const view = new GroundItemsView(shadowFn(false));
+		view.target = 1;
+		const zs = [];
+		const draw = r.drawRect.bind(r);
+		r.drawRect = (c, x, y, o) => {
+			zs.push(o.zIndex ?? 1);
+			return draw(c, x, y, o);
+		};
+		setArt({ ...ALL.ids });
+		for (const t of [0, 0.3, 1.3]) {
+			r.beginFrame();
+			view.draw(
+				r,
+				cam,
+				cam.viewRect(32),
+				[
+					{ id: 1, kind: 1, itemId: 25, count: 1, x: 1000, y: 1000, vx: 30, vy: 0 },
+					{ id: 2, kind: 4, itemId: 23, count: 1, x: 1040, y: 1000, vx: 0, vy: 0 },
+				],
+				t,
+				1 / 60,
+			);
+			r.endFrame();
+		}
+		setArt({});
+		check(
+			zs.length > 0 && Math.max(...zs) < Z.effect,
+			`every sprite of a ground item -- icon, shadow, ring, glint, the target's brackets -- is under the night (ZIndex < ${Z.effect})`,
+			`highest ${Math.max(...zs)}`,
+		);
+	}
 }
 
 console.log(failures === 0 ? "\nworld-art: all checks passed" : `\nworld-art: ${failures} FAILED`);

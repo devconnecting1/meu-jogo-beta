@@ -719,6 +719,14 @@ export const LANG_TABLE: Array<string> = [
 	"Launch drone",
 	"Call back drone",
 	"Drone charging",
+	// the ground items (client/systems/interaction.ts, client/ui/pickupToast.ts, DESIGN_RULES ITM-06): the prompt
+	// ("E: Pick up Shotgun ammo ×8"), an item the save already holds as many of as it can keep ("Wood full (9999)"),
+	// and the lesson that teaches the two ways -- walked up for supplies, E for weapons and gear. The feedback line is
+	// a number and an item's name ("+12 Wood"), both already here
+	"Pick up",
+	"full",
+	"Pick something up",
+	"Walk over food, ammo and materials. For weapons and gear, press use.",
 ];
 
 /**

@@ -43,7 +43,7 @@ import { TickAccumulator } from "./heartbeat";
 import { ServerCombat } from "./combat";
 import { BackpackOutcome, ServerCraft } from "./craft";
 import { InteractOutcome, ServerInteraction } from "./interaction";
-import { ServerItems } from "./items";
+import { PickupResult, ServerItems, WalkingSurvivor } from "./items";
 import { KEEP_AFTER_LEAVE_S } from "./life";
 import { DayCredit, DayRefusal, Progress, creditDaySurvived, dayRefusal, survivedNight } from "./progress";
 import { TitleId } from "shared/data/titles";
@@ -244,8 +244,18 @@ export class ServerSimulation {
 	turrets?: ServerTurrets;
 	/** reliable world deltas produced this tick; server/net/replication.ts drains it (§4.5) */
 	readonly worldOut = new WorldOut();
-	/** the result of a survivor's action press, for the caller's sounds and toasts */
+	/**
+	 * the result of a survivor's action press, for the caller's sounds and toasts -- and of a supply walked up
+	 * (ITM-06: `ServerItems.walkOver`), which is the press's `item` outcome without the press
+	 */
 	onInteract?: (sp: ServerPlayer, outcome: InteractOutcome) => void;
+	/** the walk-over's report, bound once (a closure per tick would be garbage): the same `item` outcome as E's */
+	private readonly walkTaken = (who: WalkingSurvivor, got: PickupResult): void => {
+		const sp = this.bySlot.get(who.slot);
+		if (sp !== undefined && got.ok && this.onInteract !== undefined) {
+			this.onInteract(sp, { kind: "item", count: got.count });
+		}
+	};
 	/** the result of a backpack intent (craft, use, equip, learn, switch), or of a pack delivered on the server */
 	onBackpack?: (sp: ServerPlayer, outcome: BackpackOutcome) => void;
 	/**
@@ -1123,6 +1133,8 @@ export class ServerSimulation {
 		this.power?.step(this.tickDt, this.tick);
 		if (this.roster.size() === 0) return;
 		items.rollNearby(this.bodies, gameHours(this.clock.day, this.clock.dayTime), this.tickDt);
+		// ITM-06: the supplies under each survivor's body, by the E press's own checks; the save is dirty as after one
+		items.walkOver(this.roster, this.tickDt, this.walkTaken);
 		items.sweepInterest(this.tickDt);
 		this.interaction?.step(this.bodies, this.bodySlots, this.tickDt);
 	}

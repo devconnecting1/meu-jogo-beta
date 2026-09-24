@@ -37,7 +37,12 @@ const { SRC, require } = installShims({ seed: 1 });
 const { installFakeGui } = await import("./fake-gui.mjs");
 const gui = installFakeGui();
 
-const OUT = resolve(opt("out") ?? join(ROOT, "docs", "art", "ground-items"));
+if (opt("out") === undefined) {
+	console.error("usage: node tools/render-ground-items.mjs --out <dir> [--src <checkout>/src] [--art <dir>]");
+	process.exit(2);
+}
+// (docs/art/ground-items keeps a chosen few of these, before and after: DESIGN_RULES ITM-06)
+const OUT = resolve(opt("out"));
 const ART_DIR = resolve(opt("art") ?? join(ROOT, "design", "world-art"));
 mkdirSync(OUT, { recursive: true });
 
@@ -226,17 +231,6 @@ function canvas(w, h, rgb = [24, 24, 28]) {
 		img.data[i * 4 + 3] = 255;
 	}
 	return img;
-}
-
-function upscale(img, k) {
-	const out = { w: img.w * k, h: img.h * k, data: Buffer.alloc(img.w * k * img.h * k * 4) };
-	for (let y = 0; y < out.h; y++) {
-		for (let x = 0; x < out.w; x++) {
-			const s = (Math.floor(y / k) * img.w + Math.floor(x / k)) * 4;
-			img.data.copy(out.data, (y * out.w + x) * 4, s, s + 4);
-		}
-	}
-	return out;
 }
 
 function save(name, img) {

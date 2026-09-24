@@ -722,7 +722,9 @@ export class GameLoop {
 		town.clock = this.clock;
 		town.drawGround(renderer, cam, view, this.world);
 		this.drawDecals(renderer, cam, view);
-		this.groundItems.draw(renderer, cam, view, this.world.items, this.clock);
+		const items = this.groundItems;
+		items.reduceMotion = reducedMotion();
+		items.draw(renderer, cam, view, this.world.items, this.clock, this.lastDt);
 		this.machines.learn(this.world, this.fxView.shotLines(), this.clock, netServerSeconds(), this.lastDt);
 		town.drawSolids(renderer, cam, view, this.world);
 		this.machines.drawAir(
@@ -905,6 +907,14 @@ export class GameLoop {
 		this.chat?.hide();
 		this.awareness?.hide();
 		ctx.darkLayer.BackgroundTransparency = 1;
+	}
+
+	/**
+	 * The ground item the E press would take now (client/systems/interaction.ts `hintedItem`, -1 for none): the one
+	 * that wears the brackets (ITM-06). client/main.client.ts sets it with the "E: …" hint, under the same conditions.
+	 */
+	setItemTarget(id: number): void {
+		this.groundItems.target = id;
 	}
 
 	getRefs(): GameRefs {

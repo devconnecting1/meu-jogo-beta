@@ -1,12 +1,33 @@
 /*
- * Ground items: what lies in the street to be picked up (moved out of client/gameLoop.ts so a Node tool can draw it:
- * tools/render-ground-items.mjs).
+ * Ground items: what lies in the street to be picked up (docs/DESIGN_RULES.md ITM-06). Drawn by
+ * client/gameLoop.ts every frame, and by tools/render-ground-items.mjs onto every ground for the pictures.
  *
- * Ground items lie flat where they fell (no floating bob), turned a little, with a short shadow cast like every other
- * object's. Each category has its own silhouette (see ITEM_LOOKS); a brief glint every few seconds marks them as loot.
- * The glint's two sprites exist only while it flashes: its ZIndex is its own bucket in the renderer's pool (one
- * sub-pool per ZIndex), so one appearing or going moves no other sprite. It used to be drawn transparent between
- * flashes to keep a single pool's order stable -- two sprites per item on screen, about 83 % of the time for nothing.
+ * What an item looks like on the ground:
+ *   - WITH the item icons' atlas (it has an asset id): the item's own pixel icon, the very picture the Bag, the item
+ *     card and the hotbar show (UI-11), upright (a turned Pixelated image is a staircase of diamonds, ART-08), at
+ *     ICON_TEXEL units per icon pixel -- 32 u for the 16 x 16 cell, the size the flat looks below always had (a
+ *     pistol 24 u, a rifle 30 u; at the town's 4 u per texel an apple would be as wide as the survivor, ESC-01). The
+ *     drawn box is centred on the item, not the grid (the Bag's fit "drawn"). Its drop shadow is the same cell tinted
+ *     black, one icon pixel along the light: a silhouette, the 1-pixel dark outline every icon already has doubled on
+ *     one side, which is what lifts it off a pale floor (LEG-03). 2 sprites an item.
+ *   - WITHOUT it (no id, or the atlas failed to load: client/view/worldArt.ts): the flat looks of before -- one
+ *     silhouette per category, turned a little, with its short shadow (ART-01: no id, nothing changes).
+ * And in both, what the item is FOR (shared/sim/pickupRule.ts groundTier):
+ *   - a weapon or equipment (taken with E) lies on a faint pale ring, a boss's trophy or a golden weapon on a gold
+ *     one (the Gold bar's colour, not LEG-02's electric yellow); a supply (walked up) has none: a street of wood reads
+ *     as a street, not as a row of targets;
+ *   - the glint: every GLINT_PERIOD for gear, a smaller one half as often for supplies; none with Reduce Motion;
+ *   - the item E would take (`target`, the same query the hint and the server run) wears four corner brackets, and
+ *     only that one: with three items in reach, the one the next press takes is the one marked;
+ *   - several items on one spot (a boss's trophies, a zombie's drop on another's) fan out on a ring round it, evenly,
+ *     in the order they fell -- drawn apart, lying where they lie (the pickup reach is measured where they LIE);
+ *   - a drop (an item first seen sliding) hops twice as it lands; with Reduce Motion it just slides.
+ * Everything is under the night (Z below the dark layer): an item is as lit as the ground it lies on, and in the dark
+ * only the survivor's light (250 u, always over the 40 u reach) shows it -- loot never glows through the night.
+ *
+ * The glint's and the brackets' sprites exist only while shown: each ZIndex is its own bucket in the renderer's pool
+ * (one sub-pool per ZIndex), so one appearing or going moves no other sprite. Nothing here creates an Instance once
+ * the pool has grown to the busiest screen (npm run test:pool).
  */
 import { COLORS, Z } from "shared/engine/colors";
 import { Camera, ViewRect } from "shared/engine/camera";
@@ -15,8 +36,12 @@ import { ItemKind, WeaponKind } from "shared/data/kinds";
 import { EQUIPS } from "shared/data/equips";
 import { USABLES } from "shared/data/usables";
 import { isChoppingTool, WEAPONS } from "shared/data/weapons";
+import { ITEM_ICONS, iconOf } from "shared/data/itemIcons";
 import type { GroundItem } from "shared/game/world";
+import { groundTier, GroundTier } from "shared/sim/pickupRule";
+import { ICON_ATLAS_CELLS } from "../ui/itemIconAtlas";
 import { circleInView, part } from "./drawKit";
+import { artId } from "./worldArt";
 import type { ShadowFn } from "./worldView";
 
 const WHITE = COLORS.white;
@@ -223,64 +248,422 @@ function itemLook(kind: number, id: number): ItemLook {
 const ITEM_SHADOW_O: SpriteOpts = { color: BLACK, alpha: 0.3, zIndex: Z.actorShadow };
 const ITEM_PIECE_O: SpriteOpts = { strokeThickness: 1, strokeAlpha: 0.75 };
 const GLINT_O: SpriteOpts = { color: WHITE, zIndex: Z.item + 4 };
+/** the icon and its silhouette shadow: one cell of the atlas each */
+const ICON_O: SpriteOpts = { zIndex: Z.item, pixelated: true };
+const ICON_SHADOW_O: SpriteOpts = { zIndex: Z.actorShadow, pixelated: true, imageTint: BLACK };
+/** the tier's ring: a dark band under a thin light line, both only strokes (the ground shows through) */
+const RING_DARK_O: SpriteOpts = { circle: true, alpha: 0, stroke: BLACK, zIndex: Z.actorShadow + 1 };
+const RING_LIGHT_O: SpriteOpts = { circle: true, alpha: 0, zIndex: Z.actorShadow + 1 };
+/**
+ * The target's corner brackets: light bars with a dark edge, over the survivor (an item in reach lies under the body
+ * as often as not, and what E takes must always be seen) and under the night like the item itself.
+ */
+const BRACKET_O: SpriteOpts = {
+	color: WHITE,
+	stroke: BLACK,
+	strokeThickness: 1,
+	strokeAlpha: 0.85,
+	zIndex: Z.player + 3,
+};
 
-/** how far a dropped item lies turned from the world axes (radians), fixed per item */
+/** how far a dropped item lies turned from the world axes (radians), fixed per item (the flat looks only) */
 const ITEM_TILT = 0.55;
+/** units of the world per pixel of an item's icon: the 16 x 16 cell is 32 u, the flat looks' size */
+export const ICON_TEXEL = 2;
 /** the glint that marks loot: once every period (s), lasting `len` (s), per item out of phase */
 const GLINT_PERIOD = 2.6;
 const GLINT_LEN = 0.45;
 const GLINT_ARM = 14;
+/** a supply's glint: half as often, and smaller */
+const GLINT_PERIOD_SUPPLY = GLINT_PERIOD * 2;
+const GLINT_ARM_SUPPLY = 8;
+/** the rings: pale for gear (taken with E), gold for a trophy (the Gold bar's colour, never LEG-02's yellow) */
+const RING_GEAR = WHITE;
+const RING_RARE = COLORS.uiAccent;
+const RING_ALPHA = 0.55;
+const RING_PAD = 4;
+/**
+ * Items closer than PILE_R to another lie in a pile, and fan out in a ring around where they lie, evenly, in the order
+ * they fell (by id): PILE_SPREAD units out for two, PILE_STEP more for each one past two, up to PILE_SPREAD_MAX --
+ * six trophies sit 33 u out, 33 u apart: an icon each, none under another.
+ */
+export const PILE_R = 12;
+export const PILE_SPREAD = 15;
+const PILE_STEP = 4.5;
+const PILE_SPREAD_MAX = 36;
+/** past this many items on screen the pile check stops (it is pairwise): a farm's floor draws, just unfanned */
+const PILE_CHECK_MAX = 64;
+/** where the first of a pile goes on its ring (up and a little left: the rest follow clockwise) */
+const PILE_START = -math.pi * 0.62;
+/** a drop's two hops: how long each lasts (s) and how high it goes (units, drawn up the screen) */
+const HOP_T1 = 0.26;
+const HOP_T2 = 0.14;
+const HOP_H1 = 7;
+const HOP_H2 = 2;
+/** the target's brackets: arm length and thickness, the gap round the drawn box, and their breath */
+const BRACKET_ARM = 6;
+const BRACKET_W = 2;
+const BRACKET_GAP = 4;
+const BRACKET_BREATH = 1.5;
+/** the four corners, as signs (a literal in the loop would be two tables a frame) */
+const SIGNS = [-1, 1];
+
+/** an icon on the ground: its atlas cell, where the drawn box's centre is in the cell, and the box's size (units) */
+interface GroundIcon {
+	x: number;
+	y: number;
+	n: number;
+	/** from the item's position to the cell's centre (units): the drawn box lands centred on the item */
+	ox: number;
+	oy: number;
+	w: number;
+	h: number;
+}
+
+const icons = new Map<string, GroundIcon | false>();
+
+/** the icon of `key` on the ground, or false when the atlas has no cell for it (then the flat look draws) */
+function groundIcon(key: string): GroundIcon | false {
+	const known = icons.get(key);
+	if (known !== undefined) return known;
+	const cell = ICON_ATLAS_CELLS[key];
+	const rows = ITEM_ICONS[key];
+	if (cell === undefined || rows === undefined) {
+		icons.set(key, false);
+		return false;
+	}
+	const n = cell[2];
+	let x0 = n;
+	let y0 = n;
+	let x1 = 0;
+	let y1 = 0;
+	for (let y = 0; y < rows.size(); y++) {
+		const row = rows[y];
+		for (let x = 0; x < n; x++) {
+			if (row.sub(x + 1, x + 1) === ".") continue;
+			x0 = math.min(x0, x);
+			y0 = math.min(y0, y);
+			x1 = math.max(x1, x + 1);
+			y1 = math.max(y1, y + 1);
+		}
+	}
+	if (x1 <= x0) {
+		x0 = 0;
+		y0 = 0;
+		x1 = n;
+		y1 = n;
+	}
+	const g: GroundIcon = {
+		x: cell[0],
+		y: cell[1],
+		n,
+		ox: (n / 2 - (x0 + x1) / 2) * ICON_TEXEL,
+		oy: (n / 2 - (y0 + y1) / 2) * ICON_TEXEL,
+		w: (x1 - x0) * ICON_TEXEL,
+		h: (y1 - y0) * ICON_TEXEL,
+	};
+	icons.set(key, g);
+	return g;
+}
+
+/** per item (kind and id as one number): its icon on the ground, looked up once -- `iconOf` builds a table a call */
+const byItem = new Map<number, GroundIcon | false>();
+
+function groundIconOf(kind: number, id: number): GroundIcon | false {
+	const k = kind * 1000 + id;
+	const known = byItem.get(k);
+	if (known !== undefined) return known;
+	const g = groundIcon(iconOf(kind, id).key);
+	byItem.set(k, g);
+	return g;
+}
+
+/** how high a drop is `t` seconds after it appeared (0 once it has landed) */
+export function hopHeight(t: number): number {
+	if (t < 0) return 0;
+	if (t < HOP_T1) return HOP_H1 * math.sin((t / HOP_T1) * math.pi);
+	if (t < HOP_T1 + HOP_T2) return HOP_H2 * math.sin(((t - HOP_T1) / HOP_T2) * math.pi);
+	return 0;
+}
+
+/** the whole hop lasts this long (s) */
+export const HOP_TIME = HOP_T1 + HOP_T2;
 
 export class GroundItemsView {
+	/** the id of the item E would take now (shared/sim/interactQuery.ts), -1 for none: it alone wears the brackets */
+	target = -1;
+	/** the Reduce Motion setting (client/ui/skin.ts reducedMotion): no glint, no hop, brackets that do not breathe */
+	reduceMotion = false;
 	private readonly shadow: ShadowFn;
+	/** this frame's items in view, and where each is drawn (a pile fans out): scratch, refilled in place */
+	private readonly shown = new Array<GroundItem>();
+	private readonly drawX = new Array<number>();
+	private readonly drawY = new Array<number>();
+	/** per item of this frame: how many lie in its pile (1: alone), and how many of them fell before it */
+	private readonly piled = new Array<number>();
+	private readonly rank = new Array<number>();
+	/** per drop being drawn: seconds since it appeared, and the frame it was last drawn (to forget it once gone) */
+	private readonly hops = new Map<number, number>();
+	private readonly hopSeen = new Map<number, number>();
+	/** every item ever drawn, so an item that comes into view already at rest never hops (pruned with `hops`) */
+	private readonly seen = new Map<number, number>();
+	private frame = 0;
 
 	constructor(shadow: ShadowFn) {
 		this.shadow = shadow;
 	}
 
-	/** every item of `items` in view, at the loop's animation clock */
-	draw(r: Renderer, cam: Camera, v: ViewRect, items: ReadonlyArray<GroundItem>, clock: number): void {
+	/** every item of `items` in view, at the loop's animation clock; `dt` ages the drops' hops */
+	draw(r: Renderer, cam: Camera, v: ViewRect, items: ReadonlyArray<GroundItem>, clock: number, dt = 0): void {
+		this.frame += 1;
+		const atlas = artId("itemIcons");
+		const shown = this.shown;
+		shown.clear();
 		for (const it of items) {
-			if (!circleInView(it.x, it.y, 26, v)) continue;
-			const lk = itemLook(it.kind, it.itemId);
-			const a = (((it.id * 37) % 23) / 11 - 1) * ITEM_TILT;
-			const so = this.shadow(it.x, it.y, 4);
-			const sh = ITEM_SHADOW_O;
-			sh.w = lk.shadowW;
-			sh.h = lk.shadowH;
-			sh.cornerRadius = lk.shadowR;
-			part(r, cam, it.x + so.x, it.y + so.y, a, 0, 0, sh);
-			const ca = math.cos(a);
-			const sa = math.sin(a);
-			const o = ITEM_PIECE_O;
-			for (let i = 0; i < lk.parts.size(); i++) {
-				const pc = lk.parts[i];
-				o.w = pc.w;
-				o.h = pc.h;
-				// a piece may be turned inside the item (bow limbs, crate brace)
-				o.rotation = a + pc.rot;
-				o.color = pc.color;
-				o.circle = pc.r === CIRCLE;
-				o.cornerRadius = pc.r;
-				o.stroke = pc.edge ? LOOT_EDGE : undefined;
-				o.zIndex = Z.item + i;
-				r.drawRect(cam, it.x + ca * pc.f - sa * pc.l, it.y + sa * pc.f + ca * pc.l, o);
-			}
-			// glint: a small four-point sparkle at the item's upper-left, out of phase per item
-			const t = (clock + it.id * 0.61) % GLINT_PERIOD;
-			if (t >= GLINT_LEN) continue;
-			const s = math.sin((t / GLINT_LEN) * math.pi);
-			const gx = it.x - 10;
-			const gy = it.y - 11;
-			const arm = 3 + GLINT_ARM * s;
-			const g = GLINT_O;
-			g.w = arm;
-			g.h = 2;
-			g.alpha = 0.9 * s;
-			r.drawRect(cam, gx, gy, g);
-			g.w = 2;
-			g.h = arm;
-			r.drawRect(cam, gx, gy, g);
+			if (circleInView(it.x, it.y, 40, v)) shown.push(it);
 		}
+		this.fanPiles();
+		for (let i = 0; i < shown.size(); i++) {
+			const it = shown[i];
+			const hop = this.hopOf(it, dt);
+			const tier = groundTier(it.kind, it.itemId);
+			const icon = atlas !== undefined ? groundIconOf(it.kind, it.itemId) : false;
+			const x = this.drawX[i];
+			const y = this.drawY[i];
+			let halfW: number;
+			let halfH: number;
+			if (icon !== false && atlas !== undefined) {
+				this.drawIcon(r, cam, atlas, icon, it, x, y, hop);
+				halfW = icon.w / 2;
+				halfH = icon.h / 2;
+			} else {
+				const lk = itemLook(it.kind, it.itemId);
+				this.drawFlat(r, cam, lk, it, x, y, hop);
+				halfW = math.max(lk.shadowW, lk.shadowH) / 2;
+				halfH = halfW;
+			}
+			if (tier !== "supply") this.drawRing(r, cam, tier, x, y, halfW, halfH);
+			if (it.id === this.target) this.drawBrackets(r, cam, x, y - hop, halfW, halfH, clock);
+			if (!this.reduceMotion) this.drawGlint(r, cam, it, tier, x - halfW + 3, y - hop - halfH + 3, clock);
+		}
+		if (this.frame % 30 === 0) this.forget();
+	}
+
+	/**
+	 * Where each item of this frame is drawn: where it lies, or -- when others lie within PILE_R -- on a ring round it,
+	 * the wider the bigger the pile, its slot its place in the order they fell (the lower id first): the ring is split
+	 * evenly, so no icon lies on another, and it closes up as the pile is taken apart.
+	 */
+	private fanPiles(): void {
+		const shown = this.shown;
+		const n = shown.size();
+		const piled = this.piled;
+		const rank = this.rank;
+		for (let i = 0; i < n; i++) {
+			piled[i] = 1;
+			rank[i] = 0;
+		}
+		const m = math.min(n, PILE_CHECK_MAX);
+		for (let i = 1; i < m; i++) {
+			const a = shown[i];
+			for (let j = 0; j < i; j++) {
+				const b = shown[j];
+				const dx = a.x - b.x;
+				if (dx > PILE_R || dx < -PILE_R) continue;
+				const dy = a.y - b.y;
+				if (dy > PILE_R || dy < -PILE_R || dx * dx + dy * dy > PILE_R * PILE_R) continue;
+				piled[i] += 1;
+				piled[j] += 1;
+				if (a.id > b.id) rank[i] += 1;
+				else rank[j] += 1;
+			}
+		}
+		for (let i = 0; i < n; i++) {
+			const it = shown[i];
+			const k = piled[i];
+			if (k > 1) {
+				const a = PILE_START + (rank[i] / k) * math.pi * 2;
+				const spread = math.min(PILE_SPREAD_MAX, PILE_SPREAD + PILE_STEP * (k - 2));
+				this.drawX[i] = it.x + math.cos(a) * spread;
+				this.drawY[i] = it.y + math.sin(a) * spread;
+			} else {
+				this.drawX[i] = it.x;
+				this.drawY[i] = it.y;
+			}
+		}
+	}
+
+	/** how high this item is drawn this frame: a drop (first seen sliding) hops as it lands; nothing else moves */
+	private hopOf(it: GroundItem, dt: number): number {
+		const id = it.id;
+		if (!this.seen.has(id)) {
+			this.seen.set(id, this.frame);
+			if (!this.reduceMotion && (it.vx !== 0 || it.vy !== 0)) this.hops.set(id, 0);
+		} else {
+			this.seen.set(id, this.frame);
+		}
+		const t = this.hops.get(id);
+		if (t === undefined) return 0;
+		if (t >= HOP_TIME || this.reduceMotion) {
+			this.hops.delete(id);
+			return 0;
+		}
+		this.hops.set(id, t + dt);
+		this.hopSeen.set(id, this.frame);
+		return hopHeight(t);
+	}
+
+	/** drops the memory of items no longer drawn (taken, or out of view): every 30 frames, allocation-free */
+	private forget(): void {
+		const frame = this.frame;
+		for (const [id, at] of this.seen) {
+			if (frame - at > 30) this.seen.delete(id);
+		}
+		for (const [id, at] of this.hopSeen) {
+			if (frame - at > 30) {
+				this.hopSeen.delete(id);
+				this.hops.delete(id);
+			}
+		}
+	}
+
+	private drawIcon(
+		r: Renderer,
+		cam: Camera,
+		atlas: string,
+		g: GroundIcon,
+		it: GroundItem,
+		x: number,
+		y: number,
+		hop: number,
+	): void {
+		const side = g.n * ICON_TEXEL;
+		// the shadow: the same cell in black, one icon pixel along the light, and further while the drop is up
+		const so = this.shadow(it.x, it.y, ICON_TEXEL + hop * 0.5);
+		const sh = ICON_SHADOW_O;
+		sh.image = atlas;
+		sh.rectX = g.x;
+		sh.rectY = g.y;
+		sh.rectW = g.n;
+		sh.rectH = g.n;
+		sh.w = side;
+		sh.h = side;
+		sh.alpha = 0.45;
+		r.drawRect(cam, x + g.ox + so.x, y + g.oy + so.y, sh);
+		const o = ICON_O;
+		o.image = atlas;
+		o.rectX = g.x;
+		o.rectY = g.y;
+		o.rectW = g.n;
+		o.rectH = g.n;
+		o.w = side;
+		o.h = side;
+		r.drawRect(cam, x + g.ox, y + g.oy - hop, o);
+	}
+
+	private drawFlat(r: Renderer, cam: Camera, lk: ItemLook, it: GroundItem, x: number, y: number, hop: number): void {
+		const a = (((it.id * 37) % 23) / 11 - 1) * ITEM_TILT;
+		const so = this.shadow(it.x, it.y, 4 + hop * 0.5);
+		const sh = ITEM_SHADOW_O;
+		sh.w = lk.shadowW;
+		sh.h = lk.shadowH;
+		sh.cornerRadius = lk.shadowR;
+		part(r, cam, x + so.x, y + so.y, a, 0, 0, sh);
+		const ca = math.cos(a);
+		const sa = math.sin(a);
+		const o = ITEM_PIECE_O;
+		for (let i = 0; i < lk.parts.size(); i++) {
+			const pc = lk.parts[i];
+			o.w = pc.w;
+			o.h = pc.h;
+			// a piece may be turned inside the item (bow limbs, crate brace)
+			o.rotation = a + pc.rot;
+			o.color = pc.color;
+			o.circle = pc.r === CIRCLE;
+			o.cornerRadius = pc.r;
+			o.stroke = pc.edge ? LOOT_EDGE : undefined;
+			o.zIndex = Z.item + i;
+			r.drawRect(cam, x + ca * pc.f - sa * pc.l, y - hop + sa * pc.f + ca * pc.l, o);
+		}
+	}
+
+	/** the tier's ring on the ground round the item: a dark band and a thin light (or gold) line on it */
+	private drawRing(
+		r: Renderer,
+		cam: Camera,
+		tier: GroundTier,
+		x: number,
+		y: number,
+		halfW: number,
+		halfH: number,
+	): void {
+		const d = (math.max(halfW, halfH) + RING_PAD) * 2;
+		const dark = RING_DARK_O;
+		dark.w = d;
+		dark.h = d;
+		dark.strokeThickness = 3;
+		dark.strokeAlpha = 0.3;
+		r.drawRect(cam, x, y, dark);
+		const light = RING_LIGHT_O;
+		light.w = d;
+		light.h = d;
+		light.stroke = tier === "rare" ? RING_RARE : RING_GEAR;
+		light.strokeThickness = 1;
+		light.strokeAlpha = tier === "rare" ? 0.9 : RING_ALPHA;
+		r.drawRect(cam, x, y, light);
+	}
+
+	/** four corner brackets round what E takes: on the item E would take now, and only on it */
+	private drawBrackets(
+		r: Renderer,
+		cam: Camera,
+		x: number,
+		y: number,
+		halfW: number,
+		halfH: number,
+		clock: number,
+	): void {
+		const breath = this.reduceMotion ? 0 : BRACKET_BREATH * (0.5 + 0.5 * math.sin(clock * math.pi * 2 * 1.2));
+		const hx = halfW + BRACKET_GAP + breath;
+		const hy = halfH + BRACKET_GAP + breath;
+		const o = BRACKET_O;
+		for (const sx of SIGNS) {
+			for (const sy of SIGNS) {
+				const cx = x + sx * hx;
+				const cy = y + sy * hy;
+				// the horizontal arm, then the vertical one, both running from the corner inwards
+				o.w = BRACKET_ARM;
+				o.h = BRACKET_W;
+				r.drawRect(cam, cx - (sx * (BRACKET_ARM - BRACKET_W)) / 2, cy, o);
+				o.w = BRACKET_W;
+				o.h = BRACKET_ARM;
+				r.drawRect(cam, cx, cy - (sy * (BRACKET_ARM - BRACKET_W)) / 2, o);
+			}
+		}
+	}
+
+	/** a four-point sparkle at the item's upper left, out of phase per item; gear often, supplies seldom and small */
+	private drawGlint(
+		r: Renderer,
+		cam: Camera,
+		it: GroundItem,
+		tier: GroundTier,
+		gx: number,
+		gy: number,
+		clock: number,
+	): void {
+		const period = tier === "supply" ? GLINT_PERIOD_SUPPLY : GLINT_PERIOD;
+		const t = (clock + it.id * 0.61) % period;
+		if (t >= GLINT_LEN) return;
+		const s = math.sin((t / GLINT_LEN) * math.pi);
+		const arm = 3 + (tier === "supply" ? GLINT_ARM_SUPPLY : GLINT_ARM) * s;
+		const g = GLINT_O;
+		g.w = arm;
+		g.h = 2;
+		g.alpha = (tier === "supply" ? 0.7 : 0.9) * s;
+		r.drawRect(cam, gx, gy, g);
+		g.w = 2;
+		g.h = arm;
+		r.drawRect(cam, gx, gy, g);
 	}
 }

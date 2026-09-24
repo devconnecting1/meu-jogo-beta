@@ -1224,6 +1224,23 @@ const LANG_COUNT = [...LANG].length;
 	);
 }
 
+{
+	// ITM-06: the pickup's words -- the prompt "E: Pick up Shotgun ammo ×8", the note at the ceiling "Wood full (9999)",
+	// the chip "+12 Wood" (client/ui/pickupToast.ts) and the lesson that teaches walking over supplies -- are entries,
+	// item names (above) and numbers; the lesson's text in objectives.ts is the entry itself
+	const objectives = readFileSync(join(SRC, "client/onboarding/objectives.ts"), "utf8");
+	const pickupLesson = objectives.match(/id: "pickup",[\s\S]*?title: "([^"]+)",[\s\S]*?hint: "([^"]+)"/);
+	const words = ["Pick up", "full"];
+	const lesson = pickupLesson === null ? [] : [pickupLesson[1], pickupLesson[2]];
+	check(
+		"a coleta (ITM-06): 'Pick up', 'full' e a licao 'Pick something up' (andar por cima / usar) estao na LANG_TABLE",
+		[...words, ...lesson].every(w => LANG.has(w)) &&
+			lesson.length === 2 &&
+			/Walk over food, ammo and materials/.test(lesson[1]),
+		lesson.join(" / "),
+	);
+}
+
 /** proper nouns a translator leaves alone (UI-03: the English of a name IS the name), and the kit's glyphs */
 const PROPER = new Set([
 	GAME_NAME,

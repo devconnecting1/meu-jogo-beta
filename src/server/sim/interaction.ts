@@ -77,7 +77,7 @@ export type InteractOutcome =
 	| { kind: "search"; building: Solid; taken: number }
 	/** an electric build did its own job (server/sim/power.ts): charged, refuelled, switched, launched a drone… */
 	| { kind: "machine"; machine: MachineOutcome }
-	| { kind: "refused"; why: "range" | "blocked" | "material" | "empty" | "cooldown" | "taken" };
+	| { kind: "refused"; why: "range" | "blocked" | "material" | "empty" | "cooldown" | "taken" | "full" };
 
 /** what E does on an electric build (server/sim/power.ts `ServerPower.act`); undefined = the ordinary E */
 export interface MachineActions {
@@ -159,7 +159,9 @@ export class ServerInteraction {
 		if (target.kind === "item") {
 			const got = this.items.pickup(ctx.save, p.x, p.y, target.item);
 			if (got.ok) return { kind: "item", count: got.count };
-			if (got.why === "range" || got.why === "blocked") return { kind: "refused", why: got.why };
+			if (got.why === "range" || got.why === "blocked" || got.why === "full") {
+				return { kind: "refused", why: got.why };
+			}
 			return { kind: "refused", why: "taken" };
 		}
 

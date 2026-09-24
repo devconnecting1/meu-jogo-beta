@@ -1413,10 +1413,12 @@ console.log("\n6) a hotbar com o atlas dos icones: um ImageLabel por ladrilho, n
 		hud.update(state());
 	});
 	const images = named("Atlas");
+	// the hotbar's five, and one per pickup chip (ITM-06, client/ui/pickupToast.ts): its icon is the Bag's too
+	const { CHIP_ROWS: chipRows } = require(join(SRC, "client/ui/pickupToast.ts"));
 	check(
-		"cada ladrilho da hotbar e UM ImageLabel, sem a reserva de Frames do icone mais caro",
+		"cada ladrilho da hotbar e UM ImageLabel, sem a reserva de Frames do icone mais caro (e cada chip da coleta, outro)",
 		named("Px") === 0 &&
-			images === 5 &&
+			images === 5 + chipRows &&
 			[0, 1, 2, 3, 4].every(k => {
 				const kids = deep(tile(k), "ItemIcon")?.GetChildren() ?? [];
 				return kids.length === 1 && kids[0].ClassName === "ImageLabel";
@@ -1424,7 +1426,7 @@ console.log("\n6) a hotbar com o atlas dos icones: um ImageLabel por ladrilho, n
 		`${images} imagens; sem atlas eram ${flatPx} Frames`,
 	);
 	check(
-		"montar custa so isso a menos: os Frames de icone viram 5 imagens, o resto da HUD e o mesmo",
+		"montar custa so isso a menos: os Frames de icone viram imagens (5 da hotbar, 1 por chip), o resto e o mesmo",
 		atlasMount.created === flatMount.created - flatPx + images &&
 			hudRoot().GetDescendants().length === flatAll - flatPx + images,
 		`${flatMount.created} -> ${atlasMount.created} Instances`,
@@ -1671,6 +1673,130 @@ console.log("\n7) o icone no ladrilho: no meio do que sobra, longe da tecla e da
 	hud.unmount();
 	setIconAtlas("");
 	own([AXE, PISTOL]);
+}
+
+// ---------------------------------------------------------------- 8) what was picked up (ITM-06)
+
+console.log("\n8) a coleta: '+12 Shotgun ammo' sobre a dica, o Bag pisca, nada criado (ITM-06)\n");
+{
+	const PK = require(join(SRC, "client/systems/pickups.ts"));
+	const { CHIP_TIME, BAG_FLASH_TIME, TOAST_H, CHIP_H, CHIP_ROWS } = require(join(SRC, "client/ui/pickupToast.ts"));
+	for (const [device, atlas] of [
+		["desktop", ""],
+		["toque", "rbxassetid://910000001"],
+	]) {
+		setIconAtlas(atlas);
+		const touch = device === "toque";
+		const uis2 = service("UserInputService");
+		uis2.TouchEnabled = touch;
+		uis2.MouseEnabled = !touch;
+		uis2.GetLastInputType = () => (touch ? Enum.UserInputType.Touch : Enum.UserInputType.MouseMovement);
+		uis2.PreferredInput = undefined;
+		let t = 7000;
+		setClock(t);
+		/** `seconds` of frames at 60 Hz, the HUD updated on each (it takes at most a quarter second a frame) */
+		const advance = seconds => {
+			for (let i = 0; i < Math.round(seconds * 60); i++) {
+				t += 1 / 60;
+				setClock(t);
+				hud.update(state());
+			}
+		};
+		const drained = [];
+		PK.takePickupNotes(drained);
+		hud.mount();
+		hud.update(state());
+		const root = deep(hudRoot(), "PickupToast");
+		const chip = i => deep(root, `Chip${i}`);
+		const text = i => `${deep(chip(i), "Amount")?.Text ?? ""} ${deep(chip(i), "Name")?.Text ?? ""}`;
+		const up = () => [0, 1, 2].filter(i => chip(i)?.Visible === true).length;
+		const flashFrame = touch
+			? deep(hudRoot(), "BagBtn")?.FindFirstChild("PickupFlash")
+			: deep(consoleFrame(), "PickupFlash");
+		const hint = deep(hudRoot(), "HintBox");
+		check(
+			`${device}: a coluna da coleta nasce com a HUD, vazia, no lugar da dica (o mesmo fundo), e a luz do Bag apagada`,
+			root !== undefined &&
+				up() === 0 &&
+				root.AnchorPoint.X === 0.5 &&
+				root.AnchorPoint.Y === 1 &&
+				hint !== undefined &&
+				root.Position.X.Scale === hint.Position.X.Scale &&
+				root.Position.Y.Scale === hint.Position.Y.Scale &&
+				root.Position.X.Offset === hint.Position.X.Offset &&
+				root.Position.Y.Offset === hint.Position.Y.Offset &&
+				flashFrame !== undefined &&
+				flashFrame.BackgroundTransparency === 1,
+		);
+		// the rows sit over the prompt's own height: the lowest chip ends above the prompt
+		const lowest = chip(0);
+		const lowestBottom = (lowest.Position.Y.Scale + lowest.Size.Y.Scale) * TOAST_H;
+		check(
+			`${device}: o chip mais baixo acaba acima da dica (o prompt continua lido), ${CHIP_ROWS} linhas de ${CHIP_H}`,
+			lowestBottom <= TOAST_H - 46 + 1e-6,
+			`fim do chip ${lowestBottom.toFixed(1)} de ${TOAST_H}`,
+		);
+		PK.took(4, 45, 8);
+		t += 1 / 60;
+		setClock(t);
+		hud.update(state());
+		check(
+			`${device}: uma coleta mostra "+8 Shotgun ammo" e acende o Bag`,
+			up() === 1 && text(0) === "+8 Shotgun ammo" && flashFrame.BackgroundTransparency < 1,
+			`${text(0)}; luz ${flashFrame.BackgroundTransparency}`,
+		);
+		PK.took(4, 45, 8);
+		advance(0.5);
+		check(
+			`${device}: o mesmo item de novo soma no mesmo chip ("+16")`,
+			up() === 1 && text(0) === "+16 Shotgun ammo",
+			text(0),
+		);
+		PK.took(3, 12, 1);
+		t += 1 / 60;
+		setClock(t);
+		hud.update(state());
+		check(
+			`${device}: outro item: um chip novo embaixo, o anterior sobe`,
+			up() === 2 && text(0) === "+1 Bandage" && text(1) === "+16 Shotgun ammo",
+			`${text(0)} | ${text(1)}`,
+		);
+		advance(BAG_FLASH_TIME + 0.05);
+		check(`${device}: a luz do Bag apaga em ${BAG_FLASH_TIME} s`, flashFrame.BackgroundTransparency === 1);
+		advance(CHIP_TIME + 0.1);
+		check(`${device}: e os chips saem depois de ${CHIP_TIME} s`, up() === 0);
+		// a run of pickups: every 20 frames something, from a list of six items; nothing is created
+		const cycle = [
+			[4, 44, 12],
+			[4, 23, 3],
+			[3, 17, 1],
+			[1, 16, 1],
+			[2, 13, 1],
+			[4, 48, 10],
+		];
+		const run = phase(
+			`600 quadros com coletas a cada 20 (${device}${atlas === "" ? ", Frames" : ", atlas"})`,
+			() => {
+				for (let i = 0; i < 600; i++) {
+					if (i % 20 === 0) {
+						const [k, id, n] = cycle[(i / 20) % cycle.length];
+						PK.took(k, id, n);
+					}
+					t += 1 / 60;
+					setClock(t);
+					hud.update(frameState(i));
+				}
+			},
+		);
+		check(`${device}: 600 quadros de coletas nao criam nem destroem Instance`, zero(run), cost(run));
+		hud.unmount();
+	}
+	setIconAtlas("");
+	const uis3 = service("UserInputService");
+	uis3.TouchEnabled = false;
+	uis3.MouseEnabled = true;
+	uis3.GetLastInputType = () => Enum.UserInputType.MouseMovement;
+	uis3.PreferredInput = undefined;
 }
 
 // ---------------------------------------------------------------- report

@@ -12,6 +12,11 @@
  *     shared/sim/ai/zombieBrain.ts replicates without that file knowing this one exists. Who was told about
  *     which item is kept per slot: an item that comes into range later is sent then (`sweepInterest`), and a
  *     removal reaches every client that was told, however far away it is now (`retract`).
+ *   - WALK-OVER (DESIGN_RULES ITM-06): a supply -- food, medicine, materials, ammunition -- is taken by the body over
+ *     it, by `walkOver`, the server's own sweep: no message asks for it, so none can be forged. It is the E press's
+ *     `pickup` below with every one of its checks (reach from the server's position, a clear line, the atomic removal,
+ *     the save's ceiling), for the item the shared rule names (shared/sim/pickupRule.ts), once it has lain
+ *     WALK_PICKUP_DELAY_S and at most one per survivor every WALK_PICKUP_RATE_S. Weapons and equipment still take E.
  *   - PICKUP is a request, resolved at the server's position of the survivor, and it is atomic: the world's
  *     `removeGroundItem` is the arbiter, so of two survivors reaching for the same can in the same tick, one
  *     gets a can and the other gets nothing (§8.3 "checar + mutar sem yield no meio"). That is the §11.3 F3
@@ -47,6 +52,8 @@ import {
 import { PlayerSaveData } from "shared/game/save";
 import { creditTaken } from "../save/achievements";
 import { segmentClear } from "shared/game/physics";
+import type { PlayerState } from "shared/game/player";
+import { pickupRoom, WALK_PICKUP_DELAY_S, WALK_PICKUP_RATE_S, walkPickupTarget } from "shared/sim/pickupRule";
 import { WorldOut } from "./worldOut";
 
 /** §8.1: `pickup` is allowed at the reach the game draws, plus a latency allowance */
@@ -71,10 +78,20 @@ export interface SearchResult {
 	taken: Array<{ kind: number; id: number; count: number }>;
 }
 
-/** why a pickup did not happen; `ok` carries what went into the backpack */
+/**
+ * why a pickup did not happen; `ok` carries what went into the backpack (`count`: what fitted under the save's
+ * ceiling -- the rest stays on the ground); "full": the save holds as many of that item as it can keep
+ */
 export type PickupResult =
 	| { ok: true; kind: number; itemId: number; count: number }
-	| { ok: false; why: "none" | "range" | "blocked" | "taken" };
+	| { ok: false; why: "none" | "range" | "blocked" | "taken" | "full" };
+
+/** a survivor the walk-over sweep looks at: the simulation's own records (server/sim/players.ts ServerPlayer) */
+export interface WalkingSurvivor {
+	slot: number;
+	state: PlayerState;
+	save: PlayerSaveData;
+}
 
 export interface ServerItemsOptions {
 	world: WorldData;
@@ -102,13 +119,29 @@ export class ServerItems {
 	 */
 	private readonly told = new Map<number, Set<number>>();
 	private interestSweep = 0;
+	/** the walk-over's clock (s), when each item appeared on it, and when each slot may walk the next one up */
+	private walkClock = 0;
+	private readonly bornAt = new Map<number, number>();
+	private readonly walkNext = new Map<number, number>();
+	/**
+	 * has this item lain WALK_PICKUP_DELAY_S? (one closure for the session: one per tick would be garbage). An item
+	 * with no record was on the ground before the hooks were (the town's own scatter): it has lain long enough
+	 */
+	private readonly walkReady = (item: GroundItem): boolean =>
+		this.walkClock - (this.bornAt.get(item.id) ?? -math.huge) >= WALK_PICKUP_DELAY_S;
 
 	constructor(options: ServerItemsOptions) {
 		this.world = options.world;
 		this.out = options.out;
 		// §4.5: every ground item that appears or disappears, whoever made it, becomes a delta here
-		this.world.onItemAdd = (w, item) => this.announce(item);
-		this.world.onItemRemove = (w, item) => this.retract(item);
+		this.world.onItemAdd = (w, item) => {
+			this.bornAt.set(item.id, this.walkClock);
+			this.announce(item);
+		};
+		this.world.onItemRemove = (w, item) => {
+			this.bornAt.delete(item.id);
+			this.retract(item);
+		};
 	}
 
 	/** the bodies (and their slots, in the same order) that see items; the simulation hands its own arrays over */
@@ -135,6 +168,7 @@ export class ServerItems {
 	/** the survivor in `slot` left the world: their client's mirror is rebuilt by the next welcome */
 	forget(slot: number): void {
 		this.told.delete(slot);
+		this.walkNext.delete(slot);
 	}
 
 	/**
@@ -206,6 +240,22 @@ export class ServerItems {
 		this.world.onItemAdd = undefined;
 		this.world.onItemRemove = undefined;
 		this.told.clear();
+		this.bornAt.clear();
+		this.walkNext.clear();
+	}
+
+	/**
+	 * An item's count went down while it stays on the ground (a pickup took what the backpack had room for): every
+	 * client that was told about it is told again, and its mirror updates the count on the id it has (§4.5, ItemAdd is
+	 * idempotent). No new message.
+	 */
+	private recount(item: GroundItem): void {
+		let ev: WItemAdd | undefined;
+		for (const [slot, set] of this.told) {
+			if (!set.has(item.id)) continue;
+			ev = ev ?? itemAddOf(item);
+			this.out.queueFor(slot, ev);
+		}
 	}
 
 	// ---------------------------------------------------------------- pickup (§8.1)
@@ -231,11 +281,58 @@ export class ServerItems {
 		const blocks = (o: Solid): boolean =>
 			isBlocking(o) && !(item.x >= o.x && item.x <= o.x + o.w && item.y >= o.y && item.y <= o.y + o.h);
 		if (!segmentClear(this.world, x, y, item.x, item.y, blocks)) return { ok: false, why: "blocked" };
-		if (!removeGroundItem(this.world, item)) return { ok: false, why: "taken" };
-		addItem(save, item.kind, item.itemId, item.count);
+		// ITM-06: the save keeps at most its ceiling of an item (shared/game/save.ts SAVE_LIMITS); past it, what went in
+		// was clamped away at the next load. Take what fits, leave the rest lying where it is
+		const room = pickupRoom(save, item.kind, item.itemId);
+		if (room <= 0) return { ok: false, why: "full" };
+		if (!this.world.items.includes(item)) return { ok: false, why: "taken" };
+		const take = math.min(item.count, room);
+		if (take < item.count) {
+			item.count -= take;
+			this.recount(item);
+		} else if (!removeGroundItem(this.world, item)) {
+			return { ok: false, why: "taken" };
+		}
+		addItem(save, item.kind, item.itemId, take);
 		// CON-04: what the SERVER put into the backpack (wood is Woods collector's)
-		creditTaken(save, item.kind, item.itemId, item.count);
-		return { ok: true, kind: item.kind, itemId: item.itemId, count: item.count };
+		creditTaken(save, item.kind, item.itemId, take);
+		return { ok: true, kind: item.kind, itemId: item.itemId, count: take };
+	}
+
+	/**
+	 * The walk-over (ITM-06): each survivor on foot takes the supply under their body, if any -- the one the shared
+	 * rule names (shared/sim/pickupRule.ts `walkPickupTarget`: within WALK_PICKUP_RANGE of the SERVER's position, lying
+	 * for WALK_PICKUP_DELAY_S, room in the save) -- through `pickup`, so the reach, the clear line, the first-come
+	 * removal and the ceiling are the E press's own. Each survivor is looked at once every WALK_PICKUP_RATE_S, which
+	 * is also the rate: ten items a second at most, and the item scan runs at 10 Hz per survivor, not 60.
+	 *
+	 * `onTaken` hears each pickup (the caller marks the save dirty, as for an E press). Riding (VEI-05: the hands are
+	 * on the bars) and dead survivors take nothing.
+	 */
+	walkOver(
+		survivors: ReadonlyArray<WalkingSurvivor>,
+		dt: number,
+		onTaken?: (who: WalkingSurvivor, got: PickupResult) => void,
+	): void {
+		this.walkClock += dt;
+		const now = this.walkClock;
+		// an item taken out of the list without the removal hook (the population's cleanup) leaves its entry behind:
+		// once the table holds many more than the world, the gone ones are dropped
+		if (this.bornAt.size() > this.world.items.size() * 2 + 64) {
+			const live = new Set<number>();
+			for (const it of this.world.items) live.add(it.id);
+			for (const [id] of this.bornAt) if (!live.has(id)) this.bornAt.delete(id);
+		}
+		for (const sp of survivors) {
+			const p = sp.state;
+			if (p.dead || p.ride !== undefined) continue;
+			if (now < (this.walkNext.get(sp.slot) ?? 0)) continue;
+			this.walkNext.set(sp.slot, now + WALK_PICKUP_RATE_S);
+			const item = walkPickupTarget(this.world, p.x, p.y, sp.save, this.walkReady);
+			if (item === undefined) continue;
+			const got = this.pickup(sp.save, p.x, p.y, item);
+			if (got.ok && onTaken !== undefined) onTaken(sp, got);
+		}
 	}
 
 	// ---------------------------------------------------------------- building loot (§4.3, §8.1)
