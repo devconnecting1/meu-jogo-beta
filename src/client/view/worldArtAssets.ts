@@ -302,23 +302,23 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** sprite: manhole cover */
 	manhole: { id: "rbxassetid://96964095561833", w: 8, h: 8 },
 	/** sprite: rain puddle in a gutter: long, stepped edge (sky streaks, lit rim, wet halo) */
-	puddle0: { id: "", w: 38, h: 11 },
+	puddle0: { id: "rbxassetid://133449956224871", w: 38, h: 11 },
 	/** sprite: rain puddle in a gutter: long, stepped edge, on a vertical road */
-	puddle0V: { id: "", w: 11, h: 38 },
+	puddle0V: { id: "rbxassetid://133768820371427", w: 11, h: 38 },
 	/** sprite: rain puddle in a gutter, a small pool past its end (sky streaks, lit rim, wet halo) */
-	puddle1: { id: "", w: 30, h: 10 },
+	puddle1: { id: "rbxassetid://118856175608293", w: 30, h: 10 },
 	/** sprite: rain puddle in a gutter, a small pool past its end, on a vertical road */
-	puddle1V: { id: "", w: 10, h: 30 },
+	puddle1V: { id: "rbxassetid://89354468515095", w: 10, h: 30 },
 	/** sprite: rain puddle in a lane: a dip in the asphalt (sky streaks, lit rim, wet halo) */
-	puddle2: { id: "", w: 22, h: 14 },
+	puddle2: { id: "rbxassetid://82231774772497", w: 22, h: 14 },
 	/** sprite: rain puddle in a lane: a dip in the asphalt, on a vertical road */
-	puddle2V: { id: "", w: 14, h: 22 },
+	puddle2V: { id: "rbxassetid://103817440914774", w: 14, h: 22 },
 	/** sprite: rain puddle in a lane, a small pool before it (sky streaks, lit rim, wet halo) */
-	puddle3: { id: "", w: 32, h: 15 },
+	puddle3: { id: "rbxassetid://130785761895865", w: 32, h: 15 },
 	/** sprite: rain puddle in a lane, a small pool before it, on a vertical road */
-	puddle3V: { id: "", w: 15, h: 32 },
+	puddle3V: { id: "rbxassetid://78848680608666", w: 15, h: 32 },
 	/** sprite: a drop's ring on a puddle (4 texels) */
-	puddleDrop: { id: "", w: 3, h: 3 },
+	puddleDrop: { id: "rbxassetid://126451428508632", w: 3, h: 3 },
 	/** sprite: storm drain */
 	drain: { id: "rbxassetid://96075237212369", w: 8, h: 4 },
 	/** sprite: fuel dispenser, upright: the station sign's white cabinet, dark display, red stripe, hose and nozzle */
