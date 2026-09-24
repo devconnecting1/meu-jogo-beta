@@ -27,7 +27,9 @@
  */
 import { isFiniteNumber } from "shared/net/codec";
 import { MAX_PLAYERS, MP_PHASE, SIM_HZ, WORLD_SERVER_PHASE } from "shared/net/mpConfig";
-import { EdgeShift, edgeCount, FxEvent, HeldBit, IntentMessage } from "shared/net/protocol";
+import { EdgeShift, edgeCount, FxEvent, FxType, HeldBit, IntentMessage } from "shared/net/protocol";
+import { wireSoundId } from "shared/net/fxWire";
+import { useSoundOf } from "shared/data/usables";
 import { serverWorld, updateGroundItems, WorldData } from "shared/game/world";
 import { applyPlayerDamage, currentWeapon, PlayerState } from "shared/game/player";
 import { ZombieState } from "shared/game/entities";
@@ -43,7 +45,7 @@ import { TickAccumulator } from "./heartbeat";
 import { ServerCombat } from "./combat";
 import { BackpackOutcome, ServerCraft } from "./craft";
 import { InteractOutcome, ServerInteraction } from "./interaction";
-import { ServerItems } from "./items";
+import { PickupResult, ServerItems, WalkingSurvivor } from "./items";
 import { KEEP_AFTER_LEAVE_S } from "./life";
 import { DayCredit, DayRefusal, Progress, creditDaySurvived, dayRefusal, survivedNight } from "./progress";
 import { TitleId } from "shared/data/titles";
@@ -205,6 +207,12 @@ export class ServerSimulation {
 	 */
 	paysRewards?: (sp: ServerPlayer) => boolean;
 	/**
+	 * The admin's switches (docs/MULTIPLAYER.md §10: god, noclip, infinite ammo) onto this survivor's body, right
+	 * before its step. They belong to the PERSON, not to a body: a stand-up, a reset or a trip to the lobby builds a
+	 * new body, and the switch must still be on in it. server/admin/adminWorld.ts sets it; undefined = nobody has any.
+	 */
+	adminMods?: (sp: ServerPlayer) => void;
+	/**
 	 * The authoritative horde (§3.3, §3.5), or undefined while MP_PHASE < 2 and every client still simulates
 	 * its own. F2-2D reads the zombies, their netIds and their deaths from here. Like everything built around the
 	 * town (combat, progress, projectiles and the F3 world below) it is rebuilt when a world ends (MP-22).
@@ -257,8 +265,20 @@ export class ServerSimulation {
 	turrets?: ServerTurrets;
 	/** reliable world deltas produced this tick; server/net/replication.ts drains it (§4.5) */
 	readonly worldOut = new WorldOut();
-	/** the result of a survivor's action press, for the caller's sounds and toasts */
+	/**
+	 * the result of a survivor's action press, for the caller's sounds and toasts -- and of a supply walked up
+	 * (ITM-07: `ServerItems.walkOver`), which is the press's `item` outcome without the press
+	 */
 	onInteract?: (sp: ServerPlayer, outcome: InteractOutcome) => void;
+	/** the walk-over's report, bound once (a closure per tick would be garbage): the same `item` outcome as E's */
+	private readonly walkTaken = (who: WalkingSurvivor, got: PickupResult): void => {
+		const sp = this.bySlot.get(who.slot);
+		if (sp !== undefined && got.ok && this.onInteract !== undefined) {
+			this.onInteract(sp, { kind: "item", count: got.count });
+		}
+	};
+	/** §9.3 for the walk-over, bound once: a supply walked up credits the collector only in a run that earns (as E's) */
+	private readonly walkPays = (slot: number): boolean => this.paysSlot(slot);
 	/** the result of a backpack intent (craft, use, equip, learn, switch), or of a pack delivered on the server */
 	onBackpack?: (sp: ServerPlayer, outcome: BackpackOutcome) => void;
 	/**
@@ -345,7 +365,14 @@ export class ServerSimulation {
 			// client still delivers them into its own copy and reports it
 			deliversPacks: this.ownsInteractive,
 		});
-		this.backpack.onOutcome = (sp, msg, outcome) => this.onBackpack?.(sp, outcome);
+		this.backpack.onOutcome = (sp, msg, outcome) => {
+			// a usable the server accepted is heard where the survivor stands (P0-4): eaten, torn, unzipped, rattled
+			if (outcome.kind === "used") {
+				const sound = wireSoundId(useSoundOf(outcome.item));
+				this.onFx?.({ t: FxType.Sound, sound, x: sp.state.x, y: sp.state.y, volume: 1 });
+			}
+			this.onBackpack?.(sp, outcome);
+		};
 		this.backpack.onPacks = (sp, opened) => this.onBackpack?.(sp, { kind: "delivered", packs: opened });
 		this.adoptSystems(this.buildAround(this.world));
 	}
@@ -519,10 +546,7 @@ export class ServerSimulation {
 				// §4.5: global, like the construction itself (a drone flies with its survivor, far from its pad)
 				publish: (s, state, pilot) => this.worldOut.queue(powerSet(s, state, pilot)),
 				// §9.3: an assisted run earns no achievement (Thomas Edison), as it earns no coins
-				paysRewards: slot => {
-					const sp = this.bySlot.get(slot);
-					return sp === undefined || this.pays(sp);
-				},
+				paysRewards: slot => this.paysSlot(slot),
 			});
 			out.power = power;
 			const build = new ServerBuild({
@@ -547,6 +571,8 @@ export class ServerSimulation {
 				machines: power,
 				// a door is a way in or a wall to the horde (§3.3), exactly like a construction going up or down
 				onSolidChanged: (x, y, w, h) => this.horde?.refs.onSolidChanged?.(x, y, w, h),
+				// §9.3: an assisted run's pickups and searches earn no achievement (Woodpile), as it earns no coins
+				paysRewards: slot => this.paysSlot(slot),
 			});
 			// VEI-05: a parked vehicle is one of the constructions above; this is getting on, riding and getting off.
 			// The hooks read the combat and the horde when they RUN (both are built below, or not at all)
@@ -568,21 +594,21 @@ export class ServerSimulation {
 					},
 					shove: (z, dir, knock, stun) => reactToHit(z, dir, knock, stun),
 				},
+				// §9.3: an assisted run rides, and earns no Road Trip point
+				paysRewards: sp => this.pays(sp),
 			});
 		}
 		// the backpack verbs work with or without the interactive world (server/sim/backpack.ts): only a build recipe
-		// needs `build`, and ServerCraft refuses one without it before anything is spent
-		out.craft = new ServerCraft({ world, build: out.build });
+		// needs `build`, and ServerCraft refuses one without it before anything is spent. An assisted run cooks and
+		// smelts, and earns no Camp Cook nor Metalworker (§9.3)
+		out.craft = new ServerCraft({ world, build: out.build, paysRewards: slot => this.paysSlot(slot) });
 
 		if (!this.ownsHorde) return out;
 		const horde = new ZombieWorld(world, this.clock);
 		out.horde = horde;
 		const progress = new Progress({
 			saveOf: slot => this.bySlot.get(slot)?.save,
-			paysRewards: slot => {
-				const sp = this.bySlot.get(slot);
-				return sp === undefined || this.pays(sp);
-			},
+			paysRewards: slot => this.paysSlot(slot),
 			// MON-05: the killing blow that made a Horde Breaker
 			titleUnlocked: (slot, titleId) => {
 				const sp = this.bySlot.get(slot);
@@ -681,6 +707,12 @@ export class ServerSimulation {
 	/** §9.3: does this survivor's run still earn coins? (`paysRewards` unset = yes) */
 	private pays(sp: ServerPlayer): boolean {
 		return this.paysRewards === undefined || this.paysRewards(sp);
+	}
+
+	/** the same, for the survivor in `slot` (nobody there: nothing to withhold) */
+	private paysSlot(slot: number): boolean {
+		const sp = this.bySlot.get(slot);
+		return sp === undefined || this.pays(sp);
 	}
 
 	/** §3.6 at the world's midnight: pay who earned the day (`dayRefusal`), then start counting the next one */
@@ -986,6 +1018,7 @@ export class ServerSimulation {
 		prof?.begin("PZ.players");
 		this.refreshBodies();
 		for (const sp of this.roster) {
+			this.adminMods?.(sp);
 			const consumed = sp.counters.consumed;
 			const cmd = takeCommand(sp);
 			// §2.4: the backpack verbs made during this command land BEFORE it is simulated -- its movement (armour,
@@ -1164,6 +1197,8 @@ export class ServerSimulation {
 		this.power?.step(this.tickDt, this.tick);
 		if (this.roster.size() === 0) return;
 		items.rollNearby(this.bodies, gameHours(this.clock.day, this.clock.dayTime), this.tickDt);
+		// ITM-07: the supplies under each survivor's body, by the E press's own checks; the save is dirty as after one
+		items.walkOver(this.roster, this.walkTaken, this.walkPays);
 		items.sweepInterest(this.tickDt);
 		this.interaction?.step(this.bodies, this.bodySlots, this.tickDt);
 	}

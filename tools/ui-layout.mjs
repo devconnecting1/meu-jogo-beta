@@ -73,13 +73,34 @@ function place(n, box) {
 	}
 }
 
+/**
+ * UIScale (opt-in, `withUIScale(true)`): a UIScale under a GuiObject scales it and everything under it -- its size, and
+ * every Offset below it (a Renderer drawing in a drawingBox, client/ui/drawingBox.ts). Off by default, so the suites that
+ * measure with this layout keep measuring exactly what they did (a Dialog's entrance zoom, the HUD's banner scale).
+ */
+let modelUIScale = false;
+export function withUIScale(on) {
+	modelUIScale = on;
+}
+/** the multiplier Offsets are drawn at inside the box being laid out now (1 unless a UIScale is above them) */
+let offsetK = 1;
+
 /** lays out `n` inside the parent content box `box` = { x, y, w, h } */
 function layoutNode(n, box) {
-	const [w, h] = sizeOf(n, box.w, box.h);
-	const x = box.x + n.Position.X.Scale * box.w + n.Position.X.Offset - n.AnchorPoint.X * w;
-	const y = box.y + n.Position.Y.Scale * box.h + n.Position.Y.Offset - n.AnchorPoint.Y * h;
+	const own = modelUIScale ? (n.FindFirstChildOfClass?.("UIScale")?.Scale ?? 1) : 1;
+	const k = offsetK;
+	let [w, h] = sizeOf(n, box.w, box.h);
+	if (k !== 1 || own !== 1) {
+		// the Offset part of the size is drawn at the scale above it, and the whole size at its own UIScale too
+		w = (n.Size.X.Scale * box.w + n.Size.X.Offset * k) * own;
+		h = (n.Size.Y.Scale * box.h + n.Size.Y.Offset * k) * own;
+	}
+	const x = box.x + n.Position.X.Scale * box.w + n.Position.X.Offset * k - n.AnchorPoint.X * w;
+	const y = box.y + n.Position.Y.Scale * box.h + n.Position.Y.Offset * k - n.AnchorPoint.Y * h;
 	setAbs(n, x, y, w, h);
+	offsetK = k * own;
 	layoutChildren(n, x, y, w, h);
+	offsetK = k;
 }
 
 function layoutChildren(n, x, y, w, h) {
@@ -228,6 +249,14 @@ export function paintList(root) {
 				rectOffset: ro === undefined ? [0, 0] : [ro.X, ro.Y],
 				rectSize: rs === undefined ? [0, 0] : [rs.X, rs.Y],
 				pixelated: n.ResampleMode?.Name === "Pixelated",
+				// ScaleType.Tile: the image repeats every TileSize px from the label's corner (the town's ground)
+				tile:
+					n.ScaleType?.Name === "Tile" && n.TileSize !== undefined
+						? [
+								n.TileSize.X.Scale * r.w + n.TileSize.X.Offset,
+								n.TileSize.Y.Scale * r.h + n.TileSize.Y.Offset,
+							]
+						: undefined,
 				tint: rgb(n.ImageColor3 ?? new Color3(1, 1, 1)),
 				alpha: 1 - (n.ImageTransparency ?? 0),
 				clip,

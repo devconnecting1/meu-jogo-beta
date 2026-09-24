@@ -36,8 +36,9 @@ import { ZombieState, zombieRadius } from "shared/game/entities";
 import { Solid, WorldData, addSolid, isBlocking, removeSolid } from "shared/game/world";
 import { SLOT_NONE } from "shared/net/mpConfig";
 import { FxEvent, FxType } from "shared/net/protocol";
-import { debrisMaterialId } from "shared/net/fxWire";
+import { debrisMaterialId, wireSoundId } from "shared/net/fxWire";
 import { interactTarget } from "shared/sim/interactQuery";
+import { noRoomIn } from "shared/sim/pickupRule";
 import { PLACEABLES, placedSolid } from "shared/sim/placement";
 import { StepResult, WORLD_MARGIN } from "shared/sim/playerMove";
 import {
@@ -127,6 +128,11 @@ export interface ServerVehiclesOptions {
 	/** everything that happened to a ride (RideEvent) */
 	event?: (sp: ServerPlayer, e: RideEvent) => void;
 	hooks?: VehicleHooks;
+	/**
+	 * §9.3: does this rider's run still earn rewards? An assisted run rides as far as it likes and earns no Road Trip
+	 * point, as it earns no coins. Left undefined, every run does -- what a pure test wants.
+	 */
+	paysRewards?: (sp: ServerPlayer) => boolean;
 }
 
 /** the vehicle under a rider: what the parked solid was, carried while it is out of the world */
@@ -159,6 +165,7 @@ export class ServerVehicles {
 	private readonly fx?: (event: FxEvent) => void;
 	private readonly event?: (sp: ServerPlayer, e: RideEvent) => void;
 	private readonly hooks: VehicleHooks;
+	private readonly paysRewards?: (sp: ServerPlayer) => boolean;
 	private readonly riders = new Map<number, Ridden>();
 	/** seconds until this slot may get on or off again */
 	private readonly cooldown = new Map<number, number>();
@@ -175,6 +182,7 @@ export class ServerVehicles {
 		this.fx = options.fx;
 		this.event = options.event;
 		this.hooks = options.hooks ?? {};
+		this.paysRewards = options.paysRewards;
 	}
 
 	/** is this slot on a vehicle? */
@@ -202,7 +210,9 @@ export class ServerVehicles {
 	tryMount(sp: ServerPlayer): boolean {
 		const p = sp.state;
 		if (p.dead || this.riders.has(sp.slot)) return false;
-		const target = interactTarget(this.world, p.x, p.y);
+		// the query the interaction and the hint ask, full stacks passed over included (ITM-07): a full stack beside the
+		// bike must not make the HUD say "Ride" while the press goes to a repair
+		const target = interactTarget(this.world, p.x, p.y, noRoomIn(sp.save));
 		if (target === undefined || target.kind !== "vehicle") return false;
 		const s = target.solid;
 		if (!isRideable(s) || vehicleBroken(s)) return false;
@@ -238,6 +248,9 @@ export class ServerVehicles {
 		if (rec === undefined || rec.hornCd > 0) return;
 		rec.hornCd = HORN_COOLDOWN_S;
 		this.emitNoise(sp, rec, rec.def.hornRadius, "horn");
+		// what the horde hears, the survivors hear too (P0-4): the motorcycle's horn, the bicycle's bell
+		const sound = rec.def.kind === VehicleKind.Motorcycle ? "hornMoto" : "bellBike";
+		this.fx?.({ t: FxType.Sound, sound: wireSoundId(sound), x: sp.state.x, y: sp.state.y, volume: 1 });
 		this.tell(sp, { kind: "horn", vehicle: rec.def.kind });
 	}
 
@@ -506,7 +519,8 @@ export class ServerVehicles {
 		const points = math.floor(rec.riderCarry / RIDER_UNITS_PER_POINT);
 		if (points > 0) {
 			rec.riderCarry -= points * RIDER_UNITS_PER_POINT;
-			creditRide(sp.save, points);
+			// never in an assisted run (§9.3): the odometer still turns, the achievement does not
+			if (this.paysRewards?.(sp) ?? true) creditRide(sp.save, points);
 		}
 		this.tell(sp, { kind: "distance", vehicle: rec.def.kind, units });
 	}

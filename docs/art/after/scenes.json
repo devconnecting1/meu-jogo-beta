@@ -11,11 +11,11 @@
 		"scale": 1,
 		"counts": {
 			"sprites": 106,
-			"images": 60,
-			"flat": 46,
-			"strokes": 25,
-			"corners": 41,
-			"instances": 235
+			"images": 63,
+			"flat": 43,
+			"strokes": 20,
+			"corners": 36,
+			"instances": 228
 		}
 	},
 	"downtown": {
@@ -29,12 +29,12 @@
 		"hour": 10,
 		"scale": 1,
 		"counts": {
-			"sprites": 141,
-			"images": 87,
-			"flat": 54,
-			"strokes": 28,
-			"corners": 46,
-			"instances": 305
+			"sprites": 139,
+			"images": 89,
+			"flat": 50,
+			"strokes": 20,
+			"corners": 39,
+			"instances": 290
 		}
 	},
 	"park": {
@@ -48,12 +48,12 @@
 		"hour": 10,
 		"scale": 1,
 		"counts": {
-			"sprites": 102,
-			"images": 53,
-			"flat": 49,
-			"strokes": 27,
-			"corners": 48,
-			"instances": 233
+			"sprites": 97,
+			"images": 55,
+			"flat": 42,
+			"strokes": 24,
+			"corners": 42,
+			"instances": 221
 		}
 	},
 	"school": {
@@ -67,12 +67,12 @@
 		"hour": 10,
 		"scale": 1,
 		"counts": {
-			"sprites": 70,
-			"images": 29,
-			"flat": 41,
-			"strokes": 18,
-			"corners": 36,
-			"instances": 156
+			"sprites": 76,
+			"images": 38,
+			"flat": 38,
+			"strokes": 12,
+			"corners": 26,
+			"instances": 155
 		}
 	},
 	"gas": {
@@ -105,12 +105,12 @@
 		"hour": 10,
 		"scale": 1,
 		"counts": {
-			"sprites": 135,
-			"images": 77,
-			"flat": 58,
-			"strokes": 32,
-			"corners": 46,
-			"instances": 293
+			"sprites": 128,
+			"images": 82,
+			"flat": 46,
+			"strokes": 22,
+			"corners": 37,
+			"instances": 272
 		}
 	},
 	"street-night": {
@@ -125,30 +125,31 @@
 		"scale": 1,
 		"counts": {
 			"sprites": 106,
-			"images": 60,
-			"flat": 46,
-			"strokes": 25,
-			"corners": 41,
-			"instances": 504
+			"images": 63,
+			"flat": 43,
+			"strokes": 20,
+			"corners": 36,
+			"instances": 497
 		}
 	},
 	"overview": {
 		"title": "Overview 3000 x 2000",
 		"rect": {
-			"x": 12200,
-			"y": 5000,
+			"x": 16700,
+			"y": 2000,
 			"w": 3000,
 			"h": 2000
 		},
 		"hour": 10,
 		"scale": 0.5,
+		"noActors": true,
 		"counts": {
-			"sprites": 342,
-			"images": 291,
-			"flat": 51,
-			"strokes": 53,
-			"corners": 35,
-			"instances": 724
+			"sprites": 451,
+			"images": 326,
+			"flat": 125,
+			"strokes": 50,
+			"corners": 64,
+			"instances": 894
 		}
 	},
 	"gas-night": {
@@ -168,6 +169,64 @@
 			"strokes": 24,
 			"corners": 42,
 			"instances": 554
+		}
+	},
+	"campus": {
+		"title": "College campus, its block",
+		"rect": {
+			"x": 18064,
+			"y": 2244,
+			"w": 2080,
+			"h": 2080
+		},
+		"hour": 10,
+		"scale": 0.5,
+		"noActors": true,
+		"counts": {
+			"sprites": 322,
+			"images": 239,
+			"flat": 83,
+			"strokes": 17,
+			"corners": 26,
+			"instances": 607
+		}
+	},
+	"campus-quad": {
+		"title": "College campus, the quad",
+		"rect": {
+			"x": 18488,
+			"y": 2880,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 10,
+		"scale": 1,
+		"counts": {
+			"sprites": 146,
+			"images": 69,
+			"flat": 77,
+			"strokes": 19,
+			"corners": 41,
+			"instances": 278
+		}
+	},
+	"campus-night": {
+		"title": "College campus, the quad at 22:00",
+		"rect": {
+			"x": 18488,
+			"y": 2880,
+			"w": 1280,
+			"h": 800
+		},
+		"hour": 22,
+		"scale": 1,
+		"counts": {
+			"sprites": 146,
+			"images": 69,
+			"flat": 77,
+			"strokes": 19,
+			"corners": 41,
+			"instances": 547
 		}
 	}
 }

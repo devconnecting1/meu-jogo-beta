@@ -7,6 +7,7 @@ import { USABLES } from "shared/data/usables";
 import { PlayerSaveData } from "shared/game/save";
 import { MP_PHASE } from "shared/net/mpConfig";
 import type { RideState } from "shared/sim/rideKey";
+import { REGEN_RESTED_S } from "shared/sim/vitals";
 
 export interface BuffState {
 	speed: number;
@@ -56,6 +57,13 @@ export interface PlayerState {
 	swingReach?: number;
 	/** 1 → 0 after taking damage; renderer flashes the player / vignette while > 0 */
 	hitFlash?: number;
+	/**
+	 * Seconds since this body last LOST hp (a hit through the armour, poison, starvation, rotten meat), counting up to
+	 * REGEN_RESTED_S and stopping there; undefined = rested. It is the wait before healing (DESIGN_RULES VIT-01,
+	 * shared/sim/vitals.ts). Never on the wire: the server keeps its own, and the client's prediction derives its own
+	 * from the self block's hp (client/net/prediction.ts).
+	 */
+	sinceHurt?: number;
 	/** seconds of spitter-acid slow left (set by zombieAI while standing in a puddle) */
 	puddleSlow?: number;
 	vehicleId: number;
@@ -110,6 +118,8 @@ export function createPlayer(save: PlayerSaveData, x: number, y: number): Player
 		iframe: 0,
 		reactionSpeed: 0,
 		reactionDir: 0,
+		// a new body has rested: one built from the save at 60 hp heals from its first step (VIT-01)
+		sinceHurt: REGEN_RESTED_S,
 		buffs: { speed: 0, calm: 0, pain: 0, poison: 0 },
 		weapon: {
 			pointer: save.equipWeapon,
@@ -196,12 +206,16 @@ export function itemUseWouldWork(p: PlayerState, save: PlayerSaveData, usableId:
  * none left, the id is unknown, or the item would have no effect at all: a pure hp/hunger item
  * (no buff, no poison cure) with both hp and hunger already at their max does nothing, so it is
  * not worth burning. `hp` heals, `hunger` feeds (the old code had them swapped).
+ *
+ * What heals here heals AT ONCE, whatever the wait after a hit (DESIGN_RULES VIT-01: the wait is the body's own
+ * healing, not the first-aid kit's); what HURTS here (rotten meat) is HP lost, and restarts that wait.
  */
 export function itemUseEffect(p: PlayerState, save: PlayerSaveData, usableId: number): boolean {
 	if (!itemUseWouldWork(p, save, usableId)) return false;
 	const u = USABLES[usableId];
 
 	p.hp = math.clamp(p.hp + u.hp, -1000, p.hpMax);
+	if (u.hp < 0) p.sinceHurt = 0;
 	p.hungry = math.clamp(p.hungry + u.hunger, 0, p.hungryMax);
 	// buff lengths are minutes; using another one refreshes (never shortens) the buff
 	if (u.speed > 0) p.buffs.speed = math.max(p.buffs.speed, u.speed * 60);
@@ -230,6 +244,10 @@ export function damageIsServerOwned(): boolean {
  *
  * This is the SERVER entry point (and, below DAMAGE_SERVER_PHASE, the local one). Client systems go through
  * `damageToPlayer`, which stops being a damage source once the server owns it.
+ *
+ * Every hit that takes hp restarts the wait before the body heals again (DESIGN_RULES VIT-01, shared/sim/vitals.ts):
+ * zombie bites, the bosses, blasts, a vehicle crash -- they all come through here. A bite the armour stops whole took
+ * nothing, and restarts nothing.
  */
 export function applyPlayerDamage(p: PlayerState, save: PlayerSaveData, raw: number, bypassDef = false): boolean {
 	if (p.dead || p.godMode === true) return false;
@@ -240,6 +258,7 @@ export function applyPlayerDamage(p: PlayerState, save: PlayerSaveData, raw: num
 		if (dd < 0) dd = 0;
 	}
 	p.hp -= dd;
+	if (dd > 0) p.sinceHurt = 0;
 	p.hitFlash = 1;
 	if (!p.attacked) {
 		p.attacked = true;

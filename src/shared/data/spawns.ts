@@ -477,6 +477,57 @@ export const BUILDING_SPAWNS: Array<Array<SpawnEntry>> = [
 		{ building: 11, kind: 3, index: 16, min: 1, max: 2 },
 		{ building: 11, kind: 3, index: 1, min: 1, max: 2 },
 	],
+	// --- the college campus (docs/DESIGN_RULES.md EDI-17): what each building held the week before (EDI-03), never a
+	// gun or a round. Nine slots over four buildings (3 + 2 + 2 + 2) come to about six items in all, one school's
+	// worth (a school search gives 6.2), where the two or three houses of the block gave some fifteen, mostly raw
+	// materials: a good run spread over four searches, never a jackpot. What the campus has instead is aim -- the
+	// lab's chip turns up in one lab search in fourteen (7.4 %), between a big house's 3.7 % and a supermarket's 10.7 %.
+	// 12, the main hall: the lecture rooms' and the faculty office's drawers (plans, cells, bulbs), the lockers of
+	// the back hall (a sweater, a can, a lost watch), the first aid box
+	[
+		{ building: 12, kind: 4, index: 29, min: 1, max: 2 },
+		{ building: 12, kind: 4, index: 31, min: 0.5, max: 0.5 },
+		{ building: 12, kind: 4, index: 32, min: 0.4, max: 0.4 },
+		{ building: 12, kind: 4, index: 34, min: 1, max: 2 },
+		{ building: 12, kind: 3, index: 9, min: 1, max: 1 },
+		{ building: 12, kind: 3, index: 12, min: 0.5, max: 0.5 },
+		{ building: 12, kind: 3, index: 6, min: 0.2, max: 0.2 },
+		{ building: 12, kind: 2, index: 10, min: 0.1, max: 0.1 },
+	],
+	// 13, the library: plans and maps in the archive (blueprints), the reading lamps' batteries and bulbs, the lost
+	// and found, a compass from the geography shelves, a can in the front desk's drawer
+	[
+		{ building: 13, kind: 4, index: 29, min: 1, max: 3 },
+		{ building: 13, kind: 4, index: 31, min: 0.6, max: 0.6 },
+		{ building: 13, kind: 4, index: 32, min: 0.5, max: 0.5 },
+		{ building: 13, kind: 4, index: 34, min: 1, max: 1 },
+		{ building: 13, kind: 2, index: 8, min: 0.1, max: 0.1 },
+		{ building: 13, kind: 3, index: 9, min: 0.25, max: 0.25 },
+	],
+	// 14, the science lab: the "tech" (chips, circuits, parts, cells), the chemistry stockroom's makings of gunpowder,
+	// the lab's first aid kit, and the physics lab's sealed teaching source (radioactive, rare)
+	[
+		{ building: 14, kind: 4, index: 35, min: 0.3, max: 0.3 },
+		{ building: 14, kind: 4, index: 36, min: 0.2, max: 0.2 },
+		{ building: 14, kind: 4, index: 30, min: 1, max: 2 },
+		{ building: 14, kind: 4, index: 31, min: 0.5, max: 0.5 },
+		{ building: 14, kind: 4, index: 33, min: 0.25, max: 0.25 },
+		{ building: 14, kind: 3, index: 5, min: 0.1, max: 0.1 },
+		{ building: 14, kind: 3, index: 12, min: 0.5, max: 0.5 },
+		{ building: 14, kind: 4, index: 43, min: 0.05, max: 0.05 },
+	],
+	// 15, the dorm: the students' food (cans, bread, a frozen pizza, last night's pizza, an apple) and clothes
+	[
+		{ building: 15, kind: 3, index: 9, min: 1, max: 2 },
+		{ building: 15, kind: 3, index: 4, min: 1, max: 2 },
+		{ building: 15, kind: 3, index: 10, min: 1, max: 1 },
+		{ building: 15, kind: 3, index: 11, min: 0.3, max: 0.3 },
+		{ building: 15, kind: 3, index: 17, min: 1, max: 1 },
+		{ building: 15, kind: 4, index: 34, min: 1, max: 3 },
+		{ building: 15, kind: 2, index: 0, min: 0.2, max: 0.2 },
+		{ building: 15, kind: 2, index: 1, min: 0.1, max: 0.1 },
+		{ building: 15, kind: 3, index: 6, min: 0.2, max: 0.2 },
+	],
 ];
 
 /**

@@ -260,3 +260,60 @@ export function birdRow(pet: number, spread: number): number {
 	}
 	return b * BIRD_ROWS_EACH + best;
 }
+
+// ---------------------------------------------------------------- bosses (ART-14)
+
+/**
+ * A boss is too big for 32 headings across one 1024-texel sheet, so each boss sheet puts the 32 headings in two bands
+ * of BOSS_BAND columns: heading `dir` of pose `pose` is column dir % BOSS_BAND, row pose * BOSS_BANDS + (dir >= 16).
+ * One sheet per boss (a cell each size: the giant, the hedgehog and the centipede 40 texels, the rafflesia 68), each
+ * with its Fill / Rim masks for the hit flash, like the horde's. Every boss is baked at the size it is HIT at
+ * (shared/game/entities.ts bossHitRadius), so it is drawn at scale 1: what you see is what you hit.
+ */
+export const BOSS_BAND = 16;
+export const BOSS_BANDS = CHAR_DIRS / BOSS_BAND;
+
+/** the giant (boss 3): three strides and the lunge of its surge */
+export const GIANT_CELL = 40;
+export const GIANT_POSE_LUNGE = STEPS;
+export const GIANT_POSES = STEPS + 1;
+/** the hedgehog (boss 4): three strides */
+export const HEDGEHOG_CELL = 40;
+export const HEDGEHOG_POSES = STEPS;
+/** the centipede (boss 1): its head (fangs shut, fangs open), a body segment in three leg beats, the tail */
+export const CENTIPEDE_CELL = 40;
+export const CENTIPEDE_POSE_HEAD = 0;
+export const CENTIPEDE_POSE_SEGMENT = 2;
+export const CENTIPEDE_POSE_TAIL = CENTIPEDE_POSE_SEGMENT + STEPS;
+export const CENTIPEDE_POSES = CENTIPEDE_POSE_TAIL + 1;
+/**
+ * The rafflesia (boss 2) never turns: its petals are drawn as they lie, and the columns are the beats of its six vines
+ * sweeping round (the flat drawing's 0.6 rad/s), a sixth of a turn -- the vines' symmetry -- in RAFFLESIA_FRAMES.
+ */
+export const RAFFLESIA_CELL = 68;
+export const RAFFLESIA_FRAMES = 12;
+/** the vines' sweep, radians a second (actorsView's flat tentacles: `clock * 0.6`) */
+export const RAFFLESIA_SWEEP = 0.6;
+
+/** the column of heading `dir` in a boss sheet */
+export function bossColumn(dir: number): number {
+	return dir % BOSS_BAND;
+}
+
+/** the row of pose `pose` at heading `dir` in a boss sheet */
+export function bossRow(pose: number, dir: number): number {
+	return pose * BOSS_BANDS + math.floor(dir / BOSS_BAND);
+}
+
+/** the rafflesia's frame at `clock` seconds: where its vines are in their sixth of a turn */
+export function rafflesiaFrame(clock: number): number {
+	const sixth = (math.pi * 2) / 6;
+	const t = (clock * RAFFLESIA_SWEEP) % sixth;
+	const f = math.floor(((t < 0 ? t + sixth : t) / sixth) * RAFFLESIA_FRAMES);
+	return math.clamp(f, 0, RAFFLESIA_FRAMES - 1);
+}
+
+/** the angle the vines of frame `f` were baked at (the generator's side of rafflesiaFrame) */
+export function rafflesiaSweep(f: number): number {
+	return (f / RAFFLESIA_FRAMES) * ((math.pi * 2) / 6);
+}

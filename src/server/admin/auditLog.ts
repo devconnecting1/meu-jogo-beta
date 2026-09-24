@@ -197,18 +197,24 @@ export function auditIdentity(e: AuditRecord): string {
 }
 
 /**
- * A world tool the admin used in their own run (a spawn, the clock, a teleport...), the "assist" mark or a refused
- * non-admin call: many, cheap, and about nobody else. Everything else (kick, ban, unban, a save edit or reset, an
- * announcement) is an action on players, and is what the log is for.
+ * A world tool (a spawn, the clock, a teleport... in the admin's own world, "local:", or in the server's, "world:"),
+ * the "assist" mark, a refused non-admin call, or what the server did on its own (`auto:`): many, cheap, and written by
+ * the game rather than decided by an admin -- a stream of them (an afternoon of spawning, a flood of alts kicked one
+ * after the other) must never push an admin's kick or ban out of the log (the review of 8f50bc5, MEDIUM-4; the
+ * security review of the net hardening, L6). Everything else (kick, ban, unban, a save edit or reset, an
+ * announcement) is an admin's action on players, and is what the log is for.
  */
 function isToolEntry(e: AuditRecord): boolean {
-	return e.action.sub(1, 6) === "local:" || e.action === "assist" || e.action === "DENIED" || isAutoEntry(e);
+	const head = e.action.sub(1, 6);
+	return head === "local:" || head === "world:" || e.action === "assist" || e.action === "DENIED" || isAutoEntry(e);
 }
 
 /**
- * What the server did on its own (`auto:`, a flood kick): the audit keeps it, but it is cheap to cause -- one alt
- * rejoining and flooding again is one more line -- so it trims like a tool entry, and one per action and UserId per
- * key is enough (`appendAudit` keeps the newest). The security review of the net hardening, L6.
+ * What the server did on its own (`auto:`: a flood kick, by server/net/mpHost.ts or by the admin remote's own
+ * ADMIN_RATE rule): the audit keeps it, but it is cheap to cause -- one alt rejoining and flooding again is one more
+ * kick -- so it trims like a tool entry, the admin server writes one per action and UserId per server
+ * (server/admin/adminServer.ts `recordAs`), and a key keeps one per action and UserId (`appendAudit` keeps the
+ * newest: the same player kicked by another server of the same day). The security review of the net hardening, L6.
  */
 function isAutoEntry(e: AuditRecord): boolean {
 	return e.action.sub(1, 5) === "auto:";
