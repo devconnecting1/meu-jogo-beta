@@ -24,6 +24,7 @@ import { isFiniteNumber } from "shared/net/codec";
 import { MP_PHASE } from "shared/net/mpConfig";
 import { creditBossAchievement, creditKillAchievements, creditTurretKill } from "../save/achievements";
 import { creditZombieKill } from "../save/titles";
+import * as Analytics from "../analytics/events";
 
 // ---------------------------------------------------------------- constants (§3.6)
 
@@ -90,6 +91,7 @@ export function creditBossKill(save: PlayerSaveData, paid = true): number {
 	if (!paid || save.bossKills === before) return 0;
 	const coins = ECONOMY.COINS_PER_BOSS;
 	save.money = math.min(SAVE_LIMITS.MONEY_MAX, save.money + coins);
+	Analytics.bossCoins(save, coins);
 	return coins;
 }
 
@@ -146,6 +148,7 @@ export function creditDaySurvived(save: PlayerSaveData, paid = true): DayCredit 
 	}
 	out.coins += out.milestone;
 	save.money = math.min(SAVE_LIMITS.MONEY_MAX, save.money + out.coins);
+	Analytics.dayCoins(save, out.coins, out.milestone);
 	return out;
 }
 

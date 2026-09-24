@@ -17,7 +17,9 @@
  *   3. MP_PHASE = 0 has no authoritative position anywhere, so every line goes to everyone;
  *   4. a head carries at most MAX_LINES, and the newest line never queues behind an older one;
  *   5. a line that has run out frees its slot without costing a live one;
- *   6. a line is solid for most of its life and only fades at the end of it.
+ *   6. a line is solid for most of its life and only fades at the end of it;
+ *   7. the chat bar is on only with a body in the world (MP-18: the lobby never pretends a line was heard);
+ *   8. no whispers: the /whisper command is off on both sides, and a whisper channel delivers nothing (MP-17).
  *
  * Pure Node (>= 18) plus the project's TypeScript, with the same shims the other tools use.
  */
@@ -34,10 +36,35 @@ const ts = require("typescript");
 
 globalThis.math = { floor: Math.floor, max: Math.max, min: Math.min, huge: Infinity };
 
-// roblox-ts arrays expose size() as a method; nothing else of Luau is needed here
+// roblox-ts arrays and strings expose size() as a method, and strings Luau's sub(); nothing else of Luau is needed
 Object.defineProperty(Array.prototype, "size", {
 	value: function () {
 		return this.length;
+	},
+	configurable: true,
+	writable: true,
+});
+Object.defineProperty(String.prototype, "size", {
+	value: function () {
+		return Buffer.byteLength(this.valueOf(), "utf8");
+	},
+	configurable: true,
+	writable: true,
+});
+Object.defineProperty(String.prototype, "lower", {
+	value: function () {
+		return this.toLowerCase();
+	},
+	configurable: true,
+	writable: true,
+});
+// String.prototype.sub is a legacy JS method (it wraps the string in <sub>): replaced by Luau's string.sub
+Object.defineProperty(String.prototype, "sub", {
+	value: function (i = 1, j = -1) {
+		const n = this.length;
+		const s = i < 0 ? Math.max(n + i + 1, 1) : Math.max(i, 1);
+		const e = j < 0 ? n + j + 1 : Math.min(j, n);
+		return s > e ? "" : this.slice(s - 1, e);
 	},
 	configurable: true,
 	writable: true,
@@ -64,7 +91,11 @@ const {
 	LINE_FADE_S,
 	LINE_LIFE_S,
 	MAX_LINES,
+	WHISPER_COMMAND,
+	chatInputEnabled,
 	dropCount,
+	isWhisperAttempt,
+	isWhisperChannel,
 	lineFade,
 	shouldDeliver,
 	withinChatRange,
@@ -205,9 +236,78 @@ console.log("\n6) o balao fica solido e so apaga no fim");
 	check("vida entre 6 e 8 s", LINE_LIFE_S >= 6 && LINE_LIFE_S <= 8, LINE_LIFE_S + " s");
 }
 
+// ---------------------------------------------------------------- 7: the chat bar follows the body
+
+console.log("\n7) sem corpo, sem barra de chat: o lobby nao finge que alguem ouviu (MP-18)");
+{
+	check("no mundo: barra ligada", chatInputEnabled(true, 1));
+	check("no lobby, na loja, nos creditos: desligada", chatInputEnabled(false, 1) === false);
+	check("MP_PHASE = 0 (todos ouvem todos): sempre ligada", chatInputEnabled(false, 0));
+	// the bar and the delivery rule say the same thing: whoever may type is heard by a body next to them
+	const near = { x: 0, y: 0 };
+	check(
+		"quem pode digitar e ouvido por quem esta perto; quem nao pode, por ninguem",
+		chatInputEnabled(true, 1) === shouldDeliver(near, near, 1) &&
+			chatInputEnabled(false, 1) === shouldDeliver(undefined, near, 1),
+	);
+	const boot = readFileSync(join(SRC, "client/bootstrap.ts"), "utf8");
+	const setPhase = boot.slice(boot.indexOf("export function setPhase("));
+	check(
+		"toda troca de fase passa pela regra: a barra liga na partida (viva ou esperando o amanhecer) e so nela",
+		/syncChatInput\(p === "playing" \|\| p === "dead"/.test(setPhase.slice(0, 400)),
+	);
+}
+
+// ---------------------------------------------------------------- 8: no whispers
+
+console.log("\n8) sem sussurro: nenhuma fala passa por cima do alcance (MP-17)");
+{
+	check("o comando padrao e o RBXWhisperCommand", WHISPER_COMMAND === "RBXWhisperCommand");
+	check("canal de sussurro reconhecido", isWhisperChannel("RBXWhisper:1_2"));
+	check("o geral nao e sussurro", isWhisperChannel("RBXGeneral") === false);
+	check("nem o de sistema", isWhisperChannel("RBXSystem") === false);
+	const server = readFileSync(join(SRC, "server/chat/proximityChat.ts"), "utf8");
+	check(
+		"o servidor desliga o comando /whisper",
+		/WHISPER_COMMAND/.test(server) && /whisper\.Enabled = false/.test(server),
+	);
+	check(
+		"e um canal de sussurro que apareca assim mesmo nao entrega nada, nem os que nascem depois",
+		/isWhisperChannel\(child\.Name\)\) child\.ShouldDeliverCallback = \(\) => false/.test(server) &&
+			/channels\.ChildAdded\.Connect\(seal\)/.test(server),
+	);
+	const client = readFileSync(join(SRC, "client/chatInput.ts"), "utf8");
+	check(
+		"o cliente tambem (a barra nunca abre uma aba de sussurro que o servidor nao entrega)",
+		/whisper\.Enabled = false/.test(client),
+	);
+	// with the command off, "/w Bob ..." would be said out loud to the whole street: it goes to nobody, and the sender
+	// is told why
+	const tries = ["/w Bob meet me", "/W bob hi", "/whisper Ana hi", "/w", "/WHISPER x"];
+	const says = ["/wave hi", "/whisperer", "w Bob", "hello /w Bob", "/e dance", ""];
+	check(
+		"'/w nome ...' e '/whisper ...' sao reconhecidos (sem distinguir maiusculas)",
+		tries.every(isWhisperAttempt),
+		tries.filter(t => !isWhisperAttempt(t)).join(" | ") || `${tries.length} casos`,
+	);
+	check(
+		"...e so eles: '/wave', '/whisperer', um 'w' solto e o resto sao fala normal",
+		says.every(t => !isWhisperAttempt(t)),
+		says.filter(isWhisperAttempt).join(" | ") || `${says.length} casos`,
+	);
+	check(
+		"o servidor nao entrega um '/w ...' a ninguem (nem aos de perto)",
+		/if \(isWhisperAttempt\(message\.Text\)\) return false;/.test(server),
+	);
+	check(
+		"e quem mandou le que o sussurro esta desligado",
+		/SendingMessage\.Connect/.test(client) && /isWhisperAttempt\(message\.Text\)/.test(client),
+	);
+}
+
 console.log("");
 if (failures > 0) {
 	console.error(failures + " verificacao(oes) falharam");
 	process.exit(1);
 }
-console.log("OK: alcance, presenca, fase 0, teto de baloes, expiracao e fade");
+console.log("OK: alcance, presenca, fase 0, teto de baloes, expiracao e fade, barra de chat e sem sussurro");
