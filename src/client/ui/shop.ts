@@ -59,7 +59,8 @@ import * as Kit from "./window";
  *   as the Bag's own item icons (UI-11) on tiles with the count on each, the names beside them in the same order, and
  *   the price with Buy on one line. A pet pack shows the pet itself, drawn by the wardrobe's SurvivorPreview (a bird
  *   in flight, wings spread: landed and seen from above, a pigeon is a grey oval), and says the truth about it: it
- *   stays until a New game (MON-04; the Wardrobe sells the one that stays). Already owned for good: "Owned".
+ *   stays for this life -- a New game or the town's end takes it (MON-04; the Wardrobe sells the one that stays).
+ *   Already owned for good: "Owned".
  * - Can't afford it: Buy is disabled and says how much is missing ("10 more needed"), on every card alike. It used to
  *   turn into a hollow outline -- a style of its own that read as focus or as another kind of button.
  * - No "popular" or "best value" tag: nothing in the data says which pack is either, and a tag that invents urgency is
@@ -81,6 +82,8 @@ export function actionErrorText(reason: ShopActionReason | undefined, langType: 
 	if (reason === "rate") return tr("Please wait a moment");
 	if (reason === "loading") return tr("Still loading your progress");
 	if (reason === "readonly") return tr("Progress not loaded");
+	// a Robux prompt for this costume is open (server/save/robux.ts): neither the coins nor a second prompt meanwhile
+	if (reason === "pending") return tr("Finish the Robux purchase first");
 	// "outdated" = the request named a run the session has already moved past. client/main.client.ts retries
 	// it once with the corrected runRev, so reaching this text means the two really do disagree -- say that,
 	// instead of "Please try again", which told a player to repeat the click that had just failed.
@@ -196,7 +199,7 @@ const BOLD = fontOf("sans", Enum.FontWeight.Bold);
 const HELP_TEXT = [
 	"Every pack has fixed contents, shown in full on its card: what you see is what you get.",
 	"Packs go into your backpack the next time you enter the city.",
-	"A pet from a pack stays until a New game. The Wardrobe sells outfits and pets you keep for good.",
+	"A pet from a pack stays for this life, until a New game or the town ends. The Wardrobe sells outfits and pets you keep for good.",
 	"Coins are earned by playing: the Earn coins tab shows how, and how far you are from the next ones.",
 ].join("#");
 
@@ -440,7 +443,7 @@ export function showShop(ctx: GameContext, onBack: () => void, onWardrobe: () =>
 		let priceX = CARD_PAD;
 		if (petEquip >= 0) {
 			// a pet pack: the pet itself, drawn as the wardrobe draws it, in a bed down to the price line, and what it
-			// is -- it stays until a New game (MON-04: the Wardrobe sells the one that stays)
+			// is -- it stays for this life, until a New game or the town ends (MON-04: the Wardrobe sells the one that stays)
 			const bedH = footY + FOOT_H - TILES_Y;
 			const bed = makeFrame(card, "PetBed", CARD_PAD, TILES_Y, PET_W, bedH, THEME.background, {
 				transparency: 1,
@@ -462,7 +465,7 @@ export function showShop(ctx: GameContext, onBack: () => void, onWardrobe: () =>
 			pet.draw(0);
 			previews.push(pet);
 			lines.push(tr(nameOf(ItemKind.Equip, petEquip)));
-			lines.push(tr("Stays until a New game"));
+			lines.push(tr("Stays for this life"));
 			priceX = namesX;
 		} else {
 			for (let k = 0; k < pack.items.size(); k++) {

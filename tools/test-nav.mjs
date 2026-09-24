@@ -1800,7 +1800,7 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 		// what is inside: the Bag's icons, one tile per item, with the count; a pet pack draws the pet itself
 		const iconsOk = SHOP_PACKS.every((p, i) => {
 			const c = card(i);
-			if (p.name.startsWith("Pet ")) return findIn(c, "Pet") !== undefined && /New game/.test(allText(c));
+			if (p.name.startsWith("Pet ")) return findIn(c, "Pet") !== undefined && /this life/.test(allText(c));
 			return p.items.every(
 				(it, k) =>
 					findIn(findIn(c, `Item${k}`), "Icon")?.GetAttribute("Icon") !== "" &&

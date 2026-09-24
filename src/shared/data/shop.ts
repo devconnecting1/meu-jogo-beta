@@ -57,15 +57,20 @@ export interface IncomeProfile {
 	bossesPerHour: number;
 	/** new record days that are a multiple of MILESTONE_EVERY, per hour, averaged over the first ~30 hours */
 	recordsPerHour: number;
+	/**
+	 * Hours of play one LIFE lasts: from its day 1 to a New game or the end of its town (MP-22: everybody down and nobody
+	 * paying). A pet pack's pet lives exactly that long (`resetRun` takes it), which is what a rental is priced against.
+	 */
+	lifeHours: number;
 }
 
 export const INCOME_PROFILES = {
 	/** dies most nights in waves 1-2 (so the midnight is lost), never near a boss, reaches day 5 in the first ~7 h */
-	new: { paidDays: 0.4, bossesPerHour: 0, recordsPerHour: 0.15 },
+	new: { paidDays: 0.4, bossesPerHour: 0, recordsPerHour: 0.15, lifeHours: 1.5 },
 	/** lives most nights, helps with a boss every other hour, a record of ~30 days after ~30 h */
-	average: { paidDays: 0.7, bossesPerHour: 0.5, recordsPerHour: 0.2 },
+	average: { paidDays: 0.7, bossesPerHour: 0.5, recordsPerHour: 0.2, lifeHours: 4 },
 	/** nearly never misses a midnight, hunts bosses (they wake from world day 5, every 3 days), ~45 days in ~30 h */
-	strong: { paidDays: 0.95, bossesPerHour: 1.5, recordsPerHour: 0.3 },
+	strong: { paidDays: 0.95, bossesPerHour: 1.5, recordsPerHour: 0.3, lifeHours: 10 },
 } as const;
 export type IncomeProfileName = keyof typeof INCOME_PROFILES;
 
@@ -91,7 +96,8 @@ export function hoursOfPlay(coins: number, profile: IncomeProfile = INCOME_PROFI
  *
  *   starter  the packs a new survivor can buy first: the welcome gift pays for one (STARTING_COINS)
  *   supply   the other packs: consumables and materials, a few hours of play each (MON-01 note in MON-03)
- *   rental   a pet pack: the pet until a New game, a fraction of what keeping it for good costs (PET_RENTAL_SHARE)
+ *   rental   a pet pack: the pet for THIS LIFE -- until a New game or the end of the town (MP-22), both of which start a
+ *            new life (`resetRun`) -- at a fraction of what keeping it for good costs (PET_RENTAL_SHARE)
  *   common / rare / top   the wardrobe's outfits and pets, kept for good (MON-04)
  */
 export type PriceTier = "starter" | "supply" | "rental" | "common" | "rare" | "top";
@@ -110,8 +116,24 @@ export const PRICE_TIERS: { readonly [K in PriceTier]: HoursBand } = {
 	top: { min: 25, max: 40 },
 };
 
-/** a pet pack costs at most this share of keeping the same pet for good (it goes with the next New game) */
+/**
+ * A pet pack costs at most this share of keeping the same pet for good. It lasts one life (a New game or the town's end
+ * takes it), so renting it life after life costs more than buying it from the third life on (1 / 0.35 ≈ 2.9) -- the
+ * wardrobe's is the better deal for anyone who keeps the pet, the pack a cheap way to try one for a life.
+ */
 export const PET_RENTAL_SHARE = 0.35;
+
+/**
+ * Robux, the owner's decision of 2026-09-24 (delegated to the orchestrator; docs/SHOP.md "Robux: decisões e desenho"):
+ * the SAME outfits and pets the wardrobe sells for coins can also be bought with Robux, one developer product per costume
+ * (src/shared/data/robuxProducts.ts), at the price of its tier. Only cosmetics: never coins, packs, a Rebirth, XP or time
+ * (MON-01). ~11-13 Robux per hour of average play the coin price asks (tools/test-shop.mjs checks the band).
+ */
+export const ROBUX_TIER_PRICE: { readonly [K in PriceTier]?: number } = {
+	common: 49,
+	rare: 149,
+	top: 349,
+};
 
 /** the model's promises about the early game and the long tail (tools/test-shop.mjs checks each) */
 export const ECONOMY_TARGETS = {
@@ -125,6 +147,10 @@ export const ECONOMY_TARGETS = {
 	thirdRebirthMinHours: 2,
 	/** …the fifth: more than most of a rare cosmetic */
 	fifthRebirthMinHours: 8,
+	/** a pet pack costs at most this share of the average LIFE it lasts, in hours of play (earned back within it) */
+	rentalShareOfLife: 0.5,
+	/** Robux per hour of average play a cosmetic's coin price asks: the Robux price never undercuts play, nor gouges */
+	robuxPerHour: { min: 8, max: 16 },
 } as const;
 
 // ---------------------------------------------------------------- Rebirth
@@ -137,6 +163,18 @@ export const ECONOMY_TARGETS = {
 export function rebirthPrice(deathCount: number): number {
 	const d = math.max(0, math.floor(deathCount));
 	return d * d * 10 + 10;
+}
+
+/**
+ * The Player attribute (true, or absent) where the server says this survivor's daybreak already came while they waited
+ * in the lobby (server/sim/life.ts `daybreakDue`): the next entry stands them up for nothing, so a Rebirth asked now is
+ * not charged (server/main.server.ts). The lobby shows that price -- 0 -- instead of one the server would not take.
+ */
+export const REBIRTH_FREE_ATTR = "pz_rebirth_free";
+
+/** what a Rebirth costs right now: nothing when the daybreak already came (`free`), else the continue's price */
+export function rebirthCharge(deathCount: number, free: boolean): number {
+	return free ? 0 : rebirthPrice(deathCount);
 }
 
 // ---------------------------------------------------------------- packs

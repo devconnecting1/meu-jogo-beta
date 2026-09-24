@@ -1,4 +1,4 @@
-import { enforceSaveInvariants, PlayerSaveData, SAVE_LIMITS } from "shared/game/save";
+import { enforceSaveInvariants, PlayerSaveData, robuxPaid, SAVE_LIMITS } from "shared/game/save";
 import { WEAPONS } from "shared/data/weapons";
 import { EQUIPS } from "shared/data/equips";
 import { USABLES } from "shared/data/usables";
@@ -183,7 +183,9 @@ export function applyAdminOps(save: PlayerSaveData, ops: Array<AdminOp>): void {
 			const now = itemCount(save, o.group, o.index);
 			setItem(save, o.group, o.index, o.mode === "min" ? math.max(now, o.count) : o.count);
 		} else if (o.op === "costume") {
-			save.costumes[o.id] = o.owned ? 1 : 0;
+			// a costume bought with Robux is never taken back (docs/SHOP.md): the server refuses such an edit whole
+			// (server/main.server.ts `adminEdit`), and this side keeps it too -- so does `enforceSaveInvariants`
+			if (o.owned || !robuxPaid(save, o.id)) save.costumes[o.id] = o.owned ? 1 : 0;
 		} else {
 			let spent = 0;
 			for (let i = 0; i < save.skillLevels.size(); i++) {

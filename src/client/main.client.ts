@@ -6,7 +6,6 @@ import { CRAFT_RECIPES } from "shared/data/crafts";
 import { DeathNote, deathKindOf } from "shared/data/deathCause";
 import { EQUIPS, EquipSlot } from "shared/data/equips";
 import { langGet } from "shared/data/lang";
-import { rebirthPrice } from "shared/data/shop";
 import { USABLES } from "shared/data/usables";
 import { MP_PHASE } from "shared/net/mpConfig";
 import { ShopActionRequest, ShopActionResult } from "shared/net/net";
@@ -1066,7 +1065,8 @@ function doRebirth(): void {
 	// MP-21 (owner's rule, 23 Sep 2026): a paid Rebirth is legal on every server kind; the server checks the death
 	// the Rebirth button stays clickable even when it's styled as "can't afford" (destructive) -
 	// check locally first so the player gets an exact, instant reason instead of just nothing happening
-	const price = rebirthPrice(ctx.save.deathCount);
+	// the server's price right now: nothing once the daybreak came while they waited in the lobby
+	const price = net.rebirthPriceNow(ctx.save.deathCount);
 	if (ctx.save.money < price) {
 		toast(ctx, `${tr("Not enough coins")}: ${fmtInt(price - ctx.save.money)} ${tr("more needed")}`, "error");
 		return;

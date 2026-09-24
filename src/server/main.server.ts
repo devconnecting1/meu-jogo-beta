@@ -2,24 +2,27 @@ import { GAME_NAME } from "shared/module";
 import {
 	bagOf,
 	bagSignature,
+	carryRobuxPurchases,
 	copySaveInto,
 	defaultSave,
 	enforceSaveInvariants,
 	packPetOwned,
 	PlayerSaveData,
 	resetRun,
+	robuxPaid,
 	SAVE_LIMITS,
 	sanitizeClientReport,
 	sanitizeStoredSave,
 	walletOf,
 } from "shared/game/save";
-import { ECONOMY, rebirthPrice, SHOP_PACKS } from "shared/data/shop";
+import { ECONOMY, REBIRTH_FREE_ATTR, rebirthCharge, SHOP_PACKS } from "shared/data/shop";
 import { breakNudgeEarned } from "shared/data/wellbeing";
 import {
 	createRemotes,
 	LoadResult,
 	LoadStatus,
 	MAX_SAVE_PAYLOAD,
+	NET_FOLDER,
 	SAVE_MIN_INTERVAL,
 	SaveAckPayload,
 	SaveRejectReason,
@@ -45,6 +48,7 @@ import { AdminEditOutcome, AdminLiveView, AdminServer, startAdminServer } from "
 import { LINGER_S, MpHost, startMpHost } from "./net/mpHost";
 import { LEGACY_STORE, ownerTag, SAVE_STORE } from "./save/stores";
 import { buyCostume } from "./save/costumes";
+import { RobuxSession, RobuxShop, startRobuxShop } from "./save/robux";
 import { equipTitle } from "./save/titles";
 import * as TitleRecord from "./save/titleRecord";
 import * as Cadence from "./save/saveCadence";
@@ -137,7 +141,15 @@ const LEVEL_CREDIT_START = 5;
  * shop opening is the client's commonest ShopAction, and counting it malformed kicked a player who opened it 51 times
  * in 10 s.
  */
-const SHOP_KINDS = new Set<string>(["buyPack", "buyCostume", "equipTitle", "rebirth", "newRun", "viewShop"]);
+const SHOP_KINDS = new Set<string>([
+	"buyPack",
+	"buyCostume",
+	"robuxCostume",
+	"equipTitle",
+	"rebirth",
+	"newRun",
+	"viewShop",
+]);
 /**
  * A REJECTED report is answered at most this often (s; audit M2). An honest client reports once per
  * SAVE_MIN_INTERVAL and retries an "outdated" one after 1 s, so it never sees this; a stream of junk SaveRequests
@@ -287,6 +299,8 @@ let adminPatchSerial = 0;
 let mpHost: MpHost | undefined;
 /** where a survivor plays (server/match/matchHost.ts, §7.4): started after the host, read lazily by its closures */
 let match: MatchHost | undefined;
+/** the wardrobe's costumes for Robux (server/save/robux.ts); undefined where there is no MarketplaceService */
+let robux: RobuxShop | undefined;
 
 // ---------------------------------------------------------------- session state helpers
 
@@ -1279,11 +1293,22 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 		save.packsBought[id] = (save.packsBought[id] ?? 0) + 1;
 		if (nonce !== undefined) keepReceipt(s.receipts, { nonce, packId: id, price });
 	} else if (req.kind === "buyCostume") {
+		// a Robux prompt for this very costume is open (or its receipt is on the way): no coins for it meanwhile, so no
+		// race makes anybody pay twice for one costume (server/save/robux.ts PROMPT_HOLD_S)
+		if (robux !== undefined && robux.pendingFor(player.UserId) === req.costumeId) return fail("pending", s);
 		// the wardrobe (MON-04): id, price, ownership and coins are all decided in server/save/costumes.ts -- the
 		// request carries nothing but the id, and a `price` field in it is never read
 		const bought = buyCostume(save, req.costumeId);
 		if (!bought.ok) return fail(bought.reason, s);
 		price = bought.price;
+	} else if (req.kind === "robuxCostume") {
+		// the same costume for Robux (docs/SHOP.md): THIS server opens Roblox's prompt, for a costume it verified and the
+		// player does not own. Nothing is granted or charged here -- the costume comes with its receipt (ProcessReceipt),
+		// and the pushed wallet brings it. `price` 0: no coin moved
+		if (robux === undefined) return fail("invalid", s);
+		const refusal = robux.prompt(player, save, req.costumeId, persists(s));
+		if (refusal !== undefined) return fail(refusal, s);
+		return { ok: true, price: 0, wallet: walletOf(save) };
 	} else if (req.kind === "equipTitle") {
 		// the wardrobe's Titles tab (MON-05): only a title the SERVER granted can be shown (server/save/titles.ts);
 		// the replicator's profile pass then puts it under the name for everybody
@@ -1324,7 +1349,7 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 				runRev: save.runRev,
 				assisted: s.assistedRunRev,
 			};
-			price = due ? 0 : rebirthPrice(save.deathCount);
+			price = rebirthCharge(save.deathCount, due);
 			save.money -= price;
 			if (!due) save.deathCount += 1;
 			save.runOver = false;
@@ -1399,6 +1424,40 @@ remotes.shopAction.OnServerInvoke = (player, request) => {
 	if (floodDrop(player, malformed, takesShopToken(kind) ? "shop" : undefined)) return fail("rate");
 	return handleAction(player, request);
 };
+
+// ---------------------------------------------------------------- Robux (docs/SHOP.md "Robux: decisões e desenho")
+
+/**
+ * What server/save/robux.ts may know of a session: its live save, whether it can record a purchase, and a write NOW.
+ * `commit` is the recipe's "save, and only a save that landed answers PurchaseGranted": the session marked dirty and
+ * flushed under its lock (outside the coalesced cadence: SAV-01's exception for a purchase paid in real money). A leave
+ * that wrote meanwhile may have encoded the save BEFORE the grant, so only a write made while the session is still
+ * open counts -- otherwise NotProcessedYet, and the next join finds the PurchaseId, or grants it again: both are safe.
+ */
+function robuxSession(player: Player): RobuxSession | undefined {
+	const s = sessions.get(player);
+	if (s === undefined) return undefined;
+	return {
+		save: s.save,
+		state: () => {
+			if (s.closed) return "closed";
+			if (!s.loaded || s.loading || s.retryQueued) return "loading";
+			return persists(s) ? "ok" : "readonly";
+		},
+		commit: () => {
+			if (s.closed || !s.loaded || !persists(s)) return false;
+			s.dirty = true;
+			const landed = guarded("Robux purchase save", () => flush(s, false), s.key) === true;
+			return landed && !s.closed && !s.released && persists(s);
+		},
+	};
+}
+
+// ProcessReceipt is set before any player is admitted below: a join brings its pending receipts at once
+robux = startRobuxShop({
+	session: robuxSession,
+	net: game.GetService("ReplicatedStorage").FindFirstChild(NET_FOLDER),
+});
 
 // ---------------------------------------------------------------- lifecycle
 
@@ -1603,7 +1662,9 @@ function walletSignature(save: PlayerSaveData): string {
 	for (const v of save.titles) titles += v > 0 ? "1" : "0";
 	const achievements = save.achievements.join(",");
 	const packs = save.packsOpened.join(",");
-	return `${save.money}|${save.level}|${save.exp}|${save.bestDay}|${save.bossKills}|${save.day}|${save.lifeNights}|${save.zombieKills}|${titles}|${achievements}|${packs}`;
+	// the costumes too: a Robux receipt grants one outside any ShopAction, and this push is how the wardrobe hears of it
+	const costumes = save.costumes.join(",");
+	return `${save.money}|${save.level}|${save.exp}|${save.bestDay}|${save.bossKills}|${save.day}|${save.lifeNights}|${save.zombieKills}|${titles}|${achievements}|${packs}|${costumes}`;
 }
 
 function pushWallets(): void {
@@ -1615,16 +1676,21 @@ function pushWallets(): void {
 	}
 	for (const [player, s] of sessions) {
 		if (s.closed || !s.loaded) continue;
+		// the Rebirth's price as the lobby must show it: nothing once this survivor's daybreak came (review of de31f47,
+		// L8). A look only (`daybreakDuePeek`); the charge is decided again when the Rebirth is asked
+		const free = mpHost !== undefined && mpHost.lives.daybreakDuePeek(player.UserId) ? true : undefined;
+		if (player.GetAttribute(REBIRTH_FREE_ATTR) !== free) player.SetAttribute(REBIRTH_FREE_ATTR, free);
 		const sig = walletSignature(s.save);
 		const last = pushedWallet.get(player);
 		pushedWallet.set(player, sig);
 		const bag = bagFor(player, s.save);
 		const lastBag = pushedBag.get(player);
 		if (bag !== undefined) pushedBag.set(player, bag.sig);
-		// the first look only takes note: the LoadAck already carried the whole save
+		// the first look only takes note: the LoadAck already carried the whole save -- unless coins were paid meanwhile
+		// (a midnight right after the load, review of de31f47 L2): those are told at this first push, not held for later
 		const walletMoved = last !== undefined && last !== sig;
 		const bagMoved = bag !== undefined && lastBag !== undefined && lastBag !== bag.sig;
-		if (!walletMoved && !bagMoved) continue;
+		if (!walletMoved && !bagMoved && !(s.income.coins > 0)) continue;
 		const wallet = walletOf(s.save);
 		// the bag only rides when IT moved: an XP tick in a firefight must not resend 150 numbers (§4.8)
 		if (bag !== undefined && bagMoved) wallet.bag = bagOf(s.save, bag.place, bag.ack, bag.seq, bag.holster);
@@ -1645,7 +1711,9 @@ function pushWallets(): void {
 }
 
 // MON-06: the coins the simulation pays on its own go on the session whose live save it is, for the next push (the
-// save table is the session's own: the simulation writes into it in place, §6.3)
+// save table is the session's own: the simulation writes into it in place, §6.3). A session that closed before its next
+// push loses only the TOAST (review of de31f47, L2): the coins are in its save, which the leave writes, and the next
+// session shows the balance -- nobody is owed a notice for a server they left.
 onIncome((save, income) => {
 	for (const [, s] of sessions) {
 		if (s.save !== save || s.closed) continue;
@@ -1689,10 +1757,21 @@ function adminEdit(player: Player, ops: Array<AdminOp> | undefined): AdminEditOu
 		return { ...none, error: "read-only session (the save could not be loaded or the session lock was lost)" };
 	}
 	const before = s.save;
+	// a costume paid for in real money is never taken back (docs/SHOP.md, Robux item 5): the edit is refused whole, so
+	// neither this save nor the player's client (which applies the same ops) moves
+	if (ops !== undefined) {
+		for (const o of ops) {
+			if (o.op === "costume" && !o.owned && robuxPaid(before, o.id)) {
+				return { ...none, error: "that costume was bought with Robux: it cannot be taken back" };
+			}
+		}
+	}
 	let edited: PlayerSaveData;
 	if (ops === undefined) {
 		edited = freshSave(true);
 		edited.settings = before.settings;
+		// a reset makes a new player's save, but what was bought with Robux stays theirs (the receipts and the costumes)
+		carryRobuxPurchases(before, edited);
 	} else {
 		edited = sanitizeStoredSave(before);
 		applyAdminOps(edited, ops);

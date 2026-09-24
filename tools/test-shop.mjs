@@ -39,7 +39,16 @@
  *                        the "+3" (and the "+10" of a record day), a boss the "+8", each told once in a pushed wallet
  *                        and toasted from it ("+13 coins  Day survived ×1 · Record day ×1"); the welcome-pack knob gives
  *                        a pack, pending on its card, for no coins.
- *   8. ROBUX             nothing is sold for Robux: no MarketplaceService anywhere in src/, and docs/SHOP.md says so.
+ *   8. ROBUX             only where it belongs (the server's one module, the wardrobe's one button, cosmetics only, no
+ *                        "R$"); then the real server with a fake MarketplaceService: no id -> no offer, no prompt, coins
+ *                        as ever; the price Roblox confirms is the one offered and shown; the SERVER prompts, only what
+ *                        is not yours, and holds the coin purchase meanwhile; a receipt grants once, only after the write
+ *                        with its PurchaseId landed (NotProcessedYet while the DataStore fails, granted on the retry); a
+ *                        receipt for nobody here, an unknown product, junk: nothing; one already owned: acknowledged,
+ *                        never coins; the admin cannot take it back; another server still has it; and the real wardrobe
+ *                        shows both prices, the coin Buy first, "See Price" beside it, "Unlocked" when the receipt lands.
+ *   9. REBIRTH AT 0      the daybreak came while the dead survivor waited in the lobby: the server says so
+ *                        (`pz_rebirth_free`), the lobby shows the Rebirth at 0 and the server charges 0.
  *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs / tools/ui-shim.mjs, plus the small fake
  * Roblox of tools/test-analytics.mjs (copied: each suite carries its own).
@@ -97,6 +106,11 @@ function runUi(inPath, outPath) {
 	};
 	const noop = () => {};
 	const out = {};
+	if (input.mode === "robux") {
+		const deps = { ctx, layer, deep, use, noop, saveClient, SRC, require, flush, COSTUMES, COS, EquipSlot };
+		writeFileSync(outPath, JSON.stringify(robuxUi(input, { ...deps, showWardrobe, showLobby })));
+		return;
+	}
 
 	// ---- the Shop: each card's price, its Buy, its Pending chip; the Earn coins page
 	const shopView = (save, money) => {
@@ -230,6 +244,146 @@ function runUi(inPath, outPath) {
 	out.welcome = SHOP.welcomeText(0);
 	out.earned = input.acks.map(a => SHOP.earnedText(a, 0));
 	writeFileSync(outPath, JSON.stringify(out));
+}
+
+/**
+ * The child's Robux mode: the REAL wardrobe with the offer the server published (`input.offer`, the attribute's text on
+ * ReplicatedStorage.Net), every costume's details panel; a click on See Price (what it sends), a refusal's toast, the
+ * receipt's wallet ("Unlocked"); and the lobby's Rebirth before and after the server says the daybreak made it free.
+ */
+function robuxUi(input, d) {
+	const { ctx, layer, deep, use, noop, saveClient, SRC, require, flush, COSTUMES, COS, EquipSlot } = d;
+	const out = {};
+	const POP = require(join(SRC, "client/ui/popup.ts"));
+	const toasts = [];
+	POP.toast = (_ctx, text, kind) => toasts.push({ text, kind });
+	const RS = game.GetService("ReplicatedStorage");
+	let netFolder = RS.FindFirstChild("Net");
+	if (netFolder === undefined) {
+		netFolder = new Instance("Folder");
+		netFolder.Name = "Net";
+		netFolder.Parent = RS;
+	}
+	const requests = [];
+	let answer = { ok: true, price: 0 };
+	saveClient.invokeShopAction = req => {
+		requests.push(clone(req));
+		return answer;
+	};
+	let walletFn;
+	saveClient.onWalletChanged = fn => {
+		walletFn = fn;
+		return () => {};
+	};
+	const btn = (root, name) => {
+		const b = deep(root, name);
+		if (b === undefined) return undefined;
+		return {
+			visible: b.Visible === true,
+			text: b.Text,
+			disabled: b.GetAttribute("Disabled") === true,
+			selectable: b.Selectable !== false,
+			variant: b.GetAttribute("Variant"),
+			// the kit places in scale of the parent's design size (widgets.ts `place`)
+			x: b.Position.X.Scale,
+			right: b.NextSelectionRight?.Name,
+		};
+	};
+	const pages = [EquipSlot.Outfit, EquipSlot.Pet];
+	const open = (save, money, offer) => {
+		netFolder.SetAttribute("pz_robux_products", offer);
+		use(save, money);
+		ctx.phase = "shop";
+		const close = d.showWardrobe(ctx, { onBack: noop, onEquip: noop, onUnequip: noop });
+		flush();
+		const root = layer.FindFirstChild("Wardrobe");
+		const details = () => deep(root, "Details");
+		const pick = id => {
+			for (let pi = 0; pi < pages.length; pi++) {
+				const items = COSTUMES.filter(c => c.equipId >= 0 && COS.cosmeticSlotOf(c.equipId) === pages[pi]);
+				const j = items.findIndex(c => c.id === id);
+				if (j < 0) continue;
+				deep(root, "Tabs")?.FindFirstChild(`Tab${pi}`)?.Activated.Fire();
+				flush();
+				deep(deep(root, `Page${pi}`), `Tile${j}`)?.Activated.Fire();
+				flush();
+				const dt = details();
+				return {
+					id,
+					status: deep(deep(dt, "Status"), "Legend")?.Text,
+					action: btn(dt, "Action"),
+					coin: btn(dt, "CoinBuy"),
+					robux: btn(dt, "RobuxBuy"),
+					keep: btn(dt, "Keep"),
+				};
+			}
+			return undefined;
+		};
+		return {
+			details,
+			pick,
+			close: () => {
+				close();
+				flush();
+			},
+		};
+	};
+	const all = (save, money, offer) => {
+		const w = open(save, money, offer);
+		const tiles = COSTUMES.map(c => w.pick(c.id));
+		w.close();
+		return tiles;
+	};
+	out.rich = all(input.fresh, 1e6, input.offer);
+	out.broke = all(input.fresh, 0, input.offer);
+	out.owned = all(input.owned, undefined, input.offer);
+	out.none = all(input.fresh, 1e6, undefined);
+	// See Price, clicked: what goes to the server; then a refusal; then the receipt's pushed wallet
+	const w = open(input.fresh, 1e6, input.offer);
+	w.pick(input.target);
+	const sent = requests.length;
+	deep(w.details(), "RobuxBuy")?.Activated.Fire();
+	flush();
+	out.clicked = requests.slice(sent);
+	answer = { ok: false, reason: "pending" };
+	deep(w.details(), "RobuxBuy")?.Activated.Fire();
+	flush();
+	answer = { ok: true, price: 0 };
+	out.pendingToast = toasts.at(-1)?.text;
+	const shown = toasts.length;
+	ctx.save.costumes[input.target] = 1;
+	walletFn?.();
+	flush();
+	walletFn?.();
+	flush();
+	out.unlockToasts = toasts.slice(shown).map(t => t.text);
+	out.afterGrant = w.pick(input.target);
+	w.close();
+
+	// the lobby's Rebirth, a dead survivor with 3 continues bought and no coins, before and after pz_rebirth_free
+	const me = game.GetService("Players").LocalPlayer;
+	use(input.fresh, 0);
+	ctx.save.deathCount = 3;
+	ctx.save.runOver = true;
+	ctx.phase = "lobby";
+	const handlers = new Proxy({}, { get: () => noop });
+	const lobby = d.showLobby(ctx, handlers, { loading: false, run: "over", hosted: true, seed: 7331 }, "survivor");
+	flush();
+	const lobbyRoot = layer.FindFirstChild("Lobby");
+	const read = () => {
+		const screen = deep(lobbyRoot, "Survivor", "Frame");
+		return { button: deep(screen, "Rebirth", "TextButton")?.Text, note: deep(screen, "Note")?.Text ?? "" };
+	};
+	out.rebirthPaid = read();
+	me.SetAttribute("pz_rebirth_free", true);
+	flush();
+	out.rebirthFree = read();
+	me.SetAttribute("pz_rebirth_free", undefined);
+	flush();
+	out.rebirthBack = read();
+	lobby.close();
+	flush();
+	return out;
 }
 
 // ================================================================================================ the server side
@@ -472,8 +626,33 @@ function main() {
 		};
 	}
 
+	/**
+	 * MarketplaceService: GetProductInfo answers from `prices` (product id -> { price, forSale }), the prompts are
+	 * recorded, and ProcessReceipt is whatever the server set (the tests call it as Roblox would, receipt by receipt)
+	 */
+	function makeMarket() {
+		const m = {
+			prices: new Map(),
+			prompts: [],
+			infoCalls: 0,
+			ProcessReceipt: undefined,
+			PromptProductPurchaseFinished: new Signal(),
+			GetProductInfo(id, infoType) {
+				m.infoCalls += 1;
+				if (infoType !== "InfoType.Product") throw new Error(`GetProductInfo asked with ${infoType}`);
+				const p = m.prices.get(id);
+				if (p === undefined) throw new Error("HTTP 400 (no such product)");
+				return { ProductId: id, Name: `product ${id}`, PriceInRobux: p.price, IsForSale: p.forSale !== false };
+			},
+			PromptProductPurchase(player, id) {
+				m.prompts.push({ userId: player.UserId, id });
+			},
+		};
+		return m;
+	}
+
 	let guid = 0;
-	function makeGame(config) {
+	function makeGame(config, market) {
 		const ReplicatedStorage = new Inst("ReplicatedStorage");
 		const Workspace = new Inst("Workspace");
 		Workspace.GetServerTimeNow = () => clockNow;
@@ -518,6 +697,8 @@ function main() {
 			AnalyticsService: makeAnalyticsService(log),
 			ConfigService: config ?? makeConfigService(),
 		};
+		// only where a section asks for it: without one, the server's Robux shop does not start (the coin shop is alone)
+		if (market !== undefined) services.MarketplaceService = market;
 		const closers = [];
 		globalThis.game = {
 			GetService(name) {
@@ -548,9 +729,9 @@ function main() {
 	}
 
 	/** a server "process": every module under src loaded again, sharing nothing with the last one but the DataStore */
-	function bootServer(config) {
+	function bootServer(config, market) {
 		for (const k of Object.keys(require.cache)) if (k.startsWith(SRC)) delete require.cache[k];
-		const env = makeGame(config);
+		const env = makeGame(config, market);
 		require(join(SRC, "server/main.server.ts"));
 		const host = require(join(SRC, "server/net/mpHost.ts")).activeMpHost();
 		if (host === undefined) throw new Error("main.server.ts did not start the MP host (MP_PHASE < 1?)");
@@ -969,6 +1150,48 @@ function main() {
 			SHOP_PACKS.every(p => (p.tier === "rental") === SHOP.petOfPack(p) >= 0),
 			"the rentals are exactly the pet packs",
 		);
+		// ...and a rental lasts ONE LIFE: a New game or the town's end (MP-22) takes the pet (`resetRun`), so it is priced
+		// against the life it lasts, and renting it life after life soon costs more than keeping it
+		const life = INCOME_PROFILES.average.lifeHours;
+		const share = ECONOMY_TARGETS.rentalShareOfLife;
+		const lifeBad = rentals.filter(p => hours(p.price) > share * life);
+		check(
+			rentals.length > 0 && lifeBad.length === 0,
+			`a pet pack costs at most ${share * 100}% of the average life it lasts (${life} h), so that life earns it back`,
+			rentals.map(p => `${p.name} ${hours(p.price).toFixed(1)} h`).join(", "),
+		);
+		check(
+			INCOME_PROFILES.new.lifeHours < life && life < INCOME_PROFILES.strong.lifeHours,
+			"a new player's life is shorter than an average one's, which is shorter than a strong one's",
+		);
+		for (const p of rentals) {
+			const kept = SHOP.costumeForEquip(SHOP.petOfPack(p));
+			const lives = kept.price / p.price;
+			info(
+				`${p.name}: renting it every life passes keeping it for good after ${lives.toFixed(1)} lives (~${(lives * life).toFixed(0)} h of average play)`,
+			);
+		}
+		// Robux (MON-07 as amended): the same cosmetic, at the Robux its coin price's hours of play are worth
+		const band = ECONOMY_TARGETS.robuxPerHour;
+		const robuxOut = COSTUMES.filter(c => {
+			const r = SHOP.ROBUX_TIER_PRICE[c.tier];
+			return r === undefined || !(r / hours(c.price) >= band.min && r / hours(c.price) <= band.max);
+		});
+		check(
+			robuxOut.length === 0,
+			`every costume's Robux price is ${band.min}-${band.max} Robux per hour of average play its coin price asks`,
+			COSTUMES.map(
+				c =>
+					`${c.name} ${SHOP.ROBUX_TIER_PRICE[c.tier]}: ${(SHOP.ROBUX_TIER_PRICE[c.tier] / hours(c.price)).toFixed(1)}/h`,
+			).join(", "),
+		);
+		check(
+			Object.keys(SHOP.ROBUX_TIER_PRICE).every(t => ["common", "rare", "top"].includes(t)) &&
+				SHOP.ROBUX_TIER_PRICE.common < SHOP.ROBUX_TIER_PRICE.rare &&
+				SHOP.ROBUX_TIER_PRICE.rare < SHOP.ROBUX_TIER_PRICE.top,
+			"only the cosmetic tiers have a Robux price (never a pack, a rental or a Rebirth), common < rare < top",
+			JSON.stringify(SHOP.ROBUX_TIER_PRICE),
+		);
 		// the Rebirth: cheap enough for a first mistake, a real decision by the third, dear by the fifth
 		const r = d => hours(rebirthPrice(d));
 		const T = ECONOMY_TARGETS;
@@ -985,6 +1208,27 @@ function main() {
 			steps.join(", "),
 		);
 	});
+
+	/** the REAL client screens, built in a child process (the two fake Robloxes cannot share one): what they show */
+	function uiRun(input) {
+		const dir = mkdtempSync(join(tmpdir(), "pz-shop-"));
+		try {
+			const inPath = join(dir, "in.json");
+			const outPath = join(dir, "out.json");
+			writeFileSync(inPath, JSON.stringify(input));
+			try {
+				execFileSync(process.execPath, [SELF, "--ui", inPath, outPath], {
+					stdio: ["ignore", "pipe", "pipe"],
+					env: process.env,
+				});
+			} catch (e) {
+				throw new Error(`the UI process failed: ${String(e.stderr ?? e).slice(0, 800)}`);
+			}
+			return JSON.parse(readFileSync(outPath, "utf8"));
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}
 
 	// ================================================================================================ the server phases
 
@@ -1487,32 +1731,12 @@ function main() {
 	section("6) what the screens show: the real UI, built from the server's saves, against what it charged", () => {
 		if (results.fresh === undefined || results.owned === undefined || results.welcomed === undefined)
 			throw new Error("the server sections did not run");
-		const dir = mkdtempSync(join(tmpdir(), "pz-shop-"));
-		let shown;
-		try {
-			const inPath = join(dir, "in.json");
-			const outPath = join(dir, "out.json");
-			writeFileSync(
-				inPath,
-				JSON.stringify({
-					fresh: results.fresh,
-					owned: results.owned,
-					welcomed: results.welcomed,
-					acks: results.acks ?? [],
-				}),
-			);
-			try {
-				execFileSync(process.execPath, [SELF, "--ui", inPath, outPath], {
-					stdio: ["ignore", "pipe", "pipe"],
-					env: process.env,
-				});
-			} catch (e) {
-				throw new Error(`the UI process failed: ${String(e.stderr ?? e).slice(0, 800)}`);
-			}
-			shown = JSON.parse(readFileSync(outPath, "utf8"));
-		} finally {
-			rmSync(dir, { recursive: true, force: true });
-		}
+		const shown = uiRun({
+			fresh: results.fresh,
+			owned: results.owned,
+			welcomed: results.welcomed,
+			acks: results.acks ?? [],
+		});
 
 		// ---- packs: the card's price = the coins taken = the answer's price
 		const cardBad = SHOP_PACKS.filter((p, i) => {
@@ -1657,30 +1881,636 @@ function main() {
 		);
 	});
 
-	// ================================================================================================ 7. Robux
+	// ================================================================================================ 7. Robux, statically
 
-	section("7) nothing is sold for Robux: no MarketplaceService in src/, and docs/SHOP.md says so", () => {
-		const files = [];
-		const walk = dir => {
-			for (const f of readdirSync(dir)) {
-				const p = join(dir, f);
-				if (statSync(p).isDirectory()) walk(p);
-				else if (p.endsWith(".ts")) files.push(p);
+	section(
+		"7) Robux only where it belongs: the server's one module, the wardrobe's one button, cosmetics only",
+		() => {
+			const files = [];
+			const walk = dir => {
+				for (const f of readdirSync(dir)) {
+					const p = join(dir, f);
+					if (statSync(p).isDirectory()) walk(p);
+					else if (p.endsWith(".ts")) files.push(p);
+				}
+			};
+			walk(SRC);
+			const rel = f =>
+				f
+					.slice(SRC.length + 1)
+					.split("\\")
+					.join("/");
+			const code = f =>
+				readFileSync(f, "utf8")
+					.replace(/\/\*[\s\S]*?\*\//g, "")
+					.replace(/\/\/.*$/gm, "");
+			const receipts = files.filter(f => /ProcessReceipt|PromptProductPurchase\b/.test(code(f))).map(rel);
+			check(
+				receipts.length === 1 && receipts[0] === "server/save/robux.ts",
+				"ProcessReceipt and PromptProductPurchase live in server/save/robux.ts alone: the client never opens a prompt",
+				receipts.join(", "),
+			);
+			const robuxCode = code(join(SRC, "server/save/robux.ts"));
+			check(
+				!/\.money\b/.test(robuxCode) && !/packsBought|deathCount|\.exp\b|skillPoint/.test(robuxCode),
+				"the Robux module never touches coins, packs, a Rebirth or XP (MON-01: cosmetics only)",
+			);
+			const asking = files.filter(f => rel(f).startsWith("client/") && /robuxCostume/.test(code(f))).map(rel);
+			check(
+				asking.length === 1 && asking[0] === "client/ui/wardrobe.ts",
+				"only the wardrobe asks for a Robux prompt (never the death screen, the match menu, the pack shop or a night: BEM-02)",
+				asking.join(", "),
+			);
+			check(
+				!LANG_TABLE.some(t => /R\$/.test(t)) &&
+					LANG_TABLE.includes("See Price") &&
+					LANG_TABLE.includes("Robux"),
+				'the game says "Robux" and "See Price" (BEM-02), never "R$" (MON-06: no real-money sign)',
+			);
+			const RP = require(join(SRC, "shared/data/robuxProducts.ts"));
+			const names = Object.keys(RP.ROBUX_PRODUCT_IDS).sort();
+			const ids = Object.values(RP.ROBUX_PRODUCT_IDS).filter(v => v !== 0);
+			check(
+				JSON.stringify(names) === JSON.stringify(COSTUMES.map(c => c.name).sort()) &&
+					Object.values(RP.ROBUX_PRODUCT_IDS).every(v => v === 0 || (Number.isInteger(v) && v > 0)) &&
+					[...new Set(ids)].length === ids.length,
+				"ROBUX_PRODUCT_IDS: one entry per costume by name, 0 or a product id, no id twice",
+				names.join(", "),
+			);
+			// docs/SHOP.md's products table (what the owner creates): every costume, at its tier's price
+			const rows = new Map();
+			for (const line of read("docs/SHOP.md").split("\n")) {
+				const cells = line.split("|").map(c => c.trim());
+				if (cells.length >= 6 && cells[1].startsWith("Last Town — ")) rows.set(cells[1].slice(12), cells);
 			}
-		};
-		walk(SRC);
-		const robux = files.filter(f =>
-			/MarketplaceService|ProcessReceipt|PromptProductPurchase|PromptGamePassPurchase|UserOwnsGamePassAsync/.test(
-				readFileSync(f, "utf8"),
-			),
-		);
-		const doc = read("docs/SHOP.md");
-		check(
-			robux.length === 0 && /Nenhum produto em Robux/.test(doc),
-			"no MarketplaceService call anywhere; docs/SHOP.md's table says there is no Robux product (a new one updates both)",
-			robux.map(f => f.slice(SRC.length + 1)).join(", "),
-		);
-	});
+			const docBad = COSTUMES.filter(c => {
+				const row = rows.get(c.name);
+				return row === undefined || num(row[2]) !== SHOP.ROBUX_TIER_PRICE[c.tier] || row[3] !== c.tier;
+			});
+			check(
+				[...rows.keys()].length === COSTUMES.length && docBad.length === 0,
+				"docs/SHOP.md lists the 9 developer products, each at its tier's Robux price",
+				docBad.map(c => c.name).join(", "),
+			);
+			check(!/Nenhum produto em Robux/.test(read("docs/SHOP.md")), "…and no longer says there is none");
+		},
+	);
+
+	// ================================================================================================ 8. Robux, live
+
+	section(
+		"8) Robux: the same costume, the server's own prompt, one grant per receipt and only once it is written",
+		() => {
+			const baseTypeIs = globalThis.typeIs;
+			globalThis.typeIs = (v, t) =>
+				t === "EnumItem"
+					? typeof v === "object" && v !== null && typeof v.EnumType === "string"
+					: baseTypeIs(v, t);
+			const GRANTED = "ProductPurchaseDecision.PurchaseGranted";
+			const LATER = "ProductPurchaseDecision.NotProcessedYet";
+			const IN_GAME = { EnumType: "ProductPurchaseChannel", Name: "InExperience" };
+			const market = makeMarket();
+			const productOf = c => 70000 + c.id;
+			const priceOf = c => SHOP.ROBUX_TIER_PRICE[c.tier];
+			const receipt = (userId, c, purchaseId) => ({
+				PlayerId: userId,
+				ProductId: productOf(c),
+				PurchaseId: purchaseId,
+				CurrencySpent: priceOf(c),
+				CurrencyType: "CurrencyType.Robux",
+				PlaceIdWherePurchased: 1,
+				ProductPurchaseChannel: IN_GAME,
+			});
+			const santa = costume("Santa");
+			const zombie = costume("Zombie");
+			const eagle = costume("Eagle");
+			const carolina = costume("Carolina");
+			const doberman = costume("Doberman");
+			const white = costume("White pigeon");
+
+			// ---- no product configured (how the game ships): no offer, no GetProductInfo, no prompt, coins as ever
+			const s = bootServer(undefined, market);
+			const net = s.env.services.ReplicatedStorage.FindFirstChild("Net");
+			let ROBUX = require(join(SRC, "server/save/robux.ts"));
+			let RP = require(join(SRC, "shared/data/robuxProducts.ts"));
+			check(
+				ROBUX.activeRobuxShop() !== undefined && typeof market.ProcessReceipt === "function",
+				"the server sets ProcessReceipt at boot where there is a MarketplaceService",
+			);
+			const plain = s.join(newUser(), "plain");
+			const ps = s.save(plain);
+			s.run(0.6);
+			const refused = s.shop(plain, { kind: "robuxCostume", costumeId: santa.id });
+			check(
+				net.GetAttribute(RP.ROBUX_OFFER_ATTR) === undefined &&
+					market.infoCalls === 0 &&
+					market.prompts.length === 0 &&
+					refused.ok === false &&
+					refused.reason === "invalid",
+				"no product id configured: no offer published, no GetProductInfo, See Price refused (invalid) with no prompt",
+				`${net.GetAttribute(RP.ROBUX_OFFER_ATTR)}, ${market.infoCalls} info calls, ${refused.reason}`,
+			);
+			ps.money = santa.price;
+			s.run(0.6);
+			const coins = s.shop(plain, { kind: "buyCostume", costumeId: santa.id });
+			check(
+				coins.ok && coins.price === santa.price && ps.money === 0 && ps.costumes[santa.id] === 1,
+				"…and the coin purchase is exactly as it was",
+			);
+			const stray = market.ProcessReceipt({ ...receipt(plain.UserId, eagle, "stray-1"), ProductId: 555 });
+			check(
+				stray === LATER && ps.robuxReceipts.length === 0 && ps.costumes[eagle.id] === 0,
+				"a receipt for a product no costume has: NotProcessedYet, nothing granted",
+			);
+
+			// ---- the products: one per costume at its tier's price -- one priced otherwise, one off sale
+			const configure = () => {
+				RP = require(join(SRC, "shared/data/robuxProducts.ts"));
+				ROBUX = require(join(SRC, "server/save/robux.ts"));
+				for (const c of COSTUMES) RP.ROBUX_PRODUCT_IDS[c.name] = productOf(c);
+				ROBUX.activeRobuxShop().verify();
+			};
+			for (const c of COSTUMES) market.prices.set(productOf(c), { price: priceOf(c), forSale: true });
+			market.prices.set(productOf(doberman), { price: 99, forSale: true });
+			market.prices.set(productOf(white), { price: priceOf(white), forSale: false });
+			configure();
+			const offerText = net.GetAttribute(RP.ROBUX_OFFER_ATTR);
+			/** what GetProductInfo said when the offer was made (a price changes later in this section) */
+			const confirmed = new Map(COSTUMES.map(c => [c.id, market.prices.get(productOf(c)).price]));
+			const offer = RP.decodeRobuxOffer(offerText);
+			const sold = COSTUMES.filter(c => c !== doberman && c !== white);
+			check(
+				sold.every(c => offer.get(c.id) === priceOf(c)) && [...offer].length === sold.length,
+				"the offer on Net is every costume whose product Roblox confirms at its tier's price (49 / 149 / 349)",
+				[...offer].map(([id, p]) => `${COSTUMES[id].name} ${p}`).join(", "),
+			);
+			check(
+				!offer.has(doberman.id) && !offer.has(white.id),
+				"a product priced otherwise in the Creator Hub (Doberman at 99) or off sale (White pigeon) is not offered",
+			);
+
+			// ---- the prompt: the server's, only what is not yours, and the coin purchase held meanwhile
+			const buyerId = newUser();
+			const buyer = s.join(buyerId, "robux");
+			const bs = s.save(buyer);
+			results.robuxFresh = clone(bs);
+			bs.money = carolina.price;
+			s.run(0.6);
+			s.shop(buyer, { kind: "buyCostume", costumeId: carolina.id });
+			s.run(0.6);
+			s.shop(buyer, { kind: "viewShop", screen: 1 });
+			const ask = c => {
+				s.run(0.6);
+				return s.shop(buyer, { kind: "robuxCostume", costumeId: c.id, price: 1, productId: 1 });
+			};
+			const own = ask(carolina);
+			const unverified = ask(doberman);
+			check(
+				own.reason === "owned" && unverified.reason === "invalid" && market.prompts.length === 0,
+				"See Price for a costume already yours: owned; for one Roblox did not confirm: invalid -- no prompt either way",
+				`${own.reason}, ${unverified.reason}`,
+			);
+			const opened = ask(santa);
+			check(
+				opened.ok &&
+					opened.price === 0 &&
+					market.prompts.length === 1 &&
+					market.prompts[0].id === productOf(santa) &&
+					market.prompts[0].userId === buyerId &&
+					bs.money === 0,
+				"See Price for Santa: the SERVER opens Roblox's prompt for Santa's product (a `productId` in the request is never read), no coin moves",
+				JSON.stringify(market.prompts),
+			);
+			bs.money = santa.price + 1;
+			s.run(0.6);
+			const race = s.shop(buyer, { kind: "buyCostume", costumeId: santa.id });
+			const second = ask(zombie);
+			check(
+				race.reason === "pending" &&
+					bs.money === santa.price + 1 &&
+					bs.costumes[santa.id] === 0 &&
+					second.reason === "pending" &&
+					market.prompts.length === 1,
+				"while it is open: Santa for coins is refused (pending, nothing charged), and no second prompt opens",
+				`${race.reason}, ${second.reason}`,
+			);
+			market.PromptProductPurchaseFinished.Fire(buyerId, productOf(santa), false);
+			const reopened = ask(santa);
+			check(
+				reopened.ok && market.prompts.length === 2,
+				"cancelled: the costume is free again, and the prompt opens again",
+			);
+			market.PromptProductPurchaseFinished.Fire(buyerId, productOf(santa), true);
+			s.run(0.6);
+			check(bs.costumes[santa.id] === 0, "the prompt closing as purchased grants nothing (only a receipt does)");
+
+			// ---- the receipt: granted, and WRITTEN before the answer
+			const log0 = s.log.length;
+			const econ0 = s.economy(buyerId).length;
+			const robuxEvents = () =>
+				s.log
+					.slice(log0)
+					.filter(
+						r =>
+							r.kind === "custom" &&
+							r.userId === buyerId &&
+							(r.name === "RobuxPurchase" || r.name === "RobuxOwned"),
+					);
+			const r1 = market.ProcessReceipt(receipt(buyerId, santa, "R-SANTA-1"));
+			const st1 = s.stored(buyerId);
+			check(
+				r1 === GRANTED && bs.costumes[santa.id] === 1 && bs.money === santa.price + 1,
+				"Santa's receipt: PurchaseGranted, the costume is theirs, no coin moved",
+			);
+			check(
+				st1?.costumes[santa.id] === 1 && st1.robuxReceipts.includes(`${santa.id}:R-SANTA-1`),
+				"…and the DataStore already holds the costume and the PurchaseId when it answers (not at the cadence's next write)",
+				JSON.stringify(st1?.robuxReceipts),
+			);
+			const r1b = market.ProcessReceipt(receipt(buyerId, santa, "R-SANTA-1"));
+			check(
+				r1b === GRANTED &&
+					bs.robuxReceipts.filter(e => e.endsWith(":R-SANTA-1")).length === 1 &&
+					robuxEvents().length === 1,
+				"the same receipt again: PurchaseGranted, granted once, one PurchaseId kept, one event",
+			);
+			const ev = robuxEvents()[0];
+			check(
+				ev?.name === "RobuxPurchase" &&
+					ev.value === priceOf(santa) &&
+					ev.fields?.CustomField01 === "Category - Costume" &&
+					ev.fields?.CustomField02 === `Tier - ${santa.tier}` &&
+					ev.fields?.CustomField03 === "Channel - In game",
+				"analytics: one RobuxPurchase -- the Robux spent, Category - Costume, its tier, In game",
+				JSON.stringify(ev),
+			);
+			check(s.economy(buyerId).length === econ0, "…and no Coins economy event: no coin moved");
+			const funnel = s.log.filter(r => r.kind === "funnel" && r.userId === buyerId && r.funnel === "Shop");
+			check(
+				JSON.stringify(funnel.map(r => r.step)) === "[1,2,3]" &&
+					funnel.every(r => r.session === funnel[0].session),
+				"the Shop funnel of the visit: opened, tried (See Price), bought (the receipt)",
+				JSON.stringify(funnel.map(r => r.step)),
+			);
+			s.run(0.6);
+			check(
+				s.pushes(buyer).at(-1)?.wallet?.costumes?.[santa.id] === 1,
+				"the pushed wallet brings the costume to the wardrobe",
+			);
+			check(ask(santa).reason === "owned", "and See Price for it now: owned");
+
+			// ---- the DataStore failing: NotProcessedYet, and granted once when Roblox asks again after it
+			check(ask(zombie).ok === true, "(the Zombie's prompt)");
+			const zombieEvents = () => robuxEvents().filter(r => r.fields?.CustomField02 === "Tier - top");
+			s.saveStore().fail.update = 1e9;
+			const r2 = market.ProcessReceipt(receipt(buyerId, zombie, "R-ZOMBIE-1"));
+			const st2 = s.stored(buyerId);
+			check(
+				r2 === LATER &&
+					bs.costumes[zombie.id] === 1 &&
+					st2.costumes[zombie.id] === 0 &&
+					!st2.robuxReceipts.some(e => e.endsWith(":R-ZOMBIE-1")) &&
+					zombieEvents().length === 0,
+				"the DataStore failing: NotProcessedYet -- the costume stays in the session, the store has neither it nor the PurchaseId, no event",
+			);
+			s.saveStore().fail.update = 0;
+			const r2b = market.ProcessReceipt(receipt(buyerId, zombie, "R-ZOMBIE-1"));
+			const st3 = s.stored(buyerId);
+			check(
+				r2b === GRANTED &&
+					st3.costumes[zombie.id] === 1 &&
+					st3.robuxReceipts.includes(`${zombie.id}:R-ZOMBIE-1`) &&
+					bs.robuxReceipts.filter(e => e.endsWith(":R-ZOMBIE-1")).length === 1,
+				"…Roblox asks again after the outage: the write lands, PurchaseGranted, granted once",
+			);
+			check(
+				zombieEvents().length === 1 &&
+					zombieEvents()[0].name === "RobuxPurchase" &&
+					zombieEvents()[0].value === priceOf(zombie),
+				"…and its RobuxPurchase goes out once, with the write that landed",
+			);
+
+			// ---- nothing for a receipt that is nobody's here, of an unknown product, or junk
+			const kept = bs.robuxReceipts.length;
+			const decisions = [
+				market.ProcessReceipt(receipt(424242, eagle, "R-GONE")),
+				market.ProcessReceipt({ ...receipt(buyerId, eagle, "R-UNKNOWN"), ProductId: 9999 }),
+				market.ProcessReceipt({ ...receipt(buyerId, eagle, "x"), PurchaseId: undefined }),
+				market.ProcessReceipt(receipt(buyerId, eagle, "a:b")),
+				market.ProcessReceipt(receipt(buyerId, eagle, "x".repeat(65))),
+				market.ProcessReceipt({ ...receipt(buyerId, eagle, "R-NOPLAYER"), PlayerId: "1" }),
+				market.ProcessReceipt("junk"),
+			];
+			check(
+				decisions.every(d => d === LATER) && bs.costumes[eagle.id] === 0 && bs.robuxReceipts.length === kept,
+				"NotProcessedYet and nothing granted: a buyer not in this server, an unknown product, no PurchaseId, one we cannot keep, a PlayerId that is not a number, junk",
+				decisions.join(","),
+			);
+			// the receipt's PlayerId picks the save, and nothing from a client does
+			const other = s.join(newUser(), "other");
+			const os2 = s.save(other);
+			const r4 = market.ProcessReceipt(receipt(other.UserId, eagle, "R-OTHER"));
+			check(
+				r4 === GRANTED && os2.costumes[eagle.id] === 1 && bs.costumes[eagle.id] === 0,
+				"another player's receipt grants THEIR save, never this buyer's",
+			);
+			s.run(11);
+			s.report(buyer, {
+				robuxReceipts: [`${eagle.id}:FAKE`],
+				costumes: COSTUMES.map(() => 1),
+				runRev: bs.runRev,
+			});
+			s.run(0.6);
+			const ownedByReport = COSTUMES.filter(c => bs.costumes[c.id] === 1).map(c => c.name);
+			check(
+				bs.costumes[eagle.id] === 0 &&
+					!bs.robuxReceipts.some(e => e.includes("FAKE")) &&
+					ownedByReport.length === 3,
+				"a report claiming a receipt and every costume moves neither (Carolina, Santa, Zombie stay the only ones)",
+				ownedByReport.join(", "),
+			);
+
+			// ---- already owned: acknowledged, nothing new, never coins -- reported for the owner to make good
+			const moneyNow = bs.money;
+			const owned0 = robuxEvents().length;
+			const r3 = market.ProcessReceipt(receipt(buyerId, carolina, "R-CAROLINA"));
+			const ownedEv = robuxEvents().slice(owned0);
+			check(
+				r3 === GRANTED &&
+					bs.money === moneyNow &&
+					bs.robuxReceipts.includes(`${carolina.id}:R-CAROLINA`) &&
+					ownedEv.length === 1 &&
+					ownedEv[0].name === "RobuxOwned",
+				"a receipt for a costume already owned (bought with coins): PurchaseGranted, nothing new, no coins, one RobuxOwned",
+				JSON.stringify(ownedEv.map(r => r.name)),
+			);
+
+			// ---- the admin cannot take it back; a reset keeps it
+			const adminId = newUser();
+			require(join(SRC, "shared/admin/config.ts")).ADMIN_USER_IDS.push(adminId);
+			const adm = s.join(adminId, "Owner");
+			adm.LocaleId = "en-us";
+			const RF = s.env.services.ReplicatedStorage.FindFirstChild("PZAdminNet")?.FindFirstChild("AdminRequest");
+			clockNow += 0.3;
+			const revoke = RF?.OnServerInvoke(adm, {
+				kind: "edit",
+				userId: buyerId,
+				ops: [{ op: "costume", id: santa.id, owned: false }],
+			});
+			check(
+				revoke?.ok === false && /Robux/.test(revoke.error ?? "") && bs.costumes[santa.id] === 1,
+				"the admin panel cannot take back a costume paid in Robux: the edit is refused whole",
+				JSON.stringify(revoke),
+			);
+			clockNow += 0.3;
+			const reset = RF?.OnServerInvoke(adm, { kind: "resetSave", userId: buyerId });
+			const paid = COSTUMES.filter(c => bs.costumes[c.id] === 1).map(c => c.name);
+			check(
+				reset?.ok === true &&
+					bs.money === ECONOMY.STARTING_COINS &&
+					bs.costumes[santa.id] === 1 &&
+					bs.costumes[zombie.id] === 1 &&
+					bs.robuxReceipts.length === kept + 1,
+				"an admin reset makes a new player's save -- and what was bought with Robux stays: receipts and costumes",
+				`${reset?.ok}, money ${bs.money}, ${paid.join(", ")}`,
+			);
+
+			// ---- another server: still theirs, and Roblox retrying an old receipt there grants nothing twice
+			s.run(1);
+			s.quit(buyer);
+			s.run(1);
+			const s2 = bootServer(undefined, market);
+			configure();
+			const net2 = s2.env.services.ReplicatedStorage.FindFirstChild("Net");
+			const back = s2.join(buyerId, "robux");
+			s2.run(0.3);
+			const bs2 = s2.save(back);
+			check(
+				s2.loadAck(back)?.status === "ok" &&
+					bs2.costumes[santa.id] === 1 &&
+					bs2.costumes[zombie.id] === 1 &&
+					bs2.robuxReceipts.includes(`${santa.id}:R-SANTA-1`),
+				"another server: Santa and Zombie are still theirs, with their receipts",
+			);
+			const late = market.ProcessReceipt(receipt(buyerId, santa, "R-SANTA-1"));
+			check(
+				late === GRANTED && bs2.robuxReceipts.filter(e => e.endsWith(":R-SANTA-1")).length === 1,
+				"Roblox asking again for an old receipt on the next server: PurchaseGranted, nothing twice",
+			);
+			s2.run(0.6);
+			check(
+				s2.shop(back, { kind: "robuxCostume", costumeId: santa.id }).reason === "owned",
+				"See Price there: owned",
+			);
+			// a price changed in the Creator Hub later: caught by the next check, and no longer offered
+			market.prices.set(productOf(eagle), { price: 199, forSale: true });
+			ROBUX.activeRobuxShop().verify();
+			s2.run(0.6);
+			const changed = s2.shop(back, { kind: "robuxCostume", costumeId: eagle.id });
+			check(
+				changed.reason === "invalid" &&
+					!RP.decodeRobuxOffer(net2.GetAttribute(RP.ROBUX_OFFER_ATTR)).has(eagle.id),
+				"a price changed in the Creator Hub (the Eagle at 199): no longer offered, See Price refused",
+				changed.reason,
+			);
+
+			// ---- a receipt that comes before the save: waited for (never for one who left), then decided
+			const SAVE = require(join(SRC, "shared/game/save.ts"));
+			const realWait = globalThis.task.wait;
+			globalThis.task.wait = sec => {
+				clockNow += sec ?? 0;
+			};
+			try {
+				let calls = 0;
+				const slow = {
+					save: SAVE.defaultSave(),
+					state: () => (++calls <= 3 ? "loading" : "ok"),
+					commit: () => true,
+				};
+				const u1 = new ROBUX.RobuxShop(market, { net: undefined, session: () => slow });
+				const d1 = u1.processReceipt(receipt(buyerId, eagle, "R-WAIT"));
+				check(
+					d1 === GRANTED && slow.save.costumes[eagle.id] === 1 && calls >= 4,
+					"a receipt before the save loaded: waited for the load, then granted",
+					`${d1}, ${calls} looks`,
+				);
+				const never = { save: SAVE.defaultSave(), state: () => "loading", commit: () => true };
+				const u2 = new ROBUX.RobuxShop(market, { net: undefined, session: () => never });
+				const t0 = clockNow;
+				const d2 = u2.processReceipt(receipt(buyerId, eagle, "R-NEVER"));
+				check(
+					d2 === LATER &&
+						u2.results.at(-1)?.outcome === "loading" &&
+						clockNow - t0 >= ROBUX.RECEIPT_LOAD_WAIT_S &&
+						never.save.costumes[eagle.id] === 0,
+					`…a load that never ends: NotProcessedYet after ${ROBUX.RECEIPT_LOAD_WAIT_S} s, nothing granted`,
+				);
+				const leaving = {
+					save: SAVE.defaultSave(),
+					state: () => {
+						back._parent = undefined;
+						return "loading";
+					},
+					commit: () => true,
+				};
+				const u3 = new ROBUX.RobuxShop(market, { net: undefined, session: () => leaving });
+				const d3 = u3.processReceipt(receipt(buyerId, eagle, "R-LEFT"));
+				back._parent = s2.env.services.Players;
+				check(
+					d3 === LATER && u3.results.at(-1)?.outcome === "absent" && leaving.save.costumes[eagle.id] === 0,
+					"…the buyer leaving while it waits: NotProcessedYet at once (Roblox asks again at their next join)",
+				);
+				const readonly = { save: SAVE.defaultSave(), state: () => "readonly", commit: () => true };
+				const u4 = new ROBUX.RobuxShop(market, { net: undefined, session: () => readonly });
+				check(
+					u4.processReceipt(receipt(buyerId, eagle, "R-RO")) === LATER &&
+						readonly.save.costumes[eagle.id] === 0,
+					"…a session that cannot record a purchase (read-only, no DataStore, the lock lost): NotProcessedYet, nothing granted",
+				);
+			} finally {
+				globalThis.task.wait = realWait;
+			}
+
+			// ---- the real wardrobe with that offer
+			if (results.owned === undefined) throw new Error("section 4 did not leave the owned save");
+			const shown = uiRun({
+				mode: "robux",
+				fresh: results.robuxFresh,
+				owned: results.owned,
+				offer: offerText,
+				target: santa.id,
+			});
+			results.robuxUi = shown;
+			const unequip = shown.owned.find(t => t.id === costume("Cowboy").id)?.action;
+			const plainBuy = shown.rich.find(t => t.id === doberman.id)?.action;
+			const richBad = COSTUMES.filter(c => {
+				const t = shown.rich.find(x => x?.id === c.id);
+				if (t === undefined) return true;
+				const r = offer.get(c.id);
+				if (r === undefined) {
+					return !(
+						t.status === `${c.price} coins` &&
+						t.action.visible &&
+						t.action.text === `Buy for ${c.price} coins` &&
+						!t.coin.visible &&
+						!t.robux.visible
+					);
+				}
+				return !(
+					t.status === `${c.price} coins  ·  ${r} Robux` &&
+					r === confirmed.get(c.id) &&
+					!t.action.visible &&
+					t.coin.visible &&
+					t.coin.text === `Buy for ${c.price} coins` &&
+					!t.coin.disabled &&
+					t.coin.variant === plainBuy.variant &&
+					t.robux.visible &&
+					t.robux.text === "See Price" &&
+					!t.robux.disabled &&
+					t.robux.variant === unequip.variant &&
+					t.coin.x < t.robux.x &&
+					t.coin.right === "RobuxBuy"
+				);
+			});
+			check(
+				richBad.length === 0 && plainBuy?.variant !== unequip?.variant,
+				'the wardrobe shows both prices, the coins\' and the one Roblox confirmed ("250 coins  ·  149 Robux"); the coin Buy is the primary on the left, "See Price" the secondary at its right; a costume not offered is the coin panel alone',
+				richBad.map(c => `${c.name}: ${JSON.stringify(shown.rich.find(x => x?.id === c.id))}`).join("; "),
+			);
+			const brokeBad = COSTUMES.filter(c => {
+				const t = shown.broke.find(x => x?.id === c.id);
+				if (!offer.has(c.id)) return false;
+				return !(
+					t.coin.text === `${c.price} more needed` &&
+					t.coin.disabled &&
+					!t.coin.selectable &&
+					t.robux.visible &&
+					!t.robux.disabled
+				);
+			});
+			check(
+				brokeBad.length === 0,
+				"without coins the coin Buy says what is missing, disabled and out of the pad's way -- it never turns into the Robux button",
+				brokeBad.map(c => c.name).join(", "),
+			);
+			check(
+				shown.owned.every(t => !t.robux.visible && !t.coin.visible),
+				"a costume already yours shows no Robux button (nor a coin Buy)",
+			);
+			check(
+				shown.none.every(t => !t.robux.visible && !t.coin.visible && t.action.visible),
+				"no offer on Net: the wardrobe is exactly the coin one, no Robux anywhere",
+			);
+			check(
+				JSON.stringify(shown.clicked) === JSON.stringify([{ kind: "robuxCostume", costumeId: santa.id }]),
+				"See Price sends the costume id and nothing else",
+				JSON.stringify(shown.clicked),
+			);
+			check(
+				shown.pendingToast === "Finish the Robux purchase first",
+				"a refusal says why (pending)",
+				shown.pendingToast,
+			);
+			check(
+				JSON.stringify(shown.unlockToasts) === JSON.stringify(["Unlocked: Santa"]) &&
+					!shown.afterGrant.robux.visible &&
+					shown.afterGrant.action.visible &&
+					shown.afterGrant.action.text === "Equip" &&
+					shown.afterGrant.status === "Owned",
+				'the receipt\'s wallet: "Unlocked: Santa" once, and the panel offers Equip',
+				JSON.stringify({ toasts: shown.unlockToasts, after: shown.afterGrant }),
+			);
+			globalThis.typeIs = baseTypeIs;
+		},
+	);
+
+	// ================================================================================================ 9. Rebirth at 0
+
+	section(
+		"9) the daybreak came in the lobby: the server says the Rebirth is free, the lobby shows 0, it charges 0",
+		() => {
+			const s = bootServer();
+			const w = s.join(newUser(), "witness");
+			s.immortal.add(w);
+			s.enter(w);
+			const a = s.join(newUser(), "patient");
+			s.enter(a);
+			const save = s.save(a);
+			save.money = 0;
+			save.deathCount = 3;
+			const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
+			s.sim.clock.setClock(6 - 1.5 * DESIGN.TIME_SPEED * 1.2);
+			s.kill(a);
+			s.exit(a);
+			const waiting = a.GetAttribute(SHOP.REBIRTH_FREE_ATTR);
+			s.run(3);
+			const due = a.GetAttribute(SHOP.REBIRTH_FREE_ATTR);
+			check(
+				waiting === undefined && due === true,
+				"pz_rebirth_free: absent while the daybreak is still to come, true once it came in the lobby",
+				`${waiting} -> ${due}`,
+			);
+			const res = s.shop(a, { kind: "rebirth", runRev: save.runRev });
+			check(
+				res.ok && res.price === 0 && save.money === 0 && save.deathCount === 3,
+				"…and the Rebirth asked then is charged 0 (and is no continue)",
+				JSON.stringify(res),
+			);
+			s.run(0.6);
+			check(a.GetAttribute(SHOP.REBIRTH_FREE_ATTR) === undefined, "standing again: the attribute is gone");
+			const ui = results.robuxUi;
+			if (ui === undefined) throw new Error("section 8 did not run the screens");
+			check(
+				num(ui.rebirthPaid.button?.split("·")[1]) === rebirthPrice(3) &&
+					ui.rebirthPaid.note.includes(`Not enough coins: ${rebirthPrice(3)} more needed`) &&
+					num(ui.rebirthFree.button?.split("·")[1]) === 0 &&
+					!ui.rebirthFree.note.includes("Not enough coins") &&
+					ui.rebirthBack.button === ui.rebirthPaid.button,
+				"the lobby's Rebirth follows the attribute: the continue's price, then 0 with nothing missing, then the price again",
+				JSON.stringify([ui.rebirthPaid.button, ui.rebirthFree.button, ui.rebirthBack.button]),
+			);
+		},
+	);
 
 	console.log(failures === 0 ? `\nall ${checks} checks passed` : `\n${failures} of ${checks} check(s) FAILED`);
 	process.exit(failures === 0 ? 0 : 1);

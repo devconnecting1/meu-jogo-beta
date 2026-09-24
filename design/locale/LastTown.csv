@@ -419,10 +419,10 @@ A change applies at once and is saved with your progress. Defaults puts a tab ba
 ,,,Earn coins
 ,,,"Fixed contents, shown in full. A pack goes into your backpack when you enter the city."
 ,shop status: a pack bought but not yet in your backpack,,Pending
-,,,Stays until a New game
+,,,Stays for this life
 ,,,"Every pack has fixed contents, shown in full on its card: what you see is what you get.
 Packs go into your backpack the next time you enter the city.
-A pet from a pack stays until a New game. The Wardrobe sells outfits and pets you keep for good.
+A pet from a pack stays for this life, until a New game or the town ends. The Wardrobe sells outfits and pets you keep for good.
 Coins are earned by playing: the Earn coins tab shows how, and how far you are from the next ones."
 ,,,Paid at every midnight your survivor lives through.
 ,,,Next pay at midnight
@@ -632,7 +632,10 @@ Waves come at 19:00, 22:00 and 01:00. Be somewhere you chose."
 ,,,From a pack
 ,,,Buy for
 ,"the game's currency, earned by playing (not literal coins)",,coins
-,,,Came in a pack: it stays until a New game. Buy it to keep it for good.
+,,,Came in a pack: it stays for this life. Buy it to keep it for good.
+,Roblox's own currency name: keep it as is (never a real-money sign),,Robux
+,wardrobe button: opens Roblox's purchase prompt for this item,,See Price
+,,,Finish the Robux purchase first
 ,,,"What you buy is yours for good, and everyone sees it. Coins are earned by playing."
 ,,,"Outfits change how your survivor looks, and a pet follows you. You can wear one of each.
 Everyone sees them, and they change nothing else: no defence, no speed, no loot.

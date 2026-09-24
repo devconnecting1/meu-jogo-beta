@@ -109,6 +109,12 @@ export type ShopActionRequest =
 	 */
 	| { kind: "buyPack"; packId: number; nonce?: number }
 	| { kind: "buyCostume"; costumeId: number }
+	/**
+	 * The same costume for Robux (docs/SHOP.md "Robux: decisões e desenho"): the SERVER opens Roblox's prompt, and only
+	 * for a costume it verified, not owned (server/save/robux.ts). The answer says the prompt opened, or why not; the
+	 * costume itself arrives with ProcessReceipt, on the pushed wallet -- never with this answer.
+	 */
+	| { kind: "robuxCostume"; costumeId: number }
 	/** MON-05: show an EARNED title under the name (-1 = none); the server checks it (server/save/titles.ts) */
 	| { kind: "equipTitle"; titleId: number }
 	| { kind: "rebirth"; runRev: number }
@@ -119,8 +125,12 @@ export type ShopActionRequest =
 	 */
 	| { kind: "viewShop"; screen: number };
 
+/**
+ * "pending": a Robux prompt for this costume is open (or its receipt is on the way), so it is not sold for coins
+ * meanwhile, and a second Robux prompt does not open over it (server/save/robux.ts PROMPT_HOLD_S)
+ */
 export type ShopActionReason =
-	"funds" | "owned" | "limit" | "invalid" | "rate" | "loading" | "readonly" | "outdated" | "network";
+	"funds" | "owned" | "limit" | "invalid" | "rate" | "loading" | "readonly" | "outdated" | "network" | "pending";
 
 export interface ShopActionResult {
 	ok: boolean;

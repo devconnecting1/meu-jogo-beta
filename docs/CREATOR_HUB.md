@@ -263,11 +263,11 @@ Você foi explícito: **não quero pay-to-win**. Isso se traduz assim:
 
 A regra prática para qualquer item futuro: **se dá vantagem numa noite, não se vende.**
 
-**Hoje não há nada a criar aqui:** a loja é toda em moedas do jogo e nenhum passe, produto de desenvolvedor ou id
-existe no código. A tabela de todo produto (onde aparece, preço, o que dá, o que criar no Creator Hub), o modelo de
-horas de jogo por trás de cada preço e as decisões de Robux (2026-09-24: servidor privado **grátis**; trajes e pets
-também por Robux, 49 / 149 / 349 R$, um produto de desenvolvedor por traje, a criar quando o código chegar) estão em
-`docs/SHOP.md`.
+**A criar aqui:** os 9 produtos de desenvolvedor dos trajes e pets por Robux (49 / 149 / 349 R$, um por traje;
+nome, preço exato, descrição e configurações em `docs/SHOP.md`, "Os produtos que o dono cria": **Unlisted**, **sem**
+"Allow external purchases"), e depois colar os ids em `src/shared/data/robuxProducts.ts`. Sem id, nada é oferecido.
+A tabela de todo produto, o modelo de horas de jogo por trás de cada preço e as decisões de Robux (2026-09-24:
+servidor privado **grátis**) estão em `docs/SHOP.md`.
 
 ---
 
@@ -467,6 +467,6 @@ O que foi conferido na documentação do Roblox (Context7, `/websites/create_rob
    a experiência na conta nova, os dois secrets novos e Run workflow; a CI reenvia tudo como a conta nova
    ("Mudou de conta").
 9. **Private servers: Free** — Audience › Access Settings › Allow private servers ligado, Requires Robux desligado
-   (decisão de 2026-09-24). **Monetization:** nada a criar hoje; quando os trajes por Robux chegarem à `main`, criar os
-   9 produtos de desenvolvedor de `docs/SHOP.md` ("Os produtos que o dono cria": preço exato, Unlisted, sem "Allow
-   external purchases") e colar os ids em `src/shared/data/robuxProducts.ts`.
+   (decisão de 2026-09-24). **Monetization › Developer Products:** criar os 9 produtos de `docs/SHOP.md` ("Os
+   produtos que o dono cria": preço exato, Unlisted, sem "Allow external purchases"), colar os ids em
+   `src/shared/data/robuxProducts.ts`, `npm run build` e commit; refazer o questionário (Paid random items: No).

@@ -2,6 +2,7 @@ import { applyWallet, PlayerSaveData, sanitizeStoredSave } from "shared/game/sav
 import {
 	LoadStatus,
 	MAX_SAVE_PAYLOAD,
+	NET_FOLDER,
 	NetRemotes,
 	SAVE_MIN_INTERVAL,
 	SaveAckPayload,
@@ -13,6 +14,8 @@ import {
 	waitRemotes,
 } from "shared/net/net";
 import { newShopBucket, SHOP_NONCE_MAX, takesShopToken, takeShopToken } from "shared/net/shopGuard";
+import { REBIRTH_FREE_ATTR, rebirthCharge } from "shared/data/shop";
+import { decodeRobuxOffer, ROBUX_OFFER_ATTR } from "shared/data/robuxProducts";
 
 /*
  * Client side of the save protocol (see shared/net/net.ts).
@@ -77,7 +80,11 @@ export function onLoad(fn: (info: LoadInfo) => void): () => void {
 	return subscribe(loadListeners, fn);
 }
 
-/** the server's answer to a report (coins earned, a refusal) */
+/**
+ * The server's answer to a report (coins earned, a refusal) -- and ALSO a pushed wallet that says coins were earned
+ * (`push` with `earned` > 0: a midnight's or a boss's pay, MON-06), so a listener must not read every ack as the answer
+ * to a report it sent. Other pushes (XP, the bag, a write's news) never reach these listeners.
+ */
 export function onSaveAck(fn: (ack: SaveAckPayload) => void): () => void {
 	return subscribe(ackListeners, fn);
 }
@@ -258,11 +265,25 @@ export function savingPersistent(): boolean {
 	return savingEnabled() && persistEnabled;
 }
 
+/**
+ * A report's JSON: the whole save but its Robux receipts (save v7). Those are the server's alone -- no report moves them
+ * (shared/game/save.ts `readProgress` keeps the server's) -- so they are not sent, and never count against
+ * MAX_SAVE_PAYLOAD. The live table lends its field for the encode and gets it back at once (nothing yields between).
+ */
+export function reportJson(save: PlayerSaveData): string {
+	const receipts = save.robuxReceipts;
+	save.robuxReceipts = [];
+	const [ok, json] = pcall(() => HttpService.JSONEncode(save));
+	save.robuxReceipts = receipts;
+	if (!ok) throw json;
+	return json;
+}
+
 function sendNow(): void {
 	const r = remotes;
 	const token = activeToken;
 	if (!savingEnabled() || r === undefined || token === undefined || getSave === undefined) return;
-	const json = HttpService.JSONEncode(getSave());
+	const json = reportJson(getSave());
 	// nothing new since the last report: the server already has it
 	if (json === lastSentJson) return;
 	if (json.size() > MAX_SAVE_PAYLOAD) {
@@ -305,6 +326,32 @@ export function requestSave(reason: SaveReason): boolean {
 	return true;
 }
 
+/**
+ * What a Rebirth costs right now, as the server will charge it: nothing once this survivor's daybreak came while they
+ * waited in the lobby (the server says so on the Player, REBIRTH_FREE_ATTR), else the continue's price.
+ */
+export function rebirthPriceNow(deathCount: number): number {
+	const me = game.GetService("Players").LocalPlayer as Player | undefined;
+	return rebirthCharge(deathCount, me !== undefined && me.GetAttribute(REBIRTH_FREE_ATTR) === true);
+}
+
+/**
+ * The costumes this server sells for Robux, and at what price (costume id -> Robux): what server/save/robux.ts checked
+ * against Roblox's own and published on the Net folder. Empty = none: the wardrobe shows no Robux button at all.
+ */
+export function robuxOffer(): Map<number, number> {
+	const folder = game.GetService("ReplicatedStorage").FindFirstChild(NET_FOLDER);
+	return decodeRobuxOffer(folder?.GetAttribute(ROBUX_OFFER_ATTR));
+}
+
+/** `fn` runs when the server publishes a new offer (its price check runs at boot and every few minutes) */
+export function onRobuxOfferChanged(fn: () => void): () => void {
+	const folder = game.GetService("ReplicatedStorage").FindFirstChild(NET_FOLDER);
+	if (folder === undefined) return () => {};
+	const conn = folder.GetAttributeChangedSignal(ROBUX_OFFER_ATTR).Connect(fn);
+	return () => conn.Disconnect();
+}
+
 const ACTION_REASONS = new Set<string>([
 	"funds",
 	"owned",
@@ -315,6 +362,7 @@ const ACTION_REASONS = new Set<string>([
 	"readonly",
 	"outdated",
 	"network",
+	"pending",
 ]);
 
 /**

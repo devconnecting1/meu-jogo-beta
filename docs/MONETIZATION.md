@@ -38,7 +38,7 @@ O que de fato é visível para os outros jogadores, hoje, no que já desenhamos:
 
 **Decidido (2026-09-24): grátis no lançamento** (Audience › Access Settings › Allow private servers, sem Requires
 Robux; `docs/CREATOR_HUB.md`). E os trajes e pets do guarda-roupa **também por Robux**, o mesmo item das moedas
-(49 / 149 / 349 R$): desenho em `docs/SHOP.md`, implementação depois da revisão de segurança.
+(49 / 149 / 349 R$): desenho e implementação em `docs/SHOP.md` (os 9 produtos o dono cria; sem id, nada é oferecido).
 
 Assinatura mensal **nativa** do Roblox. Não exige código nenhum e é o melhor produto que este jogo tem, por
 três motivos que se somam:
@@ -79,11 +79,11 @@ vender cada uma dessas linhas de uma vez.
 
 ## O que falta construir
 
-Nada disso existe hoje: **não há uma única chamada de `MarketplaceService` no código**. A loja atual usa moeda
-do jogo (`SHOP_PACKS`), e os pacotes têm conteúdo **fixo** — não são caixa aleatória, e devem continuar não
-sendo. Cada preço em moedas, o modelo de horas de jogo que os fixa (MON-07) e a **proposta de preços em Robux**
-(servidor privado, cosmético também por Robux — com o que cada regra permite e proíbe) estão em `docs/SHOP.md`;
-`npm run test:shop` falha se um produto em Robux aparecer no código sem entrar lá.
+O único uso de `MarketplaceService` no código são os trajes e pets **também por Robux** (`server/save/robux.ts`: um
+produto de desenvolvedor por traje, o prompt aberto pelo servidor, o `ProcessReceipt` idempotente). A loja de pacotes
+usa moeda do jogo (`SHOP_PACKS`), e os pacotes têm conteúdo **fixo** — não são caixa aleatória, e devem continuar não
+sendo. Cada preço em moedas, o modelo de horas de jogo que os fixa (MON-07) e os preços em Robux estão em
+`docs/SHOP.md`; `npm run test:shop` falha se o Robux sair do guarda-roupa, tocar em moedas ou divergir de lá.
 
 Para o primeiro produto (paleta do sobrevivente):
 

@@ -51,8 +51,15 @@ import { MP_PHASE } from "shared/net/mpConfig";
  * already died as far as it can tell (`deathCount > 0` -- where the old rule stopped -- or `runOver`), else 0; a v5 death
  * answered by waiting for daybreak left no record. A server rolled back to v5 drops it and takes achievements from
  * reports again; nothing earned is lost.
+ *
+ * v7 (Robux, docs/SHOP.md "Robux: decisões e desenho"): `robuxReceipts`, the developer-product purchases the SERVER
+ * granted, as "<costumeId>:<PurchaseId>" (the newest ROBUX_RECEIPTS_MAX). It makes a receipt Roblox delivers twice grant
+ * once (server/save/robux.ts), keeps a costume paid in real money owned whatever an admin edit says
+ * (`enforceSaveInvariants`), and survives an admin reset (`carryRobuxPurchases`). Same document, additive: a v6 document
+ * has none (nothing was ever sold for Robux before v7); a server rolled back to v6 drops the list when it writes, which
+ * costs nothing -- the costume stays in `costumes`, and granting a costume twice is granting it once.
  */
-export const SAVE_VERSION = 6;
+export const SAVE_VERSION = 7;
 /** the first version that carries `runHp` / `runHunger`; below it those two fields are absent, not zero */
 export const SAVE_VERSION_RUN_BODY = 3;
 /** the first version with `equipOutfit` / `equipPet`; below it the one cosmetic lives in `equipDeco` */
@@ -61,6 +68,12 @@ export const SAVE_VERSION_COSMETIC_SLOTS = 4;
 export const SAVE_VERSION_TITLES = 5;
 /** the first version whose `achievements` are server-owned and that carries `lifeDeaths` (CON-04) */
 export const SAVE_VERSION_SERVER_ACHIEVEMENTS = 6;
+/** the first version that carries `robuxReceipts` (Robux purchases of the wardrobe's costumes) */
+export const SAVE_VERSION_ROBUX = 7;
+/** Robux receipts kept per save: each costume can be bought once, so the list stays far below this */
+export const ROBUX_RECEIPTS_MAX = 64;
+/** the longest PurchaseId kept (Roblox's are GUID-like, 36 characters) */
+export const PURCHASE_ID_MAX = 64;
 
 /** hard sanity limits applied to every save the server reads or accepts */
 export const SAVE_LIMITS = {
@@ -231,6 +244,11 @@ export interface PlayerSaveData {
 	 * Server-owned (server/sim/life.ts through server/save/achievements.ts `countLifeDeath`).
 	 */
 	lifeDeaths: number;
+	/**
+	 * v7: the Robux purchases the server granted, "<costumeId>:<PurchaseId>", newest last (at most ROBUX_RECEIPTS_MAX).
+	 * Server-owned (server/save/robux.ts): a report never moves it, and it never rides the wallet.
+	 */
+	robuxReceipts: Array<string>;
 	/**
 	 * v5 (MON-05): which title HISTORY this save is. 0 for a save that came from v4 (or went through a v4 server);
 	 * otherwise the os.time() it was started at (a new save) or an admin last edited or reset it at. A title record
@@ -442,9 +460,75 @@ function copyArray(src: Array<number>): Array<number> {
 }
 
 /** overwrites `dst` with `src`'s contents, in place (the array identity is what callers rely on) */
-function copyInto(dst: Array<number>, src: Array<number>): void {
+function copyInto<T extends defined>(dst: Array<T>, src: Array<T>): void {
 	dst.clear();
 	for (const v of src) dst.push(v);
+}
+
+function copyList<T extends defined>(src: Array<T>): Array<T> {
+	const a: Array<T> = [];
+	for (const v of src) a.push(v);
+	return a;
+}
+
+// ---------------------------------------------------------------- v7: Robux receipts
+
+/** a PurchaseId this save can keep: a non-empty string of at most PURCHASE_ID_MAX characters, without ":" */
+export function isPurchaseId(v: unknown): v is string {
+	return typeIs(v, "string") && v.size() > 0 && v.size() <= PURCHASE_ID_MAX && v.split(":").size() === 1;
+}
+
+/** the costume a receipt entry ("<costumeId>:<PurchaseId>") names, or -1 when the entry is not one */
+export function receiptCostume(entry: unknown): number {
+	if (!typeIs(entry, "string")) return -1;
+	const parts = entry.split(":");
+	if (parts.size() !== 2 || !isPurchaseId(parts[1])) return -1;
+	const id = tonumber(parts[0]);
+	if (id === undefined || id % 1 !== 0 || id < 0 || id >= COSTUMES.size() || parts[0] !== `${id}`) return -1;
+	return id;
+}
+
+/** the receipt entry of `purchaseId` in this save, or undefined */
+export function robuxReceiptOf(save: PlayerSaveData, purchaseId: string): string | undefined {
+	for (const entry of save.robuxReceipts) {
+		const parts = entry.split(":");
+		if (parts.size() === 2 && parts[1] === purchaseId) return entry;
+	}
+	return undefined;
+}
+
+/** was COSTUMES[costumeId] paid for in Robux in this save? (an admin never takes it back: shared/admin/ops.ts) */
+export function robuxPaid(save: PlayerSaveData, costumeId: number): boolean {
+	for (const entry of save.robuxReceipts) {
+		if (receiptCostume(entry) === costumeId) return true;
+	}
+	return false;
+}
+
+/**
+ * An admin reset makes a new player's save (server/main.server.ts `adminEdit`), but what was bought with real money is
+ * still theirs: the receipts go over, and with them the costumes they paid for (`enforceSaveInvariants`).
+ */
+export function carryRobuxPurchases(from: PlayerSaveData, to: PlayerSaveData): void {
+	copyInto(to.robuxReceipts, from.robuxReceipts);
+	for (const entry of to.robuxReceipts) {
+		const costumeId = receiptCostume(entry);
+		if (costumeId >= 0) to.costumes[costumeId] = 1;
+	}
+}
+
+/** a stored list, entry by entry: well-formed entries only, no PurchaseId twice, the newest ROBUX_RECEIPTS_MAX */
+function readReceipts(v: unknown): Array<string> {
+	const out: Array<string> = [];
+	if (!typeIs(v, "table")) return out;
+	const seen = new Set<string>();
+	for (const entry of v as Array<unknown>) {
+		if (!typeIs(entry, "string") || receiptCostume(entry) < 0 || seen.has(entry)) continue;
+		seen.add(entry);
+		out.push(entry);
+	}
+	while (out.size() > ROBUX_RECEIPTS_MAX) out.remove(0);
+	return out;
 }
 
 function idByName(list: Array<{ id: number; name: string }>, name: string): number {
@@ -567,6 +651,7 @@ function emptySave(): PlayerSaveData {
 		equipTitle: -1,
 		titleEpoch: 0,
 		lifeDeaths: 0,
+		robuxReceipts: [],
 	};
 }
 
@@ -867,6 +952,8 @@ function readProgress(r: Record<string, unknown>, fb: PlayerSaveData): PlayerSav
 		equipTitle: readInt(r.equipTitle, fb.equipTitle, -1, TITLES.size() - 1),
 		titleEpoch: fb.titleEpoch,
 		lifeDeaths: fb.lifeDeaths,
+		// v7: the SERVER's (copied, never read from `r`); `sanitizeStoredSave` reads the stored list
+		robuxReceipts: copyList(fb.robuxReceipts),
 	};
 }
 
@@ -920,6 +1007,11 @@ export function enforceSaveInvariants(s: PlayerSaveData, previous?: PlayerSaveDa
 	s.zombieKills = math.clamp(math.floor(s.zombieKills), 0, L.COUNTER_MAX);
 	s.lifeNights = math.clamp(math.floor(s.lifeNights), 0, L.DAY_MAX);
 	s.lifeDeaths = math.clamp(math.floor(s.lifeDeaths), 0, L.COUNTER_MAX);
+	// v7: a costume paid in real money is owned, whatever else happened to the save (an admin edit included)
+	for (const entry of s.robuxReceipts) {
+		const costumeId = receiptCostume(entry);
+		if (costumeId >= 0) s.costumes[costumeId] = 1;
+	}
 	// v3 run body: a stored 0 means "not recorded" and the session starts at full, so the only rule here is
 	// that neither number may be negative or absurd. Hunger is capped at its own bar by the player state.
 	s.runHp = math.clamp(math.floor(s.runHp), 0, L.RUN_HP_MAX);
@@ -995,6 +1087,7 @@ export function copySaveInto(dst: PlayerSaveData, src: PlayerSaveData): PlayerSa
 	dst.equipTitle = src.equipTitle;
 	dst.titleEpoch = src.titleEpoch;
 	dst.lifeDeaths = src.lifeDeaths;
+	copyInto(dst.robuxReceipts, src.robuxReceipts);
 	return dst;
 }
 
@@ -1025,6 +1118,8 @@ export function sanitizeStoredSave(raw: unknown): PlayerSaveData {
 	// daybreak left no record at all
 	s.achievements = readIntArray(r.achievements, ACHIEVEMENTS.size(), i => ACHIEVEMENTS[i].max, undefined);
 	s.lifeDeaths = readInt(r.lifeDeaths, s.deathCount > 0 || s.runOver ? 1 : 0, 0, L.COUNTER_MAX);
+	// v7: absent in a v6 document -- nothing was sold for Robux before
+	s.robuxReceipts = readReceipts(r.robuxReceipts);
 	const packMax = (): number => L.COUNTER_MAX;
 	if (r.packsBought !== undefined) {
 		s.packsBought = readIntArray(r.packsBought, SHOP_PACKS.size(), packMax, undefined);

@@ -218,7 +218,19 @@ export const EVENT = {
 	TownOffered: "TownOffered",
 	/** a trip to a town of one's own ended with the player still here */
 	TripFailed: "TripFailed",
+	/**
+	 * A costume bought with Robux was GRANTED (server/save/robux.ts, after the write with its PurchaseId landed): once
+	 * per PurchaseId, value = the receipt's CurrencySpent. Never a Coins economy event: no coin moved (docs/SHOP.md)
+	 */
+	RobuxPurchase: "RobuxPurchase",
+	/** a Robux receipt for a costume the player already owned: acknowledged with nothing new (no refund API) */
+	RobuxOwned: "RobuxOwned",
 } as const;
+
+/** the Robux purchase's channel, as its field says it: the game's own prompt, or anything else (never expected) */
+export function robuxChannelName(channel: unknown): string {
+	return typeIs(channel, "EnumItem") && channel.Name === "InExperience" ? "Channel - In game" : "Channel - Other";
+}
 
 /** the economy's transaction types: the built-in names where one fits (typed against the enum), and "Admin" */
 type BuiltInTx = Enum.AnalyticsEconomyTransactionType["Name"];
@@ -332,9 +344,10 @@ function killBucket(kills: number): string {
 }
 
 /**
- * The coins a player holds, in coarse steps of what they buy (shared/data/shop.ts, docs/SHOP.md): under 10 buys nothing,
- * 10-49 a pack, 50-199 a pack or a common cosmetic, 200+ a rare one and up. The labels are dashboard values: kept as
- * they are when prices move (a new label splits the chart), so a step is "about", not a price.
+ * The coins a player holds, in four coarse steps. The labels are dashboard values, fixed since before the prices of
+ * docs/SHOP.md (a new label would split the chart), so they are read against today's catalogue (shared/data/shop.ts),
+ * not as prices: "0-9" buys nothing; "10-49" is the packs' range (15-60) up to most of them; "50-199" reaches the
+ * dearer packs and the common cosmetics (70-90); "200+" is where the rare (220-250) and top (600) ones start.
  */
 export function coinBucket(coins: number): string {
 	if (coins < 10) return "0-9";
@@ -1245,9 +1258,37 @@ export class ServerAnalytics {
 		const e = this.entries.get(player);
 		if (e === undefined || e.shop === undefined) return;
 		const pack = req.kind === "buyPack" && typeIs(req.packId, "number") && SHOP_PACKS[req.packId] !== undefined;
+		// the Robux prompt asked for is a try as much as the coin purchase (docs/SHOP.md, Robux item 7)
 		const costume =
-			req.kind === "buyCostume" && typeIs(req.costumeId, "number") && COSTUMES[req.costumeId] !== undefined;
+			(req.kind === "buyCostume" || req.kind === "robuxCostume") &&
+			typeIs(req.costumeId, "number") &&
+			COSTUMES[req.costumeId] !== undefined;
 		if (pack || costume) this.shopStep(e, 2);
+	}
+
+	/**
+	 * A costume's Robux receipt was granted and its write landed (server/save/robux.ts). `fresh`: a new costume -- the
+	 * visit's "Bought" and one RobuxPurchase; otherwise it was already owned (a receipt from outside the game): one
+	 * RobuxOwned for the owner to make good by hand. Once per PurchaseId: robux.ts calls it only for the grant that
+	 * landed, never for a replayed receipt. No Coins economy event either way: no coin moved.
+	 */
+	robuxPurchase(player: Player, costumeId: number, spent: number, channel: unknown, fresh: boolean): void {
+		const e = this.entries.get(player);
+		if (e === undefined) return;
+		const costume = COSTUMES[costumeId];
+		if (costume === undefined) return;
+		const value = typeIs(spent, "number") && spent === spent && spent >= 0 ? math.floor(spent) : 0;
+		const fields: CustomFields = {
+			CustomField01: "Category - Costume",
+			CustomField02: `Tier - ${costume.tier}`,
+			CustomField03: robuxChannelName(channel),
+		};
+		if (!fresh) {
+			this.custom(e, EVENT.RobuxOwned, value, fields);
+			return;
+		}
+		this.custom(e, EVENT.RobuxPurchase, value, fields);
+		this.shopStep(e, 3);
 	}
 
 	/** MON-05: the server granted a title (server/net/mpHost.ts `onTitleUnlocked`), once per title per save */
@@ -1601,6 +1642,17 @@ export function shopViewed(player: Player, screen: unknown): void {
 /** server/main.server.ts `handleAction`, before the request is decided */
 export function shopRequest(player: Player, req: Record<string, unknown>): void {
 	guard(c => c.shopRequest(player, req));
+}
+
+/** server/save/robux.ts: a costume's Robux receipt granted and written (`fresh` false: it was already owned) */
+export function robuxPurchase(
+	player: Player,
+	costumeId: number,
+	spent: number,
+	channel: unknown,
+	fresh: boolean,
+): void {
+	guard(c => c.robuxPurchase(player, costumeId, spent, channel, fresh));
 }
 
 /** server/net/mpHost.ts `onTitleUnlocked` */

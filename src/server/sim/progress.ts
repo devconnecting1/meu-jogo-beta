@@ -94,11 +94,23 @@ export interface Income {
 	records: number;
 }
 
-let incomeListener: ((save: PlayerSaveData, income: Income) => void) | undefined;
+/**
+ * Who hears the coins this module pays. A list (security review of de31f47, L3): a second listener -- a second server
+ * script, a test harness -- is added beside the first, never silently replacing it; `onIncome` answers the way to leave.
+ */
+const incomeListeners: Array<(save: PlayerSaveData, income: Income) => void> = [];
 
-/** the one listener for the coins this module pays (server/main.server.ts); undefined removes it */
-export function onIncome(fn: ((save: PlayerSaveData, income: Income) => void) | undefined): void {
-	incomeListener = fn;
+/** listens to the coins this module pays (server/main.server.ts); the answer stops listening */
+export function onIncome(fn: (save: PlayerSaveData, income: Income) => void): () => void {
+	incomeListeners.push(fn);
+	return () => {
+		const i = incomeListeners.indexOf(fn);
+		if (i >= 0) incomeListeners.remove(i);
+	};
+}
+
+function tellIncome(save: PlayerSaveData, income: Income): void {
+	for (const fn of incomeListeners) fn(save, income);
 }
 
 /**
@@ -119,7 +131,7 @@ export function creditBossKill(save: PlayerSaveData, paid = true): number {
 	const coins = save.money - had;
 	if (coins <= 0) return 0;
 	Analytics.bossCoins(save, coins);
-	incomeListener?.(save, { coins, days: 0, bosses: 1, records: 0 });
+	tellIncome(save, { coins, days: 0, bosses: 1, records: 0 });
 	return coins;
 }
 
@@ -185,7 +197,14 @@ export function creditDaySurvived(save: PlayerSaveData, paid = true): DayCredit 
 	out.milestone = math.max(0, out.coins - ECONOMY.COINS_PER_DAY);
 	if (out.coins <= 0) return out;
 	Analytics.dayCoins(save, out.coins, out.milestone);
-	incomeListener?.(save, { coins: out.coins, days: 1, bosses: 0, records: out.milestone > 0 ? records : 0 });
+	// the toast names what was PAID (security review of de31f47, L1): a record whose bonus a full purse cut short is not
+	// told as a "Record day" -- the coins line says the amount that went in, the labels only what was paid in full
+	tellIncome(save, {
+		coins: out.coins,
+		days: 1,
+		bosses: 0,
+		records: math.min(records, math.floor(out.milestone / ECONOMY.MILESTONE_BONUS)),
+	});
 	return out;
 }
 

@@ -5,7 +5,14 @@ import { EquipSlot } from "shared/data/equips";
 import { cosmeticSlotOf, outfitLookOfEquip, petLookOfEquip } from "shared/data/cosmetics";
 import { TITLES, TitleId, titleFromWire, titleToWire } from "shared/data/titles";
 import { langGet } from "shared/data/lang";
-import { invokeShopAction, onWalletChanged, requestSave, sessionReady } from "../systems/saveClient";
+import {
+	invokeShopAction,
+	onRobuxOfferChanged,
+	onWalletChanged,
+	requestSave,
+	robuxOffer,
+	sessionReady,
+} from "../systems/saveClient";
 import { PreviewSubject, SurvivorPreview } from "../view/cosmeticPreview";
 import { drawingBox } from "./drawingBox";
 import { actionErrorText, fundsErrorText } from "./shop";
@@ -56,6 +63,13 @@ import * as Kit from "./window";
  *   (server/save/costumes.ts, through ShopAction): the request is the costume id and nothing else; ownership
  *   and coins come back in the wallet. Equip / Unequip go through the same path as the Bag (main.client.ts):
  *   the save the server re-checks for ownership on the next report.
+ * - Robux (docs/SHOP.md "Robux: decisões e desenho", MON-04 as amended): a locked costume the server sells for Robux
+ *   too shows both prices on its row ("600 coins · 349 Robux" -- the word, never "R$": MON-06 keeps real-money signs
+ *   out) and splits the action: the coin Buy stays the primary, on the left where the pad arrives from the grid, and
+ *   "See Price" sits at its right, secondary (BEM-02). It asks the SERVER to open Roblox's own prompt
+ *   (server/save/robux.ts); the costume comes with the receipt, on the pushed wallet, and says "Unlocked". No offer
+ *   (no product configured, or one whose price Roblox does not confirm): the panel is exactly the coin one. A pet
+ *   that came in a pack keeps its two buttons (wear | keep for good, in coins). The tiles show coins only.
  * - Nothing here pauses anything (UI-06): the wardrobe is a menu screen, reached from the lobby and the shop,
  *   never over a running world.
  * - Titles (MON-05), the third tab: ROWS, not tiles -- "[None]" / "Unequip title" first, then each title in brackets,
@@ -313,6 +327,20 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 		return c !== undefined ? [page, c] : undefined;
 	};
 
+	/**
+	 * The costumes owned for good as this window last saw them: one that turns up owned outside a coin purchase came
+	 * with a Robux receipt (server/save/robux.ts), and says so ("Unlocked: Santa")
+	 */
+	const ownedSeen = new Set<number>();
+	for (const c of COSTUMES) if (ownsCostume(ctx.save, c.id)) ownedSeen.add(c.id);
+	const noteUnlocks = (): void => {
+		for (const c of COSTUMES) {
+			if (ownedSeen.has(c.id) || !ownsCostume(ctx.save, c.id)) continue;
+			ownedSeen.add(c.id);
+			toast(ctx, `${tr("Unlocked")}: ${tr(c.name)}`, "success");
+		}
+	};
+
 	const buy = (c: CostumeDef, btn: TextButton): void => {
 		if (busy) return;
 		if (!sessionReady()) {
@@ -326,8 +354,35 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 		busy = false;
 		if (root.Parent === undefined) return; // closed while the server answered
 		setButtonEnabled(btn, true);
-		if (res.ok) toast(ctx, `${tr("Purchased")}: ${tr(c.name)}`, "success");
-		else toast(ctx, fundsErrorText(res.reason, c.price - ctx.save.money, lang), "error");
+		if (res.ok) {
+			ownedSeen.add(c.id);
+			toast(ctx, `${tr("Purchased")}: ${tr(c.name)}`, "success");
+		} else {
+			toast(ctx, fundsErrorText(res.reason, c.price - ctx.save.money, lang), "error");
+		}
+		noteUnlocks();
+		refresh();
+	};
+
+	/**
+	 * "See Price": asks the SERVER to open Roblox's prompt for `c` -- the id and nothing else (server/save/robux.ts
+	 * decides whether it is sold, at what price, and that it is not yours). Nothing is granted here: the costume comes
+	 * with its receipt, on the pushed wallet (`noteUnlocks`).
+	 */
+	const seePrice = (c: CostumeDef, btn: TextButton): void => {
+		if (busy) return;
+		if (!sessionReady()) {
+			toast(ctx, tr("Still loading your progress"), "error");
+			return;
+		}
+		busy = true;
+		setButtonEnabled(btn, false);
+		const res = invokeShopAction({ kind: "robuxCostume", costumeId: c.id });
+		busy = false;
+		if (root.Parent === undefined) return; // closed while the server answered
+		setButtonEnabled(btn, true);
+		if (!res.ok) toast(ctx, actionErrorText(res.reason, lang), "error");
+		noteUnlocks();
 		refresh();
 	};
 
@@ -422,6 +477,38 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 	});
 	setVisible(packAction, false);
 	setVisible(keep, false);
+	// the same costume for Robux (docs/SHOP.md): the coin Buy on the left -- the primary, where the pad lands coming
+	// from the grid -- and "See Price" on the right, secondary (BEM-02). Built now, shown only for a locked costume the
+	// server sells for Robux
+	const coinBuy: TextButton = Button(details.frame, "CoinBuy", "", {
+		x: INSET,
+		y: actionY,
+		w: halfW,
+		h: ACTION_H,
+		textSize: TEXT.lg,
+		zIndex: dz,
+		onClick: (): void => {
+			const sel = selection();
+			if (sel !== undefined) buy(sel[1], coinBuy);
+		},
+	});
+	const robuxBuy: TextButton = Button(details.frame, "RobuxBuy", tr("See Price"), {
+		x: INSET + DETAIL_INNER_W - halfW,
+		y: actionY,
+		w: halfW,
+		h: ACTION_H,
+		textSize: TEXT.lg,
+		variant: "secondary",
+		zIndex: dz,
+		onClick: (): void => {
+			const sel = selection();
+			if (sel !== undefined) seePrice(sel[1], robuxBuy);
+		},
+	});
+	coinBuy.NextSelectionRight = robuxBuy;
+	robuxBuy.NextSelectionLeft = coinBuy;
+	setVisible(coinBuy, false);
+	setVisible(robuxBuy, false);
 
 	// ---- the pages: one grid of tiles per slot that has something to sell
 	const PAGE_DEFS: Array<[string, number, PreviewSubject]> = [
@@ -621,6 +708,8 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 		setVisible(action, true);
 		setVisible(packAction, false);
 		setVisible(keep, false);
+		setVisible(coinBuy, false);
+		setVisible(robuxBuy, false);
 		if (!owned) {
 			// the quiet iron, disabled: nothing a click could do (the disabled plate is the kit's dark slot)
 			action.Text = tr("Locked");
@@ -677,9 +766,13 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 		Kit.setValueKey(slotKey, tr(page.slot === EquipSlot.Pet ? "PET" : "OUTFIT"));
 		// owned through a pack, not bought: it lives in the run's inventory, which a New game starts over
 		const fromPack = !locked && !ownsCostume(save, c.id);
+		// the Robux price the server checked with Roblox, for a locked costume only (never offered for what is yours)
+		const robuxPrice = locked ? robuxOffer().get(c.id) : undefined;
+		const dual = robuxPrice !== undefined;
 		statusRow.label.Text = tr(locked ? "Price" : "Status");
 		let status = tr("Owned");
 		if (locked) status = `${fmtInt(c.price)} ${tr("coins")}`;
+		if (dual) status = `${status}  ·  ${fmtInt(robuxPrice)} ${tr("Robux")}`;
 		else if (state === "equipped") status = tr("Equipped");
 		else if (fromPack) status = tr("From a pack");
 		Kit.setValueKey(statusKey, status);
@@ -687,7 +780,7 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 			const have = `${tr("You have")} ${fmtInt(save.money)}`;
 			note.Text = `${tr("Not enough coins")}. ${have}. ${tr("Coins are earned by playing")}.`;
 		} else if (fromPack) {
-			note.Text = tr("Came in a pack: it stays until a New game. Buy it to keep it for good.");
+			note.Text = tr("Came in a pack: it stays for this life. Buy it to keep it for good.");
 		} else {
 			note.Text = tr(slotNote(page.slot));
 		}
@@ -706,9 +799,19 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 			action.Text = tr("Equip");
 			setButtonVariant(action, "default");
 		}
-		setVisible(action, !fromPack);
+		setVisible(action, !fromPack && !dual);
 		setVisible(packAction, fromPack);
 		setVisible(keep, fromPack);
+		setVisible(coinBuy, dual);
+		setVisible(robuxBuy, dual);
+		if (dual) {
+			// without the coins the coin Buy says how many are missing, disabled -- and the pad stays on the grid: it is
+			// never sent to the Robux button instead (BEM-02)
+			coinBuy.Text = buyText;
+			setButtonVariant(coinBuy, "default");
+			setButtonEnabled(coinBuy, affordable && !busy);
+			setButtonEnabled(robuxBuy, !busy);
+		}
 		if (fromPack) {
 			packAction.Text = action.Text;
 			setButtonVariant(packAction, state === "equipped" ? "secondary" : "default");
@@ -759,12 +862,20 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 		if (tab !== titlesTab) preview.draw(os.clock() - t0);
 	});
 	const unsubscribe = onWalletChanged(() => {
-		if (!busy) refresh();
-		else coins.refresh();
+		if (busy) {
+			coins.refresh();
+			return;
+		}
+		// a costume the Robux receipt granted (the pushed wallet) says so, then shows as yours
+		noteUnlocks();
+		refresh();
 	});
+	// the server's price check publishes the Robux offer at boot: a window opened before it repaints when it comes
+	const unsubscribeOffer = onRobuxOfferChanged(() => refresh());
 
 	return (): void => {
 		unsubscribe();
+		unsubscribeOffer();
 		conn.Disconnect();
 		for (const icon of icons) icon.destroy();
 		preview.destroy();

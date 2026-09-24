@@ -441,8 +441,8 @@ export const LANG_TABLE: Array<string> = [
 	// survivor is in the city: a New game is not needed), a pack waiting, a pet pack's truth, the "?"
 	"Fixed contents, shown in full. A pack goes into your backpack when you enter the city.",
 	"Pending",
-	"Stays until a New game",
-	"Every pack has fixed contents, shown in full on its card: what you see is what you get.#Packs go into your backpack the next time you enter the city.#A pet from a pack stays until a New game. The Wardrobe sells outfits and pets you keep for good.#Coins are earned by playing: the Earn coins tab shows how, and how far you are from the next ones.",
+	"Stays for this life",
+	"Every pack has fixed contents, shown in full on its card: what you see is what you get.#Packs go into your backpack the next time you enter the city.#A pet from a pack stays for this life, until a New game or the town ends. The Wardrobe sells outfits and pets you keep for good.#Coins are earned by playing: the Earn coins tab shows how, and how far you are from the next ones.",
 	// Earn coins: how each source pays, and how far the player is from it
 	"Paid at every midnight your survivor lives through.",
 	"Next pay at midnight",
@@ -677,7 +677,13 @@ export const LANG_TABLE: Array<string> = [
 	"From a pack",
 	"Buy for",
 	"coins",
-	"Came in a pack: it stays until a New game. Buy it to keep it for good.",
+	"Came in a pack: it stays for this life. Buy it to keep it for good.",
+	// the same costume for Robux (docs/SHOP.md "Robux: decisões e desenho"): the price row "600 coins · 349 Robux", the
+	// secondary button that opens Roblox's own prompt (BEM-02: "See Price", never "GET IT NOW"), and the refusal while a
+	// prompt for it is open
+	"Robux",
+	"See Price",
+	"Finish the Robux purchase first",
 	"What you buy is yours for good, and everyone sees it. Coins are earned by playing.",
 	"Outfits change how your survivor looks, and a pet follows you. You can wear one of each.#Everyone sees them, and they change nothing else: no defence, no speed, no loot.#Locked items show their price in coins. Coins are earned by playing: days survived, record days and bosses.#Titles are never sold: each one is earned by playing, and shows under your name for everyone.#Pick an item to try it on in the preview, then buy or wear it.",
 	// titles (shared/data/titles.ts, client/ui/wardrobe.ts, DESIGN_RULES MON-05): the three titles, how each is earned,
