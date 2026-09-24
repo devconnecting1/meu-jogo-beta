@@ -178,6 +178,8 @@ export class Renderer {
 	private drawn = 0;
 	/** sprites created so far, all buckets */
 	private created = 0;
+	/** Instances created so far: the sprites and their UICorners, UIStrokes and ImageLabels */
+	private made = 0;
 	private viewW = 1120;
 	private viewH = 630;
 
@@ -204,6 +206,11 @@ export class Renderer {
 	/** number of sprites in the pool, shown or not (every bucket) */
 	poolSize(): number {
 		return this.created;
+	}
+
+	/** Instances this renderer has created so far: its sprites and their modifiers (never goes down) */
+	instancesMade(): number {
+		return this.made;
 	}
 
 	/** Start a new frame: every sprite becomes reusable (nothing is hidden yet). */
@@ -287,6 +294,47 @@ export class Renderer {
 				if (corner && sp.corner === undefined) this.ensureCorner(sp);
 				if (stroke && sp.stroke === undefined) this.ensureStroke(sp);
 				if (image && sp.img === undefined) this.ensureImage(sp);
+				left--;
+			}
+		}
+		return missing;
+	}
+
+	/**
+	 * Modifiers ahead of need, for a pool that grows by drawing (client/view/townFlyover.ts): in a bucket where some
+	 * sprite already has its UICorner, its UIStroke or its ImageLabel -- a layer that draws rounded, outlined or image
+	 * sprites --, up to `budget` of the others get theirs, as the first draw would leave them (a square corner, a
+	 * disabled outline, a hidden label with no picture). The order inside a bucket is the draw order, and it shifts as
+	 * the view moves: a rounded or outlined sprite (a flat roof's a/c box, a patch of lawn) lands one day on a slot
+	 * that only ever drew plain ones (a ridge, a seam), and with this that frame creates nothing. Answers how many are
+	 * still missing: 0 = every slot of such a bucket has them. Nothing drawn changes: each cache is its Instance.
+	 */
+	warmModifiers(budget: number): number {
+		let left = budget;
+		let missing = 0;
+		for (const b of this.list) {
+			const sprites = b.sprites;
+			let rounded = false;
+			let outlined = false;
+			let pictured = false;
+			for (const sp of sprites) {
+				if (sp.corner !== undefined) rounded = true;
+				if (sp.stroke !== undefined) outlined = true;
+				if (sp.img !== undefined) pictured = true;
+			}
+			if (!rounded && !outlined && !pictured) continue;
+			for (const sp of sprites) {
+				const corner = rounded && sp.corner === undefined;
+				const stroke = outlined && sp.stroke === undefined;
+				const image = pictured && sp.img === undefined;
+				if (!corner && !stroke && !image) continue;
+				if (left <= 0) {
+					missing++;
+					continue;
+				}
+				if (corner) this.ensureCorner(sp);
+				if (stroke) this.ensureStroke(sp);
+				if (image) this.ensureImage(sp);
 				left--;
 			}
 		}
@@ -586,6 +634,7 @@ export class Renderer {
 		};
 		this.byFrame.set(f, sp);
 		this.created++;
+		this.made++;
 		return sp;
 	}
 
@@ -597,6 +646,7 @@ export class Renderer {
 			c.CornerRadius = cornerRadius(sp.cornerKey);
 			c.Parent = sp.frame;
 			sp.corner = c;
+			this.made++;
 		}
 		return c;
 	}
@@ -619,6 +669,7 @@ export class Renderer {
 			label.ResampleMode = Enum.ResamplerMode.Pixelated;
 			label.Visible = false;
 			label.Parent = sp.frame;
+			this.made++;
 			im = {
 				label,
 				on: false,
@@ -659,6 +710,7 @@ export class Renderer {
 			st.Enabled = sp.strokeOn;
 			st.Parent = sp.frame;
 			sp.stroke = st;
+			this.made++;
 		}
 		return st;
 	}
