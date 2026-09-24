@@ -92,6 +92,12 @@ export interface ServerInteractionOptions {
 	fx?: (event: FxEvent) => void;
 	/** the electric grid: E on a machine is its job first (ELE-03), the ordinary E (repair, a light) only if not */
 	machines?: MachineActions;
+	/**
+	 * A door opened or closed: the horde's flow field reads that patch again (§3.3 dirty tiles). Passed in, like
+	 * server/sim/build.ts's, so the module stays pure. Without it the field kept routing through a door that had been
+	 * shut, or round one that had been opened, until something else dirtied the tile.
+	 */
+	onSolidChanged?: (x: number, y: number, w: number, h: number) => void;
 }
 
 /** the world as the resolver needs to see it for one press */
@@ -112,6 +118,7 @@ export class ServerInteraction {
 	private readonly out: WorldOut;
 	private readonly fx?: (event: FxEvent) => void;
 	private readonly machines?: MachineActions;
+	private readonly onSolidChanged?: (x: number, y: number, w: number, h: number) => void;
 	/** seconds of fire left per campfire/brazier; absent = freshly built, full (the original's `fuelOf`) */
 	private readonly fuel = new Map<Solid, number>();
 	private fireTick = 0;
@@ -129,6 +136,7 @@ export class ServerInteraction {
 		this.out = options.out;
 		this.fx = options.fx;
 		this.machines = options.machines;
+		this.onSolidChanged = options.onSolidChanged;
 	}
 
 	/**
@@ -194,6 +202,7 @@ export class ServerInteraction {
 		if (!willOpen && bodiesOverlapRect(s, ctx.players, ctx.zombies)) return { kind: "refused", why: "blocked" };
 		s.open = willOpen;
 		this.toggleCd.set(s, TOGGLE_COOLDOWN_S);
+		if (this.onSolidChanged !== undefined) this.onSolidChanged(s.x, s.y, s.w, s.h);
 		// GLOBAL, not interest-filtered (§4.5): a door decides whether a corridor is walkable, and every
 		// client predicts its own movement against it. A door somebody was not told about is a wall.
 		this.out.queue({ t: WorldEv.DoorSet, id: s.id, state: willOpen ? SolidState.Open : 0 });

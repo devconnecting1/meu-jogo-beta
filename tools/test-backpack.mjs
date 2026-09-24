@@ -607,6 +607,20 @@ function setIconAtlas(id) {
 	ids.itemIcons = id;
 	WA.overrideWorldArt(ids);
 }
+/** the characters' sheets and masks (client/boot/preloadPlan.ts laterArt: survivors, weapons, zombies, dogs, birds) */
+const isCharacterSheet = name => /^(survivors|weapons|zombies|dogs|birds)/.test(name);
+/**
+ * setIconAtlas("") with the characters' sheets on -- their uploaded ids, a stand-in for one not uploaded yet -- or
+ * off: the survivor and the pets drawn flat, as before the art (ART-01)
+ */
+function setCharacterArt(on) {
+	const ids = {};
+	for (const [name, t] of Object.entries(WORLD_ART)) {
+		ids[name] = !isCharacterSheet(name) ? t.id : on ? t.id || `local:${name}` : "";
+	}
+	ids.itemIcons = "";
+	WA.overrideWorldArt(ids);
+}
 // the walk measures the Frame drawing whatever has been uploaded; part 10 measures the atlas too (test:icons)
 setIconAtlas("");
 flush();
@@ -1480,11 +1494,22 @@ pack.close();
 		deep(deep(details(), "PreviewBed"), "Sprites")
 			.GetChildren()
 			.filter(f => f.Visible);
-	const torso = sprites =>
-		sprites
-			.filter(f => f.ZIndex === Z.player + 1)
-			.sort((a, b) => b.Size.X.Offset * b.Size.Y.Offset - a.Size.X.Offset * a.Size.Y.Offset)[0]?.BackgroundColor3;
-	/** the torso colour the world's own drawing gives an outfit look (a detached preview, the same code) */
+	/**
+	 * What the survivor's body shows, both ways the world draws it: the torso's colour (the flat drawing), or -- with
+	 * the characters' sheets uploaded (ART-09) -- the body's picture, its sheet and its cell (charSheets.survivorRow:
+	 * each outfit has rows of its own), as "<id> @ x,y". The flat torso is the biggest Frame of its layer; the body's
+	 * cell is the ImageLabel on that layer.
+	 */
+	const torso = sprites => {
+		const onBody = sprites.filter(f => f.ZIndex === Z.player + 1);
+		for (const f of onBody) {
+			const im = f.GetChildren().find(c => c.ClassName === "ImageLabel" && c.Visible);
+			if (im !== undefined) return `${im.Image} @ ${im.ImageRectOffset?.X ?? 0},${im.ImageRectOffset?.Y ?? 0}`;
+		}
+		return onBody.sort((a, b) => b.Size.X.Offset * b.Size.Y.Offset - a.Size.X.Offset * a.Size.Y.Offset)[0]
+			?.BackgroundColor3;
+	};
+	/** what the world's own drawing gives an outfit look's body (a detached preview, the same code) */
 	const torsoOf = look => {
 		const ref = new SurvivorPreview(makeInstance("Frame", false), { w: 300, h: 200 });
 		ref.setOutfit(look);
@@ -1500,6 +1525,11 @@ pack.close();
 	};
 	const sameColor = (a, b) =>
 		a !== undefined && b !== undefined && Math.abs(a.R - b.R) + Math.abs(a.G - b.G) + Math.abs(a.B - b.B) < 1e-6;
+	/** the same body: the same torso colour (flat) or the same sheet and cell (pixel art) */
+	const sameLook = (a, b) =>
+		typeof a === "string" || typeof b === "string" ? a !== undefined && a === b : sameColor(a, b);
+	const lookText = v =>
+		typeof v === "string" ? v : v === undefined ? "nada" : `rgb ${[v.R, v.G, v.B].map(c => Math.round(c * 255))}`;
 	const petShown = () => previewSprites().some(f => f.ZIndex >= PET_Z && f.ZIndex <= PET_Z + 3);
 
 	check("o guarda-roupa abriu", screen() !== undefined);
@@ -1545,7 +1575,11 @@ pack.close();
 		`${title()} / ${legend(deep(details(), "Slot"))} / ${status()} / ${action().Text}`,
 	);
 	renderFrame();
-	check("a previa veste o Cowboy", sameColor(torso(previewSprites()), torsoOf(COS.OutfitLook.Cowboy)));
+	check(
+		"a previa veste o Cowboy",
+		sameLook(torso(previewSprites()), torsoOf(COS.OutfitLook.Cowboy)),
+		lookText(torso(previewSprites())),
+	);
 	check("e sem pet (nenhum vestido)", !petShown());
 
 	// select Santa: a repaint, not a rebuild
@@ -1565,7 +1599,11 @@ pack.close();
 	);
 	check("com moedas para pagar, a acao e a principal (verde)", action().GetAttribute("Variant") === "default");
 	renderFrame();
-	check("a previa experimenta o Santa", sameColor(torso(previewSprites()), torsoOf(COS.OutfitLook.Santa)));
+	check(
+		"a previa experimenta o Santa",
+		sameLook(torso(previewSprites()), torsoOf(COS.OutfitLook.Santa)),
+		lookText(torso(previewSprites())),
+	);
 
 	// buy it: the request is the id and nothing else, the answer is the server's
 	r = phase("guarda-roupa: compra o Santa", () => click(action(), "Buy"));
@@ -1641,7 +1679,11 @@ pack.close();
 	check("a Carolina vai para o slot do pet", save.equipPet === CAROLINA.equipId && status() === "Equipped");
 	renderFrame();
 	check("a previa mostra o pet", petShown());
-	check("com o traje que voce veste (nenhum)", sameColor(torso(previewSprites()), torsoOf(COS.OutfitLook.None)));
+	check(
+		"com o traje que voce veste (nenhum)",
+		sameLook(torso(previewSprites()), torsoOf(COS.OutfitLook.None)),
+		lookText(torso(previewSprites())),
+	);
 	const askedBefore = asked.length;
 	click(keep(), "Buy Carolina for good");
 	check(
@@ -1672,10 +1714,22 @@ pack.close();
 		service("RunService").RenderStepped.conns.length === drawing - 1,
 		`${drawing} -> ${service("RunService").RenderStepped.conns.length}`,
 	);
+	// the looks compared above are really apart, both ways the world draws a survivor: from the characters' sheets as
+	// uploaded (ART-09: a cell of its own per outfit, MON-04) and without them (ART-01: a torso colour per outfit)
+	const apart = () =>
+		!sameLook(torsoOf(COS.OutfitLook.Cowboy), torsoOf(COS.OutfitLook.Santa)) &&
+		!sameLook(torsoOf(COS.OutfitLook.None), torsoOf(COS.OutfitLook.Cowboy));
+	setCharacterArt(true);
+	const artBody = torsoOf(COS.OutfitLook.Cowboy);
+	const artApart = apart();
+	setCharacterArt(false);
+	const flatBody = torsoOf(COS.OutfitLook.Cowboy);
+	const flatApart = apart();
+	setIconAtlas("");
 	check(
-		"as cores de torso comparadas acima sao mesmo diferentes entre si",
-		!sameColor(torsoOf(COS.OutfitLook.Cowboy), torsoOf(COS.OutfitLook.Santa)) &&
-			!sameColor(torsoOf(COS.OutfitLook.None), torsoOf(COS.OutfitLook.Cowboy)),
+		"os corpos comparados acima sao mesmo diferentes entre si: com a pixel art (a celula) e no desenho liso (a cor)",
+		typeof artBody === "string" && artApart && typeof flatBody === "object" && flatApart,
+		`Cowboy com a arte: ${lookText(artBody)}; liso: ${lookText(flatBody)}`,
 	);
 }
 

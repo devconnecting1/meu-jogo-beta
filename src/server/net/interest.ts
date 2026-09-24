@@ -1,3 +1,4 @@
+//!native
 /*
  * Interest management: what each client is allowed to receive (docs/MULTIPLAYER.md §4.3, §4.4; MP-07).
  *

@@ -36,6 +36,17 @@ export interface RemotePlayerView {
 	hpMax: number;
 	/** downed survivors crawl and show the revive ring (MP-03) */
 	downed: boolean;
+	/**
+	 * Dead (the reliable LifeState, §7.3): a body carries no light (shared/sim/survivorLight.ts `carriesLight`). The
+	 * list the network layer hands over leaves the dead out today, so this is false in it; it is the field the rule
+	 * reads, not a second place that decides it.
+	 */
+	dead: boolean;
+	/**
+	 * They carry a flashlight: the server's `PlayerFlag.Flashlight` (§4.2), set from the rule the horde's visibility
+	 * lights with (`survivorCone`). The view draws its cone along `angle` (LUZ-04).
+	 */
+	flashlight: boolean;
 	/** equipped weapon id, so the view draws the right thing in their hands */
 	weaponId: number;
 	/** walk-cycle phase for the feet, advanced from the interpolated speed */

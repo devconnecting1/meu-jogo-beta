@@ -23,7 +23,9 @@
  *   C. THE CLIENT: the prediction replays a ride from the server's self block to within RECONCILE_EPS while it
  *      accelerates, weaves and brakes (client/net/prediction.ts); a client that pretends to ride is rewound to a
  *      walk; another client's snapshot buffer carries the rider's vehicle and heading; the vehicle is drawn inside
- *      its footprint, under its rider, whose hands hold the bars and no weapon, with no Instance after warm-up.
+ *      its footprint, under its rider, whose hands hold the bars and no weapon, with no Instance after warm-up --
+ *      flat (no ids: ART-01) and from the uploaded art (the vehicles' sprites, the survivors' sheets: the rider's
+ *      body cell and no weapon cell).
  *
  * Pure Node (>= 18) + the project's TypeScript, on the shared shims (tools/luau-shim.mjs).
  */
@@ -99,7 +101,8 @@ function rider(kind, x = 1000, y = 4000, save = fueled()) {
 /** runs `n` ticks of `cmdOf(i)` and returns the per-tick results */
 function ride(world, r, n, cmdOf) {
 	const out = [];
-	for (let i = 0; i < n; i++) out.push(stepPlayer(world, r.p, r.save, cmdOf(i), DT));
+	// stepPlayer answers in one shared table (shared/sim/playerMove.ts): keeping them means copying them
+	for (let i = 0; i < n; i++) out.push({ ...stepPlayer(world, r.p, r.save, cmdOf(i), DT) });
 	return out;
 }
 
@@ -1429,6 +1432,20 @@ section(
 		const VV = require(join(SRC, "client/view/vehicleView.ts"));
 		const SVW = require(join(SRC, "client/view/survivorView.ts"));
 		const { WEAPONS } = require(join(SRC, "shared/data/weapons.ts"));
+		const WA = require(join(SRC, "client/view/worldArt.ts"));
+		const { WORLD_ART } = require(join(SRC, "client/view/worldArtAssets.ts"));
+		const CS = require(join(SRC, "client/view/charSheets.ts"));
+		// the art this section draws with: the uploads as they are, with the vehicles' sprites and the characters'
+		// sheets on (their uploaded ids; a stand-in for one not uploaded yet) or off (the flat drawing, ART-01)
+		const isRideArt = name => name === "bicycle" || name === "motorcycle" || /^(survivors|weapons)/.test(name);
+		const artIds = on => {
+			const ids = {};
+			for (const [name, t] of Object.entries(WORLD_ART)) {
+				ids[name] = !isRideArt(name) ? t.id : on ? t.id || `local:${name}` : "";
+			}
+			return ids;
+		};
+		WA.overrideWorldArt(artIds(false));
 		// what a frame asks of the renderer, recorded
 		const calls = [];
 		const rec = {
@@ -1476,8 +1493,8 @@ section(
 			"the bicycle in its frame colour",
 		);
 		// ART-01: with an id each vehicle is ONE pixel-art image on its footprint; without, the flat parts again
-		const WA = require(join(SRC, "client/view/worldArt.ts"));
-		WA.overrideWorldArt({ bicycle: "rbxassetid://101", motorcycle: "rbxassetid://102" });
+		const lit = artIds(true);
+		WA.overrideWorldArt(lit);
 		for (const def of VEHICLES) {
 			calls.length = 0;
 			VV.drawVehicle(rec, undefined, def.kind, 0, 0, 0, 0, 0, Z.player - 2);
@@ -1487,15 +1504,14 @@ section(
 					calls.length === 2 &&
 					images[0].w === def.length &&
 					images[0].h === def.width &&
-					images[0].image === (def.kind === VehicleKind.Motorcycle ? "rbxassetid://102" : "rbxassetid://101"),
+					images[0].image === (def.kind === VehicleKind.Motorcycle ? lit.motorcycle : lit.bicycle),
 				`${def.name} with its art uploaded: its shadow and one ${def.length} × ${def.width} image`,
 			);
 		}
-		WA.overrideWorldArt({});
+		WA.overrideWorldArt(artIds(false));
 		calls.length = 0;
 		VV.drawVehicle(rec, undefined, VehicleKind.Motorcycle, 0, 0, 0, 0, 0, Z.player - 2);
 		check(calls.every(c => c.image === undefined) && calls.length > 2, "no id: the flat parts");
-		WA.overrideWorldArt(undefined);
 		// the rider: the survivor drawing with `riding` -- no weapon, both hands on the bars, no body shadow
 		const look = SVW.createLook();
 		look.x = 0;
@@ -1522,44 +1538,88 @@ section(
 			calls.some(c => c.color === COLORS.weapon && c.zIndex === look.z),
 			"on foot the same survivor holds the pistol again",
 		);
-		// the real renderer on a fake tree: riding, parking and riding again create no Instance after the first frame
-		const root = makeInstance("Frame");
-		const r = new Renderer(root, "World");
-		const cam = new Camera();
-		cam.setView(800, 600);
-		cam.x = 1000;
-		cam.y = 1000;
-		const parked = {
-			x: 1100,
-			y: 1000,
-			w: MOTO.length,
-			h: MOTO.width,
-			hp: 60,
-			hpMax: 120,
-			tags: "vehicle",
-			placeable: 22,
-			rot: 0,
-		};
-		const frame = i => {
-			r.beginFrame();
+		// the rider from the survivors' sheets (ART-09): the body's cell and NO weapon cell -- the pose's scratch must
+		// not keep the pistol the same survivor held on foot the frame before (nor another survivor's weapon)
+		{
+			WA.overrideWorldArt(lit);
+			const cam = new Camera();
+			cam.setView(800, 600);
+			const cells = () => ({
+				weapon: calls.filter(c => c.image === lit.weapons),
+				body: calls.filter(c => c.image === lit.survivorsA),
+			});
+			look.riding = false;
+			calls.length = 0;
+			SVW.drawSurvivor(rec, cam, look, SVW.createSwingTrail());
+			const onFoot = cells();
 			look.riding = true;
-			look.x = 1000 + i;
-			look.y = 1000;
-			look.angle = i / 30;
-			VV.drawVehicle(r, cam, 1 + (i % 2), look.x, look.y, look.angle, 4, 4, Z.player - 2);
-			SVW.drawSurvivor(r, cam, look, SVW.createSwingTrail());
-			VV.drawParkedVehicle(r, cam, parked, 4, 4);
-			r.endFrame();
-		};
-		frame(0);
-		frame(1);
-		const warm = tree.created;
-		for (let i = 2; i < 300; i++) frame(i);
-		checkEq(
-			tree.created - warm,
-			0,
-			"300 frames of a rider and a parked vehicle: no Instance created after warm-up",
-		);
+			calls.length = 0;
+			SVW.drawSurvivor(rec, cam, look, SVW.createSwingTrail());
+			const riding = cells();
+			const row = riding.body[0] === undefined ? -1 : riding.body[0].rectY / CS.SURVIVOR_CELL;
+			check(
+				onFoot.weapon.length === 1 && onFoot.body.length === 1,
+				"with the art: on foot, the body's cell and the pistol's",
+			);
+			check(
+				riding.weapon.length === 0 && riding.body.length === 1,
+				"...riding, the body's cell and no weapon (VEI-05), right after holding the pistol",
+				`${riding.weapon.length} weapon cells`,
+			);
+			check(
+				row >= CS.Grip.Idle * CS.STEPS && row < (CS.Grip.Idle + 1) * CS.STEPS,
+				"...its hands out at the bars' width (the idle grip: the sheets bake no riding pose), not the pistol's",
+				`row ${row}`,
+			);
+			check(!calls.some(c => c.circle === true && c.w === 38), "...and no body shadow (the vehicle casts it)");
+			look.riding = false;
+			WA.overrideWorldArt(artIds(false));
+		}
+		// the real renderer on a fake tree: riding, parking and riding again create no Instance after the first frame
+		for (const [label, ids] of [
+			["flat", artIds(false)],
+			["art", lit],
+		]) {
+			WA.overrideWorldArt(ids);
+			const root = makeInstance("Frame");
+			const r = new Renderer(root, "World");
+			const cam = new Camera();
+			cam.setView(800, 600);
+			cam.x = 1000;
+			cam.y = 1000;
+			const parked = {
+				x: 1100,
+				y: 1000,
+				w: MOTO.length,
+				h: MOTO.width,
+				hp: 60,
+				hpMax: 120,
+				tags: "vehicle",
+				placeable: 22,
+				rot: 0,
+			};
+			const frame = i => {
+				r.beginFrame();
+				look.riding = true;
+				look.x = 1000 + i;
+				look.y = 1000;
+				look.angle = i / 30;
+				VV.drawVehicle(r, cam, 1 + (i % 2), look.x, look.y, look.angle, 4, 4, Z.player - 2);
+				SVW.drawSurvivor(r, cam, look, SVW.createSwingTrail());
+				VV.drawParkedVehicle(r, cam, parked, 4, 4);
+				r.endFrame();
+			};
+			frame(0);
+			frame(1);
+			const warm = tree.created;
+			for (let i = 2; i < 300; i++) frame(i);
+			checkEq(
+				tree.created - warm,
+				0,
+				`${label}: 300 frames of a rider and a parked vehicle: no Instance created after warm-up`,
+			);
+		}
+		WA.overrideWorldArt(undefined);
 	},
 );
 

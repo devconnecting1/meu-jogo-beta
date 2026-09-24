@@ -31,6 +31,11 @@ jobs:
       - name: Typecheck (roblox-ts)
         run: npm run build
 
+      # the pinned official Luau compiler (tools/luauRelease.mjs) against every out/**/*.luau: the real load-time
+      # limits (200 locals, registers, constants...), not the text heuristic check:registers falls back to
+      - name: Luau CLI check (real compiler; catches every load-time limit, not just locals)
+        run: npm run check:luau
+
       - name: Luau register budget (a module chunk may hold 200 locals)
         run: npm run check:registers
 
@@ -70,6 +75,9 @@ jobs:
       # IA-05: the blue dot, the gold "?" and the red "!" over the horde, measured on every ground and at night
       - name: Zombie awareness marks (shape + colour, LEG-03 contrast, never over a survivor, Reduce Motion, no churn)
         run: npm run test:awareness
+
+      - name: Night light map (cost per frame, High looks the same, lightAt agrees, Low never tears, Auto hysteresis)
+        run: npm run test:light
 
       - name: A struck tree or car stops shaking (every client-side flinch is aged by one clock)
         run: npm run test:flinch

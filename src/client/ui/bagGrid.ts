@@ -386,7 +386,8 @@ export class BagGrid {
 		b.Text = "";
 		b.TextColor3 = THEME.foreground;
 		b.ZIndex = 2;
-		const icon = IconView(b, "ItemIcon", ICON_X, ICON_Y, ICON, 3);
+		// what the icon draws centred on its square (the hotbar's and the card's fit: the same item, the same place)
+		const icon = IconView(b, "ItemIcon", ICON_X, ICON_Y, ICON, 3, 0, "drawn");
 		const t: BagTile = {
 			button: b,
 			icon,

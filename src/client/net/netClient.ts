@@ -1261,6 +1261,9 @@ function viewOf(state: RemoteState, entry: RosterEntry): RemotePlayerView {
 		hp: state.hp,
 		hpMax: 1,
 		downed: entry.life === LifeState.Downed,
+		dead: entry.life === LifeState.Dead,
+		// the continuous flag of the sample at the render time, like Swinging (snapshotBuffer `flags`)
+		flashlight: (state.flags & PlayerFlag.Flashlight) !== 0,
 		weaponId: state.weapon,
 		feetCycle: state.feetCycle,
 		swinging: (state.flags & PlayerFlag.Swinging) !== 0,

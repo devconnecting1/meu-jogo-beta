@@ -197,7 +197,8 @@ export function textPx(label, rect) {
  * children, siblings by ZIndex then child order), clipped by every ClipsDescendants / ScrollingFrame ancestor:
  *   { kind: "rect", x, y, w, h, color: [r,g,b], alpha, radius, clip }
  *   { kind: "stroke", ..., thickness }
- *   { kind: "image", x, y, w, h, image, slice: [l, t, r, b], sliceScale, tint, alpha, clip }
+ *   { kind: "image", x, y, w, h, image, slice: [l, t, r, b], sliceScale, rectOffset, rectSize, pixelated, tint, alpha,
+ *     clip }
  *   { kind: "text", x, y, w, h, text, color, alpha, px, bold, mono, alignX, alignY, wrapped, clip }
  */
 export function paintList(root) {
@@ -215,12 +216,18 @@ export function paintList(root) {
 		}
 		if (n.ClassName === "ImageLabel" && n.Image && (n.ImageTransparency ?? 0) < 1) {
 			const sc = n.SliceCenter;
+			const ro = n.ImageRectOffset;
+			const rs = n.ImageRectSize;
 			out.push({
 				kind: "image",
 				...r,
 				image: n.Image,
 				slice: sc === undefined ? [0, 0, 0, 0] : [sc.Min.X, sc.Min.Y, sc.Max.X, sc.Max.Y],
 				sliceScale: n.SliceScale ?? 1,
+				// the part of the image it shows (an atlas cell; [0, 0] = the whole image) and its resampling
+				rectOffset: ro === undefined ? [0, 0] : [ro.X, ro.Y],
+				rectSize: rs === undefined ? [0, 0] : [rs.X, rs.Y],
+				pixelated: n.ResampleMode?.Name === "Pixelated",
 				tint: rgb(n.ImageColor3 ?? new Color3(1, 1, 1)),
 				alpha: 1 - (n.ImageTransparency ?? 0),
 				clip,

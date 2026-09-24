@@ -216,13 +216,16 @@ function rasterSprite(cv, f, resolve) {
 	}
 }
 
-/** the light map's strips: a Frame of the night colour whose UIGradient carries the transparency across */
+/**
+ * the light map's strips: a Frame of the night colour whose UIGradient carries the transparency across -- or, with
+ * the gradient off (a strip of one colour), just the Frame's own BackgroundTransparency
+ */
 function rasterStrip(cv, f) {
 	const x0 = f.Position.X.Offset;
 	const y0 = f.Position.Y.Offset;
 	const w = f.Size.X.Offset;
 	const h = f.Size.Y.Offset;
-	const grad = f.GetChildren().find(k => k.ClassName === "UIGradient");
+	const grad = f.GetChildren().find(k => k.ClassName === "UIGradient" && k.Enabled !== false);
 	const keys =
 		grad !== undefined
 			? grad.Transparency.Keypoints

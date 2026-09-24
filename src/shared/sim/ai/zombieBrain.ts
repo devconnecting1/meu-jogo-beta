@@ -1,3 +1,4 @@
+//!native
 import { DESIGN } from "shared/engine/constants";
 import { chance, choose, damageCal, rnd, rndRange } from "shared/engine/rng";
 import { angleDiff } from "shared/engine/vec2";
@@ -100,6 +101,25 @@ function addLight(x: number, y: number, r: number, kind: number, angle: number):
 /** lit structures found by the sweep; double-buffered so a half-finished cycle never dims anything */
 let structureLights: Array<Light> = [];
 let structureBuild: Array<Light> = [];
+/** Light records a cleared sweep list gave back, for the next sweep to fill (no table per lamp per sweep) */
+const spareLights: Array<Light> = [];
+
+function takeLight(x: number, y: number, r: number): Light {
+	const l = spareLights.pop();
+	if (l === undefined) return { x, y, r, kind: 1, angle: 0 };
+	l.x = x;
+	l.y = y;
+	l.r = r;
+	l.kind = 1;
+	l.angle = 0;
+	return l;
+}
+
+/** empties a sweep list, its records back to `spareLights` (nothing else holds them: `addLight` copies) */
+function releaseLights(list: Array<Light>): void {
+	for (const l of list) spareLights.push(l);
+	list.clear();
+}
 
 /** kills since the last call, then resets: the pacing director's "they are winning" signal */
 export function takeKills(ai: Ctx.BrainState): number {
@@ -449,14 +469,14 @@ function sweepAround(refs: Ctx.AiRefs, p: PlayerState, dt: number, decayMult: nu
 		if (t !== undefined && t > 0) s.hitShake = math.max(0, t - dt * decayMult);
 		if (!dark || s.powered !== true) continue;
 		const lr = T.STRUCTURE_LIGHT_R[s.tags];
-		if (lr !== undefined) structureBuild.push({ x: s.x + s.w / 2, y: s.y + s.h / 2, r: lr, kind: 1, angle: 0 });
+		if (lr !== undefined) structureBuild.push(takeLight(s.x + s.w / 2, s.y + s.h / 2, lr));
 	}
 }
 
 function collectLights(refs: Ctx.AiRefs, dt: number): void {
 	const n = refs.players.size();
 	const slot = refs.ai.frameNo % n;
-	if (slot === 0) structureBuild.clear();
+	if (slot === 0) releaseLights(structureBuild);
 	// one survivor's window per frame: with a single survivor this is exactly the sweep of every frame
 	// before F2, and with six the cost stays at one spatial query per tick (§3.2). The shake decays by the
 	// frames that solid waited, so a struck car settles at the same rate whoever is standing next to it.
@@ -552,8 +572,8 @@ function syncWorld(refs: Ctx.AiRefs): void {
 		refs.ai.scanFrom = -1;
 		refs.ai.tracks.clear();
 		refs.ai.seenMorning = refs.clock.morningCount;
-		structureLights.clear();
-		structureBuild.clear();
+		releaseLights(structureLights);
+		releaseLights(structureBuild);
 	}
 }
 

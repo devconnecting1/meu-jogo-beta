@@ -144,6 +144,8 @@ function hand(f: number, l: number): void {
  * picked by (the hands are baked into it, charSheets.GRIP_HANDS / SWINGS).
  */
 const WEAPON = { row: 0, f: 0, l: 0, rel: 0, grip: 0, swinging: false };
+/** WEAPON.row of empty hands: no weapon cell is drawn (a rider, VEI-05) */
+const NO_WEAPON = -1;
 
 function holdWeapon(row: number, f: number, l: number, rel: number, grip: number, swinging: boolean): void {
 	WEAPON.row = row;
@@ -201,6 +203,9 @@ export function drawSurvivor(r: Renderer, cam: Camera, look: SurvivorLook, trail
 		// VEI-05: both hands on the bars, nothing in them
 		hand(RIDE_GRIP_F, -RIDE_GRIP_L);
 		hand(RIDE_GRIP_F, RIDE_GRIP_L);
+		// the pixel art: no weapon cell (WEAPON is a scratch: left alone it would hold the last survivor's weapon),
+		// and the sheets bake no riding pose, so the idle grip: both hands out at the bars' width (±14 u, the bars ±13)
+		if (art) holdWeapon(NO_WEAPON, 0, 0, 0, Grip.Idle, false);
 	} else if (w.kind === WeaponKind.Melee) {
 		const reach = look.swingReach;
 		if (look.swinging) {
@@ -354,10 +359,10 @@ const POISON_VEIL = 0.5;
 const FLASH_FILL = 0.6;
 
 /**
- * The pixel-art survivor (ART-09), from the weapon and the grip the pose above decided: the weapon (z), then the
- * whole body -- boots, torso, what the outfit carries, both arms with the hands on that grip, the head or hat -- as
- * one cell (z + 1), the poison veil (z + 2), and a hit's flash and red outline (z + 3). The weapon is snapped to the
- * body's texel grid (charArt.snapped).
+ * The pixel-art survivor (ART-09), from the weapon and the grip the pose above decided: the weapon (z; a rider has
+ * none), then the whole body -- boots, torso, what the outfit carries, both arms with the hands on that grip, the
+ * head or hat -- as one cell (z + 1), the poison veil (z + 2), and a hit's flash and red outline (z + 3). The weapon
+ * is snapped to the body's texel grid (charArt.snapped).
  */
 function drawStandingArt(r: Renderer, cam: Camera, look: SurvivorLook, flash: number, flashTo: Color3): void {
 	const a = look.angle;
@@ -369,7 +374,9 @@ function drawStandingArt(r: Renderer, cam: Camera, look: SurvivorLook, flash: nu
 	const col = columnOf(cam, a);
 	const wf = WEAPON.f;
 	const wl = WEAPON.l;
-	drawWeaponCell(r, cam, WEAPON.row, x, y, x + c * wf - s * wl, y + s * wf + c * wl, a + WEAPON.rel, z);
+	if (WEAPON.row !== NO_WEAPON) {
+		drawWeaponCell(r, cam, WEAPON.row, x, y, x + c * wf - s * wl, y + s * wf + c * wl, a + WEAPON.rel, z);
+	}
 	const outfit = look.outfit;
 	const row = WEAPON.swinging
 		? swingRow(outfit, WEAPON.rel)

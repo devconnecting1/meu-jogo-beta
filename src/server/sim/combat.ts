@@ -1,3 +1,4 @@
+//!native
 /*
  * Authoritative combat: the server decides every shot, swing, hit and point of damage
  * (docs/MULTIPLAYER.md §2.1, §2.3, §3.1 step 1, §8.1, §8.3, §9.1; DESIGN_RULES MP-00, MP-01).

@@ -42,15 +42,27 @@
  *     mouse in use gets the desktop HUD AND the mouse aim; switching to the touch screen rebuilds the HUD with the
  *     thumbs' controls and turns the aim to touch; a pad names X in the hint and opens Controls on Gamepad; back to the
  *     keyboard the hint says E without a rebuild; a phone is the touch HUD as before.
+ *  6. the hotbar with the item icon atlas: one ImageLabel per tile, no reserve of Frames, no churn.
+ *  7. the icon in its tile (the owner's screenshot, 2026-09-24: the dagger low and right, the axe under the key, a
+ *     1,56 px-per-pixel staircase), measured on the PAINTED pixels (tools/ui-raster.mjs), with the Frames and with the
+ *     atlas, for all 30 weapons, on desktop at 1365 x 567 (the owner's 41 px tile), 1120 x 630, 1366 x 768,
+ *     1920 x 1080 and 1360 x 435 and on touch at 1120 x 630 and 1360 x 435: the centre of what the icon draws is within
+ *     1 px of the centre of what the tile leaves it (the face; above the ammo chip on a gun's tile), inside it, no
+ *     pixel of it under the key badge, one side for every weapon that the screen pixels carry evenly (16 / 24 / 32 /
+ *     40 / 48 px...) with every Frame and the image on whole pixels (Pixelated), no Instance while weapons change,
+ *     and a resize re-fits it in place. Pictures of the same drawing: node tools/render-hotbar.mjs --out <dir>.
  *
  * Pure Node (>= 18) plus the project's TypeScript.
  */
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { installUiShims } from "./ui-shim.mjs";
-import { layoutGame, rectOf } from "./ui-layout.mjs";
+import { layoutGame, paintList, rectOf } from "./ui-layout.mjs";
+import { rasterPaint } from "./ui-raster.mjs";
+import { decodePNG } from "./png-lite.mjs";
 
 const ui = installUiShims({ seed: 1, viewport: [1120, 630] });
-const { SRC, require, INTERNAL, flush, service, measure, setViewport, setClock, getClock } = ui;
+const { SRC, ROOT, require, INTERNAL, flush, service, measure, setViewport, setClock, getClock } = ui;
 
 const boot = require(join(SRC, "client/bootstrap.ts"));
 const { Hud, messageReach } = require(join(SRC, "client/ui/hud.ts"));
@@ -1442,6 +1454,223 @@ console.log("\n6) a hotbar com o atlas dos icones: um ImageLabel por ladrilho, n
 	console.log(
 		`  (a HUD no toque: ${flatAll + 1} Instances com os icones em Frames, ${flatAll - flatPx + images + 1} com o atlas)`,
 	);
+}
+
+// ---------------------------------------------------------------- 7) the icon in its tile: centred, clear, crisp
+
+console.log("\n7) o icone no ladrilho: no meio do que sobra, longe da tecla e da municao, nitido, do mesmo tamanho\n");
+{
+	// the owner's screenshot (1365 x 567, a 41 px tile): the dagger low and right, the axe's head and the pistol's grip
+	// under the key badge, 1,56 px per icon pixel. Measured here on the PAINTED pixels (tools/ui-raster.mjs, the
+	// engine's snapping: a rect covers the pixels whose centre it holds), with the Frames and with the atlas
+	const FAKE_ATLAS = "rbxassetid://910000001";
+	const ATLAS_PNG = decodePNG(readFileSync(join(ROOT, "design", "world-art", "itemIcons.png")));
+	const resolve = id => (id === FAKE_ATLAS ? ATLAS_PNG : undefined);
+	const snap = e => Math.ceil(e - 0.5);
+	/** `g`'s rect in whole screen pixels, [x0, y0, x1, y1) */
+	const pxBox = g => {
+		const r = rectOf(g);
+		return [snap(r.x), snap(r.y), snap(r.x + r.w), snap(r.y + r.h)];
+	};
+	/** the pixels tile `b`'s icon paints: their box and a lookup, in screen pixels */
+	function drawnIcon(b) {
+		const [x0, y0, x1, y1] = pxBox(b);
+		const img = rasterPaint(
+			paintList(deep(b, "ItemIcon")),
+			{ x: x0, y: y0, w: x1 - x0, h: y1 - y0 },
+			undefined,
+			resolve,
+		);
+		const box = [Infinity, Infinity, -Infinity, -Infinity];
+		const on = new Set();
+		for (let y = 0; y < img.h; y++) {
+			for (let x = 0; x < img.w; x++) {
+				if (img.data[(y * img.w + x) * 4 + 3] === 0) continue;
+				on.add(`${x0 + x},${y0 + y}`);
+				box[0] = Math.min(box[0], x0 + x);
+				box[1] = Math.min(box[1], y0 + y);
+				box[2] = Math.max(box[2], x0 + x + 1);
+				box[3] = Math.max(box[3], y0 + y + 1);
+			}
+		}
+		return { box, on };
+	}
+	/** what tile `b` leaves its icon: the face (inside the plate's relief), above the ammo chip on a gun's tile */
+	function room(b, gun) {
+		const v = pxBox(b.FindFirstChild("PlateFace"));
+		const h = pxBox(b.FindFirstChild("PlateFaceH"));
+		const face = [v[0], h[1], v[2], h[3]];
+		return gun ? [face[0], face[1], face[2], pxBox(b.FindFirstChild("Ammo"))[1]] : face;
+	}
+	const inRect = (key, r) => {
+		const [x, y] = key.split(",").map(Number);
+		return x >= r[0] && x < r[2] && y >= r[1] && y < r[3];
+	};
+	const boxesMeet = (a, b) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+	/** the sides the drawer draws evenly: whole screen px per icon pixel, or a regular 1,5 / 2,5 */
+	const evenSide = s => s % 16 === 0 || s === 24 || s === 40;
+
+	const own = ids => {
+		for (let i = 0; i < WEAPONS.length; i++) save.invenWeapon[i] = ids.includes(i) ? 1 : 0;
+	};
+	const useDevice = touch => {
+		uis.TouchEnabled = touch;
+		uis.MouseEnabled = !touch;
+		uis.GetLastInputType = () => (touch ? Enum.UserInputType.Touch : Enum.UserInputType.MouseMovement);
+		uis.PreferredInput = undefined;
+	};
+	const weaponState = id =>
+		state({
+			weaponId: id,
+			weaponName: WEAPONS[id].name,
+			magSize: WEAPONS[id].mag,
+			mag: WEAPONS[id].mag > 0 ? 7 : 0,
+		});
+	/** shows weapon `id` in hand (the dagger always owned is tile 1, any other weapon tile 2) and lays out */
+	function show(id) {
+		own(id === 0 ? [] : [id]);
+		hud.update(weaponState(id));
+		layoutGame(ui, ctx);
+		hud.update(weaponState(id));
+		return tile(id === 0 ? 0 : 1);
+	}
+
+	const SCREENS = [
+		{ label: "1365x567 (a tela do dono)", w: 1365, h: 567, touch: false },
+		{ label: "1120x630", w: 1120, h: 630, touch: false },
+		{ label: "1366x768", w: 1366, h: 768, touch: false },
+		{ label: "1920x1080", w: 1920, h: 1080, touch: false },
+		{ label: "1360x435", w: 1360, h: 435, touch: false },
+		{ label: "toque 1120x630", w: 1120, h: 630, touch: true },
+		{ label: "toque 1360x435", w: 1360, h: 435, touch: true },
+	];
+	const HEADLINE = [DAGGER, AXE, PISTOL, 13];
+	for (const screen of SCREENS) {
+		for (const atlas of [false, true]) {
+			hud.unmount();
+			setIconAtlas(atlas ? FAKE_ATLAS : "");
+			useDevice(screen.touch);
+			setViewport(screen.w, screen.h, screen.touch ? TOP_BAR : 36);
+			hud.mount();
+			own([]);
+			hud.update(weaponState(DAGGER));
+			for (let i = 0; i < 3; i++) layoutGame(ui, ctx);
+			const where = `${screen.label}, ${atlas ? "atlas" : "Frames"}`;
+			const off = [];
+			const covered = [];
+			const outside = [];
+			const sides = new Set();
+			const crooked = [];
+			const headline = [];
+			let tilePx = 0;
+			let badge = false;
+			const run = measure(() => {
+				for (let id = 0; id < WEAPONS.length; id++) {
+					const b = show(id);
+					const view = deep(b, "ItemIcon");
+					const gun = WEAPONS[id].mag > 0;
+					const name = `${WEAPONS[id].name} (${weaponIcon(id)})`;
+					const { box, on } = drawnIcon(b);
+					const r = room(b, gun);
+					const dx = (box[0] + box[2]) / 2 - (r[0] + r[2]) / 2;
+					const dy = (box[1] + box[3]) / 2 - (r[1] + r[3]) / 2;
+					if (Math.abs(dx) > 1 || Math.abs(dy) > 1) off.push(`${name} ${dx},${dy}`);
+					if (box[0] < r[0] || box[1] < r[1] || box[2] > r[2] || box[3] > r[3]) {
+						outside.push(`${name} [${box}] em [${r}]`);
+					}
+					const key = b.FindFirstChild("Key");
+					if (key.Visible) {
+						badge = true;
+						const k = pxBox(key);
+						const hit = [...on].filter(p => inRect(p, k)).length;
+						if (hit > 0) covered.push(`${name}: ${hit} px sob a tecla`);
+					}
+					sides.add(Math.round(rectOf(view).w));
+					const img = view.GetChildren().find(c => c.ClassName === "ImageLabel" && c.Visible);
+					const runs = view.GetChildren().filter(c => c.ClassName === "Frame" && c.Visible);
+					const whole = u =>
+						u.X.Scale === 0 &&
+						u.Y.Scale === 0 &&
+						Number.isInteger(u.X.Offset) &&
+						Number.isInteger(u.Y.Offset);
+					const snapped =
+						whole(view.Position) &&
+						whole(view.Size) &&
+						(atlas
+							? img !== undefined &&
+								img.ResampleMode.Name === "Pixelated" &&
+								whole(img.Position) &&
+								whole(img.Size)
+							: runs.length > 0 && runs.every(f => whole(f.Position) && whole(f.Size)));
+					if (!snapped) crooked.push(name);
+					if (HEADLINE.includes(id)) {
+						const k = key.Visible ? pxBox(key) : undefined;
+						headline.push(
+							`${WEAPONS[id].name}: centro ${dx >= 0 ? "+" : ""}${dx},${dy >= 0 ? "+" : ""}${dy} px` +
+								`${k !== undefined ? `, caixa ${boxesMeet(box, k) ? "toca a" : "longe da"} tecla` : ""}`,
+						);
+					}
+					tilePx = rectOf(b).w;
+				}
+			});
+			const [side] = [...sides];
+			console.log(
+				`  ${where}: ladrilho ${tilePx.toFixed(1)} px, icone ${[...sides].join("/")} px; ${headline.join("; ")}`,
+			);
+			check(
+				`${where}: o que cada uma das ${WEAPONS.length} armas desenha fica no meio do que o ladrilho deixa (1 px)`,
+				off.length === 0,
+				off.slice(0, 4).join("; "),
+			);
+			check(
+				`${where}: ...dentro da face, e a de fogo acima do chip da municao`,
+				outside.length === 0,
+				outside.slice(0, 3).join("; "),
+			);
+			check(
+				`${where}: ${badge ? "nenhum pixel do icone fica sob a tecla" : "sem tecla no ladrilho (toque)"}`,
+				covered.length === 0 && badge === !screen.touch,
+				covered.slice(0, 4).join("; "),
+			);
+			check(
+				`${where}: o mesmo tamanho para toda arma, nitido (${side} px = ${side / 16} px de tela por pixel do icone)`,
+				[...sides].length === 1 && evenSide(side) && crooked.length === 0,
+				crooked.slice(0, 3).join(", "),
+			);
+			check(`${where}: trocar ${WEAPONS.length} armas nao cria nem destroi Instance`, zero(run), cost(run));
+		}
+	}
+
+	// a resize re-fits the icons in place: the size the tiles have, never an Instance
+	hud.unmount();
+	setIconAtlas("");
+	useDevice(false);
+	setViewport(1365, 567, 36);
+	hud.mount();
+	show(AXE);
+	for (let i = 0; i < 3; i++) layoutGame(ui, ctx);
+	const small = Math.round(rectOf(deep(tile(1), "ItemIcon")).w);
+	const resized = measure(() => {
+		setViewport(1920, 1080, 36);
+		for (let i = 0; i < 3; i++) layoutGame(ui, ctx);
+		hud.update(weaponState(AXE));
+	});
+	const big = Math.round(rectOf(deep(tile(1), "ItemIcon")).w);
+	const { box, on } = drawnIcon(tile(1));
+	const r = room(tile(1), false);
+	const k = pxBox(tile(1).FindFirstChild("Key"));
+	check(
+		"mudar o tamanho da tela reajusta o icone no lugar: maior, no meio, longe da tecla, sem Instance",
+		big > small &&
+			Math.abs((box[0] + box[2]) / 2 - (r[0] + r[2]) / 2) <= 1 &&
+			Math.abs((box[1] + box[3]) / 2 - (r[1] + r[3]) / 2) <= 1 &&
+			![...on].some(p => inRect(p, k)) &&
+			zero(resized),
+		`${small} -> ${big} px, ${cost(resized)}`,
+	);
+	hud.unmount();
+	setIconAtlas("");
+	own([AXE, PISTOL]);
 }
 
 // ---------------------------------------------------------------- report

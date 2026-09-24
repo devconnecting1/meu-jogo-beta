@@ -31,6 +31,11 @@
  *      another icon of the same size writes only its ImageRectOffset; the rect Vector2s are cached, one per cell.
  *   5. THE FALLBACK. When the atlas cannot be fetched every live view repaints as its Frame drawing -- the same
  *      digest as a view that never had the atlas -- and views built afterwards reserve their Frames again.
+ *   6. FIT "DRAWN" (the item views: hotbar, Bag, item card, Survivor loadout). Every icon and glyph, at 16-48 px, with
+ *      the Frames and with the atlas: the centre of what it draws within half a pixel (Frames) / 1 px (atlas) of the
+ *      square's centre; the "cell" drawing pixel for pixel, moved by whole pixels; drawnRects() exactly the runs the
+ *      view places; the same centring in Scale before the size is known; no churn. The default fit ("cell") is what
+ *      parts 1-5 measure, unchanged.
  *
  * Pure Node (>= 18) + the project's TypeScript on tools/ui-shim.mjs (the counted fake Instance tree).
  */
@@ -643,6 +648,161 @@ section("5) the atlas does not load: every live view repaints as its Frame drawi
 		`${after.created} Instances`,
 	);
 	WA.overrideWorldArt(undefined);
+}
+
+// ================================================================ 6. fit "drawn"
+
+section('6) fit "drawn": what is drawn sits in the middle of the square, the same pixels moved by whole pixels');
+{
+	/** a view `size` px square (0: the Scale path) with fit `fit` */
+	const viewFit = (size, fit, reserve = 0) => {
+		const v = Icon.IconView(root, "ItemIcon", 0, 0, 48, 1, reserve, fit);
+		if (size > 0) v.frame.AbsoluteSize = new Vector2(size, size);
+		flush();
+		return v;
+	};
+	/** the box of a raster's painted pixels, [x0, y0, x1, y1) */
+	const boxOf = (px, w, h) => {
+		const b = [Infinity, Infinity, -Infinity, -Infinity];
+		for (let y = 0; y < h; y++) {
+			for (let x = 0; x < w; x++) {
+				if (px[(y * w + x) * 4 + 3] === 0) continue;
+				b[0] = Math.min(b[0], x);
+				b[1] = Math.min(b[1], y);
+				b[2] = Math.max(b[2], x + 1);
+				b[3] = Math.max(b[3], y + 1);
+			}
+		}
+		return b;
+	};
+	/** `px` (w x h) moved by (dx, dy) */
+	const moved = (px, w, h, dx, dy) => {
+		const out = Buffer.alloc(w * h * 4);
+		for (let y = 0; y < h; y++) {
+			for (let x = 0; x < w; x++) {
+				const X = x + dx;
+				const Y = y + dy;
+				if (X < 0 || Y < 0 || X >= w || Y >= h) continue;
+				px.copy(out, (Y * w + X) * 4, (y * w + x) * 4, (y * w + x) * 4 + 4);
+			}
+		}
+		return out;
+	};
+	const SIZES_DRAWN = [48, 44, 40, 32, 24, 20, 16];
+	const KEYS = [...ICON_KEYS, ...GLYPH_KEYS];
+	for (const atlas of [false, true]) {
+		setAtlas(atlas ? FAKE : "");
+		const off = [];
+		const notSame = [];
+		const predicted = [];
+		let worst = 0;
+		for (const size of SIZES_DRAWN) {
+			const cellView = viewFit(size, "cell");
+			const view = viewFit(size, "drawn");
+			for (const k of KEYS) {
+				const ink = GLYPH_KEYS.includes(k) ? THEME.foreground : undefined;
+				Icon.drawIcon(cellView, k, { ink });
+				Icon.drawIcon(view, k, { ink });
+				const w = size + 8;
+				const raster = atlas ? rasterImage : rasterFrames;
+				const a = raster(view, w, w);
+				const b = boxOf(a, w, w);
+				// the square the view fills: its side px at (ox, oy) of the frame
+				const cx = view.ox + view.px / 2;
+				const cy = view.oy + view.px / 2;
+				const d = Math.max(Math.abs((b[0] + b[2]) / 2 - cx), Math.abs((b[1] + b[3]) / 2 - cy));
+				worst = Math.max(worst, d);
+				if (d > (atlas ? 1 : 0.5)) off.push(`${k}@${size}: ${d}`);
+				// the same drawing as "cell", moved: the pixels are not redrawn, only placed
+				const c = raster(cellView, w, w);
+				if (!moved(c, w, w, view.sx, view.sy).equals(a)) notSame.push(`${k}@${size}`);
+				if (!atlas) {
+					// drawnRects: what a layout is told the view paints (hudConsole.ts fitTileIcon trusts it)
+					const runs = view.frame.GetChildren().filter(f => f.ClassName === "Frame" && f.Visible);
+					const want = Icon.drawnRects(k, view.px).map(r => r.join(","));
+					const got = runs.map(f =>
+						[
+							f.Position.X.Offset - view.ox,
+							f.Position.Y.Offset - view.oy,
+							f.Position.X.Offset - view.ox + f.Size.X.Offset,
+							f.Position.Y.Offset - view.oy + f.Size.Y.Offset,
+						].join(","),
+					);
+					if (want.join(";") !== got.join(";")) predicted.push(`${k}@${size}`);
+				}
+			}
+			cellView.frame.Destroy();
+			view.frame.Destroy();
+		}
+		const path = atlas ? "atlas" : "Frames";
+		check(
+			off.length === 0,
+			`${path}: every one of the ${KEYS.length} icons and glyphs at ${SIZES_DRAWN.join(", ")} px has the centre of what it draws within ${atlas ? "1 px" : "half a pixel"} of the square's (worst ${worst} px)`,
+			off.slice(0, 4).join("; "),
+		);
+		check(
+			notSame.length === 0,
+			`${path}: ...and it is the "cell" drawing pixel for pixel, moved by whole pixels`,
+			notSame.slice(0, 4).join(", "),
+		);
+		if (!atlas) {
+			check(
+				predicted.length === 0,
+				"drawnRects(key, side) is exactly the runs the view places (the hotbar's layout can trust it)",
+				predicted.slice(0, 4).join(", "),
+			);
+		}
+	}
+	// before the view knows its size: the same shift in Scale, for the runs and for the image
+	setAtlas("");
+	const scaled = viewFit(0, "drawn");
+	Icon.drawIcon(scaled, "dagger");
+	const [bx0, by0, bx1, by1] = Icon.drawnBox("dagger");
+	const fx = (16 - bx0 - bx1) / 32;
+	const fy = (16 - by0 - by1) / 32;
+	const r0 = Icon.iconRuns("dagger")[0];
+	const f0 = scaled.frame.GetChildren().find(f => f.Visible);
+	check(
+		Math.abs(f0.Position.X.Scale - (r0[0] / 16 + fx)) < 1e-9 &&
+			Math.abs(f0.Position.Y.Scale - (r0[1] / 16 + fy)) < 1e-9,
+		"in Scale (the size not known yet) the runs carry the same centring, as a share of the square",
+		`dagger's box [${bx0}, ${by0}, ${bx1}, ${by1}) -> ${fx}, ${fy}`,
+	);
+	scaled.frame.Destroy();
+	setAtlas(FAKE);
+	const scaledImg = viewFit(0, "drawn");
+	Icon.drawIcon(scaledImg, "dagger");
+	const img = scaledImg.frame.GetChildren()[0];
+	check(
+		Math.abs(img.Position.X.Scale - fx) < 1e-9 &&
+			Math.abs(img.Position.Y.Scale - fy) < 1e-9 &&
+			img.Size.X.Scale === 1,
+		"...and so does the atlas image",
+	);
+	scaledImg.frame.Destroy();
+	// no churn: a pooled "drawn" view repaints and resizes in place
+	for (const atlas of [false, true]) {
+		setAtlas(atlas ? FAKE : "");
+		const v = viewFit(48, "drawn", Icon.maxItemFrames());
+		const cycle = measure(() => {
+			for (let i = 0; i < 300; i++) {
+				Icon.drawIcon(v, ICON_KEYS[(i * 5) % ICON_KEYS.length], { dim: i % 4 === 0 });
+				if (i % 60 === 0) {
+					v.frame.AbsoluteSize = new Vector2(24 + (i % 3) * 16, 24 + (i % 3) * 16);
+					flush();
+				}
+			}
+		});
+		Icon.drawIcon(v, "axe");
+		const again = measure(() => Icon.drawIcon(v, "axe"));
+		check(
+			cycle.created === 0 && cycle.destroyed === 0 && again.writes === 0,
+			`${atlas ? "atlas" : "Frames"}: 300 repaints and resizes of a "drawn" view create nothing; the same icon again writes nothing`,
+			`${cycle.created} created, ${cycle.writes} writes; again ${again.writes}`,
+		);
+		v.frame.Destroy();
+	}
+	setAtlas("");
 }
 
 // ================================================================ the pictures (--render <dir>)
