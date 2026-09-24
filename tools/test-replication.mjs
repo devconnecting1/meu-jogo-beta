@@ -26,7 +26,8 @@
  *      body shown for one snapshot is retired within a frame of each other on both sides.
  *  a7. A RE-ENTRY (N1). A body not sent for longer than its ring's timeout while the viewer got others restarts its
  *      fade on the client; the server's model restarts it too (435 ms for a body shown once after it, as the client; the
- *      old model said 450), and a silence of the whole stream keeps the fade it had.
+ *      old model said 450), and a silence of the whole stream keeps the fade it had. A strike before the gap counts no
+ *      more after it (the alpha started at 0 again); a strike at the re-entry draws it whole, and the full fade holds.
  *  a6. A PART OVER THE LIMIT (S3 NIT 4). It never goes out, what it carried counts as dropped entity by entity, and the
  *      bodies of the parts after it are still the ones taken as drawn.
  *   b. INTEREST AND THE DARK (§4.3). A zombie past the hysteresis band is not sent; at night one outside
@@ -1476,6 +1477,56 @@ section("(a7) a re-entry restarts the fade on both sides: the server times the r
 		"a silence of the whole stream (the server sent this viewer nothing) keeps the fade it had, as the client does",
 		`retired ${(wholeGone * 1000).toFixed(0)} ms after, the fade of a full track ${(long * 1000).toFixed(0)} ms`,
 	);
+	/*
+	 * LUZ-05 and N1 together: a track a strike showed was drawn at full alpha at once (client/net/snapshotBuffer.ts
+	 * `reveal`), and the server assumes its whole fade out (`revealed`). The re-entry puts the client's alpha back at 0:
+	 * carried again with no strike, it is a track shown once and the strike before the gap counts no more; carried again
+	 * while a strike lights the town, the client draws it whole at once, and the full fade holds again.
+	 */
+	// an older src (PZ_SRC) without the reveal: nothing to check
+	if (retiredAfterS(false, 0, true) !== retiredAfterS(false, 0)) {
+		const reentry = (litBefore, litAgain) => {
+			const r = new ActorInterest();
+			let t = 0;
+			let n = 0;
+			const snap = (carries, revealed) => {
+				n += 1;
+				r.update(0, netId, dist2, n);
+				r.noteRound(0, t);
+				if (carries) r.noteSent(0, netId, false, n * CFG.SNAP_NEAR_EVERY_TICKS, 3, t, revealed);
+				t += 1 / CFG.SNAP_NEAR_HZ;
+			};
+			for (let i = 0; i < CFG.SNAP_NEAR_HZ; i++) snap(true, litBefore);
+			for (let i = 0; i < 7; i++) snap(false, false);
+			const at0 = t;
+			snap(true, litAgain);
+			let gone = -1;
+			for (let i = 0; i < 20 && gone < 0; i++) {
+				const at = t;
+				snap(false, false);
+				for (let k = 0; k < 10 && gone < 0; k++) {
+					const probe = at + k * 0.005;
+					if (!r.hasTrack(0, netId, probe)) gone = probe - at0;
+				}
+			}
+			return gone;
+		};
+		const once = retiredAfterS(false, 0);
+		const full = retiredAfterS(false, 0, true);
+		const cases = [
+			[true, false, once, "a strike before the gap, none at the re-entry: a track shown once"],
+			[true, true, full, "a strike before the gap and at the re-entry: the whole fade again"],
+			[false, true, full, "dark before the gap, a strike at the re-entry: the whole fade"],
+		];
+		for (const [before, again, want, what] of cases) {
+			const got = reentry(before, again);
+			check(
+				got >= want && got < want + step,
+				`re-entry and strike: ${what} (the server's retirement within 5 ms of the client's)`,
+				`${(got * 1000).toFixed(0)} ms, the client ${(want * 1000).toFixed(0)} ms`,
+			);
+		}
+	}
 }
 
 section("(a6) a Snap part over the limit never goes out, and what it carried is counted, entity by entity (S3 NIT 4)");
