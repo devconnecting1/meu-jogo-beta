@@ -56,6 +56,7 @@ import { powerSet, ServerPower } from "./power";
 import { ServerTurrets } from "./turrets";
 import { RideEvent, ServerVehicles, VehicleNoise } from "./vehicles";
 import { WorldClock } from "./waves";
+import { ServerWindows } from "./windows";
 import { WorldOut } from "./worldOut";
 import { ZombieWorld } from "./zombies";
 import { newPhaseCosts, PhaseCosts, SIM_PHASES, SimPhase, SimProfiler } from "./metrics";
@@ -121,6 +122,7 @@ interface TownSystems {
 	combat?: ServerCombat;
 	power?: ServerPower;
 	turrets?: ServerTurrets;
+	windows?: ServerWindows;
 }
 
 /** what a player looked like after a tick — everything the replication layer needs beyond `state` */
@@ -269,6 +271,12 @@ export class ServerSimulation {
 	power?: ServerPower;
 	/** the machines that shoot (ELE-04, ELE-05) — with the grid AND the horde they shoot at */
 	turrets?: ServerTurrets;
+	/**
+	 * The town's window glass (EDI-18): the global DoorSet of every pane that breaks, the tick's budget, and the reach,
+	 * line and rate of a survivor breaking one. With the interactive world: where the server owns the doors, it owns
+	 * the glass.
+	 */
+	windows?: ServerWindows;
 	/** reliable world deltas produced this tick; server/net/replication.ts drains it (§4.5) */
 	readonly worldOut = new WorldOut();
 	/**
@@ -415,6 +423,7 @@ export class ServerSimulation {
 		// the old town stops feeding the outbox: nothing that happens to it is news any more
 		this.items?.detach();
 		this.build?.detach();
+		this.windows?.detach();
 		this.worldOut.clear();
 		this.backpack.clear();
 		// §3.6 counts the new world's first day from its first tick, exactly as a midnight would start it (the last
@@ -446,6 +455,7 @@ export class ServerSimulation {
 		this.combat = systems.combat;
 		this.power = systems.power;
 		this.turrets = systems.turrets;
+		this.windows = systems.windows;
 		// a new town's horde is measured like the old one was
 		if (this.nowMs !== undefined || this.profile !== undefined) this.instrumentHorde();
 	}
@@ -569,6 +579,15 @@ export class ServerSimulation {
 				profile: () => this.profile,
 			});
 			out.build = build;
+			// EDI-18: the town's glass. Every pane that breaks is a global DoorSet (the world's hook: a zombie's blow too),
+			// and a pane giving way is heard and walked through by THIS town's horde, read when it breaks
+			const windows = new ServerWindows({
+				world,
+				out: this.worldOut,
+				horde: () => this.horde?.refs,
+				fx: event => this.onFx?.(event),
+			});
+			out.windows = windows;
 			out.interaction = new ServerInteraction({
 				world,
 				items,
@@ -579,6 +598,13 @@ export class ServerSimulation {
 				onSolidChanged: (x, y, w, h) => this.horde?.refs.onSolidChanged?.(x, y, w, h),
 				// §9.3: an assisted run's pickups and searches earn no achievement (Woodpile), as it earns no coins
 				paysRewards: slot => this.paysSlot(slot),
+				windows,
+				// IA-02: a door turning is heard by the next zombie over; EDI-24: the bank vault's work, its door giving
+				// way and its alarm
+				noise: (x, y, radius, shot) => {
+					const horde = this.horde;
+					if (horde !== undefined) emitSound(horde.refs, x, y, radius, shot === true);
+				},
 			});
 			// VEI-05: a parked vehicle is one of the constructions above; this is getting on, riding and getting off.
 			// The hooks read the combat and the horde when they RUN (both are built below, or not at all)
@@ -625,6 +651,8 @@ export class ServerSimulation {
 		const projectiles = new ServerProjectiles({
 			playerOf: slot => this.bySlot.get(slot),
 			onFx: event => this.onFx?.(event),
+			// EDI-18: an arrow that stopped at a pane breaks it, like a bullet (its flight is its line)
+			glass: s => this.windows?.byShot(s) === "broken",
 		});
 		out.projectiles = projectiles;
 		const combat = new ServerCombat({
@@ -658,6 +686,16 @@ export class ServerSimulation {
 					if (items === undefined || by === undefined) return false;
 					return items.hitMapItem(s, chopping, by.state.x, by.state.y);
 				},
+				// EDI-18: a bullet that stopped at a pane breaks it (the ray is its line); a blade's arc that crossed one
+				// breaks it by hand -- reach, a clear line and the swinger's rate (server/sim/windows.ts)
+				glass: (s, melee, reach) => {
+					const windows = this.windows;
+					if (windows === undefined) return false;
+					if (!melee) return windows.byShot(s) === "broken";
+					const by = this.swinger;
+					// a swing, not a press: its refusals are no evidence against the swinger
+					return by !== undefined && windows.byHand(by.slot, by.state, s, reach, false) === "broken";
+				},
 			},
 		});
 		out.combat = combat;
@@ -675,6 +713,8 @@ export class ServerSimulation {
 				damage: combat,
 				fx: event => this.onFx?.(event),
 				noise: (x, y, radius) => emitSound(horde.refs, x, y, radius, true),
+				// EDI-18: a turret's bullet breaks the pane it stops at, like a survivor's (the ray is its line)
+				glass: s => this.windows?.byShot(s) === "broken",
 			});
 		}
 		// §2.3/MP-00: from here on a survivor only ever loses hp through the server's combat. The brains still
@@ -868,6 +908,7 @@ export class ServerSimulation {
 		this.build?.remove(slot, sp.save);
 		this.craft?.remove(slot);
 		this.interaction?.remove(slot);
+		this.windows?.remove(slot);
 		// the drones escorting them fly home
 		this.power?.remove(slot);
 		this.items?.forget(slot);
@@ -1034,6 +1075,8 @@ export class ServerSimulation {
 		this.tick += 1;
 		this.stats.ticks += 1;
 		this.dayTicks += 1;
+		// EDI-18: this tick's panes, whatever breaks them (survivors below, the horde after), and the hands' buckets
+		this.windows?.beginTick(this.tickDt);
 		prof?.begin("PZ.players");
 		this.refreshBodies();
 		for (const sp of this.roster) {
@@ -1055,7 +1098,8 @@ export class ServerSimulation {
 			// rider's step never "walks" (no feet, no footsteps: VEI-05), so for them the stick moving the vehicle is the
 			// presence -- else three minutes on a motorcycle read as AFK and lost the day's credit (review V1)
 			const went = res.walking || (rode && res.moved > WALK_EPSILON);
-			this.notePresence(sp, sp.counters.consumed > consumed && ((cmd.moveMag > 0 && went) || cmd.edges !== 0));
+			const arrived = sp.counters.consumed > consumed;
+			this.notePresence(sp, arrived && ((cmd.moveMag > 0 && went) || cmd.edges !== 0));
 			// the weapon machine runs on the SAME command as the movement: the aim a shot is fired along is
 			// the one the player was holding when they walked that step, never the one two ticks later. While a
 			// construction is on the cursor the attack and reload edges are the builder's (place, rotate): the weapon
@@ -1072,7 +1116,7 @@ export class ServerSimulation {
 			this.swinger = undefined;
 			// ...and so do the discrete actions (§2.4): the E press and the build edges belong to the command
 			// the player made them during, which is the one just consumed
-			this.stepWorldActions(sp, cmd);
+			this.stepWorldActions(sp, cmd, arrived);
 			if (died && this.onDeath !== undefined) this.onDeath(sp);
 		}
 		prof?.end();
@@ -1153,10 +1197,14 @@ export class ServerSimulation {
 	 * edges mean build, exactly as `BuildSystem.handleInput` swallows the frame on the client; otherwise the
 	 * action press is the E key and the server picks the target itself.
 	 */
-	private stepWorldActions(sp: ServerPlayer, cmd: InputCommand): void {
+	private stepWorldActions(sp: ServerPlayer, cmd: InputCommand, arrived: boolean): void {
 		const build = this.build;
 		const interaction = this.interaction;
 		if (build === undefined || interaction === undefined) return;
+		// E held down (the command's held Action bit): the work at a bank's vault door goes on (EDI-24); a survivor who
+		// died, walked off or let go stops there. Only a command the client really sent holds it: a tick filled with the
+		// last input (players.ts) repeats the held bit, and a client gone silent with E down must not crack a vault
+		interaction.hold(sp.slot, sp.state, sp.save, arrived && (cmd.held & HeldBit.Action) !== 0);
 		if (sp.state.dead) return;
 		const action = edgeCount(cmd.edges, EdgeShift.ActionPress);
 		const attack = edgeCount(cmd.edges, EdgeShift.AttackPress);
@@ -1185,8 +1233,11 @@ export class ServerSimulation {
 			return;
 		}
 		if (action <= 0) return;
+		// EDI-18: the press is for a window's glass only when its command says so (protocol.ts note 23) -- and then it
+		// is for nothing else: a bike parked under the window does not take it (the review of b61425a)
+		const glass = (cmd.held & HeldBit.Glass) !== 0;
 		// a rideable vehicle in reach takes the press (a broken one falls through: the interaction repairs it)
-		if (vehicles !== undefined && vehicles.tryMount(sp)) return;
+		if (!glass && vehicles !== undefined && vehicles.tryMount(sp)) return;
 		const outcome = interaction.act({
 			slot: sp.slot,
 			state: sp.state,
@@ -1194,6 +1245,7 @@ export class ServerSimulation {
 			players: this.bodies,
 			zombies: this.horde?.zombies ?? EMPTY_ZOMBIES,
 			hours: gameHours(this.clock.day, this.clock.dayTime),
+			glass,
 		});
 		// MP-24: a repair of a construction that is rotting (its builder long gone) makes it the repairer's
 		if (outcome.kind === "repair") build.adopt(outcome.solid, sp.slot);

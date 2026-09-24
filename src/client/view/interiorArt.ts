@@ -176,6 +176,10 @@ function planCell(key: string, template: string | undefined, x: number, y: numbe
 export class InteriorArt {
 	private world?: WorldData;
 	private readonly plans = new Map<object, Plan>();
+	/** a window's plans that depend on its glass (EDI-18): the frame with the pane, and its shards outside and inside */
+	private readonly panes = new Map<Opening, Plan>();
+	private readonly shardsOut = new Map<Opening, Plan>();
+	private readonly shardsIn = new Map<Opening, Plan>();
 	/** each building's furniture and walls, by the building's id (a chair looks for its table, a wall its joints) */
 	private readonly pieces = new Map<number, Array<Solid>>();
 	private readonly walls = new Map<number, Array<Solid>>();
@@ -187,6 +191,9 @@ export class InteriorArt {
 		if (world === this.world) return;
 		this.world = world;
 		this.plans.clear();
+		this.panes.clear();
+		this.shardsOut.clear();
+		this.shardsIn.clear();
 		this.pieces.clear();
 		this.walls.clear();
 		this.fills.clear();
@@ -359,21 +366,44 @@ export class InteriorArt {
 
 	// ------------------------------------------------------------------ doorways and windows
 
-	/** the frame of a doorway or a window; false = draw it flat */
-	opening(r: Renderer, cam: Camera, o: Opening): boolean {
+	/**
+	 * The frame of a doorway or a window; false = draw it flat. A window is drawn as it is NOW (EDI-18): `intact`, the
+	 * frame with the whole pane and its reflection (`windowGlass:<side>`); broken, the frame with what is left of the
+	 * glass (`window:<side>`). A pane that breaks switches plans; nothing is worked out again.
+	 */
+	opening(r: Renderer, cam: Camera, o: Opening, intact = false): boolean {
 		const id = artId("furniture");
 		if (id === undefined) return false;
-		let plan = this.plans.get(o);
+		const cache = intact ? this.panes : this.plans;
+		let plan = cache.get(o);
 		if (plan === undefined) {
-			plan = this.planOpening(o);
-			this.plans.set(o, plan);
+			plan = this.planOpening(o, intact);
+			cache.set(o, plan);
 		}
 		if (plan.size() === 0) return false;
 		this.draw(r, cam, id, plan, Z.structure + 2);
 		return true;
 	}
 
-	private planOpening(o: Opening): Plan {
+	/**
+	 * The glass of broken window `o` on the ground outside it (`sgn` 1) or on the floor inside (-1), centred on (cx, cy)
+	 * at layer `z`: the atlas's broken-glass decoration along the wall. False = draw it flat.
+	 */
+	shards(r: Renderer, cam: Camera, o: Opening, sgn: number, cx: number, cy: number, z: number): boolean {
+		const id = artId("furniture");
+		if (id === undefined) return false;
+		const cache = sgn > 0 ? this.shardsOut : this.shardsIn;
+		let plan = cache.get(o);
+		if (plan === undefined) {
+			plan = this.centred(`glass:${o.w >= o.h ? "h" : "v"}`, cx, cy);
+			cache.set(o, plan);
+		}
+		if (plan.size() === 0) return false;
+		this.draw(r, cam, id, plan, z);
+		return true;
+	}
+
+	private planOpening(o: Opening, intact: boolean): Plan {
 		const along = o.w >= o.h;
 		const len = along ? o.w : o.h;
 		const thick = along ? o.h : o.w;
@@ -388,7 +418,7 @@ export class InteriorArt {
 		}
 		if (o.kind === "window") {
 			return len === WINDOW_GAP && thick === OUTER_WALL
-				? planCell(`window:${o.side}`, undefined, x, y, w, h)
+				? planCell(`${intact ? "windowGlass" : "window"}:${o.side}`, undefined, x, y, w, h)
 				: NONE;
 		}
 		return thick === INNER_WALL ? planCell("", `inner:${a}`, x, y, w, h) : NONE;
@@ -397,16 +427,19 @@ export class InteriorArt {
 	// ------------------------------------------------------------------ walls
 
 	/**
-	 * A building's wall (`s`, tagged bwall with a parent): the shadow at its foot on the floor (`wallShade`), then
-	 * the wall as masonry -- a dark outline under it (its own rect) and the plaster (`wall`, tinted as before) on
-	 * top, in by one texel where the wall is free and one texel into the wall it joins where it meets one, so the
-	 * walls of a building read as one outlined piece instead of a row of boxes. False = draw it flat.
+	 * A building's wall (`s`, tagged bwall with a parent), two sprites: the dark outline under it (its own rect) with
+	 * the shadow at its foot on the floor round it -- one 9-slice, `wallShade` (without it, the outline alone as a
+	 * Frame) -- and the plaster (`wall`, tinted as before) on top, in by one texel where the wall is free and one
+	 * texel into the wall it joins where it meets one, so the walls of a building read as one outlined piece instead
+	 * of a row of boxes. False = draw it flat.
 	 */
 	wall(r: Renderer, cam: Camera, s: Solid, house: boolean): boolean {
 		const id = artId("wall");
 		if (id === undefined || s.parentId === undefined) return false;
 		const shade = artId("wallShade");
 		if (shade !== undefined) {
+			// the outline and the foot shadow, one sprite (the slice's centre is the wall's rect, white, tinted to the
+			// outline's colour; its border the shadow on the floor, black): under the furniture, under the plaster
 			const o = image(shade, s.w + 2 * SHADE_OUT, s.h + 2 * SHADE_OUT, Z.floorDetail);
 			const sl = artSlice("wallShade");
 			o.scaleType = "slice";
@@ -415,10 +448,12 @@ export class InteriorArt {
 			o.sliceX1 = sl[2];
 			o.sliceY1 = sl[3];
 			o.sliceScale = WORLD_TEXEL;
+			o.imageTint = house ? EDGE_HOUSE : EDGE_SHOP;
 			r.drawRect(cam, s.x + s.w / 2, s.y + s.h / 2, o);
+		} else {
+			r.drawRect(cam, s.x + s.w / 2, s.y + s.h / 2, edgeOpts(s.w, s.h, house ? EDGE_HOUSE : EDGE_SHOP));
 		}
 		const inner = s.inner === true;
-		r.drawRect(cam, s.x + s.w / 2, s.y + s.h / 2, edgeOpts(s.w, s.h, house ? EDGE_HOUSE : EDGE_SHOP));
 		let f = this.fills.get(s);
 		if (f === undefined) {
 			f = this.fillOf(s);

@@ -49,6 +49,15 @@ import {
 } from "shared/game/world";
 import { drawBuildingSign, drawPriceSign } from "./buildingSigns";
 import { drawParkedVehicle } from "./vehicleView";
+import {
+	drawBankRoof,
+	drawPortico,
+	drawTownCanopy,
+	drawTownGround,
+	drawTownProp,
+	drawVaultDoor,
+	vaultDoorSolid,
+} from "./townView";
 import { circleInView, overlaps, part, SIDES } from "./drawKit";
 import { FLOOR_FLAT, InteriorView } from "./interiorView";
 import { artId, artSize, artSlice } from "./worldArt";
@@ -437,6 +446,8 @@ export class WorldView {
 	}
 
 	private drawGroundRect(r: Renderer, cam: Camera, g: GroundRect, v: ViewRect): void {
+		// the everyday town's own ground (the bank's steps, a court, a sand pit...): ./townView.ts, both drawings
+		if (drawTownGround(r, cam, g, v)) return;
 		if (this.drawGroundRectArt(r, cam, g, v)) return;
 		const k = g.kind;
 		if (k === "stall") {
@@ -647,8 +658,10 @@ export class WorldView {
 			} else if (s.kind === "tree") {
 				if (!this.drawTreeArt(r, cam, s, v)) this.drawTree(r, cam, s, v);
 			} else if (s.kind === "canopy") {
-				// a gas station's canopy (EDI-16): culled on its own (its shadow reaches further than its rect)
-				this.drawCanopy(r, cam, s, v);
+				// a gas station's canopy (EDI-16): culled on its own (its shadow reaches further than its rect); the
+				// bank's portico and the everyday town's other roofs on posts: ./townView.ts
+				if (s.tags === "portico") drawPortico(r, cam, s, v, this.shadow, this.clock);
+				else if (!drawTownCanopy(r, cam, s, v, this.shadow)) this.drawCanopy(r, cam, s, v);
 			} else if (s.tags === "gas_sign") {
 				// its footing, and the price pylon standing on it (upright: it reaches past the footing's rect)
 				this.drawGasSign(r, cam, s, v);
@@ -667,7 +680,11 @@ export class WorldView {
 					const so = this.shadow(s.x + s.w / 2, s.y + s.h / 2, 6);
 					drawParkedVehicle(r, cam, s, so.x, so.y);
 				} else if (s.kind === "prop") {
-					this.drawProp(r, cam, s);
+					// the everyday town's fixtures first (./townView.ts), the campus quad's here
+					if (!drawTownProp(r, cam, s, world, this.shadow)) this.drawProp(r, cam, s);
+				} else if (vaultDoorSolid(s)) {
+					// the bank's vault door (EDI-24): a steel slab, not a built door
+					drawVaultDoor(r, cam, s, world);
 				} else if (this.machines === undefined || !this.machines.draw(r, cam, s)) {
 					this.drawStructure(r, cam, s);
 				}
@@ -828,9 +845,13 @@ export class WorldView {
 		}
 		// the inside, only while the roof is not on (a closed roof covers the whole footprint)
 		if (!this.interior.roofOpaque(s)) this.drawInterior(r, cam, s, v, false);
-		// doormats outside every door: the entrances read even with the roof closed
-		if (s.openings !== undefined) this.interior.drawDoormats(r, cam, s, v, undefined);
-		else this.drawPlainEntrance(r, cam, s, -1, BLACK);
+		// doormats outside every door, and the glass under every broken window (EDI-18): read with the roof closed
+		if (s.openings !== undefined) {
+			this.interior.drawDoormats(r, cam, s, v, undefined);
+			this.interior.drawWindowShards(r, cam, s, v);
+		} else {
+			this.drawPlainEntrance(r, cam, s, -1, BLACK);
+		}
 		if (roofA <= 0.01) return;
 		const roof = s.roofColor ?? COLORS.roofGray;
 		const roofDark = roof.Lerp(BLACK, 0.3);
@@ -918,6 +939,8 @@ export class WorldView {
 			a,
 			this.shadow,
 		);
+		// the bank's stone parapet and the laylight over its hall (EDI-24, ./townView.ts)
+		if (s.buildingType === 22) drawBankRoof(r, cam, v, s, a);
 	}
 
 	private drawWall(r: Renderer, cam: Camera, s: Solid): void {
@@ -1296,6 +1319,27 @@ export class WorldView {
 		const cx = s.x + s.w / 2;
 		const cy = s.y + s.h / 2;
 		const t = s.tags;
+		if (t !== "fountain" && t !== "statue") {
+			// a bench, flat (ART-01; its pixel art is ART-16's): the slats in their iron ends, the back rest on the side
+			// away from where it faces -- two Frames, no shadow: a town holds hundreds of benches (the review of e9b0fbb, L5)
+			const n = sideNormal(s.face);
+			const horizontal = s.w >= s.h;
+			r.drawRect(cam, cx, cy, {
+				w: s.w,
+				h: s.h,
+				color: COLORS.furnWood,
+				stroke: PROP.iron,
+				strokeThickness: 2,
+				zIndex: Z.structure,
+			});
+			r.drawRect(cam, cx - n.x * (s.w / 2 - 4), cy - n.y * (s.h / 2 - 4), {
+				w: horizontal ? s.w - 4 : 5,
+				h: horizontal ? 5 : s.h - 4,
+				color: COLORS.furnDark,
+				zIndex: Z.structure + 1,
+			});
+			return;
+		}
 		const so = this.shadow(cx, cy, t === "statue" ? 14 : 6);
 		const round = t === "fountain";
 		r.drawRect(cam, cx + so.x, cy + so.y, {
@@ -1353,24 +1397,7 @@ export class WorldView {
 				cornerRadius: 8,
 				zIndex: Z.structure + 2,
 			});
-			return;
 		}
-		// a bench: the iron ends, the slats, the back rest on the side away from where it faces
-		const n = sideNormal(s.face);
-		const horizontal = s.w >= s.h;
-		r.drawRect(cam, cx, cy, { w: s.w, h: s.h, color: PROP.iron, cornerRadius: 2, zIndex: Z.structure });
-		r.drawRect(cam, cx + n.x * 3, cy + n.y * 3, {
-			w: horizontal ? s.w - 8 : s.w - 10,
-			h: horizontal ? s.h - 10 : s.h - 8,
-			color: COLORS.furnWood,
-			zIndex: Z.structure + 1,
-		});
-		r.drawRect(cam, cx - n.x * (s.w / 2 - 4), cy - n.y * (s.h / 2 - 4), {
-			w: horizontal ? s.w - 4 : 5,
-			h: horizontal ? 5 : s.h - 4,
-			color: COLORS.furnDark,
-			zIndex: Z.structure + 2,
-		});
 	}
 
 	private drawTrash(r: Renderer, cam: Camera, s: Solid): void {
@@ -1804,9 +1831,14 @@ export class WorldView {
 		}
 		// the rooms' floors, the decoration and the frames (only while the roof is not on)
 		if (!this.interior.roofOpaque(s)) this.drawInterior(r, cam, s, v, true);
-		// the doorstep and the mat on it, at every door: the entrances read even with the roof closed
-		if (s.openings !== undefined) this.interior.drawDoormats(r, cam, s, v, STEP);
-		else this.drawPlainEntrance(r, cam, s, -1, BLACK);
+		// the doorstep and the mat on it, at every door, and the glass under every broken window (EDI-18): the entrances
+		// read even with the roof closed
+		if (s.openings !== undefined) {
+			this.interior.drawDoormats(r, cam, s, v, STEP);
+			this.interior.drawWindowShards(r, cam, s, v);
+		} else {
+			this.drawPlainEntrance(r, cam, s, -1, BLACK);
+		}
 		if (roofA <= 0.01) return true;
 		const roof = s.roofColor ?? COLORS.roofGray;
 		const shades = this.roofShadesOf(s, roof);
@@ -1932,8 +1964,9 @@ export class WorldView {
 		} else {
 			this.drawRoofUnits(r, cam, wing, s.doorSide, wx, wy, roofA);
 		}
-		// darker eaves over the doorways and dark glass over the windows: the entrances read from above
-		if (s.openings !== undefined) this.interior.drawRoofMarks(r, cam, s, roofA, shades[3], v);
+		// darker eaves over the doorways and dark glass over the windows: the entrances read from above (with the art, the
+		// glass catches the light: EDI-18)
+		if (s.openings !== undefined) this.interior.drawRoofMarks(r, cam, s, roofA, shades[3], v, true);
 		else this.drawPlainEntrance(r, cam, s, roofA, shades[3]);
 		return true;
 	}

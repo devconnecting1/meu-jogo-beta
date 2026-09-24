@@ -15,6 +15,7 @@ import type { GamePhase } from "shared/game/context";
 import { getCtx, setPhase } from "./bootstrap";
 import { GameLoop } from "./gameLoop";
 import { audio, gameAudio, startAudio } from "./audio";
+import { stepBankAlarm } from "./audio/bankAlarm";
 import * as Boot from "./boot";
 import {
 	netActive,
@@ -877,6 +878,8 @@ function mountRun(enterWorld = true): void {
 		// the listener follows the camera, and whatever is still queued in refs.fx is played before
 		// GameLoop.render() consumes (and clears) it — so no cosmetic event is ever heard twice
 		gameAudio.frame(refs, ctx.cam.x, ctx.cam.y);
+		// a bank's alarm bell, ringing after its vault was cracked (EDI-24)
+		stepBankAlarm(refs.world, dt);
 		debug.profilebegin("pz.render");
 		loop.render();
 		debug.profileend();

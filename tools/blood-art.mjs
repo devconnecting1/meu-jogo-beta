@@ -1,5 +1,5 @@
 /*
- * Project Z combat blood (docs/DESIGN_RULES.md ART-15, LEG-02): the pixel art a fight leaves on the floor, baked into
+ * Last Town combat blood (docs/DESIGN_RULES.md ART-15, LEG-02): the pixel art a fight leaves on the floor, baked into
  * ONE atlas (design/world-art/blood.png) that client/view/bloodView.ts draws a cell of per stain (ImageRectOffset /
  * ImageRectSize, Pixelated). Written by tools/gen-world-art.mjs with the rest of the town (`npm run art:world`) and
  * uploaded with it (`upload-art`, the CI's `assets` job); until the atlas has an id -- or while the uploaded one is not

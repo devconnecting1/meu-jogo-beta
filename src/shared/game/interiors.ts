@@ -30,7 +30,8 @@
  * on the street), then mapped onto the world through the building's street side, optionally mirrored.
  */
 import { TOWN } from "shared/engine/constants";
-import type { DoorSide, Rect } from "./world";
+import type { DoorSide, Rect, Solid } from "./world";
+import { brokenShare } from "./windows";
 
 // ---------------------------------------------------------------------------------------------- public types
 
@@ -61,7 +62,14 @@ export type RoomKind =
 	| "lab"
 	| "chemstore"
 	| "dormroom"
-	| "common";
+	| "common"
+	// the everyday town (docs/DESIGN_RULES.md EDI-19): the town hall's meeting hall, a workshop or fire engine bay, a
+	// holding cell
+	| "meeting"
+	| "garage"
+	| "cell"
+	// the bank's vault (EDI-24): its only way in is the vault door
+	| "vault";
 
 export type FloorKind = "wood" | "tile" | "shop" | "carpet" | "kitchen" | "bath" | "concrete";
 
@@ -107,7 +115,11 @@ export type FurnitureKind =
 	| "fumehood"
 	| "chemshelf"
 	| "bunk"
-	| "vending";
+	| "vending"
+	// the bank's vault (EDI-24): the wall of safe deposit boxes -- the vault's own container, never a piece of the bank
+	| "deposit"
+	// the town hall's meeting hall (EDI-19): a row of folding chairs
+	| "foldchairs";
 
 export type DecorKind =
 	| "rug"
@@ -139,6 +151,13 @@ export interface Opening extends Rect {
 	side: DoorSide;
 	/** the main entrance (the one facing the street) */
 	main: boolean;
+	/** a window generated with its glass already broken (EDI-18: a seeded share, `brokenShare` of the type) */
+	broken?: boolean;
+	/**
+	 * A window's solid, set by the town (world.ts `planInteriors`): the pane's state lives there (shared/game/windows.ts),
+	 * and the drawing reads it through this without looking the solid up
+	 */
+	glass?: Solid;
 }
 
 export interface Piece extends Rect {
@@ -574,7 +593,12 @@ function smallShop(back: string): Array<Template> {
 			],
 			rooms: SHOP_ROOMS,
 			main: [1, 0],
-			doors: [[1, 1, "K", 0.5]],
+			// the back room's door: out the back, or onto one of the notches beside it when the back is built up
+			doors: [
+				[1, 1, "K", 0.5],
+				[1, 1, "L", 0.5],
+				[1, 1, "R", 0.5],
+			],
 			extra: 1,
 			links: [[1, 0, 1, 1, 0]],
 		},
@@ -1078,8 +1102,231 @@ const CAMPUS_DORM: Array<Template> = [
 	},
 ];
 
+// ---------------------------------------------------------------------------------------------- the everyday town
+
+/** EDI-19's rooms: a shop's, and the lobby, office, secure room, garage, meeting hall and cell of the civic buildings */
+const TOWN_ROOMS: Record<string, RoomKind> = {
+	S: "sales",
+	R: "stock",
+	X: "secure",
+	O: "office",
+	o: "office",
+	E: "lobby",
+	K: "galley",
+	G: "garage",
+	M: "meeting",
+	C: "cell",
+	B: "bedroom",
+	V: "vault",
+};
+
+/** the bakery (684 × 556): the shop with its pastry case on the street, the bakehouse behind */
+const BAKERY: Array<Template> = [
+	{
+		cols: [62, 38],
+		rows: [64, 36],
+		map: [
+			["S", "S"],
+			["K", "."],
+		],
+		rooms: TOWN_ROOMS,
+		main: [0, 0],
+		doors: [
+			[0, 1, "R", 0.5],
+			[0, 1, "K", 0.5],
+		],
+		extra: 1,
+		links: [[0, 0, 0, 1, 0]],
+	},
+	{
+		cols: [26, 48, 26],
+		rows: [64, 36],
+		map: [
+			["S", "S", "S"],
+			[".", "K", "."],
+		],
+		rooms: TOWN_ROOMS,
+		main: [1, 0],
+		doors: [[1, 1, "K", 0.5]],
+		extra: 1,
+		links: [[1, 0, 1, 1, 0]],
+	},
+];
+
+/** the auto repair shop (684 × 556): the workshop bay on the street, the counter beside it, parts behind */
+const AUTO_REPAIR: Array<Template> = [
+	{
+		cols: [62, 38],
+		rows: [62, 38],
+		map: [
+			["G", "S"],
+			["G", "R"],
+		],
+		rooms: TOWN_ROOMS,
+		main: [0, 0],
+		doors: [
+			[0, 1, "K", 0.5],
+			[1, 0, "F", 0.5],
+			[1, 1, "K", 0.5],
+		],
+		extra: 2,
+		links: [
+			[0, 0, 1, 0, 0],
+			[1, 0, 1, 1, 0],
+		],
+	},
+];
+
+/**
+ * The bank (808 × 620, EDI-24): the banking hall across the front with the tellers' counter, and behind it the
+ * manager's office, the vault and the loan office. The vault is a leaf: its one doorway opens off the hall, and that
+ * doorway is the vault door (world.ts `bankVault`); the staff door is at the back of an office.
+ */
+const BANK: Array<Template> = [
+	{
+		cols: [32, 36, 32],
+		rows: [54, 46],
+		map: [
+			["E", "E", "E"],
+			["O", "V", "o"],
+		],
+		rooms: TOWN_ROOMS,
+		main: [1, 0],
+		doors: [
+			[0, 1, "K", 0.5],
+			[2, 1, "K", 0.5],
+			[0, 1, "L", 0.5],
+			[2, 1, "R", 0.5],
+		],
+		extra: 1,
+		links: [
+			[0, 0, 0, 1, 0],
+			[1, 0, 1, 1, 0],
+			[2, 0, 2, 1, 0],
+		],
+	},
+];
+
+/** offices (684 × 556): the reception on the street, two offices behind */
+const OFFICES: Array<Template> = [
+	{
+		cols: [50, 50],
+		rows: [54, 46],
+		map: [
+			["E", "E"],
+			["O", "o"],
+		],
+		rooms: TOWN_ROOMS,
+		main: [0, 0],
+		doors: [
+			[0, 1, "K", 0.5],
+			[1, 1, "K", 0.5],
+		],
+		extra: 1,
+		links: [
+			[0, 0, 0, 1, 0],
+			[1, 0, 1, 1, 0],
+		],
+	},
+];
+
+/**
+ * the town hall (808 × 684): the lobby on the street -- the clerk's counter, the first-aid cabinet, the notice board --
+ * with the records office and the clerk's office either side of it, and across the back the meeting hall where the
+ * town met: folding chairs in rows facing the council table, a door to each side and one at the back
+ */
+const TOWN_HALL: Array<Template> = [
+	{
+		cols: [30, 40, 30],
+		rows: [40, 60],
+		map: [
+			["O", "E", "o"],
+			["M", "M", "M"],
+		],
+		rooms: TOWN_ROOMS,
+		main: [1, 0],
+		doors: [
+			[0, 1, "L", 0.5],
+			[2, 1, "R", 0.5],
+			[1, 1, "K", 0.5],
+		],
+		extra: 2,
+		// the offices open off the back of the lobby, leaving its front walls to the counter's cabinet and bench
+		links: [
+			[1, 0, 1, 1, 0],
+			[1, 0, 0, 0, 0, 0.75],
+			[1, 0, 2, 0, 0, 0.75],
+		],
+	},
+];
+
+/** the fire station (808 × 684): the engine bay on the apron, the office and the crew's bunk room beside it */
+const FIRE_STATION: Array<Template> = [
+	{
+		cols: [60, 40],
+		rows: [55, 45],
+		map: [
+			["G", "O"],
+			["G", "B"],
+		],
+		rooms: TOWN_ROOMS,
+		main: [0, 0],
+		doors: [
+			[0, 1, "K", 0.5],
+			[1, 1, "K", 0.5],
+			[1, 0, "F", 0.5],
+		],
+		extra: 2,
+		links: [
+			[0, 0, 1, 0, 0],
+			[1, 0, 1, 1, 0],
+		],
+	},
+];
+
+/** the police station (808 × 684): the lobby, the officers' room, the holding cell and the armoury */
+const POLICE_STATION: Array<Template> = [
+	{
+		cols: [55, 45],
+		rows: [52, 48],
+		map: [
+			["E", "O"],
+			["C", "X"],
+		],
+		rooms: TOWN_ROOMS,
+		main: [0, 0],
+		doors: [
+			[1, 0, "R", 0.5],
+			[0, 0, "L", 0.5],
+			[1, 0, "F", 0.5],
+		],
+		extra: 1,
+		links: [
+			[0, 0, 0, 1, 0],
+			[0, 0, 1, 0, 0],
+			[1, 0, 1, 1, 0],
+		],
+	},
+];
+
+/** the everyday town's templates (EDI-19), or undefined for a type that is not one of them */
+function townTemplates(bt: number): Array<Template> | undefined {
+	if (bt === 16 || bt === 18 || bt === 21) return smallShop("R");
+	if (bt === 17) return AUTO_REPAIR;
+	if (bt === 19) return BAKERY;
+	if (bt === 20) return smallShop("X");
+	if (bt === 22) return BANK;
+	if (bt === 23) return TOWN_HALL;
+	if (bt === 24) return FIRE_STATION;
+	if (bt === 25) return POLICE_STATION;
+	if (bt === 26) return OFFICES;
+	return undefined;
+}
+
 /** the templates that fit a footprint of this type, `along` × `depth` */
 function templatesFor(bt: number, along: number, depth: number): Array<Template> {
+	const town = townTemplates(bt);
+	if (town !== undefined) return town;
 	if (bt === 1 || bt === 2) {
 		const area = along * depth;
 		if (area > 1000000) return [HOUSE_XL];
@@ -1191,6 +1438,13 @@ const ROOM_INFO: Record<RoomKind, RoomInfo> = {
 	chemstore: { floor: "concrete", win: 0, early: false },
 	dormroom: { floor: "carpet", win: 1, early: true },
 	common: { floor: "wood", win: 1, early: false },
+	// the everyday town (EDI-19): the town hall's meeting hall has its windows before its chairs; a workshop or an
+	// engine bay and a holding cell have none
+	meeting: { floor: "wood", win: 1, early: true },
+	garage: { floor: "concrete", win: 0, early: false },
+	cell: { floor: "concrete", win: 0, early: false },
+	// the bank's vault (EDI-24): steel-lined, windowless
+	vault: { floor: "concrete", win: 0, early: false },
 };
 
 // ---------------------------------------------------------------------------------------------- local geometry
@@ -1356,6 +1610,8 @@ interface LOpening {
 	out?: LSide;
 	alongU: boolean;
 	main: boolean;
+	/** a window whose glass the generator broke (EDI-18) */
+	broken?: boolean;
 }
 
 interface LPiece extends LR {
@@ -2365,7 +2621,8 @@ class Planner {
 	/**
 	 * Free-standing pieces in a grid over the band [vFrom, vTo] (shares of the biggest cell's depth): as many as fit
 	 * with `gap` between them and the walls, at most cols × rows, spread evenly. `alongU`: the piece's long side
-	 * runs along u. Answers how many went in.
+	 * runs along u. `face`: the side every piece faces (the front of the building unless told: the town hall's
+	 * chairs face its council table at the back). Answers how many went in.
 	 */
 	grid(
 		ctx: RoomCtx,
@@ -2379,6 +2636,7 @@ class Planner {
 		vTo: number,
 		gap: number,
 		cell?: LR,
+		face: LSide = "F",
 	): number {
 		const r = cell ?? biggest(ctx).inner;
 		const pw = alongU ? len : depth;
@@ -2398,7 +2656,7 @@ class Planner {
 				const v = math.floor(v0 + sv + j * (ph + sv));
 				const p = lr(u, u + pw, v, v + ph);
 				if (!this.fits(p, r, true)) continue;
-				this.place(ctx, p, kind, "F");
+				this.place(ctx, p, kind, face);
 				n++;
 			}
 		}
@@ -3037,6 +3295,9 @@ const PIECES: Record<FurnitureKind, PieceInfo> = {
 	chemshelf: { low: false, loot: true },
 	bunk: { low: false, loot: false },
 	vending: { low: false, loot: true },
+	// the vault's deposit boxes (EDI-24) are a container of their own (world.ts `bankVault`): no loot spot of the bank
+	deposit: { low: false, loot: false },
+	foldchairs: { low: true, loot: false },
 };
 
 /** the pieces that say what a room is: a window takes their place only as a last resort (`forceWindow`) */
@@ -3064,7 +3325,151 @@ const DEFINING: Array<FurnitureKind> = [
 
 // ---------------------------------------------------------------------------------------------- furnishing by room
 
+/**
+ * The everyday town's rooms (EDI-19), each with the piece that says what it is (EDI-08): the hardware store's shelves
+ * and lumber rack, the pawn shop's glass cases, the post office's counter and sorting racks, the bank's tellers'
+ * counter and the vault's deposit boxes, the town hall's council table and folding chairs, its clerk's counter and
+ * first-aid cabinet, its records' shelves, the workshop's racks and workbench, the fire crew's lockers, the holding
+ * cell's bench and toilet. Answers whether it furnished the room (false: the ordinary furnishing of its kind,
+ * `furnish`, does).
+ */
+function furnishTown(pl: Planner, ctx: RoomCtx, bt: number): boolean {
+	const k = ctx.kind;
+	if (k === "meeting") {
+		// the town hall's meeting hall: the council table against the back wall, two blocks of folding chairs facing it
+		// with the aisle between them
+		// (each block two rows of chairs, back to back with no way between them: EDI-11's sealed gap)
+		if (!pl.againstWall(ctx, "table", 176, 56, "K")) pl.againstWall(ctx, "table", 136, 52);
+		if (pl.grid(ctx, "foldchairs", 240, 64, true, 2, 2, 0.05, 0.74, PATH, undefined, "K") === 0) {
+			pl.grid(ctx, "foldchairs", 176, 64, true, 2, 2, 0.05, 0.8, PATH, undefined, "K");
+		}
+		pl.roomWindow(ctx);
+		return true;
+	}
+	if (bt === 23 && k === "lobby") {
+		// the town hall's lobby: the clerk's counter, a bench to wait on, and the first-aid cabinet on the wall (the
+		// emergency supplies the town handed out: its bandages are the town hall's loot, spawns.ts)
+		if (!pl.island(ctx, "reception", 168, 52, true)) pl.island(ctx, "reception", 120, 48, true);
+		pl.roomWindow(ctx);
+		pl.againstWall(ctx, "cabinet", 56, 36);
+		pl.againstWall(ctx, "bench", 112, 36);
+		return true;
+	}
+	if (bt === 23 && k === "office") {
+		// the records office and the clerk's: a desk, the shelves of binders -- no cabinet (the town hall's one cabinet
+		// is the first-aid one in the lobby)
+		pl.againstWall(ctx, "desk", 112, 56, "K");
+		pl.roomWindow(ctx);
+		pl.againstWall(ctx, "bookcase", 120, 32);
+		pl.againstWall(ctx, "bookcase", 96, 32);
+		return true;
+	}
+	if (k === "garage") {
+		// the bay stays open (an engine or a car on the lift); racks, lockers and the bench along its walls
+		if (bt === 24) {
+			pl.againstWall(ctx, "lockers", 160, 32, "K");
+			pl.againstWall(ctx, "lockers", 128, 32);
+			pl.againstWall(ctx, "rack", 112, 44);
+		} else {
+			pl.againstWall(ctx, "rack", 160, 44, "K");
+			pl.againstWall(ctx, "counter", 136, 44);
+			pl.againstWall(ctx, "cabinet", 56, 36);
+		}
+		return true;
+	}
+	if (k === "cell") {
+		pl.againstWall(ctx, "bench", 112, 36, "K");
+		pl.againstWall(ctx, "toilet", 32, 40);
+		return true;
+	}
+	if (k === "galley" && bt === 19) {
+		// the bakehouse: the oven, the kneading bench, the proving rack -- sized for a shop's back room
+		if (!pl.againstWall(ctx, "stove", 112, 52, "K")) pl.againstWall(ctx, "stove", 72, 44);
+		if (!pl.againstWall(ctx, "counter", 144, 44)) pl.againstWall(ctx, "counter", 96, 40);
+		if (!pl.againstWall(ctx, "rack", 96, 40)) pl.island(ctx, "prep", 96, 48, true);
+		return true;
+	}
+	if (k === "secure" && bt === 20) {
+		// the pawn shop's back room: the safe, and a cabinet -- no gun rack
+		pl.againstWall(ctx, "safe", 56, 56, "K");
+		pl.againstWall(ctx, "cabinet", 88, 36);
+		return true;
+	}
+	if (k === "vault") {
+		// the bank's vault (EDI-24): the wall of deposit boxes facing the door, and nothing else -- no loot spot of the
+		// bank in here: the boxes are the vault's own container, behind the vault door
+		if (!pl.againstWall(ctx, "deposit", 240, 36, "K")) {
+			if (!pl.againstWall(ctx, "deposit", 176, 36, "K")) pl.againstWall(ctx, "deposit", 128, 36);
+		}
+		return true;
+	}
+	if (k === "lobby" && bt === 22) {
+		// the banking hall: the tellers' counter across it (their drawers are the bank's loot), the benches to wait on,
+		// the writing desk for the deposit slips
+		if (!pl.island(ctx, "counter", 320, 44, true, 0, 24)) pl.island(ctx, "counter", 224, 44, true);
+		pl.roomWindow(ctx);
+		pl.againstWall(ctx, "bench", 112, 36);
+		pl.againstWall(ctx, "bench", 112, 36);
+		pl.againstWall(ctx, "cabinet", 56, 36);
+		return true;
+	}
+	if (k === "lobby" && (bt === 25 || bt === 26)) {
+		// the tellers' counter, the police front desk, an office's reception; a bench to wait on
+		pl.island(ctx, "reception", 168, 52, true);
+		pl.roomWindow(ctx);
+		pl.againstWall(ctx, "bench", 112, 36);
+		if (bt !== 25) pl.againstWall(ctx, "cabinet", 56, 36);
+		return true;
+	}
+	if (k !== "sales") return false;
+	if (bt === 16) {
+		// hardware: shelves of tools and fittings, the lumber rack, aisles between the gondolas
+		pl.againstWall(ctx, "shelf", 180, 36, "K");
+		pl.againstWall(ctx, "rack", 140, 44);
+		pl.aisles(ctx, "gondola", 48);
+		return true;
+	}
+	if (bt === 17) {
+		// the auto repair shop's counter: the till and a shelf of parts
+		pl.againstWall(ctx, "checkout", 112, 52, "K");
+		pl.againstWall(ctx, "shelf", 112, 36);
+		return true;
+	}
+	if (bt === 18) {
+		// electronics: wall shelves, a display table in the middle, the till by the door
+		pl.againstWall(ctx, "shelf", 180, 36, "K");
+		pl.againstWall(ctx, "shelf", 140, 36);
+		pl.island(ctx, "display", 150, 44, true, 0, 30);
+		pl.againstWall(ctx, "checkout", 112, 52, "L");
+		return true;
+	}
+	if (bt === 19) {
+		// bakery: the pastry case across the shop, bread shelves behind it
+		pl.island(ctx, "display", 180, 44, true, 0, -20);
+		pl.againstWall(ctx, "shelf", 160, 36, "K");
+		pl.againstWall(ctx, "checkout", 96, 44, "L");
+		return true;
+	}
+	if (bt === 20) {
+		// pawn shop: glass cases, the shelves of what was pawned, the counter
+		pl.island(ctx, "display", 140, 44, true, -90, 10);
+		pl.island(ctx, "display", 140, 44, true, 90, 10);
+		pl.againstWall(ctx, "shelf", 160, 36, "K");
+		pl.againstWall(ctx, "checkout", 96, 44, "L");
+		return true;
+	}
+	if (bt === 21) {
+		// post office: the counter across the back, the wall of P.O. boxes
+		pl.againstWall(ctx, "counter", 200, 44, "K");
+		pl.againstWall(ctx, "shelf", 160, 36);
+		pl.againstWall(ctx, "bench", 112, 36);
+		return true;
+	}
+	return false;
+}
+
 function furnish(pl: Planner, ctx: RoomCtx, bt: number): void {
+	if (furnishTown(pl, ctx, bt)) return;
 	const k = ctx.kind;
 	const rng = pl.rng;
 	if (k === "living") {
@@ -3336,6 +3741,8 @@ function decorate(pl: Planner, ctx: RoomCtx): void {
 	if (bt >= 12 && bt <= 15 && (k === "foyer" || k === "corridor" || k === "common")) {
 		noticeBoard(pl, ctx);
 	}
+	// the town hall's (EDI-19): the meeting's agenda and the town's notices, in the lobby and the meeting hall
+	if (bt === 23 && (k === "lobby" || k === "meeting")) noticeBoard(pl, ctx);
 	// chairs round every table and desk (flat, EDI-12: a chair is clutter, not a wall), a few knocked over
 	for (const p of pl.pieces) {
 		if (p.room !== ctx.id) continue;
@@ -3362,8 +3769,9 @@ function decorate(pl: Planner, ctx: RoomCtx): void {
 			pl.decorAt(down ? "chairDown" : "chair", u, v, 26, 26, down ? rng.next() * 1.4 : 0);
 		}
 	}
-	// a few days after the outbreak (APO-01): dried blood in some rooms
-	if (rng.chance(0.22)) {
+	// a few days after the outbreak (APO-01): dried blood in some rooms -- never in the bank's vault, shut since the
+	// town fell (EDI-24)
+	if (rng.chance(0.22) && k !== "vault") {
 		pl.decorAt(
 			"blood",
 			cu + (rng.next() - 0.5) * w * 0.5,
@@ -3443,17 +3851,14 @@ export function planBuilding(inp: PlanInput): BuildingPlan {
 	pl.cutWindows();
 	pl.removePockets();
 	for (let id = 0; id < pl.kinds.size(); id++) decorate(pl, pl.roomCtx(id));
-	// broken glass inside some windows (APO-01): the zombies came through here
+	// a few days after the outbreak (APO-01, EDI-18): a share of the windows is already broken -- the storefronts
+	// looted, the zombies come through -- and the rest still has its glass. One draw per window, as the glass decal it
+	// replaces took (the plan's stream, and so everything after it, is the one it always was); the shards are drawn
+	// from the window's state now, on both sides of the sill (client/view/interiorView.ts), for a pane broken later too
+	const share = brokenShare(inp.type);
 	for (const o of pl.openings) {
-		if (o.kind !== "window" || !rng.chance(0.35)) continue;
-		const b = o.band;
-		const cu = (b.u0 + b.u1) / 2;
-		const cv = (b.v0 + b.v1) / 2;
-		const off = 22;
-		if (o.out === "F") pl.decorAt("glass", cu, b.v1 + off, 60, 28, 0);
-		else if (o.out === "K") pl.decorAt("glass", cu, b.v0 - off, 60, 28, 0);
-		else if (o.out === "L") pl.decorAt("glass", b.u1 + off, cv, 28, 60, 0);
-		else pl.decorAt("glass", b.u0 - off, cv, 28, 60, 0);
+		if (o.kind !== "window") continue;
+		o.broken = rng.chance(share);
 	}
 	// loot spots: in front of the pieces that hold the loot, one per room at most, up to three
 	const taken: Array<number> = [];
@@ -3490,7 +3895,9 @@ export function planBuilding(inp: PlanInput): BuildingPlan {
 	for (const w of pl.walls) out.walls.push({ ...f.rect(w.r), inner: w.inner });
 	for (const o of pl.openings) {
 		const side = o.out !== undefined ? f.world(o.out) : f.world(o.alongU ? "F" : "L");
-		out.openings.push({ ...f.rect(o.band), kind: o.kind, side, main: o.main });
+		const opening: Opening = { ...f.rect(o.band), kind: o.kind, side, main: o.main };
+		if (o.kind === "window") opening.broken = o.broken === true;
+		out.openings.push(opening);
 		if (o.main) {
 			const r = f.rect(o.band);
 			out.doorX = r.x + r.w / 2;

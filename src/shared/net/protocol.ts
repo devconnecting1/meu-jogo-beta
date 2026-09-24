@@ -134,6 +134,31 @@
  *     direction -- a kill, a bite the simulation gave no angle --, and its angle byte (still sent, 0) means nothing:
  *     the client sprays it all round. No byte more. Before, "no direction" travelled as angle 0 and every such spray
  *     and stain went to +x. `BloodKind.Green` is now `BloodKind.Horde` (same value, 1): the horde bleeds dark red.
+ * 23. (EDI-18, the window glass) No new message and no byte more.
+ *       - S→C: a window's glass breaking is the `DoorSet` every door already takes, with the window's STATIC id and
+ *         `state` = Open (the open frame: shared/game/windows.ts); GLOBAL like a door's, since it changes everybody's
+ *         collision and prediction, and at most WINDOW_BREAKS_PER_TICK a tick whoever broke them. Glass only ever
+ *         breaks, so a newcomer's WorldInit carries a DoorSet only for the windows broken SINCE the town was
+ *         generated (one born broken comes from the seed); the client's mirror lays each one on its copy of the town
+ *         and a reset of the mirror puts the generated glass back. `DoorSet` with Open cleared on a window that had
+ *         glass puts it back (nothing sends that today); on one born broken, or on anything that is neither a door nor
+ *         a window, it is ignored as before. A pane broken in the tick a survivor is welcomed goes out in that tick's
+ *         broadcast first -- which the newcomer drops, being before its InitBegin -- and is repeated after the welcome,
+ *         at the end of its own batch after its WorldInit, with every other global change of the town's state in that
+ *         broadcast (SolidAdd, SolidRemove, DoorSet, SolidHp, LightSet, PowerSet: all idempotent; server/net/
+ *         replication.ts `flushWorld`). The crash is the `Debris` Fx with the material "glass", appended as wire
+ *         id 6 (fxWire.ts `GLASS_DEBRIS`): an older client reads an unknown material as "impact". It is heard in
+ *         range but, unlike a thud or a hit, not held back by the sight filter (MP-07): the DoorSet already told
+ *         everybody that pane broke. A zombie's blows on the glass are the "structure" debris of a blow on a
+ *         barricade, sight-filtered as before.
+ *       - C→S: breaking glass with E is an EXPLICIT intent, `HeldBit.Glass` (8) on the command that carries the
+ *         ActionPress edge -- set only when the client's hint was the window (client/systems/interaction.ts, the
+ *         edge and the bit travel together through client/net/commands.ts). HELD_MASK becomes 15: a bit above it is
+ *         still malformed. The server breaks a pane only on a press with the bit, and a press with it does nothing
+ *         else (server/sim/interaction.ts `act`): E meant for an item, a search, a door or a repair never smashes
+ *         glass, whatever the server's own query finds; E meant for the glass never picks something up, nor gets on a
+ *         vehicle parked in reach (server/sim/simulation.ts `stepWorldActions`), instead. The bit follows its edge
+ *         when a dropped command's edges are carried on (server/sim/players.ts `carryEdges`).
  * 24. (UI-13 / BEM-04 / BEM-08, the death screen teaches, the dawn card's break line) No new message and no byte more
  *     per event: two more AnnounceKinds, both S→C only, reliable and DIRECTED (`queueFor(slot)`, like TitleUnlocked):
  *       - `Died` (7), whose `arg` is the cause of this survivor's death, read by the server off the lethal damage
@@ -262,9 +287,15 @@ export const HeldBit = {
 	Attack: 1,
 	Action: 2,
 	SniperAim: 4,
+	/**
+	 * (EDI-18, note 23) This command's E press is meant for a window's GLASS: the client's hint named the window. The
+	 * server breaks a pane only on a press with this bit, and a press with it does nothing else: an E meant for an
+	 * item, a search or a door never smashes glass, and one meant for the glass never picks something up instead.
+	 */
+	Glass: 8,
 } as const;
 /** meaningful `held` bits; the others are reserved and must be 0 */
-export const HELD_MASK = 7;
+export const HELD_MASK = 15;
 
 /** bit offset of each 2-bit counter in `edges` (0..3 per tick) */
 export const EdgeShift = {

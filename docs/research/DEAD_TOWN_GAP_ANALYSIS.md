@@ -1,4 +1,4 @@
-# Dead Town × Project Z — análise de lacunas e recomendações
+# Dead Town × Last Town — análise de lacunas e recomendações
 
 Pedido do dono (2026-09-24): "verifica tudo no jogo original Dead Town e verifica se há algo que podemos tornar o nosso
 melhor, e recomendações e entre outros que faça sentido pro nosso." Base: `main` em `915d3f0`.
@@ -272,7 +272,7 @@ Esforço (a mesma unidade de `docs/MULTIPLAYER.md` §11): **S** ≤ 1 agente-dia
 | Aspecto | Original                                       | Nosso                                                                                                                   | V   |
 | ------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | --- |
 | Save    | Arquivo local, autosave de 5 s [repo]          | DataStore com trava de sessão, migrações v2→v6, RTBF (MULTIPLAYER §6) [repo]                                            | ✅  |
-| Línguas | EN, KR, CN, JP escritos à mão [repo `lang.ts`] | Inglês + tradução **automática** do Roblox; `OVERRIDES` vazio, CSV só com a fonte (`design/locale/ProjectZ.csv`) [repo] | ⚠️  |
+| Línguas | EN, KR, CN, JP escritos à mão [repo `lang.ts`] | Inglês + tradução **automática** do Roblox; `OVERRIDES` vazio, CSV só com a fonte (`design/locale/LastTown.csv`) [repo] | ⚠️  |
 
 ---
 

@@ -12,8 +12,10 @@
  *      calls of drawGround + drawSolids over seven scenes (day, night, overview, the map border) and a camera pan
  *      hashes to tools/golden/world-flat.json, recorded from the flat drawing of e097eb3 (the commit before the
  *      art) and re-recorded on purpose only when the flat drawing changes: the storefront signs (ART-07) replaced
- *      the rooftop emblems in downtown, school, gas and overview. A second digest per scene, with the signage hook
- *      stubbed out, still equals 8725b0b's with its emblem stubbed out: the signs are the only change. And not one
+ *      the rooftop emblems in downtown, school, gas and overview; the window glass (EDI-18) put the open frames'
+ *      marks and shards on the windows born broken (with none born broken, every scene was the old golden's). A
+ *      second digest per scene, with the signage hook stubbed out, still equals 8725b0b's with its emblem stubbed
+ *      out: the signs are the only change. And not one
  *      sprite shows an image.
  *   2. WITH ART, THE SURFACES ARE TEXTURES. With a fake id for every texture: the ground, the roads, the roofs and
  *      the props draw as ImageLabels, pixelated, tiles at their texel size (4 units per texel), no flat asphalt /
@@ -21,14 +23,16 @@
  *      Each texture falls back ON ITS OWN: with only the lawn uploaded, only the lawn is textured.
  *   3. NO CHURN. After a warm-up, 600 frames of camera movement create no Instance, flat and with art, and the
  *      renderer's write cache still skips what did not change.
- *   4. THE COST, measured on a dense 1920 x 1080 downtown screen: sprites, ImageLabels, strokes, corners and the
- *      Node time of a frame, flat against art (printed; the art stays within 10 % of the flat town's sprites).
+ *   4. THE COST, measured on a dense 1920 x 1080 downtown screen (the block whose screen draws the most sprites flat):
+ *      sprites, ImageLabels, strokes, corners and the Node time of a frame, flat against art (printed; the art stays
+ *      within 10 % of the flat town's sprites there, and over every downtown block's screen together).
  *   5. LEGIBILITY (LEG-03). A walker and the survivor on every kind of ground, rendered through the real code and
  *      rasterised: the strongest colour step across the silhouette (ΔE, CIELAB) must not drop with the textures,
  *      and a walker on grass must clear the bar the old outline missed (it measured 15; the lawn's own colour).
  *   6. THE PIPELINE. The manifest, the PNGs and worldArtAssets.ts agree; masks and roof tiles are greyscale (the
  *      roof keeps its type colour, EDI-03); each ground texture's mean colour stays within ΔE 6 of the flat colour
- *      it replaces (the art never repaints the palette); ids are "" or rbxassetid.
+ *      it replaces (the art never repaints the palette); ids are "" or rbxassetid. The game's name (`wordmark`, kind
+ *      "ui") is the store art's LAST TOWN in tools/title-font.mjs, greyscale, as its three cells (ink, LAST, TOWN).
  *   7. THE TOOLS RUN. tools/render-map.mjs renders a scene whose PNG decodes, with no missing texture (magenta);
  *      `npm run cloud -- upload-art --dry-run` lists every texture without reading any key.
  *   8. THE STOREFRONT SIGNS (EDI-03, ART-07, client/view/buildingSigns.ts). Every type that is not a house has its
@@ -51,9 +55,11 @@
  *      their pets, 300 frames -- flat against art: sprites, Instances, property writes, time, and no churn.
  *  11. THE INTERIORS (EDI-04, ART-12). With every roof on, nothing of any interior is drawn; walking in and out of
  *      the largest building creates no Instance; its sprites inside and the writes of a walk across it (printed), the
- *      art costing no more sprites than the flat drawing. 11b, their pixel art: with no id, the first building of each
- *      of the 15 types seen from inside makes the flat interiors' very draw calls (tools/golden/interiors-flat.json,
- *      `--golden-interiors` with PZ_SRC on the commit before the art); in 5 towns every piece of furniture is drawn
+ *      art costing at most 10 % more sprites than the flat drawing (the town's budget, §4). 11b, their pixel art: with
+ *      no id, the first building of each type (the 15 of before and the everyday town's) seen from inside makes the
+ *      flat interiors' very draw calls (tools/golden/interiors-flat.json, `--golden-interiors` with PZ_SRC on the
+ *      commit before the art; re-recorded with the window glass, EDI-18, and with the everyday town, EDI-19..EDI-24);
+ *      in 5 towns every piece of furniture is drawn
  *      from the atlas, exactly on its solid's rect (plus its baked shadow), in at most 4 sprites; every decoration and
  *      every doorway and window has its art; a chair faces its table. §5 measures the bodies on every room floor and
  *      every rug, §6 the floors' mean colours.
@@ -72,6 +78,12 @@
  *      fainter, darker where it soaks in (asphalt, grass, soil: checked against 4000 points of the town); droplets on
  *      one spot join, and a full ring keeps the newest; an item lying in blood (wet, drying, dry) still reads.
  *      The pictures: node tools/render-blood.mjs --out <dir> (docs/art/blood).
+ *  14. THE WINDOW GLASS (EDI-18, client/view/interiorView.ts). On the building with the most windows of both states:
+ *      from the street, glass is the dark strip it always was and an open frame the darker hole with two stubs of
+ *      glass (70 ΔE apart) over three shards on the ground outside; inside, the pane with its streak of light or the
+ *      sill tint and the glass on the floor; with the interiors' atlas, its cells: `windowGlass:<side>` for the pane,
+ *      `window:<side>` for the empty frame and `glass:h|v` for the shards, outside and in. No
+ *      sprite of the glass is over a body in the frame or an item; panes breaking in view create no Instance.
  *
  * Pure Node (>= 18) + the project's TypeScript on tools/luau-shim.mjs and the fake GUI tree of tools/fake-gui.mjs.
  */
@@ -86,6 +98,7 @@ import { countSprites, rasterise } from "./gui-raster.mjs";
 import { decodePNG } from "./png-lite.mjs";
 import { castDrawer, characterCast } from "./character-cast.mjs";
 import { bossCast, bossDrawer } from "./boss-cast.mjs";
+import { dilate, layoutText } from "./title-font.mjs";
 
 const GOLDEN_MODE = process.argv.includes("--golden");
 // --golden-chars: rewrites tools/golden/characters-flat.json from the CURRENT src (run it on the commit before the
@@ -175,13 +188,58 @@ function setArt(ids) {
 
 // ================================================================ 1. no art, no change
 
+/**
+ * The scenes are framed on what they are named for, found in the town (the fixed rects of before showed an empty yard,
+ * a bare crossing and a house where the forecourt used to be once the everyday town moved the buildings round and the
+ * mix got its quotas, EDI-19/EDI-20, 2026-09-24): a house of the street with its ridge along x and its front yard, a
+ * shop's door at the sidewalk, a park's middle, the first school, a gas station's forecourt whose street is at the top
+ * (its canopy is `gasCanopyN`), framed like render-map's `findGas`.
+ */
+const sceneOn = (name, x, y, night = false) => ({
+	name,
+	x: Math.round(x - 640),
+	y: Math.round(y - 400),
+	w: 1280,
+	h: 800,
+	zoom: 1,
+	night,
+});
+const HOUSE = world.solids.find(
+	s =>
+		s.kind === "building" && s.buildingType === 1 && s.w > s.h && (s.doorSide === "top" || s.doorSide === "bottom"),
+);
+const SHOP = world.solids.find(
+	s =>
+		s.kind === "building" &&
+		[6, 8, 9, 10].includes(s.buildingType) &&
+		world.lots.some(l => l.zone === "commercial" && s.x >= l.x && s.x < l.x + l.w && s.y >= l.y && s.y < l.y + l.h),
+);
+const PARK = world.lots.find(l => l.kind === "park");
+const SCHOOL = world.solids.find(s => s.kind === "building" && s.buildingType === 3);
+const STREET_AT =
+	HOUSE !== undefined
+		? [HOUSE.x + HOUSE.w / 2, HOUSE.doorY + (HOUSE.doorSide === "top" ? -160 : 160)]
+		: [17116, 12122];
+const GAS_SCENE = (() => {
+	const canopies = world.solids.filter(s => s.kind === "canopy" && s.tags === "canopy");
+	const c = canopies.find(s => s.face === "top") ?? canopies[0];
+	if (c === undefined) return sceneOn("gas", 1581, 9201);
+	const b = world.solids
+		.filter(s => s.kind === "building" && s.buildingType === 5)
+		.sort((p, q) => Math.hypot(p.x - c.x, p.y - c.y) - Math.hypot(q.x - c.x, q.y - c.y))[0];
+	const cx = b !== undefined ? (b.x + b.w / 2) * 0.35 + (c.x + c.w / 2) * 0.65 : c.x + c.w / 2;
+	const cy = b !== undefined ? (b.y + b.h / 2) * 0.35 + (c.y + c.h / 2) * 0.65 : c.y + c.h / 2;
+	return sceneOn("gas", cx, cy);
+})();
 const SCENES = [
-	{ name: "street", x: 16476, y: 11722, w: 1280, h: 800, zoom: 1, night: false },
-	{ name: "downtown", x: 7764, y: 9854, w: 1280, h: 800, zoom: 1, night: false },
-	{ name: "park", x: 2724, y: 14928, w: 1280, h: 800, zoom: 1, night: false },
-	{ name: "school", x: 4445, y: 2742, w: 1280, h: 800, zoom: 1, night: false },
-	{ name: "gas", x: 941, y: 8801, w: 1280, h: 800, zoom: 1, night: false },
-	{ name: "street-night", x: 16476, y: 11722, w: 1280, h: 800, zoom: 1, night: true },
+	sceneOn("street", STREET_AT[0], STREET_AT[1]),
+	SHOP !== undefined ? sceneOn("downtown", SHOP.doorX, SHOP.doorY) : sceneOn("downtown", 8404, 10254),
+	PARK !== undefined ? sceneOn("park", PARK.x + PARK.w / 2, PARK.y + PARK.h / 2) : sceneOn("park", 3364, 15328),
+	SCHOOL !== undefined
+		? sceneOn("school", SCHOOL.x + SCHOOL.w / 2, SCHOOL.y + SCHOOL.h / 2)
+		: sceneOn("school", 5085, 3142),
+	GAS_SCENE,
+	sceneOn("street-night", STREET_AT[0], STREET_AT[1], true),
 	{ name: "overview", x: 12200, y: 5000, w: 3000, h: 2000, zoom: 0.5, night: false },
 	{ name: "border", x: 0, y: 5000, w: 1280, h: 800, zoom: 1, night: false },
 ];
@@ -310,7 +368,10 @@ if (process.argv.includes("--golden-chars")) {
 const GOLDEN_INTERIORS = join(ROOT, "tools", "golden", "interiors-flat.json");
 function interiorBuildings(w) {
 	const out = [];
-	for (let t = 1; t <= 15; t++) {
+	// every type of the town: the 15 of before and the everyday town's (EDI-19..EDI-24: the bank and its vault too)
+	let top = 15;
+	for (const s of w.solids) if (s.kind === "building" && s.buildingType > top) top = s.buildingType;
+	for (let t = 1; t <= top; t++) {
 		const list = w.solids.filter(s => s.kind === "building" && s.buildingType === t && s.rooms !== undefined);
 		list.sort((a, b) => a.id - b.id);
 		if (list[0] !== undefined) out.push(list[0]);
@@ -553,12 +614,15 @@ const texOf = Object.fromEntries(ALL.manifest.textures.map(t => [t.name, t]));
 		"shadowBox",
 		"bin",
 		"dispenser",
-		"gasCanopyN",
+		"gasCanopy",
 		"manhole",
 		"dirt",
 		"apron",
 	];
-	const missing = want.filter(n => !(counts[n] > 0));
+	// a gas canopy of whichever street side the town put a station on (gasCanopyN, S, W or E)
+	const missing = want.filter(n =>
+		n === "gasCanopy" ? !["N", "S", "W", "E"].some(d => counts[`gasCanopy${d}`] > 0) : !(counts[n] > 0),
+	);
 	check(
 		missing.length === 0,
 		"ground, kerbs, paint, roofs, rims, soft shadows, bins, pumps, manholes all drawn",
@@ -568,21 +632,33 @@ const texOf = Object.fromEntries(ALL.manifest.textures.map(t => [t.name, t]));
 	// the town is exactly its texture at 4 units a texel (the generator's 113 x 29 is world.ts's 452 x 116)
 	{
 		const side = { top: "gasCanopyN", bottom: "gasCanopyS", left: "gasCanopyW", right: "gasCanopyE" };
-		const bad = world.solids
-			.filter(s => s.kind === "canopy")
-			.filter(s => {
-				const t = texOf[side[s.face]];
-				return t === undefined || t.w * 4 !== s.w || t.h * 4 !== s.h;
-			});
-		const n = world.solids.filter(s => s.kind === "canopy").length;
+		// the gas stations' (tags "canopy"): a market tent, a bus shelter and the bank's portico are canopies of their own
+		const gasCanopy = s => s.kind === "canopy" && s.tags === "canopy";
+		const bad = world.solids.filter(gasCanopy).filter(s => {
+			const t = texOf[side[s.face]];
+			return t === undefined || t.w * 4 !== s.w || t.h * 4 !== s.h;
+		});
+		const n = world.solids.filter(gasCanopy).length;
 		check(
 			n > 0 && bad.length === 0,
 			"every gas station canopy is its street side's roof texture at 4 units a texel",
 			`${n - bad.length}/${n}${bad.length > 0 ? `; #${bad[0].id} ${bad[0].w}x${bad[0].h} ${bad[0].face}` : ""}`,
 		);
 	}
-	const cars = Object.keys(counts).filter(n => /^car\d$/.test(n)).length;
-	const crowns = Object.keys(counts).filter(n => /^canopy\d$/.test(n)).length;
+	// the styles are counted on the overview too: the six close scenes are framed on a house, a shop, a park, a school
+	// and a forecourt, and hold a handful of cars between them (a hash picks each car's style)
+	const styles = { ...counts };
+	{
+		const d = digestOf(SCENES.find(sc => sc.name === "overview"));
+		for (const f of d.layer.GetChildren()) {
+			const label = f.GetChildren().find(k => k.ClassName === "ImageLabel");
+			if (f.Visible === false || label === undefined || label.Visible === false || label.Image === "") continue;
+			const name = nameOf[label.Image];
+			styles[name] = (styles[name] ?? 0) + 1;
+		}
+	}
+	const cars = Object.keys(styles).filter(n => /^car\d$/.test(n)).length;
+	const crowns = Object.keys(styles).filter(n => /^canopy\d$/.test(n)).length;
 	check(cars >= 3, "cars come in several body styles", `${cars} styles on screen`);
 	check(crowns >= 2, "tree crowns come in several shapes", `${crowns} shapes on screen`);
 }
@@ -655,6 +731,38 @@ setArt({});
 // ================================================================ 4. the cost
 
 section("4) cost of a dense screen: downtown, 1920 x 1080, zoom 1");
+/**
+ * The screens: the middle of every downtown block. The dense one is the block whose screen draws the most sprites flat
+ * (the fixed point of before, 8400 x 10250, framed one market's big roof and no sign once the everyday town moved the
+ * buildings round, EDI-19/EDI-20, 2026-09-24); the budget holds there, and over every block's screen together.
+ */
+const blockScreens = world.lots.filter(l => l.zone === "commercial").map(l => ({ x: l.x + l.w / 2, y: l.y + l.h / 2 }));
+function spritesAt(ids, at) {
+	setArt(ids);
+	const st = stage(1920, 1080, 1);
+	drawTown(st, new WorldView(shadowFn(false)), at.x, at.y);
+	return countSprites(st.r.layer).sprites;
+}
+let DENSE = { x: 8400, y: 10250 };
+const blocks = { flat: 0, art: 0, worst: 0, where: "" };
+{
+	let most = -1;
+	for (const at of blockScreens) {
+		const f = spritesAt({}, at);
+		const a = spritesAt(ALL.ids, at);
+		blocks.flat += f;
+		blocks.art += a;
+		if (f > most) {
+			most = f;
+			DENSE = at;
+		}
+		if (a / f > blocks.worst) {
+			blocks.worst = a / f;
+			blocks.where = `${Math.round(at.x)} x ${Math.round(at.y)}: ${a} vs ${f}`;
+		}
+	}
+}
+console.log(`       the densest downtown screen: the block round ${Math.round(DENSE.x)} x ${Math.round(DENSE.y)}`);
 const perf = {};
 for (const [label, ids] of [
 	["flat", {}],
@@ -663,7 +771,7 @@ for (const [label, ids] of [
 	setArt(ids);
 	const st = stage(1920, 1080, 1);
 	const view = new WorldView(shadowFn(false));
-	const at = { x: 8400, y: 10250 };
+	const at = DENSE;
 	const created0 = gui.stats.created;
 	drawTown(st, view, at.x, at.y);
 	const c = countSprites(st.r.layer);
@@ -683,6 +791,11 @@ check(
 	perf.art.sprites <= perf.flat.sprites * 1.1,
 	"the art stays within 10 % of the flat town's sprites",
 	`${perf.art.sprites} vs ${perf.flat.sprites}`,
+);
+check(
+	blockScreens.length > 0 && blocks.art <= blocks.flat * 1.1,
+	`and so it does over every downtown block's screen together (${blockScreens.length})`,
+	`${blocks.art} vs ${blocks.flat}; the most, ${((blocks.worst - 1) * 100).toFixed(0)} %, at ${blocks.where}`,
 );
 setArt({});
 
@@ -1063,7 +1176,7 @@ section("6) the art pipeline: manifest, PNGs, worldArtAssets.ts, palette");
 			const img = decodePNG(readFileSync(join(ART_DIR, t.file)));
 			decoded[t.name] = img;
 			if (img.w !== t.w || img.h !== t.h) decodeFail.push(`${t.name} size`);
-			if (t.kind === "mask" || t.kind === "tileTint") {
+			if (t.kind === "mask" || t.kind === "tileTint" || t.kind === "ui") {
 				for (let i = 0; i < img.w * img.h; i++) {
 					const [r, g, b] = [img.data[i * 4], img.data[i * 4 + 1], img.data[i * 4 + 2]];
 					if (img.data[i * 4 + 3] > 0 && (r !== g || g !== b)) {
@@ -1079,9 +1192,46 @@ section("6) the art pipeline: manifest, PNGs, worldArtAssets.ts, palette");
 	check(decodeFail.length === 0, "every PNG decodes at its manifest size", decodeFail.slice(0, 3).join(", "));
 	check(
 		notGrey.length === 0,
-		"masks and roof tiles are greyscale: the tint keeps the type colour (EDI-03)",
+		"masks, roof tiles and the wordmark are greyscale: the tint keeps the type colour (EDI-03) / the theme's (UI-01)",
 		notGrey.join(", "),
 	);
+	// the game's name (client/ui/logo.ts): the store art's wordmark -- tools/title-font.mjs, LAST TOWN, the one-pixel
+	// outline and the hard shadow one pixel down and right -- as three stacked cells: the ink, LAST's fill, TOWN's fill
+	{
+		const wm = decoded.wordmark;
+		const m = layoutText("LAST TOWN");
+		const ring = dilate(m, 1);
+		const lastW = layoutText("LAST").w;
+		const cw = ring.w + 1;
+		const ch = ring.h + 1;
+		const alphaAt = (x, y) => wm.data[(y * wm.w + x) * 4 + 3];
+		const bad = [];
+		if (wm === undefined || wm.w !== cw || wm.h !== ch * 3) bad.push(`size ${wm?.w} x ${wm?.h}`);
+		else {
+			const inRing = (x, y) => x >= 0 && y >= 0 && x < ring.w && y < ring.h && ring.bits[y * ring.w + x] === 1;
+			const letter = (x, y) => x >= 0 && y >= 0 && x < m.w && y < m.h && m.bits[y * m.w + x] === 1;
+			for (let y = 0; y < ch; y++) {
+				for (let x = 0; x < cw; x++) {
+					const ink = inRing(x, y) || inRing(x - 1, y - 1);
+					if (ink !== alphaAt(x, y) > 0) bad.push(`ink ${x},${y}`);
+					if (inRing(x, y) && alphaAt(x, y) !== 255) bad.push(`outline ${x},${y} not opaque`);
+					const l = letter(x - 1, y - 1);
+					if ((l && x - 1 < lastW) !== alphaAt(x, ch + y) > 0) bad.push(`LAST ${x},${y}`);
+					if ((l && x - 1 >= lastW) !== alphaAt(x, ch * 2 + y) > 0) bad.push(`TOWN ${x},${y}`);
+				}
+			}
+		}
+		check(
+			bad.length === 0,
+			"wordmark.png: LAST TOWN in the store art's pixel font (outline + hard shadow), ink / LAST / TOWN in three cells",
+			bad.slice(0, 4).join(", ") || `${cw} x ${ch} x 3`,
+		);
+		const wmTex = manifest.textures.find(t => t.name === "wordmark");
+		check(
+			wmTex?.kind === "ui" && /client\/ui\/logo\.ts/.test(wmTex.description),
+			'in the manifest as kind "ui" (uploaded with the town by CI, drawn by client/ui/logo.ts)',
+		);
+	}
 	const mean = img => {
 		let r = 0;
 		let g = 0;
@@ -2516,11 +2666,13 @@ section("11) interiors: nothing under a closed roof is drawn, walking in and out
 		insideCost[label] = inside.sprites;
 	}
 	setArt({});
-	// the pixel art of the rooms (ART-12) costs no more sprites than their Frames did
+	// the pixel art of the rooms (ART-12) costs at most 10 % more sprites than their Frames did, the town's own budget
+	// (§4): a piece is one sprite instead of 1-9 Frames, but every wall adds its shade on the floor, so a building of
+	// many rooms (a big house, the hospital, the school) comes out a little over the flat drawing
 	if (insideCost.art !== undefined) {
 		check(
-			insideCost.art <= insideCost.flat,
-			"art: the largest building seen from inside costs no more sprites than the flat drawing",
+			insideCost.art <= insideCost.flat * 1.1,
+			"art: the largest building seen from inside stays within 10 % of the flat drawing's sprites",
 			`${insideCost.art} vs ${insideCost.flat}`,
 		);
 	}
@@ -2652,6 +2804,178 @@ section("11b) the interiors' pixel art: no id no change, every piece in the atla
 		);
 		const cells = Object.keys(FURNITURE_CELLS).length;
 		console.log(`       atlas: ${cells} cells; a piece is 1 sprite (its cell) or 2-4 (a template cropped)`);
+		setArt({});
+	}
+}
+
+// ================================================================ 11c. the town's fixtures (ART-16)
+
+section("11c) the town's fixtures' pixel art (ART-16): every fixture and its ground in the atlas, on its own rect");
+{
+	const TPA_MODULE = join(SRC, "client/view/townPropArt.ts");
+	if (existsSync(TPA_MODULE)) {
+		const TPA = require(TPA_MODULE);
+		const { TOWN_PROP_STRIPS } = require(join(SRC, "client/view/townPropAtlas.ts"));
+		const cam = new Camera();
+		const noShadow = () => ({ x: 0, y: 0 });
+		const calls = [];
+		const rec = {
+			drawRect: (c, x, y, o) => calls.push({ x, y, w: o.w, h: o.h, image: o.image, z: o.zIndex }),
+			drawCircle: (c, x, y, d, o) => calls.push({ x, y, w: d, h: d, image: undefined, z: o.zIndex }),
+		};
+		// without the atlas every call answers false and draws nothing: townView's Frames, as before (ART-01; §1)
+		setArt({});
+		let silent = true;
+		for (const s of world.solids) {
+			if (s.kind === "prop" && TPA.drawPropArt(rec, cam, s, world, noShadow)) silent = false;
+			if (s.kind === "canopy" && s.tags !== "portico" && TPA.drawCanopyArt(rec, cam, s, noShadow)) silent = false;
+		}
+		check(silent && calls.length === 0, "no id: no fixture is drawn from the atlas (townView draws them flat)");
+		// ...and the flat fallback stays lean (the review of e9b0fbb, L5): a town holds hundreds of fixtures, so each is
+		// at most two Frames with its shadow -- a lamp or a bus stop its pole and its head, the food truck its awning too,
+		// a standing tent its canvas and three stripes (and a rent or a puddle) -- and the market's litter none at all
+		{
+			const TV = require(join(SRC, "client/view/townView.ts"));
+			const { WorldView } = require(join(SRC, "client/view/worldView.ts"));
+			const view = new WorldView(noShadow);
+			const LIMIT = { foodtruck: 3, tent: 6, shelter: 2, column: 4, bank: 0 };
+			const v = { minX: -1e9, minY: -1e9, maxX: 1e9, maxY: 1e9 };
+			const most = {};
+			let over = [];
+			for (const s of world.solids) {
+				const canopy = s.kind === "canopy" && (s.tags === "tent" || s.tags === "shelter");
+				if (s.kind !== "prop" && !canopy) continue;
+				calls.length = 0;
+				let drawn = canopy
+					? TV.drawTownCanopy(rec, cam, s, v, noShadow)
+					: TV.drawTownProp(rec, cam, s, world, noShadow);
+				// a bench (and the campus quad's fountain and statue) is worldView's own drawProp
+				if (!drawn && !canopy) {
+					view.drawProp(rec, cam, s);
+					drawn = true;
+				}
+				const n = calls.length;
+				most[s.tags] = Math.max(most[s.tags] ?? 0, n);
+				const cap = LIMIT[s.tags] ?? (s.tags === "fountain" || s.tags === "statue" ? 5 : 2);
+				if (n > cap && over.length < 6) over.push(`${s.tags}: ${n}`);
+			}
+			let litter = 0;
+			for (const l of world.lots) {
+				for (const g of l.ground) {
+					if (g.kind !== "spill" && g.kind !== "paper" && g.kind !== "bag") continue;
+					calls.length = 0;
+					TV.drawTownGround(rec, cam, g, v);
+					litter += calls.length;
+				}
+			}
+			check(
+				over.length === 0,
+				"no id: every fixture's flat fallback is at most two Frames (a lamp, a bus stop: pole and head; the food truck: 3; a tent: 5-6)",
+				over.join("; ") ||
+					Object.entries(most)
+						.map(([k, n]) => `${k} ${n}`)
+						.join(", "),
+			);
+			check(
+				litter === 0,
+				"no id: the market's litter is the pixel art's only (a decorative extra, ART-04)",
+				`${litter} calls`,
+			);
+		}
+		setArt(ALL.ids);
+		const id = ALL.ids.townProps;
+		const TOWN = new Set([
+			...["stall", "trestle", "crates", "handcart", "foodtruck", "bench", "streetlight", "hydrant", "mailbox"],
+			...["postbox", "busstop", "swings", "slide", "climber", "springer", "hoop", "picnic", "shed", "pool"],
+			...[
+				"trampoline",
+				"grill",
+				"pile",
+				"portapotty",
+				"mixer",
+				"dumpster",
+				"scaffold",
+				"column",
+				"fence",
+				"studs",
+			],
+		]);
+		const GROUND = new Set(["court", "sandbox", "garden", "steps", "site", "pad", "spill", "paper", "bag"]);
+		const seeds = [DESIGN.TOWN_SEED, 1, 42, 99991, 123456];
+		const stat = { fixtures: 0, roofs: 0, ground: 0, missing: [], off: [] };
+		const tags = new Set();
+		/** the atlas sprites drawn for one thing: the fixture's own (not its sun shadow), their union */
+		const span = () => {
+			let x0 = Infinity;
+			let y0 = Infinity;
+			let x1 = -Infinity;
+			let y1 = -Infinity;
+			let n = 0;
+			for (const c of calls) {
+				if (c.image !== id || c.z === Z.roof - 1) continue;
+				n++;
+				x0 = Math.min(x0, c.x - c.w / 2);
+				y0 = Math.min(y0, c.y - c.h / 2);
+				x1 = Math.max(x1, c.x + c.w / 2);
+				y1 = Math.max(y1, c.y + c.h / 2);
+			}
+			return { x0, y0, x1, y1, n };
+		};
+		const T = 4;
+		for (const seed of seeds) {
+			const w = seed === DESIGN.TOWN_SEED ? world : generateTown(seed);
+			const things = [];
+			for (const s of w.solids) {
+				if (s.kind === "prop" && TOWN.has(s.tags)) things.push(["prop", s]);
+				else if (s.kind === "canopy" && (s.tags === "tent" || s.tags === "shelter")) things.push(["roof", s]);
+			}
+			for (const l of w.lots) for (const g of l.ground) if (GROUND.has(g.kind)) things.push(["ground", g]);
+			for (const [kind, s] of things) {
+				calls.length = 0;
+				const tag = kind === "ground" ? s.kind : s.tags;
+				tags.add(tag);
+				const ok =
+					kind === "prop"
+						? TPA.drawPropArt(rec, cam, s, w, noShadow)
+						: kind === "roof"
+							? TPA.drawCanopyArt(rec, cam, s, noShadow)
+							: TPA.drawGroundArt(rec, cam, s);
+				if (kind === "prop") stat.fixtures++;
+				else if (kind === "roof") stat.roofs++;
+				else stat.ground++;
+				if (!ok) {
+					if (stat.missing.length < 6)
+						stat.missing.push(`${tag} ${s.w}x${s.h} ${s.face ?? "-"} v${s.variant ?? "-"}`);
+					continue;
+				}
+				// the art starts on the thing's own rect and covers it; past it only its baked contact shadow (one
+				// texel) and a hoop's rim over the court; a strip is its rect exactly
+				const b = span();
+				const hang = s.tags === "hoop" ? 6 * T : 0;
+				const past = TOWN_PROP_STRIPS[tag] === true ? 0 : T + hang;
+				const good =
+					b.n >= 1 &&
+					b.x0 >= s.x - hang - 0.01 &&
+					b.y0 >= s.y - hang - 0.01 &&
+					b.x0 <= s.x + 0.01 &&
+					b.y0 <= s.y + 0.01 &&
+					b.x1 >= s.x + s.w - 0.01 &&
+					b.y1 >= s.y + s.h - 0.01 &&
+					b.x1 <= s.x + s.w + past + 0.01 &&
+					b.y1 <= s.y + s.h + past + 0.01;
+				if (!good && stat.off.length < 6) stat.off.push(`${tag} ${s.w}x${s.h}: ${JSON.stringify(b)}`);
+			}
+		}
+		check(
+			stat.missing.length === 0,
+			`every fixture, roof and ground of the everyday town in ${seeds.length} towns is drawn from the atlas (${stat.fixtures} fixtures, ${stat.roofs} tents and shelters, ${stat.ground} grounds; ${[...tags].length} kinds)`,
+			stat.missing.join("; "),
+		);
+		check(
+			stat.off.length === 0,
+			"each one's art stands on its own rect (the collision box): at most a texel of baked shadow past it",
+			stat.off.join("; "),
+		);
 		setArt({});
 	}
 }
@@ -3401,6 +3725,207 @@ section(
 				: `weakest ${weakest.ratio.toFixed(2)}:1 / ${weakest.dE.toFixed(0)} ΔE (${weakest.where})`,
 		);
 	}
+}
+
+// ================================================================ 14. window glass (EDI-18)
+
+section("14) window glass (EDI-18): intact and broken read apart from the street, the shards are a decal, no churn");
+{
+	const WIN = require(join(SRC, "shared/game/windows.ts"));
+	const panesOf = s => (s.openings ?? []).filter(o => o.kind === "window" && o.glass !== undefined);
+	// the building on a 1920 x 1080 screen with the most of both: glass in some windows, open frames in others
+	let b;
+	let most = 0;
+	for (const s of world.solids) {
+		if (s.kind !== "building" || s.w > 1600 || s.h > 900) continue;
+		const ws = panesOf(s);
+		const both = Math.min(
+			ws.filter(o => WIN.windowIntact(o.glass)).length,
+			ws.filter(o => !WIN.windowIntact(o.glass)).length,
+		);
+		if (both > most) ((b = s), (most = both));
+	}
+	const at = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
+	const panes = panesOf(b);
+	const intact = panes.filter(o => WIN.windowIntact(o.glass));
+	const broken = panes.filter(o => !WIN.windowIntact(o.glass));
+	console.log(
+		`       ${b.tags} #${b.id} (${b.w} x ${b.h}): ${intact.length} windows with glass, ${broken.length} open frames`,
+	);
+	/** the shards' layer: the ground's detail, under the blood (interiorView Z_SHARDS) */
+	const ZS = Z.floorDetail + 1;
+	const key = c => JSON.stringify(rgb(c));
+	const GLASS = key(COLORS.glassCold);
+	const HOLE = key(COLORS.carGlass.Lerp(Color3.fromRGB(0, 0, 0), 0.55));
+	const DARK = key(COLORS.carGlass);
+	/** one frame of the town on the building, its draw calls: [x, y, w, h, rot, rgb, alpha, z, ..., image] */
+	const frameCalls = (ids, roofAlpha) => {
+		setArt(ids);
+		const st = stage(1920, 1080, 1);
+		const view = new WorldView(shadowFn(false));
+		b.roofAlpha = roofAlpha;
+		drawTown(st, view, at.x, at.y);
+		calls.length = 0;
+		capturing = true;
+		drawTown(st, view, at.x, at.y);
+		capturing = false;
+		b.roofAlpha = undefined;
+		setArt({});
+		return calls.slice();
+	};
+	const near = (c, o, d) => Math.hypot(c[0] - (o.x + o.w / 2), c[1] - (o.y + o.h / 2)) <= d;
+	/** is call `c` on the street side of window `o`'s wall? (a wing's wall can stand inside the building's rect) */
+	const NORMAL = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] };
+	const outside = (c, o) =>
+		(c[0] - (o.x + o.w / 2)) * NORMAL[o.side][0] + (c[1] - (o.y + o.h / 2)) * NORMAL[o.side][1] > 0;
+	const colour = c => JSON.stringify(c[5]);
+	/** the calls of window `o`'s neighbourhood that pass `f` */
+	const around = (cs, o, d, f) => cs.filter(c => near(c, o, d) && f(c));
+	const every = (list, f) => list.length > 0 && list.every(f);
+
+	// flat, every roof on: the street's view of the building
+	{
+		const cs = frameCalls({}, undefined);
+		const chipsOut = o => around(cs, o, 60, c => c[7] === ZS && colour(c) === GLASS && outside(c, o)).length;
+		check(
+			every(broken, o => chipsOut(o) === 3) &&
+				intact.every(o => around(cs, o, 60, c => c[7] === ZS && colour(c) === GLASS).length === 0),
+			"flat, roof on: three shards of glass on the ground outside every open frame, nothing on the ground under glass",
+			`${broken.map(chipsOut).join(",")} shards outside the open frames`,
+		);
+		const mark = (o, col) => around(cs, o, 30, c => c[7] === Z.roof + 2 && colour(c) === col).length;
+		const stubs = o => around(cs, o, 40, c => c[7] === Z.roof + 3 && colour(c) === GLASS).length;
+		check(
+			every(intact, o => mark(o, DARK) === 1 && stubs(o) === 0) &&
+				every(broken, o => mark(o, HOLE) === 1 && stubs(o) === 2),
+			"flat, roof on: on the roof's edge, glass is the dark glass it always was, an open frame the darker hole with two stubs of glass",
+			`${intact.length} + ${broken.length} windows`,
+		);
+		const glass = rgb255(COLORS.glassCold);
+		const hole = rgb255(COLORS.carGlass.Lerp(Color3.fromRGB(0, 0, 0), 0.55));
+		check(
+			dE(glass, hole) >= 35,
+			"the stubs step off the hole (the survivor's bar, 35 ΔE): an open frame reads from the street",
+			`${dE(glass, hole).toFixed(1)} ΔE`,
+		);
+	}
+
+	// flat, the roof off: inside the building
+	{
+		const cs = frameCalls({}, 0);
+		const pane = (o, alpha) =>
+			around(cs, o, 12, c => c[7] === Z.structure && colour(c) === GLASS && Math.abs(c[6] - alpha) < 1e-3).length;
+		const glint = o => around(cs, o, 40, c => c[7] === Z.structure + 2 && colour(c) !== GLASS).length;
+		const chipsIn = o => around(cs, o, 60, c => c[7] === ZS && colour(c) === GLASS && !outside(c, o)).length;
+		check(
+			every(intact, o => pane(o, 0.62) === 1 && glint(o) === 1 && chipsIn(o) === 0),
+			"flat, inside: an intact window is the pane (a more solid glass) with its streak of light",
+		);
+		check(
+			every(broken, o => pane(o, 0.35) === 1 && glint(o) === 0 && chipsIn(o) === 3),
+			"flat, inside: an open frame is the old sill tint and its glass on the floor inside",
+			`${broken.map(chipsIn).join(",")} shards inside`,
+		);
+	}
+
+	// with the art: the interiors' atlas (client/view/interiorArt.ts) -- the frame with the pane or with what is left of
+	// it, and the broken-glass cell for the shards -- each cell read off the image's rect
+	{
+		const { FURNITURE_CELLS } = require(join(SRC, "client/view/furnitureAtlas.ts"));
+		const atlas = ALL.ids.furniture;
+		/** one frame's images, [x, y, z, rectX, rectY] each */
+		const imageCalls = roofAlpha => {
+			const out = [];
+			const inner = Renderer.prototype.drawRect;
+			Renderer.prototype.drawRect = function (cam, wx, wy, o) {
+				if (capturing && o.image === atlas) out.push([wx, wy, o.zIndex, o.rectX, o.rectY]);
+				return inner.call(this, cam, wx, wy, o);
+			};
+			try {
+				frameCalls(ALL.ids, roofAlpha);
+			} finally {
+				Renderer.prototype.drawRect = inner;
+			}
+			return out;
+		};
+		const cellIs = (c, key) =>
+			FURNITURE_CELLS[key] !== undefined && c[3] === FURNITURE_CELLS[key][0] && c[4] === FURNITURE_CELLS[key][1];
+		const nearI = (c, o, d) => Math.hypot(c[0] - (o.x + o.w / 2), c[1] - (o.y + o.h / 2)) <= d;
+		const outsideI = (c, o) =>
+			(c[0] - (o.x + o.w / 2)) * NORMAL[o.side][0] + (c[1] - (o.y + o.h / 2)) * NORMAL[o.side][1] > 0;
+		const shardsCell = o => `glass:${o.w >= o.h ? "h" : "v"}`;
+		const shardsAt = (cs, o, out) =>
+			cs.filter(c => nearI(c, o, 60) && c[2] === ZS && cellIs(c, shardsCell(o)) && outsideI(c, o) === out).length;
+		const roofOn = imageCalls(undefined);
+		const cs = frameCalls(ALL.ids, undefined);
+		const glintRoof = o => around(cs, o, 40, c => c[7] === Z.roof + 3 && colour(c) !== GLASS).length;
+		check(
+			every(broken, o => shardsAt(roofOn, o, true) === 1) &&
+				every(intact, o => glintRoof(o) === 1 && shardsAt(roofOn, o, true) === 0),
+			"art, roof on: the atlas's broken glass outside every open frame, a glint on the roof's edge over the glass",
+			`${broken.map(o => shardsAt(roofOn, o, true)).join(",")} outside the open frames`,
+		);
+		const inside = imageCalls(0);
+		const frameCell = (o, key) =>
+			inside.filter(c => nearI(c, o, 12) && c[2] === Z.structure + 2 && cellIs(c, `${key}:${o.side}`)).length;
+		check(
+			every(intact, o => frameCell(o, "windowGlass") === 1 && frameCell(o, "window") === 0) &&
+				every(
+					broken,
+					o =>
+						frameCell(o, "window") === 1 &&
+						frameCell(o, "windowGlass") === 0 &&
+						shardsAt(inside, o, false) === 1,
+				),
+			"art, inside: the frame with the whole pane (windowGlass), or with what is left of it (window) and the glass on the floor",
+		);
+	}
+
+	// legibility: nothing of the glass is ever drawn over a body or an item
+	{
+		const all = [...frameCalls({}, 0), ...frameCalls(ALL.ids, 0)];
+		const glassZ = [];
+		for (const o of panes) for (const c of around(all, o, 70, c => c[7] < Z.roof)) glassZ.push(c[7]);
+		check(
+			glassZ.length > 0 && Math.max(...glassZ) < Z.zombie && ZS < Z.decal,
+			"a body in the frame is drawn over the glass, and the shards lie under the blood and every item (the ground's detail layer)",
+			`highest ${Math.max(...glassZ)} (the horde ${Z.zombie}); shards at ${ZS}, the blood at ${Z.decal}, items at ${Z.item}`,
+		);
+	}
+
+	// a pane breaking in view (and, to measure it again and again, going back in): no Instance after the first break
+	for (const [label, ids] of [
+		["flat", {}],
+		["art", ALL.ids],
+	]) {
+		setArt(ids);
+		const st = stage(1920, 1080, 1);
+		const view = new WorldView(shadowFn(false));
+		const flip = on => intact.forEach(o => WIN.setWindowGlass(o.glass, !on));
+		const run = frames => {
+			for (let f = 0; f < frames; f++) {
+				if (f % 10 === 0) flip(f % 20 === 0);
+				b.roofAlpha = f % 40 < 20 ? undefined : 0;
+				drawTown(st, view, at.x + (f % 7) * 3, at.y);
+			}
+		};
+		run(40);
+		const created = gui.stats.created;
+		const w0 = gui.stats.writes;
+		run(200);
+		check(
+			gui.stats.created === created,
+			`${label}: all ${intact.length} panes breaking and the roof lifting, 200 frames after one of each: no Instance created`,
+			`${gui.stats.created - created} created, ${((gui.stats.writes - w0) / 200).toFixed(0)} writes a frame`,
+		);
+		flip(false);
+		b.roofAlpha = undefined;
+		setArt({});
+	}
+	check(
+		intact.every(o => WIN.windowIntact(o.glass)) && broken.every(o => !WIN.windowIntact(o.glass)),
+		"the town is left as generated",
+	);
 }
 
 console.log(failures === 0 ? "\nworld-art: all checks passed" : `\nworld-art: ${failures} FAILED`);

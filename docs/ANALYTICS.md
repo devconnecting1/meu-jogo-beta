@@ -39,7 +39,7 @@ Referências: as páginas oficiais `production/analytics` (índice, `get-started
 6. **Studio não manda nada.** A documentação é explícita: eventos só saem do servidor de um jogo **publicado**. No
    Studio o módulo roda todas as regras (o playtest as exercita) e entrega cada evento a um coletor seco que só conta
    — atributos `pz_analytics_sent`, `pz_analytics_deferred`, `pz_analytics_dropped` do Workspace — e imprime cada um
-   se o atributo `pz_analytics_echo` do Workspace for `true`. Uma **experiência de teste publicada** (a "Project Z
+   se o atributo `pz_analytics_echo` do Workspace for `true`. Uma **experiência de teste publicada** (a "Last Town
    [dev]" da §7.4 de `docs/MULTIPLAYER.md`) é outro universo, com painéis próprios: jogo de teste nunca suja os
    números do jogo de verdade.
 7. **Campos só no passo 1 de um funil.** A referência de `LogFunnelStepEvent` / `LogOnboardingFunnelStepEvent`:
@@ -493,8 +493,10 @@ Onze de 20. O save do jogo é DataStore com trava de sessão: uma falha de data 
    por `Weapon`; LifeEnded (média) por `Rebirths`; Shop por `Coins`.
 4. **Error Report**, depois de cada publish: filtro **New errors since** a versão nova. Regras (Rules → Create Rule):
    `DataStore` → Group "DataStore" (os avisos de fila da própria engine — o exemplo da página — não passam pelo nosso
-   código); `^\[Project Z\] save` → Group
-   "Save"; `^\[Project Z\] kicking a player` → Group "Flood kicks"; `^\[Project Z\] input anomaly` → Group "Input".
+   código); `^\[Last Town\] save` → Group
+   "Save"; `^\[Last Town\] kicking a player` → Group "Flood kicks"; `^\[Last Town\] input anomaly` → Group "Input".
+   O prefixo é o `GAME_NAME` (`src/shared/module.ts`): até 2026-09-24 ele era `[Project Z]`, então uma regra criada
+   antes disso precisa do prefixo novo (os avisos das versões antigas ainda no ar seguem com o velho até saírem).
 5. **Alerts** (com 100+ DAU): criar o webhook e as alertas da §13.
 6. **Configs/Experiments:** criar a config `pz_welcome_pack` (Number, −1) e publicar; o experimento 1 da §12 quando
    o MDE permitir (≈ 1.000 DAU).

@@ -504,7 +504,7 @@ audio.start();
 audio.bindSettings(() => settings);
 audio.setListener(0, 0);
 frame();
-const group = bus => SoundService.FindFirstChild("ProjectZAudio")?.FindFirstChild(bus);
+const group = bus => SoundService.FindFirstChild("LastTownAudio")?.FindFirstChild(bus);
 
 section("D. o cliente toca cada um no grupo SFX, onde aconteceu; com o SFX em 0, nada; o slot vazio, nada", () => {
 	const bad = [];
@@ -1047,7 +1047,7 @@ section(
 			"...e os takes da biblioteca que entram no lugar sao buscados na mesma hora (nao tocam mudos na primeira vez)",
 		);
 		check(
-			SoundService.FindFirstChild("ProjectZAudio")?.FindFirstChild("Preload") === undefined,
+			SoundService.FindFirstChild("LastTownAudio")?.FindFirstChild("Preload") === undefined,
 			"o preload nao deixa nada para tras (a pasta temporaria e destruida)",
 			`${created - created0} Instances temporarias`,
 		);
@@ -1868,6 +1868,35 @@ section(
 			check(
 				/cues: ""/.test(stale) && stale.includes(before.ids.ui),
 				"um id cujo sha1 nao e o do WAV de hoje fica de fora do modulo (o banco volta a biblioteca ate subir de novo)",
+			);
+			// troca de conta: o audio e privado de quem sobe; um id de outro criador que o `owner` (gravado pela CI)
+			// tocaria silencio no jogo da conta nova, entao sai do modulo e o banco toca a biblioteca (SND-01)
+			const regen = assets => {
+				writeFileSync(join(dir, "assets.json"), JSON.stringify(assets));
+				spawnSync(process.execPath, [join(ROOT, "tools", "gen-sfx.mjs"), "--assets"], {
+					encoding: "utf8",
+					env: { ...process.env, PZ_AUDIO_DIR: dir, PZ_AUDIO_TS: tsOut },
+				});
+				return readFileSync(tsOut, "utf8");
+			};
+			const owned = JSON.parse(JSON.stringify(before));
+			owned.sha1.cues = assets.sha1.cues;
+			owned.creator = Object.fromEntries(SFX.BANKS.map(b => [b, "user:4242"]));
+			owned.creator.items = "user:111";
+			delete owned.creator.weapons;
+			const withOwner = regen({ ...owned, owner: "user:4242" });
+			check(
+				/items: ""/.test(withOwner) &&
+					/weapons: ""/.test(withOwner) &&
+					withOwner.includes(owned.ids.ui) &&
+					withOwner.includes(owned.ids.cues),
+				"conta nova (owner no assets.json): o id de outro criador, ou sem criador gravado, sai do modulo " +
+					"(a biblioteca toca, nao o silencio); os do dono ficam",
+			);
+			const legacy = regen(owned);
+			check(
+				legacy.includes(owned.ids.items) && legacy.includes(owned.ids.weapons),
+				"sem owner (antes da troca de conta), nada muda: todo id do WAV de hoje entra",
 			);
 			// moderation: a rejected bank keeps no id
 			rmSync(join(dir, "assets.json"));

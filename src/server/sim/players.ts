@@ -80,7 +80,16 @@ import {
 	INPUT_SEQ_WINDOW,
 	SIM_HZ,
 } from "shared/net/mpConfig";
-import { EDGE_MAX, EdgeShift, InputCommand, InputPacket, decodeInput, edgeCount, packEdges } from "shared/net/protocol";
+import {
+	EDGE_MAX,
+	EdgeShift,
+	HeldBit,
+	InputCommand,
+	InputPacket,
+	decodeInput,
+	edgeCount,
+	packEdges,
+} from "shared/net/protocol";
 import { PLAYER_RADIUS, circleBlocked } from "shared/game/physics";
 import { PlayerState, createPlayer } from "shared/game/player";
 import { PlayerSaveData, outfitLookOf, petLookOf, titleWireOf } from "shared/game/save";
@@ -377,8 +386,11 @@ export function floodReason(sp: ServerPlayer): string | undefined {
  * the head alone they were capped at 3, and a hitch that drops a dozen commands at once -- a 250 ms one, or a
  * crawling repayment's grace taken back (server/sim/heartbeat.ts) -- lost the presses past the third
  * (tools/test-input-buffer.mjs case 16: 1075 of 1080 taps with the fixed ceiling).
+ *
+ * `glass`: the dropped command's E press was meant for a window's glass (`HeldBit.Glass`, protocol.ts note 23). The bit
+ * is its press's own, so it goes where the press goes: onto the command that takes the carried action edges.
  */
-function carryEdges(edges: number, queue: Array<InputCommand>): void {
+function carryEdges(edges: number, queue: Array<InputCommand>, glass = false): void {
 	let press = edgeCount(edges, EdgeShift.AttackPress);
 	let release = edgeCount(edges, EdgeShift.AttackRelease);
 	let action = edgeCount(edges, EdgeShift.ActionPress);
@@ -401,6 +413,7 @@ function carryEdges(edges: number, queue: Array<InputCommand>): void {
 		reload -= tl;
 		// in place: a queued command is the queue's own table (`acceptInput`), no new one per change
 		q.edges = packEdges(p + tp, r + tr, a + ta, l + tl);
+		if (glass && ta > 0 && (q.held & HeldBit.Glass) === 0) q.held += HeldBit.Glass;
 	}
 }
 
@@ -468,7 +481,7 @@ function enqueue(sp: ServerPlayer, cmd: InputCommand, grace: number): boolean {
 		// (a shot still waits for the weapon's cadence, a reload or an E happens once however many presses carry
 		// it), and dropping it is the one loss the player cannot be compensated for: a server hitch, or a burst
 		// that lands on a full queue, must not eat a shot. tools/test-input-buffer.mjs case 5 lost 161 of 1080.
-		if (dropped.edges !== 0) carryEdges(dropped.edges, sp.queue);
+		if (dropped.edges !== 0) carryEdges(dropped.edges, sp.queue, (dropped.held & HeldBit.Glass) !== 0);
 	}
 	return true;
 }

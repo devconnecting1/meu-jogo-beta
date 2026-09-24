@@ -1,5 +1,6 @@
 {
-	"name": "project-z",
+	"name": "last-town",
+	"description": "Last Town: Zombie Survival -- a top-down co-op zombie survival game for Roblox, drawn in pixel art and written in roblox-ts",
 	"private": true,
 	"version": "0.1.0",
 	"scripts": {

@@ -145,6 +145,14 @@ export function damageStructure(refs: GameRefs, s: Solid, dmg: number): void {
 }
 
 /**
+ * A window's glass breaks in this client's OWN world (EDI-18: a shot, a blade, E, offline -- where the server owns the
+ * world it breaks it and the mirror hears): the crash the horde hears, the glass on the floor, the open frame.
+ */
+export function shatterWindow(refs: GameRefs, s: Solid): boolean {
+	return Brain.shatterWindow(aiContext(refs), s);
+}
+
+/**
  * Zombie AI + physics for one frame. With MP_PHASE >= 2 the server owns the horde and this does nothing:
  * the client must never simulate a zombie it does not own, or the two worlds drift apart again.
  */

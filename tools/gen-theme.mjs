@@ -51,7 +51,7 @@ const COLOR_TOKENS = [
 	["chart-3", "primary"],
 	["chart-4", "primary"],
 	["chart-5", "primary"],
-	// Project Z extensions (not shadcn): tweakcn does not know them, so a theme downloaded from it falls back to
+	// Last Town extensions (not shadcn): tweakcn does not know them, so a theme downloaded from it falls back to
 	// the token on the right and nothing breaks -- the window kit just loses the exact shade (docs/DESIGN_RULES UI-07)
 	/** the ACTIVE tab / segment / selected tile: a blue plate under light text */
 	["tab-active", "chart-2"],
@@ -432,7 +432,7 @@ async function main() {
 // regenerate: \`npm run theme\` (or \`npm run theme -- <tweakcn registry url>\`)
 // semantic roles, game colours and typography live in theme.ts
 
-/** shadcn colour tokens + the Project Z extensions tab-active / cell / window / stat-* / bar-* (CSS --kebab-case -> camelCase) */
+/** shadcn colour tokens + the Last Town extensions tab-active / cell / window / stat-* / bar-* (CSS --kebab-case -> camelCase) */
 export interface ThemeColors {
 ${iface}
 }

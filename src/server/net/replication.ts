@@ -69,14 +69,16 @@ import {
 	encodeSnapshot,
 	encodeWorld,
 } from "shared/net/protocol";
-import { debrisMaterialId, toWireFx, tracerKindId } from "shared/net/fxWire";
+import { debrisMaterialId, GLASS_DEBRIS, toWireFx, tracerKindId } from "shared/net/fxWire";
 import { positionLit } from "shared/sim/ai/zombieBrain";
 import { FxEvent as SimFxEvent } from "shared/sim/types";
 import { BossState, ZombieState } from "shared/game/entities";
 import { WEAPONS } from "shared/data/weapons";
 import { blocksShots, raycast } from "shared/game/physics";
 import { Solid, WorldData, buildingAt } from "shared/game/world";
+import { hadGlass, windowBroken } from "shared/game/windows";
 import { isDoor } from "shared/sim/interactQuery";
+import { isPortico } from "shared/sim/vault";
 import { packRide, rideHeading } from "shared/sim/rideKey";
 import { carriesLight, survivorCone } from "shared/sim/survivorLight";
 import {
@@ -434,6 +436,24 @@ function urgentEvent(e: WorldEvent): boolean {
 	return e.t === WorldEv.InitBegin || e.t === WorldEv.WorldReset || e.t === WorldEv.PlayerLife;
 }
 
+/**
+ * A change of the town's state that goes to EVERYONE and a client lays on its copy of the town (client/net/worldMirror.ts,
+ * and the grid's PowerSet): idempotent -- a DoorSet, an HP, an add or a removal keyed by id -- so sending one twice
+ * changes nothing. The ground items and the loot flags are not among them: each survivor is told those on their own
+ * (`queueFor`), so they are never in the broadcast `flushWorld` repeats to a newcomer.
+ */
+function worldStateEvent(e: WorldEvent): boolean {
+	const t = e.t;
+	return (
+		t === WorldEv.SolidAdd ||
+		t === WorldEv.SolidRemove ||
+		t === WorldEv.DoorSet ||
+		t === WorldEv.SolidHp ||
+		t === WorldEv.LightSet ||
+		t === WorldEv.PowerSet
+	);
+}
+
 /** a set of player slots (0..MAX_PLAYERS-1) in one number */
 function maskHas(mask: number, slot: number): boolean {
 	return math.floor(mask / 2 ** slot) % 2 === 1;
@@ -480,6 +500,8 @@ export class Replicator {
 	private readonly hordeRings = new ActorInterest();
 	private readonly broadcast = new Array<WorldEvent>();
 	private readonly directed = new Map<number, Array<WorldEvent>>();
+	/** slots welcomed since the last world flush: that flush's broadcast reaches them before their InitBegin (M3) */
+	private readonly welcomedSince = new Array<number>();
 	/** effects of the tick being flushed: everyone's, then the ones addressed to one survivor */
 	private readonly fxQueue = new Array<FxEvent>();
 	private snapIndex = 0;
@@ -627,6 +649,8 @@ export class Replicator {
 	 */
 	welcome(sp: ServerPlayer): void {
 		this.queueFor(sp.slot, this.initBegin());
+		// the next flush sends its broadcast BEFORE this batch: see `flushWorld` (the review of ef98768, M3)
+		if (!this.welcomedSince.includes(sp.slot)) this.welcomedSince.push(sp.slot);
 		// the hour, the day, the weather and the wave flags: a newcomer must not spend up to CLOCK_RESYNC_S
 		// seconds in the wrong half of the day (§4.6)
 		this.queueFor(sp.slot, this.sim.clock.clockEventNow(this.sim.tick));
@@ -694,10 +718,18 @@ export class Replicator {
 			for (const st of power.initAll(this.initMachines)) this.queueFor(sp.slot, powerSetOf(st));
 			this.initMachines.clear();
 		}
-		// a door of the generated map that somebody opened: the mirror generated it closed
+		// a door of the generated map that somebody opened: the mirror generated it closed. And a window whose glass
+		// broke since the town was generated (EDI-18, protocol.ts note 23): the mirror generated its pane, so it hears the
+		// frame is open -- the same DoorSet, 6 B each, and only those (a pane born broken comes from the seed, one never
+		// broken needs nothing): a town has ~370 panes, so a whole town smashed is ~2.2 KB of one 16 KB batch
 		for (const solid of this.sim.world.solids) {
 			if (solid.placeable !== undefined) continue;
-			if (!isDoor(solid) || solid.open !== true) continue;
+			// ...and a bank's alarm bell that is ringing right now (EDI-24: the LightSet of its portico)
+			if (isPortico(solid) && solid.powered === true) {
+				this.queueFor(sp.slot, { t: WorldEv.LightSet, id: solid.id, powered: true });
+				continue;
+			}
+			if (isDoor(solid) ? solid.open !== true : !(windowBroken(solid) && hadGlass(solid))) continue;
 			this.queueFor(sp.slot, { t: WorldEv.DoorSet, id: solid.id, state: SolidState.Open });
 		}
 		const items = this.sim.items;
@@ -997,6 +1029,19 @@ export class Replicator {
 
 	private flushWorld(tick: number): void {
 		this.urgent = false;
+		// A survivor welcomed since the last flush reads this broadcast BEFORE its own batch -- the InitBegin that opens
+		// its town, and the WorldInit built when it was welcomed -- and a client drops the world's deltas until its
+		// InitBegin. A pane broken, a door opened or a barricade built in between would be lost for it for good: the
+		// world's state changes of this broadcast go again at the end of its batch (all idempotent: a DoorSet, an add
+		// keyed by id), after its WorldInit (the review of ef98768, M3; protocol.ts note 23).
+		if (this.broadcast.size() > 0) {
+			for (const slot of this.welcomedSince) {
+				const list = this.directed.get(slot);
+				if (list === undefined) continue;
+				for (const e of this.broadcast) if (worldStateEvent(e)) list.push(e);
+			}
+		}
+		this.welcomedSince.clear();
 		if (this.broadcast.size() > 0) {
 			const res = encodeWorld({ tick, events: this.broadcast });
 			this.stats.droppedEvents += res.dropped;
@@ -1178,7 +1223,11 @@ export class Replicator {
 				if (e.t === FxType.Blood) {
 					en.sight = e.kind === BloodKind.Horde;
 				} else if (e.t === FxType.Debris) {
-					en.sight = e.material !== BOSS_DEBRIS;
+					// a window's glass giving way (EDI-18) is heard in range whoever broke it: its DoorSet is global already
+					// (every client predicts against the frame), so hiding the crash in the dark would hide nothing from a
+					// modified client and a warning from an honest one. The blows before it stay sight-filtered: those show
+					// a zombie the snapshot withholds, and no delta says so
+					en.sight = e.material !== BOSS_DEBRIS && e.material !== GLASS_DEBRIS;
 				} else if (e.t === FxType.Sound) {
 					en.sight = true;
 				} else if (e.t === FxType.ProjSpawn) {

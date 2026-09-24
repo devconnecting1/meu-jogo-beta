@@ -22,6 +22,14 @@ export const FEET_RATE = math.rad(10) * 30;
 export const REACTION_MAX = 9;
 /** zombies only hit constructions when a survivor is this close (par_action collision) */
 export const STRUCT_ATTACK_RANGE = 800;
+/**
+ * A chasing zombie pounds on a pane only while it walks INTO it (EDI-18): the cosine between its heading and the way
+ * through the glass at least this (60° off square). One sliding along a shop front towards the door is walking along
+ * a wall, and a row of windows is not smashed by a horde brushing past it.
+ */
+export const GLASS_INTO = 0.5;
+/** ...a charger's rush at any angle up to 75° off square (a battering ram), never along the glass (a scrape) */
+export const GLASS_INTO_RUSH = 0.25;
 /** walkers stop hunting 2000 px from where they spawned unless a survivor is within 600 */
 export const LEASH_SPAWN = 2000;
 export const LEASH_PLAYER = 600;
@@ -90,6 +98,19 @@ export const RUSH_MIN_DIST = 100;
  * 60 Hz) so a single step can never cross the whole band, which is what made the old single line shiver.
  */
 export const KEEP_BAND = 6;
+/**
+ * Seconds a charger whose back-off barely moved (a wall, a corner, furniture behind it) closes in to bite instead of
+ * keeping its distance: long enough to reach the survivor and bite, so it does not try the back-off again at once
+ */
+export const CLOSE_IN_TIME = 1.5;
+/**
+ * ...or has no room to back off: its body, a radius plus this much further back, is in a wall. At least the 14 u
+ * `steer` looks ahead: where that probe is blocked the back-off turns into a slide along the wall, side to side
+ */
+export const BACK_ROOM = 16;
+/** ...measured like this: over BACK_CHECK_S of back-off, it netted less than this share of its walk */
+export const BACK_CHECK_S = 0.4;
+export const BACK_MIN_PROGRESS = 0.3;
 export const RUSH_TIME = 2;
 export const RUSH_COOLDOWN = 3;
 export const RUSH_SPEED_MIN = 5;
@@ -109,6 +130,11 @@ export const JUMP_AIR_MAX = 2;
 export const JUMP_LIFT = 28;
 /** a hunting jumper only takes off when the leap actually shortens its path, in flow-field cells */
 export const JUMP_GAIN = 2.5;
+/**
+ * A hunting jumper within a hop of the survivor that found no leap this many times running (half a second apart) is
+ * stuck: only then does it look all round for a hop (zombieBrain `startJump`; further out it looks every time)
+ */
+export const JUMP_HOP_STUCK = 2;
 export const POISON_TIME = 30;
 /** exploder */
 export const FUSE_TIME = 50 / 30;
@@ -154,7 +180,18 @@ export const FIELD_GOTO = 400;
  * vision, the flashlight's cone) is shared/sim/survivorLight.ts, the rule the light map reads too (LUZ-04).
  */
 export const PLAYER_LIGHT_R = SURVIVOR_LIGHT_R;
-export const STRUCTURE_LIGHT_R: Record<string, number> = { lamp: 400, lamp_drone: 320, campfire: 300, brazier: 330 };
+/**
+ * The built and fixed light sources, while `powered`, by tag: THE table -- the client's light map draws these very radii
+ * (client/gameLoop.ts LIGHT_R is this object), so the ground the horde sees lit is the ground the survivor sees lit.
+ * `portico`: a bank's portico while its alarm bell rings (EDI-24), the bell's flashing lamp.
+ */
+export const STRUCTURE_LIGHT_R: Record<string, number> = {
+	lamp: 400,
+	lamp_drone: 320,
+	campfire: 300,
+	brazier: 330,
+	portico: 220,
+};
 /** flashlight (equipHand 13): original power 400 in a 45° cone → ~560 px (shared/data/equips.ts EQUIP_LIGHTS) */
 export const FLASHLIGHT_R = EQUIP_LIGHTS[FLASHLIGHT_ID].radius;
 /** how far around a survivor the AI looks for lit structures and shaking solids */

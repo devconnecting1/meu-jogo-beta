@@ -31,6 +31,11 @@
  *                it can really reach first (§3.3), MP-09 holds against ALL survivors, netIds are stable and
  *                recycled (§4.4), deaths come out once — and the client stops simulating at MP_PHASE >= 2;
  *  11. TICK      the §3.2 measurement: cost of a whole server tick with 150 zombies and 6 survivors.
+ *  12. GLASS     (EDI-18) a pane breaking is heard 420 u away and pulls the horde to the WINDOW; a zombie that sees you
+ *                through the glass pounds on it (GLASS_HITS blows, ~2 s) and climbs in; a doorway nearby wins over the
+ *                glass, the glass over a barricade; a wanderer never breaks one; on the server the break is one global
+ *                DoorSet and the flow field reads the open frame; and a walker, a charger (its rush through the glass)
+ *                and a jumper (its leap through it) all get into a room whose only way in is a pane, from 8 sides.
  *
  * Pure Node (>= 18) + the project's TypeScript (devDependency) to transpile src on the fly, with the same
  * Luau / roblox-ts shims tools/test-sim.mjs uses. `math.random` is replaced by a seeded generator, so every
@@ -386,8 +391,13 @@ const fail = msg => {
 	console.log(`  FAIL  ${msg}`);
 };
 const ok = msg => console.log(`  ok    ${msg}`);
-const check = (cond, msg) => (cond ? ok(msg) : fail(msg));
 const info = msg => console.log(`        ${msg}`);
+/** `detail`, when given, is printed under the line: the measured value, pass or fail */
+const check = (cond, msg, detail) => {
+	if (cond) ok(msg);
+	else fail(msg);
+	if (detail !== undefined) info(detail);
+};
 
 // ---------------------------------------------------------------- scaffolding
 
@@ -2042,6 +2052,579 @@ function testTickCost() {
 	}
 }
 
+// ---------------------------------------------------------------- 12. window glass (EDI-18)
+
+const windowsMod = optional("shared/game/windows.ts");
+
+/** a pane of glass (as the generator lays one): 80 x 20 in a wall along x, or 20 x 80 along y */
+function pane(world, x, y, alongY = false) {
+	return W.addSolid(world, {
+		kind: "window",
+		x,
+		y,
+		w: alongY ? 20 : 80,
+		h: alongY ? 80 : 20,
+		hp: windowsMod.GLASS_HITS,
+		hpMax: windowsMod.GLASS_HITS,
+		destructible: false,
+		tags: "window",
+		rot: 0,
+	});
+}
+
+/**
+ * A room 400 x 400 at (1800, 1800), walls 20 thick, with a pane in the north wall (1960..2040) and -- `door` -- a
+ * doorway 96 wide beside it (2080..2176), barricaded or not.
+ */
+function glassRoom(door, barricaded = false) {
+	const world = W.createWorld(4000, 4000);
+	wall(world, 1800, 1800, 160, 20);
+	const g = pane(world, 1960, 1800);
+	if (door) {
+		wall(world, 2040, 1800, 40, 20);
+		wall(world, 2176, 1800, 24, 20);
+		if (barricaded) {
+			W.addSolid(world, {
+				kind: "barricade",
+				x: 2080,
+				y: 1800,
+				w: 96,
+				h: 20,
+				hp: 700,
+				hpMax: 700,
+				destructible: true,
+				tags: "barricade",
+				rot: 0,
+			});
+		}
+	} else {
+		wall(world, 2040, 1800, 160, 20);
+	}
+	wall(world, 1800, 2180, 400, 20);
+	wall(world, 1800, 1820, 20, 360);
+	wall(world, 2180, 1820, 20, 360);
+	return { world, g };
+}
+
+/**
+ * The survivor inside the room, a walker 500 u north of it who can see them THROUGH the glass (IA-01: glass hides
+ * nobody): what it does over `seconds`. Blows are counted off the pane's own hp.
+ */
+function breakIn(door, barricaded, seconds = 20) {
+	setSeed(SEED);
+	resetEntityIds();
+	const { world, g } = glassRoom(door, barricaded);
+	const refs = makeRefs(world, 2000, 2000);
+	refs.player.godMode = true;
+	const z = addZombie(refs, 1, 2000, 1500, Math.PI / 2);
+	let blows = 0;
+	let firstBlow = -1;
+	let broke = -1;
+	let inside = -1;
+	let hp = g.hp;
+	const bar = world.solids.find(s => s.kind === "barricade");
+	/** the noise rings heard from the pane, by their loudest radius: the blows' and the crash's */
+	const rings = new Set();
+	for (let f = 0; f < 60 * seconds; f++) {
+		zombieAI.updateZombies(refs, DT);
+		for (const s of refs.sounds ?? []) if (dist(s.x, s.y, 2000, 1810) < 20) rings.add(Math.round(s.rMax));
+		if (g.hp < hp) {
+			blows += hp - g.hp;
+			if (firstBlow < 0) firstBlow = f;
+		}
+		hp = g.hp;
+		if (broke < 0 && windowsMod.windowBroken(g)) broke = f;
+		if (inside < 0 && z.y > 1830 && z.x > 1820 && z.x < 2180) inside = f;
+	}
+	return { g, z, refs, blows, firstBlow, broke, inside, bar, rings };
+}
+
+function testGlass() {
+	console.log(
+		"\n[12] glass (EDI-18): the crash is heard, the horde goes to look, and breaks in where the field sends it",
+	);
+	const N = noiseMod;
+	const WIN = windowsMod;
+	info(
+		`glass breaking ${N.GLASS_BREAK} u · a zombie's blow on it ${N.GLASS_BANG} u · a door ${N.DOOR} u · ` +
+			`(pistol ${N.gunshotRadius(2, 10, false)}, running ${N.footstepRadius(210, false)}, a blow on a body ${N.HIT})`,
+	);
+	check(
+		N.GLASS_BREAK > N.GLASS_BANG &&
+			N.GLASS_BREAK > N.footstepRadius(210, false) &&
+			N.GLASS_BREAK < N.gunshotRadius(2, 10, false) &&
+			N.GLASS_BREAK >= 300 &&
+			N.GLASS_BREAK <= 450,
+		"the crash is louder than a blow and than running, quieter than a pistol (300-450 u)",
+	);
+	check(
+		N.gunshotRadius(2, 10, true) < N.GLASS_BREAK,
+		"a pane shot with a silenced pistol is louder AT THE PANE than at the shooter: a lure",
+	);
+
+	// (a) heard, and it says WHERE: the window, not the survivor
+	{
+		const hears = d => {
+			setSeed(SEED);
+			resetEntityIds();
+			const world = W.createWorld(4000, 4000);
+			const refs = makeRefs(world, 2000, 3600);
+			const g = pane(world, 1960, 2000);
+			const z = still(addZombie(refs, 1, 2000, 2010 - d, -Math.PI / 2));
+			const d0 = dist(z.x, z.y, 2000, 2010);
+			zombieAI.shatterWindow(refs, g);
+			run(refs, 60 * 4);
+			return { z, d0, refs, g };
+		};
+		const near = hears(380);
+		check(awareOf(near.z) !== 0, "a zombie 380 u from a pane that breaks hears it (the gold '?')");
+		check(
+			near.z.lastSeenX === 2000 &&
+				near.z.lastSeenY === 2010 &&
+				dist(near.z.x, near.z.y, 2000, 2010) < near.d0 - 100,
+			"...and walks to the WINDOW, where the noise came from -- never to the survivor",
+			`${dist(near.z.x, near.z.y, 2000, 2010).toFixed(0)} u from it after 4 s`,
+		);
+		check(awareOf(near.z) !== 3, "a noise alone never makes it chase");
+		check(awareOf(hears(480).z) === 0, "one 480 u away does not hear it");
+		check(
+			near.refs.fx.some(e => e.kind === "debris" && e.material === "glass" && e.count >= 8) &&
+				WIN.windowBroken(near.g),
+			"the pane is an open frame, with its glass on the floor (the 'glass' debris burst: shards and crash)",
+		);
+	}
+
+	// (b) the break-in: a room with only a window, the survivor inside, seen through the glass
+	{
+		const r = breakIn(false, false);
+		const secs = r.broke >= 0 && r.firstBlow >= 0 ? (r.broke - r.firstBlow) / 60 : -1;
+		info(
+			`a walker outside a closed room: first blow at ${(r.firstBlow / 60).toFixed(1)} s, the pane gave at ` +
+				`${(r.broke / 60).toFixed(1)} s after ${r.blows} blows (${secs.toFixed(1)} s of pounding), inside at ${(r.inside / 60).toFixed(1)} s`,
+		);
+		check(
+			r.blows === WIN.GLASS_HITS && WIN.windowBroken(r.g),
+			`it pounds ${WIN.GLASS_HITS} times and the glass gives`,
+		);
+		check(
+			secs >= 1.5 && secs <= 3.5,
+			"the pounding lasts 1.5-3.5 s (a stun of STUN_TIME between two blows)",
+			`${secs.toFixed(2)} s`,
+		);
+		check(r.inside > r.broke, "then it climbs in through the open frame");
+		check(
+			r.rings.has(N.GLASS_BANG) && r.rings.has(N.GLASS_BREAK),
+			"the blows are a noise ring the street hears (GLASS_BANG, as on a barricade), and the crash a louder one (GLASS_BREAK)",
+			[...r.rings].join(", "),
+		);
+	}
+
+	// (c) a door close by wins: the field prices the glass, and the horde takes the open way first
+	{
+		const r = breakIn(true, false, 12);
+		check(
+			WIN.windowIntact(r.g) && r.inside > 0,
+			"with a doorway 100 u from the pane, it walks in by the door and the glass stays whole",
+			`inside at ${(r.inside / 60).toFixed(1)} s, pane ${WIN.windowIntact(r.g) ? "intact" : "broken"}`,
+		);
+	}
+
+	// (d) a barricaded door and a pane: the glass is the weak point (WINDOW_COST + GLASS_COST < COST_SOFT)
+	{
+		const r = breakIn(true, true, 16);
+		check(
+			WIN.windowBroken(r.g) && r.bar.hp === r.bar.hpMax,
+			"with the door barricaded, it breaks the glass and never chews the planks: board the windows too",
+			`pane ${WIN.windowBroken(r.g) ? "broken" : "intact"}, barricade ${r.bar.hp}/${r.bar.hpMax}`,
+		);
+	}
+
+	// (e) a zombie that knows nothing does not break glass: a wanderer walks into the pane and turns away
+	{
+		setSeed(SEED);
+		resetEntityIds();
+		const world = W.createWorld(4000, 4000);
+		const g = pane(world, 1960, 2000);
+		wall(world, 1400, 2000, 560, 20);
+		wall(world, 2040, 2000, 560, 20);
+		const refs = makeRefs(world, 600, 3600);
+		const z = addZombie(refs, 1, 2000, 1950, Math.PI / 2);
+		z.wanderDir = Math.PI / 2;
+		z.wanderTimer = 5;
+		let touched = false;
+		run(refs, 60 * 8, () => {
+			if (z.y > 2000 - 16 - 2 && z.x > 1960 && z.x < 2040) touched = true;
+		});
+		check(
+			touched && WIN.windowIntact(g) && g.hp === WIN.GLASS_HITS,
+			"a wanderer that walks into a pane never pounds on it (only a zombie that knows where you are)",
+			touched ? "touched it" : "never reached it",
+		);
+	}
+
+	// (f) the server: a night-wave zombie breaks a pane in the authoritative world -- one global DoorSet, the flow field
+	// reads the open frame
+	if (SERVER) {
+		setSeed(SEED);
+		resetEntityIds();
+		const { world, g } = glassRoom(false);
+		const sim = new simulationMod.ServerSimulation({ world, zombies: true, interactive: true });
+		sim.horde.clock.setClock(12, 1);
+		const sp = serverPlayers.createServerPlayer(
+			{ slot: 0, userId: 1, name: "p" },
+			defaultSave(),
+			2000,
+			2000,
+			0,
+			sim.simHz,
+		);
+		sp.state.x = 2000;
+		sp.state.y = 2000;
+		sp.state.godMode = true;
+		sim.add(sp);
+		const z = createZombie(1, 2000, 1500, 1, true);
+		z.detect = true;
+		z.wave = true;
+		sim.horde.zombies.push(z);
+		sim.step();
+		const outside = sim.horde.field.pathCells(2000, 1720);
+		const sets = [];
+		for (let t = 0; t < 60 * 15 && !WIN.windowBroken(g); t++) {
+			sim.step();
+			const out = [];
+			sim.worldOut.take(out);
+			for (const p of out) if (p.ev.t === 3 && p.ev.id === g.id) sets.push(p);
+		}
+		for (let t = 0; t < 60; t++) sim.step();
+		const after = sim.horde.field.pathCells(2000, 1720);
+		check(WIN.windowBroken(g), "on the server, a wave zombie breaks the pane between it and the survivor");
+		check(
+			sets.length === 1 && sets[0].slot === mpConfig.SLOT_NONE && sets[0].ev.state === 2,
+			"...and the world's hook queued ONE global DoorSet (Open) for it",
+			`${sets.length}`,
+		);
+		check(
+			after < outside - 0.5,
+			"the flow field reads the open frame: the way through it got cheaper by GLASS_COST",
+			`${outside.toFixed(1)} -> ${after.toFixed(1)} cells`,
+		);
+	}
+
+	// (g) the review of ef98768, M2: EVERY kind gets in, from every side. The room's only way in is its pane; one wave
+	// zombie starts 520 u out, at each of 8 bearings round it, on the server. A charger used to slide back and forth
+	// outside the wall for ever (its lane blocked by the wall, it looked for a lane instead of walking round), and it
+	// could not charge through glass; a jumper stood at the building's outside corner (every leap along the field gained
+	// less than JUMP_GAIN, or grazed the wall), and could not leap through glass.
+	if (SERVER) {
+		const kinds = [
+			[1, "walker"],
+			[4, "charger"],
+			[5, "jumper"],
+		];
+		for (const [type, name] of kinds) {
+			const times = [];
+			let never = 0;
+			for (let a = 0; a < 360; a += 45) {
+				setSeed(7);
+				resetEntityIds();
+				const { world, g } = glassRoom(false);
+				const sim = new simulationMod.ServerSimulation({ world, zombies: true, interactive: true });
+				sim.horde.clock.setClock(12, 1);
+				const sp = serverPlayers.createServerPlayer(
+					{ slot: 0, userId: 1, name: "p" },
+					defaultSave(),
+					2000,
+					2000,
+					0,
+					sim.simHz,
+				);
+				sp.state.x = 2000;
+				sp.state.y = 2000;
+				sp.state.godMode = true;
+				sim.add(sp);
+				const rad = (a * Math.PI) / 180;
+				const z = createZombie(type, 2000 + Math.cos(rad) * 520, 2000 + Math.sin(rad) * 520, 1, true);
+				z.detect = true;
+				z.wave = true;
+				sim.horde.zombies.push(z);
+				let inside = -1;
+				for (let t = 0; t < sim.simHz * 45 && inside < 0; t++) {
+					// this zombie alone (the spawner fills a night)
+					for (let i = sim.horde.zombies.length - 1; i >= 0; i--) {
+						if (sim.horde.zombies[i] !== z) sim.horde.zombies.splice(i, 1);
+					}
+					sim.step();
+					sp.state.x = 2000;
+					sp.state.y = 2000;
+					if (z.x > 1820 && z.x < 2180 && z.y > 1820 && z.y < 2180) inside = t / sim.simHz;
+				}
+				if (inside < 0) never += 1;
+				else times.push(inside);
+				void g;
+			}
+			times.sort((p, q) => p - q);
+			check(
+				never === 0,
+				`a ${name} gets into a room whose only way in is a pane of glass, from all 8 sides`,
+				`${8 - never}/8 in; median ${times[Math.floor(times.length / 2)]?.toFixed(1)} s, max ${times[times.length - 1]?.toFixed(1)} s`,
+			);
+		}
+	}
+
+	// (h) the review of b61425a: once in, a charger does not shiver. It keeps its distance (LEG-05) to take a run-up --
+	// but inside the survivor's building there is none to take, and with its back to a wall or in a corner there is
+	// nowhere to back off to: it slid side to side against the wall every tick (136 reversals of its step in 6 s in a
+	// 200 u room, 20 a second) and hardly ever bit. Now it closes in and bites, like a walker.
+	if (SERVER) {
+		const walkerLike = 36;
+		const indoors = (label, room, building, zx, zy, px, py) => {
+			const out = {};
+			for (const type of [4, 1]) {
+				setSeed(7);
+				resetEntityIds();
+				const world = W.createWorld(4000, 4000);
+				const [x0, y0, size] = room;
+				wall(world, x0, y0, size, 20);
+				wall(world, x0, y0 + size - 20, size, 20);
+				wall(world, x0, y0 + 20, 20, size - 40);
+				wall(world, x0 + size - 20, y0 + 20, 20, size - 40);
+				if (building) {
+					W.addSolid(world, {
+						kind: "building",
+						x: x0,
+						y: y0,
+						w: size,
+						h: size,
+						hp: 99999,
+						hpMax: 99999,
+						destructible: false,
+						tags: "house",
+						rot: 0,
+						passable: true,
+					});
+				}
+				const sim = new simulationMod.ServerSimulation({ world, zombies: true, interactive: true });
+				sim.horde.clock.setClock(12, 1);
+				const sp = serverPlayers.createServerPlayer(
+					{ slot: 0, userId: 1, name: "p" },
+					defaultSave(),
+					px,
+					py,
+					0,
+					sim.simHz,
+				);
+				sp.state.x = px;
+				sp.state.y = py;
+				sim.add(sp);
+				const z = createZombie(type, zx, zy, 1, true);
+				z.detect = true;
+				z.wave = true;
+				sim.horde.zombies.push(z);
+				let reversals = 0;
+				let bites = 0;
+				let backing = 0;
+				let lx = 0;
+				let ly = 0;
+				for (let t = 0; t < sim.simHz * 6; t++) {
+					for (let i = sim.horde.zombies.length - 1; i >= 0; i--) {
+						if (sim.horde.zombies[i] !== z) sim.horde.zombies.splice(i, 1);
+					}
+					const hp = sp.state.hp;
+					const bx = z.x;
+					const by = z.y;
+					sim.step();
+					if (sp.state.hp < hp) bites += 1;
+					sp.state.x = px;
+					sp.state.y = py;
+					sp.state.hp = sp.state.hpMax;
+					sp.state.dead = false;
+					if (z.backstep === true) backing += 1;
+					// a reversal: this tick's step goes the other way from the last one, along x or along y
+					const sx = Math.abs(z.x - bx) < 0.05 ? 0 : Math.sign(z.x - bx);
+					const sy = Math.abs(z.y - by) < 0.05 ? 0 : Math.sign(z.y - by);
+					if (sx !== 0 && lx !== 0 && sx !== lx) reversals += 1;
+					if (sy !== 0 && ly !== 0 && sy !== ly) reversals += 1;
+					if (sx !== 0) lx = sx;
+					if (sy !== 0) ly = sy;
+				}
+				out[type] = { reversals, bites, backing };
+			}
+			const c = out[4];
+			const wk = out[1];
+			check(
+				c.reversals <= walkerLike && c.bites >= 2,
+				`a charger ${label}: no shiver (at most ${walkerLike} reversals of its step in 6 s), and it bites`,
+				`${c.reversals} reversals, ${c.bites} bites, ${c.backing} ticks backing off · a walker there: ${wk.reversals} reversals, ${wk.bites} bites`,
+			);
+			return c;
+		};
+		const own = indoors(
+			"in the survivor's own building, 60 u off",
+			[1800, 1800, 400],
+			true,
+			2060,
+			2000,
+			2000,
+			2000,
+		);
+		check(
+			own.backing === 0,
+			"...where it never backs off: there is no run-up to take indoors",
+			`${own.backing} ticks`,
+		);
+		indoors(
+			"with its back to a wall (no building: a ruin, a yard)",
+			[1800, 1800, 400],
+			false,
+			2150,
+			2000,
+			2080,
+			2000,
+		);
+		indoors("in the corner of a 200 u room", [2000, 2000, 200], false, 2150, 2150, 2100, 2110);
+		indoors("across a 200 u room", [2000, 2000, 200], false, 2040, 2040, 2130, 2130);
+	}
+
+	// (i) the review of b61425a: what (g)'s all-round hop costs. Fourteen body probes and three rays each; it ran every
+	// half second a hunting jumper found no leap -- which, at the survivor's side, biting, is every half second. Now it
+	// runs further than a hop out, or when the jumper is stuck, and never at the survivor's side. Counted off the body
+	// probes: a tick with more than the 15 of the ordinary leap tries is one that looked all round.
+	if (SERVER) {
+		const Phys = require(join(SRC, "shared/game/physics.ts"));
+		const probe = Phys.circleBlocked;
+		let probes = 0;
+		Phys.circleBlocked = (...a) => {
+			probes += 1;
+			return probe(...a);
+		};
+		try {
+			for (const [label, room, zx, zy] of [
+				["on open ground, 60 u off", false, 2060, 2000],
+				["in a room, 120 u off", true, 2120, 2000],
+			]) {
+				setSeed(7);
+				resetEntityIds();
+				const world = W.createWorld(4000, 4000);
+				if (room) {
+					wall(world, 1800, 1800, 400, 20);
+					wall(world, 1800, 2180, 400, 20);
+					wall(world, 1800, 1820, 20, 360);
+					wall(world, 2180, 1820, 20, 360);
+				}
+				const sim = new simulationMod.ServerSimulation({ world, zombies: true, interactive: true });
+				sim.horde.clock.setClock(12, 1);
+				const sp = serverPlayers.createServerPlayer(
+					{ slot: 0, userId: 1, name: "p" },
+					defaultSave(),
+					2000,
+					2000,
+					0,
+					sim.simHz,
+				);
+				sp.state.x = 2000;
+				sp.state.y = 2000;
+				sim.add(sp);
+				const z = createZombie(5, zx, zy, 1, true);
+				z.detect = true;
+				z.wave = true;
+				sim.horde.zombies.push(z);
+				let allRound = 0;
+				let total = 0;
+				let near = 0;
+				for (let t = 0; t < sim.simHz * 20; t++) {
+					for (let i = sim.horde.zombies.length - 1; i >= 0; i--) {
+						if (sim.horde.zombies[i] !== z) sim.horde.zombies.splice(i, 1);
+					}
+					probes = 0;
+					sim.step();
+					sp.state.x = 2000;
+					sp.state.y = 2000;
+					sp.state.hp = sp.state.hpMax;
+					sp.state.dead = false;
+					total += probes;
+					if (probes > 15) allRound += 1;
+					if (dist(z.x, z.y, 2000, 2000) < 60) near += 1;
+				}
+				check(
+					allRound <= 2 && near >= sim.simHz * 15,
+					`a hunting jumper ${label} leaps in and stays at the survivor's side without looking all round for a hop every half second`,
+					`${allRound} all-round searches in 20 s (it was 33 on open ground, 13 in the room), ${total} body probes, ` +
+						`${(near / sim.simHz).toFixed(1)} s at its side`,
+				);
+			}
+		} finally {
+			Phys.circleBlocked = probe;
+		}
+	}
+
+	// (j) the review of b61425a: a rush smashes the pane it runs INTO -- not one whose jamb it grazed (it met the wall
+	// beside it, and the pane it touched was looked up), nor one it scraped along the shop front. A wall with a pane in
+	// it along y = 2000; the charger mid-rush, the survivor behind the glass.
+	if (SERVER) {
+		const rushAt = (x, y, dir) => {
+			setSeed(SEED);
+			resetEntityIds();
+			const world = W.createWorld(4000, 4000);
+			wall(world, 1700, 2000, 260, 20);
+			const g = pane(world, 1960, 2000);
+			wall(world, 2040, 2000, 260, 20);
+			const sim = new simulationMod.ServerSimulation({ world, zombies: true, interactive: true });
+			sim.horde.clock.setClock(12, 1);
+			const sp = serverPlayers.createServerPlayer(
+				{ slot: 0, userId: 1, name: "p" },
+				defaultSave(),
+				1900,
+				2300,
+				0,
+				sim.simHz,
+			);
+			sp.state.x = 1900;
+			sp.state.y = 2300;
+			sp.state.godMode = true;
+			sim.add(sp);
+			const z = createZombie(4, x, y, 1, true);
+			z.detect = true;
+			z.wave = true;
+			sim.horde.zombies.push(z);
+			sim.step();
+			z.x = x;
+			z.y = y;
+			z.rush = true;
+			z.rushReady = false;
+			z.rushTime = 0;
+			z.rushSpeed = tuning.RUSH_SPEED_MAX;
+			z.rushDir = dir;
+			let crashed = false;
+			for (let t = 0; t < 20 && !crashed; t++) {
+				for (let i = sim.horde.zombies.length - 1; i >= 0; i--) {
+					if (sim.horde.zombies[i] !== z) sim.horde.zombies.splice(i, 1);
+				}
+				sim.step();
+				crashed = z.rush !== true;
+			}
+			return { g, z, crashed };
+		};
+		const r = require(join(SRC, "shared/game/entities.ts")).zombieRadius(createZombie(4, 0, 0, 1, true));
+		const head = rushAt(2000, 2000 - r - 30, Math.PI / 2);
+		check(
+			head.crashed && WIN.windowBroken(head.g),
+			"a charge straight at the glass smashes it (the ram M2 asked for)",
+		);
+		const jamb = rushAt(2045, 2000 - r - 30, Math.PI / 2);
+		check(
+			jamb.crashed && WIN.windowIntact(jamb.g) && jamb.g.hp === WIN.GLASS_HITS,
+			"a charge whose body meets the jamb beside a pane (its centre past the glass) crashes into the wall: the pane stays whole",
+			`pane ${WIN.windowIntact(jamb.g) ? "intact" : "broken"}, the charger stopped at ${jamb.z.x.toFixed(0)},${jamb.z.y.toFixed(0)}`,
+		);
+		const scrape = rushAt(1965, 2000 - r + 2, 0);
+		check(
+			scrape.crashed && WIN.windowIntact(scrape.g),
+			"a charge scraping along the shop front, not into it, crashes: the pane stays whole",
+			`pane ${WIN.windowIntact(scrape.g) ? "intact" : "broken"}`,
+		);
+	}
+}
+
 // ---------------------------------------------------------------- run
 
 const started = Date.now();
@@ -2068,6 +2651,7 @@ if (TICK_ONLY) {
 	testDeterminism();
 	if (MODERN) testBite();
 	if (SERVER) testServerHorde();
+	if (MODERN && windowsMod !== undefined) testGlass();
 }
 if (!TICK_ONLY) {
 	testCost();

@@ -9,7 +9,8 @@
  *
  * "Walk" is the survivors' own collision (a body of PLAYER_RADIUS against every blocking solid), with two
  * differences that both make a ring legal: a door -- built, or of a building -- is a way out whether it is open
- * or not (anybody opens a door; MP-11's lock is not built), and a window is passable as it always is (EDI-10). A
+ * or not (anybody opens a door; MP-11's lock is not built), and a window is a way out whether its glass is in or not
+ * (EDI-10, EDI-18: anybody breaks a pane with E). A
  * base with a door in it is a base, not a cell. A yard wider than twice ESCAPE_RANGE is not a box either: its
  * survivors can walk, and the horde gets in the way it always does. That is an ACCEPTED limit (MP-24, the security
  * review of the net hardening, L3): a 1200 u yard closed around somebody is still a pen, but a big one -- ground
@@ -31,6 +32,7 @@
 import { PLAYER_RADIUS } from "shared/game/physics";
 import type { PlayerState } from "shared/game/player";
 import { isBlocking, querySolids, Solid, WorldData } from "shared/game/world";
+import { isWindow } from "shared/game/windows";
 import { isDoor } from "shared/sim/interactQuery";
 import { PlaceRect, rectCircleOverlap } from "shared/sim/placement";
 
@@ -68,7 +70,7 @@ function bodyBlocked(world: WorldData, x: number, y: number, extra: PlaceRect | 
 	scratch.clear();
 	querySolids(world, x - BODY, y - BODY, x + BODY, y + BODY, scratch);
 	for (const s of scratch) {
-		if (!isBlocking(s) || isDoor(s)) continue;
+		if (!isBlocking(s) || isDoor(s) || isWindow(s)) continue;
 		if (rectCircleOverlap(s.x, s.y, s.w, s.h, x, y, BODY)) return true;
 	}
 	scratch.clear();
@@ -120,7 +122,7 @@ function touchesAnything(world: WorldData, r: PlaceRect): boolean {
 	scratch.clear();
 	querySolids(world, r.x - pad, r.y - pad, r.x + r.w + pad, r.y + r.h + pad, scratch);
 	for (const s of scratch) {
-		if (isBlocking(s) && !isDoor(s)) {
+		if (isBlocking(s) && !isDoor(s) && !isWindow(s)) {
 			scratch.clear();
 			return true;
 		}

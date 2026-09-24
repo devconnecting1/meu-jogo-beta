@@ -7,7 +7,7 @@
  * text, so that match is free and no call site had to change.
  *
  * What the table is FOR, then, is being the registry of what may be translated: `npm run locale` exports it
- * to the CSV that the Localization tab imports (design/locale/ProjectZ.csv). A string that is shown but not
+ * to the CSV that the Localization tab imports (design/locale/LastTown.csv). A string that is shown but not
  * listed here never reaches that table, so it is the one language nobody can fix -- which is exactly what
  * had happened to nineteen strings from the onboarding and the end-of-run screen before this pass.
  *
@@ -915,6 +915,21 @@ export const LANG_TABLE: Array<string> = [
 	// a gas station's pump island holding fuel: what E does there (client/systems/interaction.ts PUMP_HINT,
 	// DESIGN_RULES EDI-16; the HUD shows the text after "E: ")
 	"Siphon Oil",
+	// the everyday town's searchable fixtures (client/systems/interaction.ts YARD_HINTS, DESIGN_RULES EDI-21, EDI-22,
+	// MOB-06) and the bank's vault (EDI-24): what E does there, the text after "E: "
+	"Search stall",
+	"Search food truck",
+	"Search pile",
+	"Search shed",
+	"Open deposit boxes",
+	"Crack vault (hold)",
+	// the vault door's pill while its work goes on ("E: Cracking vault 40%") and without the tool it needs ("Vault: needs
+	// Crowbar"): the words here, the number and the item's name added by client/systems/interaction.ts vaultHint
+	"Cracking vault",
+	"Vault: needs",
+	// an intact window at hand: E breaks its glass, the loud way in or out (client/systems/interaction.ts WINDOW_HINT,
+	// DESIGN_RULES EDI-18; the HUD shows the text after "E: ")
+	"Break window",
 ];
 
 /**

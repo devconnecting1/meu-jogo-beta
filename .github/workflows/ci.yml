@@ -4,8 +4,14 @@ on:
   push:
     branches: [main, master]
   pull_request:
-  # Actions -> CI -> Run workflow (branch main): uploads whatever is still missing and builds the place again
+  # Actions -> CI -> Run workflow (branch main): uploads whatever is still missing and builds the place again; an id
+  # of another creator than the secrets' (the account changed) is uploaded again on its own, push or button alike
   workflow_dispatch:
+    inputs:
+      reupload_all:
+        description: "Upload EVERY asset again as the creator in the secrets (art and sound banks), even ones already theirs"
+        type: boolean
+        default: false
 
 # least privilege: every job only reads, except `assets`, which commits the new asset ids to main
 permissions:
@@ -18,7 +24,8 @@ jobs:
   assets:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # a change of account uploads everything once (~140 files, then up to 10 min of moderation per step)
+    timeout-minutes: 60
     permissions:
       contents: write
     # one upload at a time; a push that lands meanwhile waits (never cancelled mid-upload: that would orphan assets)
@@ -61,8 +68,10 @@ jobs:
       - name: The upload tools are the committed ones
         run: node tools/assets-ci.mjs untouched tools package.json package-lock.json
 
-      # new or changed textures only (by sha1); waits for moderation; only APPROVED ids are written; a rejected
-      # file fails the job and is not sent again; still in review after the wait = `pending`, looked at next run
+      # new or changed textures only (by sha1), and any whose id another creator uploaded (the account changed: the old
+      # id stays until the new one is approved); waits for moderation; only APPROVED ids are written; a rejected
+      # file fails the job and is not sent again; still in review after the wait = `pending`, looked at next run.
+      # REUPLOAD_ALL: the Run workflow checkbox, never typed text (a boolean input, reaching the script only by the env)
       - name: Upload new or changed world art (npm run cloud -- upload-art --ci)
         id: art
         continue-on-error: true
@@ -71,7 +80,10 @@ jobs:
           ROBLOX_CREATOR_USER_ID: ${{ secrets.ROBLOX_CREATOR_USER_ID }}
           ROBLOX_CREATOR_GROUP_ID: ${{ secrets.ROBLOX_CREATOR_GROUP_ID }}
           PZ_MODERATION_WAIT_S: "600"
-        run: npm run cloud -- upload-art --ci
+          REUPLOAD_ALL: ${{ github.event_name == 'workflow_dispatch' && inputs.reupload_all }}
+        run: |
+          if [ "$REUPLOAD_ALL" = "true" ]; then set -- --reupload-all; fi
+          npm run cloud -- upload-art --ci "$@"
 
       # our own sound banks (tools/gen-sfx.mjs, DESIGN_RULES SND-08): the same rules as the art; the `has` guard keeps
       # an older checkout of tools/cloud.mjs (without the command) from failing the job
@@ -83,9 +95,11 @@ jobs:
           ROBLOX_CREATOR_USER_ID: ${{ secrets.ROBLOX_CREATOR_USER_ID }}
           ROBLOX_CREATOR_GROUP_ID: ${{ secrets.ROBLOX_CREATOR_GROUP_ID }}
           PZ_MODERATION_WAIT_S: "600"
+          REUPLOAD_ALL: ${{ github.event_name == 'workflow_dispatch' && inputs.reupload_all }}
         run: |
+          if [ "$REUPLOAD_ALL" = "true" ]; then set -- --reupload-all; fi
           if node tools/cloud.mjs has upload-audio; then
-            npm run cloud -- upload-audio --ci
+            npm run cloud -- upload-audio --ci "$@"
           else
             echo "tools/cloud.mjs has no upload-audio yet: nothing to upload"
           fi
@@ -351,14 +365,14 @@ jobs:
 
       - name: Rojo build
         run: |
-          "$HOME/.local/bin/rojo" build -o ProjectZ-ci.rbxl
+          "$HOME/.local/bin/rojo" build -o LastTown-ci.rbxl
 
       # place properties a script cannot set (Players.BanningEnabled for the admin's Ban API): a fresh build must carry
       # them, or every publish silently resets them to the engine default
       - name: Place properties survive a fresh build (bans enabled, TextChatService)
         run: |
-          "$HOME/.local/bin/rojo" build -o ProjectZ-ci.rbxlx
-          node tools/check-place.mjs ProjectZ-ci.rbxlx
+          "$HOME/.local/bin/rojo" build -o LastTown-ci.rbxlx
+          node tools/check-place.mjs LastTown-ci.rbxlx
 
       # the place the owner downloads: only when `assets` succeeded (every id of this commit is in it) or did not
       # apply (a pull request, another branch)
@@ -367,5 +381,5 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: place
-          path: ProjectZ-ci.rbxl
+          path: LastTown-ci.rbxl
           if-no-files-found: error

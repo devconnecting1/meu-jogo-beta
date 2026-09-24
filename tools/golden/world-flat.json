@@ -1,69 +1,69 @@
 {
 	"note": "draw-call digests of WorldView.drawGround + drawSolids with no world art (tools/test-world-art.mjs --golden); noSigns: the same with the building-signage hook stubbed out",
-	"recordedFrom": "the gas station's forecourt (EDI-16, 2026-09-24: the canopy with its fascia, pinstripe, seams and drains, the upright dispensers, the price sign and its shadow, the cars at the pumps) -- only the gas scene differs from the golden before it (the interiors branch after the review of ea5cf71, the ART-07 signs on the main wing, the furnishing of 1d98ae5); noSigns = the same without the signage hook",
+	"recordedFrom": "the everyday town with the window glass (780f2b5), re-recorded on purpose after the review of e9b0fbb (L5): the flat fallback of the town's fixtures is lean -- at most two Frames each (a lamp and a bus stop their pole and head, the food truck its awning too, a standing tent its canvas and three stripes), a bench two Frames with no shadow, a court its acrylic and keys, the bank's steps their risers, and the market's litter none (a decorative extra of the pixel art, ART-04); everything else is 780f2b5's golden",
 	"scenes": {
 		"street": {
-			"count": 1234,
-			"sha1": "c003255ca392c502bf3eba8d841a43b0f0446368",
+			"count": 1147,
+			"sha1": "7d605b1cfb7659da453dc8a64cb4fc6f6e533550",
 			"noSigns": {
-				"count": 1234,
-				"sha1": "c003255ca392c502bf3eba8d841a43b0f0446368"
+				"count": 1147,
+				"sha1": "7d605b1cfb7659da453dc8a64cb4fc6f6e533550"
 			}
 		},
 		"downtown": {
-			"count": 1354,
-			"sha1": "5fa8464d463fd91f916d0a338161f30579454589",
+			"count": 1832,
+			"sha1": "206369aaa1bc5820d7ea91d69ad58bfa31931714",
 			"noSigns": {
-				"count": 1159,
-				"sha1": "8d08c967790e721f8586c7ef0a4af898b0b124cb"
+				"count": 1481,
+				"sha1": "2510f32990fac8bee930b1b1a43e913977abfe00"
 			}
 		},
 		"park": {
-			"count": 956,
-			"sha1": "345e4532d863d70f29f82f4839fb06e5c5f8ac08",
+			"count": 1551,
+			"sha1": "11d3c1ccd9d1723e5477457b9bc3697f80abe16a",
 			"noSigns": {
-				"count": 956,
-				"sha1": "345e4532d863d70f29f82f4839fb06e5c5f8ac08"
+				"count": 1551,
+				"sha1": "11d3c1ccd9d1723e5477457b9bc3697f80abe16a"
 			}
 		},
 		"school": {
-			"count": 841,
-			"sha1": "2b931cc814b5a43d5bc5b6e9c1d51a99222559d3",
+			"count": 1157,
+			"sha1": "cbebf1c7a5afaa3b454f7574444c7d3ab266beae",
 			"noSigns": {
-				"count": 568,
-				"sha1": "3bac9f586cdfdf61eb529c7371b44231a871bc5d"
+				"count": 845,
+				"sha1": "9f5958b9fa50a33eaac2bb8c88918d0e0ac83adb"
 			}
 		},
 		"gas": {
-			"count": 2099,
-			"sha1": "342cc46b006f8fa618f2ace7a5aba784c727608e",
+			"count": 2509,
+			"sha1": "d15789d67445ebf0ac1c54f8ba9cbaca198aad9b",
 			"noSigns": {
-				"count": 1839,
-				"sha1": "a9de3b5095353ddc720d404ed04672fd273debb8"
+				"count": 2262,
+				"sha1": "68659f6bab75516191347db2df5ea9c99469e1bb"
 			}
 		},
 		"street-night": {
-			"count": 1234,
-			"sha1": "1187c5226aff32d440a5cfba175e5b73c8d5aabe",
+			"count": 1142,
+			"sha1": "50a212f73810c972556e5b473ff4acc7810865f1",
 			"noSigns": {
-				"count": 1234,
-				"sha1": "1187c5226aff32d440a5cfba175e5b73c8d5aabe"
+				"count": 1142,
+				"sha1": "50a212f73810c972556e5b473ff4acc7810865f1"
 			}
 		},
 		"overview": {
-			"count": 4794,
-			"sha1": "d27915db440654fadeb6dc50e51648c24d774ee8",
+			"count": 4747,
+			"sha1": "1df945f6f144a494e97eaadcf84b923981f47710",
 			"noSigns": {
-				"count": 4482,
-				"sha1": "487d4bb44a2e5a4f0416b17bcddd8b364708665c"
+				"count": 4565,
+				"sha1": "f2fd7a1cbe882203368668deef599f5b2c1f3103"
 			}
 		},
 		"border": {
-			"count": 488,
-			"sha1": "2e63912f04ba407b4cdf84da6d4ec6c05150c6eb",
+			"count": 845,
+			"sha1": "01eb46d43d8c41c4ce0c65d1826d96bd2b01667f",
 			"noSigns": {
-				"count": 488,
-				"sha1": "2e63912f04ba407b4cdf84da6d4ec6c05150c6eb"
+				"count": 845,
+				"sha1": "01eb46d43d8c41c4ce0c65d1826d96bd2b01667f"
 			}
 		}
 	}

@@ -4,6 +4,10 @@ Tudo nesta pasta é gerado por `npm run promo` (`tools/render-promo.mjs`) com o 
 
 Determinístico: a mesma semente dá os mesmos bytes (`npm run promo` duas vezes = arquivos idênticos).
 
+O **texto** da página (o nome "Last Town: Zombie Survival", a descrição com as regras e o recurso, e o About do
+repositório no GitHub) está em [`DESCRIPTION.md`](DESCRIPTION.md). No jogo, o título do lobby e o splash usam o mesmo
+desenho do wordmark como a textura `wordmark` do `npm run art:world` (`client/ui/logo.ts`), que a CI sobe com a cidade.
+
 ## Arquivos
 
 | Arquivo                                                         | Tamanho     | Onde vai                                                                                                                                             |

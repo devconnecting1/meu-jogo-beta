@@ -38,10 +38,19 @@
  *   x. CONSTRUCTIONS (MP-24): the per-player cap follows the account through a leave and a rejoin; an abandoned
  *      construction rots after the grace and falls, and whoever repairs it while it rots takes it over; the piece that
  *      would close a ring around a living survivor (the builder too) is refused, a door in the same gap is not.
+ *  aa. WINDOW GLASS (EDI-18): an intact pane stops a body and a bullet and not the eyes, a broken one is EDI-10's
+ *      open frame; E through the real wire breaks it (one global DoorSet, the glass Fx) only when its command says so
+ *      (HeldBit.Glass: a plain E beside the pane leaves it, an E for the glass leaves the item beside it; the client
+ *      sets the bit only under the "E: Break window" pill, on the command with the press), not from 60 u nor through a
+ *      wall (the hint's test, paneAtHand, to a point inside the pane), and each refusal is the slot's evidence; the
+ *      hand's rate and the tick's budget hold; a pistol's ray and a dagger's arc break it; a barricade goes into a
+ *      window with glass, nothing else stands on it; a pane is a way out for MP-24; the generated share; a newcomer's
+ *      WorldInit names exactly the panes broken since generation and the client's mirror ends up with the server's.
  *
  * MP_PHASE is NOT changed (tools/test-net.mjs pins it): the simulation is built with `interactive: true`,
  * the switch `zombies: true` already uses for the horde.
  */
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { installShims, setSeed } from "./luau-shim.mjs";
 
@@ -121,8 +130,8 @@ function addPlayer(sim, slot, x, y, save) {
  * Sends one command through the REAL wire: encode → the token bucket and the decoder of `ingestInput`.
  * `edges` is `packEdges(attackPress, attackRelease, actionPress, reload)`.
  */
-function send(sp, seq, aim, edges, now) {
-	const cmd = P.makeCommand(seq, 0, 0, aim, 0, edges);
+function send(sp, seq, aim, edges, now, held = 0) {
+	const cmd = P.makeCommand(seq, 0, 0, aim, held, edges);
 	const packet = { viewTick: 0, viewFrac: 0, cmds: [cmd] };
 	const payload = P.encodeInput(packet);
 	return PL.ingestInput(sp, payload, now ?? 0);
@@ -1513,14 +1522,31 @@ section("t) fortificar: barricada ou porta mirada numa janela ou num vao de pred
 	// the generated town: its buildings have doorways and windows (shared/game/interiors.ts)
 	const world = W.serverWorld(W.generateTown(DESIGN.TOWN_SEED));
 	const sim = newSim(world);
+	const NORMAL = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] };
+	/**
+	 * does a window give onto open ground (a body climbing out of it gets 100 u clear)? The town's first building with a
+	 * window may stand by the map's border wall, 56 u off -- a window onto that alley is not the way out this checks
+	 */
+	const opensOut = o => {
+		const n = NORMAL[o.side];
+		let x = o.x + o.w / 2 - n[0] * 40;
+		let y = o.y + o.h / 2 - n[1] * 40;
+		for (let i = 0; i < 60; i++) {
+			const r = PH.moveActor(world, x, y, 16, n[0] * 4, n[1] * 4);
+			x = r.x;
+			y = r.y;
+		}
+		return (x - (o.x + o.w / 2)) * n[0] + (y - (o.y + o.h / 2)) * n[1] > 100;
+	};
+	// a window born broken (EDI-18): its open frame is the one a body climbs today; the glass is §aa's
 	const house = world.solids.find(
 		s =>
 			s.kind === "building" &&
-			(s.openings ?? []).some(o => o.kind === "window") &&
-			(s.openings ?? []).some(o => o.kind === "door" && !o.main),
+			(s.openings ?? []).some(o => o.kind === "door" && !o.main) &&
+			(s.openings ?? []).some(o => o.kind === "window" && o.broken === true) &&
+			opensOut(s.openings.find(o => o.kind === "window" && o.broken === true)),
 	);
-	check(house !== undefined, "a cidade tem predio com janela e porta dos fundos");
-	const NORMAL = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] };
+	check(house !== undefined, "a cidade tem predio com janela (vao aberto) e porta dos fundos");
 	/**
 	 * The CLIENT's ghost (client/systems/build.ts BuildSystem, the drawing the survivor aims with) for a survivor
 	 * standing where `fortify` puts one: builds become the server's (ServerBuild.hold / place) while the client keeps
@@ -1552,7 +1578,7 @@ section("t) fortificar: barricada ou porta mirada numa janela ou num vao de pred
 		sim.build.hold(slot, placeable, undefined);
 		return { p, out: sim.build.place(slot, p.state, [p.state], []) };
 	};
-	const win = house.openings.find(o => o.kind === "window");
+	const win = house.openings.find(o => o.kind === "window" && o.broken === true);
 	/**
 	 * A body `radius` wide, 40 u in from the opening, walks straight out through it (60 steps of 4 u) with the one
 	 * moveActor the server, the client's prediction and every zombie move by: how far past the opening's middle it
@@ -2512,6 +2538,1073 @@ section(
 		Mirror.resetMirror(cw);
 		check(!IQ.holdsLoot(cp), "um WorldInit novo seca a bomba no espelho ate o proximo aviso");
 		Mirror.forgetMirrorIndex();
+	}
+}
+
+section(
+	"zb) o cofre do banco: pe de cabra, E segurado 10 s, barulho, a porta abre para todos, o alarme toca e chama a horda, e o cofre so enche uma vez (EDI-24)",
+);
+{
+	const V = require(join(SRC, "shared/sim/vault.ts"));
+	const IQ = require(join(SRC, "shared/sim/interactQuery.ts"));
+	const { VAULT_LOOT } = require(join(SRC, "shared/data/spawns.ts"));
+	const { gameHours } = require(join(SRC, "shared/sim/clock.ts"));
+	const Mirror = require(join(SRC, "client/net/worldMirror.ts"));
+	const world = W.serverWorld(W.generateTown(7331));
+	const bank = world.solids.find(s => s.kind === "building" && s.buildingType === 22);
+	check(bank !== undefined, "a cidade 7331 tem um banco");
+	const door = world.solids.find(s => V.isVaultDoor(s) && s.bankId === bank?.id);
+	const box = world.solids.find(s => V.isVaultBox(s) && s.bankId === bank?.id);
+	const portico = world.solids.find(s => V.isPortico(s) && s.bankId === bank?.id);
+	check(
+		door !== undefined && box !== undefined && portico !== undefined,
+		"com a porta do cofre, as caixas e o portico",
+	);
+	checkEq(door?.open, false, "a porta do cofre nasce fechada");
+	const vault = bank.rooms.find(r => r.kind === "vault");
+	// the hall side of the door: away from the vault's floor
+	const alongXDoor = door.w >= door.h;
+	const hallSign = alongXDoor
+		? Math.sign(door.y + door.h / 2 - (vault.y + vault.h / 2))
+		: Math.sign(door.x + door.w / 2 - (vault.x + vault.w / 2));
+	const at = {
+		x: alongXDoor ? door.x + door.w / 2 : door.x + door.w / 2 + hallSign * (door.w / 2 + 20),
+		y: alongXDoor ? door.y + door.h / 2 + hallSign * (door.h / 2 + 20) : door.y + door.h / 2,
+	};
+	const clock = new WorldClock({ day: 1, dayTime: 12 });
+	const sim = newSim(world, clock);
+	const rings = [];
+	sim.interaction.vaults.noise = (x, y, r, shot) => rings.push({ x, y, r, shot });
+	const fx = [];
+	sim.onFx = e => fx.push(e);
+	const a = addPlayer(sim, 0, at.x, at.y);
+	const b = addPlayer(sim, 1, at.x + 2000, at.y);
+	checkEq(IQ.interactTarget(world, a.state.x, a.state.y)?.solid, door, "o alvo do E ali e a porta do cofre");
+	drain(sim);
+	const HOLD = P.HeldBit.Action;
+	let seq = 1;
+	/** one command a tick: E held (and pressed on the first), for `secs` seconds */
+	const hold = (sp, secs, press = true) => {
+		const n = Math.round(secs * sim.simHz);
+		const seen = [];
+		for (let i = 0; i < n; i++) {
+			const cmd = P.makeCommand(seq, 0, 0, 0, HOLD, press && i === 0 ? PRESS_E : 0);
+			PL.ingestInput(sp, P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [cmd] }), sim.tick / sim.simHz);
+			seq += 1;
+			seen.push(...run(sim, 1));
+		}
+		return seen;
+	};
+
+	// no crowbar: nothing starts
+	const bare = hold(a, 1);
+	check(
+		bare.some(s => s.outcome.kind === "refused" && s.outcome.why === "material"),
+		"sem pe de cabra, o servidor recusa ('material', como um reparo sem madeira)",
+	);
+	check(!sim.interaction.vaults.working(0), "e ninguem esta trabalhando a porta");
+	checkEq(door.open, false, "a porta segue fechada");
+
+	// with one: half the work, then let go -- the bolts seat again
+	addItem(a.save, V.VAULT_TOOL_KIND, V.VAULT_TOOL_INDEX, 1);
+	rings.length = 0;
+	fx.length = 0;
+	hold(a, V.VAULT_CRACK_S / 2);
+	check(sim.interaction.vaults.working(0), "com o pe de cabra e E segurado, o trabalho anda");
+	const half = sim.interaction.vaults.progressOf(door);
+	check(Math.abs(half - V.VAULT_CRACK_S / 2) < 0.2, "o servidor conta o tempo do E segurado", `${half.toFixed(2)} s`);
+	checkEq(door.open, false, "na metade, a porta ainda nao cede");
+	const clanks = rings.filter(r => r.r === V.VAULT_WORK_NOISE && r.shot);
+	check(
+		clanks.length >= V.VAULT_CRACK_S / 2 / V.VAULT_WORK_PERIOD - 1,
+		"cada segundo de trabalho e um barulho que a horda ouve (IA-02)",
+		`${clanks.length} aneis de ${V.VAULT_WORK_NOISE}`,
+	);
+	check(
+		fx.filter(e => e.t === P.FxType.Sound).length >= clanks.length,
+		"e um som de aco para quem esta perto (o Fx de uma porta de ferro)",
+	);
+	// let go for longer than the grace (commands without the held bit)
+	for (let i = 0; i < Math.round((V.VAULT_GRACE_S + 0.3) * sim.simHz); i++) {
+		send(a, seq++, 0, 0, sim.tick / sim.simHz);
+		run(sim, 1);
+	}
+	checkEq(sim.interaction.vaults.progressOf(door), 0, "soltou o E: o trabalho recomeca do zero");
+	check(!sim.interaction.vaults.working(0), "e ninguem trabalha mais a porta");
+
+	// walking off stops it as well
+	hold(a, 1);
+	a.state.x += 400;
+	hold(a, 0.2, false);
+	check(!sim.interaction.vaults.working(0), "quem se afasta da porta para de trabalhar");
+	a.state.x = at.x;
+	a.state.y = at.y;
+	for (let i = 0; i < Math.round((V.VAULT_GRACE_S + 0.3) * sim.simHz); i++) run(sim, 1);
+
+	// the whole crack
+	drain(sim);
+	rings.length = 0;
+	hold(a, V.VAULT_CRACK_S + 0.3);
+	checkEq(door.open, true, `${V.VAULT_CRACK_S} s de E segurado com o pe de cabra: a porta do cofre cede`);
+	const out = drain(sim);
+	const doorSets = out.filter(p => p.ev.t === P.WorldEv.DoorSet && p.ev.id === door.id);
+	checkEq(doorSets.length, 1, "um DoorSet da porta do cofre");
+	checkEq(doorSets[0]?.slot, CFG.SLOT_NONE, "para todo mundo, como qualquer porta (§4.5)");
+	checkEq(doorSets[0]?.ev.state, P.SolidState.Open, "aberta");
+	const bells = out.filter(p => p.ev.t === P.WorldEv.LightSet && p.ev.id === portico.id);
+	checkEq(bells.length, 1, "e o LightSet do portico: o alarme tocando");
+	check(bells[0]?.ev.powered === true && bells[0]?.slot === CFG.SLOT_NONE, "ligado, para todo mundo");
+	checkEq(portico.powered, true, "o sino do portico esta tocando");
+	check(
+		rings.some(r => r.r === V.VAULT_OPEN_NOISE && r.shot),
+		"a porta cedendo e um estrondo (um tiro de pistola)",
+	);
+	const alarmRing = rings.find(r => r.r === V.VAULT_ALARM_RADIUS);
+	check(
+		alarmRing !== undefined &&
+			Math.abs(alarmRing.x - (portico.x + portico.w / 2)) < 1 &&
+			Math.abs(alarmRing.y - (portico.y + portico.h / 2)) < 1,
+		`o alarme chama a horda num raio de ${V.VAULT_ALARM_RADIUS} u, a partir da frente do banco`,
+	);
+	// the client: the DoorSet opens its copy, a WorldInit shuts it again until told
+	{
+		const cw = W.generateTown(7331);
+		const cd = cw.solids.find(s => s.id === door.id);
+		const cpo = cw.solids.find(s => s.id === portico.id);
+		Mirror.forgetMirrorIndex();
+		check(
+			cd !== undefined && V.isVaultDoor(cd) && cd.open === false,
+			"o cliente gera a mesma porta, com o mesmo id, fechada",
+		);
+		Mirror.applyMirrorEvent(cw, doorSets[0].ev);
+		Mirror.applyMirrorEvent(cw, bells[0].ev);
+		check(
+			cd?.open === true && cpo?.powered === true,
+			"o DoorSet e o LightSet de sempre abrem a copia dele e tocam o sino",
+		);
+		Mirror.resetMirror(cw);
+		check(
+			cd?.open === false && cpo?.powered !== true,
+			"um WorldInit novo fecha a porta e cala o sino ate ser avisado",
+		);
+		Mirror.forgetMirrorIndex();
+	}
+	// E at the open door: nothing -- it hangs open for good
+	run(sim, Math.ceil(sim.simHz * 0.3));
+	send(a, seq++, 0, PRESS_E, sim.tick / sim.simHz);
+	run(sim, 1);
+	checkEq(door.open, true, "E na porta aberta nao a fecha (cofre arrombado fica aberto)");
+
+	// a late joiner is told: the door open, the bell ringing
+	{
+		const sent = [];
+		const replicator = new Replicator(
+			sim,
+			{
+				snap: () => {},
+				fx: () => {},
+				world: (slot, packet) => sent.push({ slot, packet }),
+				worldAll: packet => sent.push({ slot: CFG.SLOT_NONE, packet }),
+			},
+			{ tick0Time: 0, mapHash: mapHashOf(world) },
+		);
+		const late = addPlayer(sim, 2, at.x, at.y + 600);
+		replicator.welcome(late);
+		replicator.afterTick(1);
+		const got = [];
+		for (const s of sent.filter(q => q.slot === 2)) for (const e of P.decodeWorld(s.packet).events) got.push(e);
+		check(
+			got.some(e => e.t === P.WorldEv.DoorSet && e.id === door.id && e.state === P.SolidState.Open),
+			"quem entra depois recebe a porta do cofre aberta (o WorldInit das portas do mapa)",
+		);
+		check(
+			got.some(e => e.t === P.WorldEv.LightSet && e.id === portico.id && e.powered === true),
+			"e o sino tocando, enquanto toca",
+		);
+	}
+
+	// the alarm keeps calling, then stops
+	rings.length = 0;
+	drain(sim);
+	for (let i = 0; i < Math.ceil((V.VAULT_ALARM_S + 1) * sim.simHz); i++) run(sim, 1);
+	const pulses = rings.filter(r => r.r === V.VAULT_ALARM_RADIUS).length;
+	check(
+		pulses >= Math.floor(V.VAULT_ALARM_S / V.VAULT_ALARM_PERIOD) - 2,
+		`o alarme chama de novo a cada ${V.VAULT_ALARM_PERIOD} s enquanto toca`,
+		`${pulses} aneis`,
+	);
+	const off = drain(sim).filter(p => p.ev.t === P.WorldEv.LightSet && p.ev.id === portico.id);
+	check(
+		off.length === 1 && off[0].ev.powered === false,
+		`depois de ${V.VAULT_ALARM_S} s o sino cala (LightSet desligado)`,
+	);
+	checkEq(portico.powered, false, "e o portico fica em silencio");
+
+	// the boxes: inside the vault, the flag is theirs; E takes everything; once a town
+	const n = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] }[box.face];
+	a.state.x = box.x + box.w / 2 + n[0] * (box.w / 2 + 26);
+	a.state.y = box.y + box.h / 2 + n[1] * (box.h / 2 + 26);
+	check(V.inVault(bank, a.state.x, a.state.y), "dentro do cofre");
+	for (let i = 0; i < Math.ceil(sim.simHz * 0.6); i++) run(sim, 1);
+	check(box.lootItems.length > 0, "as caixas rolaram quando alguem chegou perto");
+	const flags = drain(sim).filter(p => p.ev.t === P.WorldEv.LootFlag && p.slot === 0);
+	check(
+		flags.some(p => p.ev.buildingId === box.id && p.ev.hasLoot),
+		"dentro do cofre, o LootFlag e o das caixas, nao o do banco",
+	);
+	checkEq(
+		IQ.interactTarget(world, a.state.x, a.state.y)?.kind,
+		"pump",
+		"o E ali abre as caixas (um conteiner, como a barraca)",
+	);
+	const inBox = box.lootItems.map(d => `${d.kind}/${d.id}`);
+	check(
+		box.lootItems.every(d => VAULT_LOOT.some(e => e.kind === d.kind && e.index === d.id)) &&
+			!box.lootItems.some(d => d.kind === 1 || (d.kind === 4 && d.id >= 44 && d.id <= 47)),
+		"so o que a tabela do cofre tem, e nunca arma ou municao",
+		inBox.join(" "),
+	);
+	check(
+		box.lootItems.some(d => d.kind === 4 && d.id === 27),
+		"ouro sempre (2 a 4 pedacos)",
+	);
+	const gold = countItem(a.save, 4, 27);
+	send(a, seq++, 0, PRESS_E, sim.tick / sim.simHz);
+	const took = run(sim, 1);
+	check(
+		took.some(s => s.outcome.kind === "pump"),
+		"o E leva tudo",
+	);
+	check(countItem(a.save, 4, 27) > gold, "o ouro foi para a mochila");
+	checkEq(box.lootItems.length, 0, "as caixas ficaram vazias");
+	checkEq(box.lootTimer, Infinity, "e nao enchem de novo nesta cidade (uma vez por mundo)");
+	clock.day = 30;
+	for (let i = 0; i < Math.ceil(sim.simHz * 0.6); i++) run(sim, 1);
+	checkEq(box.lootItems.length, 0, "30 dias depois, continuam vazias");
+	check(gameHours(30, 12) > 0, "(o relogio andou)");
+	void b;
+
+	// the real wiring: the work's clank reaches the horde's ears (zombieBrain's emitSound), not only a test hook
+	{
+		const w2 = W.serverWorld(W.generateTown(7331));
+		const d2 = w2.solids.find(s => V.isVaultDoor(s));
+		const sim2 = new ServerSimulation({
+			world: w2,
+			clock: new WorldClock({ day: 1, dayTime: 12 }),
+			zombies: true,
+			interactive: true,
+		});
+		const c = addPlayer(sim2, 0, at.x, at.y);
+		addItem(c.save, V.VAULT_TOOL_KIND, V.VAULT_TOOL_INDEX, 1);
+		for (let i = 0; i < Math.round(sim2.simHz * 1.2); i++) {
+			const cmd = P.makeCommand(seq, 0, 0, 0, HOLD, i === 0 ? PRESS_E : 0);
+			PL.ingestInput(c, P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [cmd] }), sim2.tick / sim2.simHz);
+			seq += 1;
+			sim2.step();
+		}
+		const heard = (sim2.horde?.refs.sounds ?? []).some(
+			r => Math.hypot(r.x - (d2.x + d2.w / 2), r.y - (d2.y + d2.h / 2)) < 1 && r.rMax > 0,
+		);
+		check(heard, "o barulho do trabalho chega aos ouvidos da horda (emitSound, IA-02)");
+	}
+	// the pill: what the door needs, what E does
+	{
+		const CInter = require(join(SRC, "client/systems/interaction.ts"));
+		const cw = W.generateTown(7331);
+		const refs = {
+			world: cw,
+			pendingPlace: -1,
+			save: SAVE.defaultSave(),
+			players: [],
+			zombies: [],
+			player: { x: at.x, y: at.y, dead: false },
+			input: { keyE: false },
+		};
+		checkEq(CInter.interactHint(refs, at), "Vault: needs Crowbar", "a pilula diz o que falta: um pe de cabra");
+		addItem(refs.save, V.VAULT_TOOL_KIND, V.VAULT_TOOL_INDEX, 1);
+		checkEq(CInter.interactHint(refs, at), "E: Crack vault (hold)", "com ele: segurar E arromba");
+	}
+	// the review of e9b0fbb, M1: the ringing portico's light is ONE table -- the client's light map draws the server's
+	// radii, so the ground the survivor sees lit is the ground the horde sees lit (LUZ-04)
+	{
+		const T = require(join(SRC, "shared/sim/ai/zombieTuning.ts"));
+		const ZB = require(join(SRC, "shared/sim/ai/zombieBrain.ts"));
+		const loop = readFileSync(join(SRC, "client/gameLoop.ts"), "utf8");
+		const decl = /const LIGHT_R[^=]*=\s*([^;]+);/.exec(loop);
+		let client = {};
+		if (decl !== null && decl[1].trim() === "STRUCTURE_LIGHT_R") client = T.STRUCTURE_LIGHT_R;
+		else if (decl !== null) {
+			for (const m of decl[1].matchAll(/(\w+)\s*:\s*(\d+)/g)) client[m[1]] = Number(m[2]);
+		}
+		const ck = Object.keys(client).sort().join(",");
+		const sk = Object.keys(T.STRUCTURE_LIGHT_R).sort().join(",");
+		check(
+			decl !== null && ck === sk && Object.keys(client).every(k => client[k] === T.STRUCTURE_LIGHT_R[k]),
+			"as luzes do cliente (gameLoop LIGHT_R) sao as do servidor (STRUCTURE_LIGHT_R): as mesmas fontes, os mesmos raios",
+			`${ck} | ${sk}`,
+		);
+		checkEq(T.STRUCTURE_LIGHT_R.portico, 220, "o portico com o sino tocando e uma delas (220 u)");
+		const w3 = W.serverWorld(W.generateTown(7331));
+		const po = w3.solids.find(s => V.isPortico(s));
+		const sim3 = new ServerSimulation({
+			world: w3,
+			clock: new WorldClock({ day: 1, dayTime: 23 }),
+			zombies: true,
+			interactive: true,
+		});
+		const pcx = po.x + po.w / 2;
+		const pcy = po.y + po.h / 2;
+		// a survivor 700 u off: their own light does not reach the portico
+		addPlayer(sim3, 0, pcx, pcy + 700);
+		po.powered = true;
+		for (let i = 0; i < 10; i++) sim3.step();
+		check(
+			[0, 100, 200].every(d => ZB.positionLit(sim3.horde.refs, pcx + d, pcy)),
+			"a noite, o chao ate 200 u do portico tocando esta aceso tambem para a horda",
+		);
+		po.powered = false;
+		for (let i = 0; i < Math.ceil(sim3.simHz * 1.2); i++) sim3.step();
+		check(!ZB.positionLit(sim3.horde.refs, pcx + 100, pcy), "e apaga quando o sino cala");
+	}
+	// M2: the deposit boxes are reached from inside that bank's vault only -- never the hint, the flag or the E from
+	// behind the vault's back wall (outside the bank) or from the office beside it
+	{
+		const CInter = require(join(SRC, "client/systems/interaction.ts"));
+		const w4 = W.serverWorld(W.generateTown(7331));
+		const bk = w4.solids.find(s => s.kind === "building" && s.buildingType === 22);
+		const bx = w4.solids.find(s => V.isVaultBox(s) && s.bankId === bk.id);
+		const R = PH.PLAYER_RADIUS;
+		/** a spot within E's reach of the boxes' edge, where a body fits, outside the vault: outside the bank or in it */
+		let outside;
+		let inside;
+		for (let x = bx.x - 70; x <= bx.x + bx.w + 70 && !(outside && inside); x += 2) {
+			for (let y = bx.y - 70; y <= bx.y + bx.h + 70; y += 2) {
+				if (V.inVault(bk, x, y) || IQ.edgeDist(bx, x, y) > IQ.SOLID_REACH - 2) continue;
+				if (PH.circleBlocked(w4, x, y, R - 1) !== undefined) continue;
+				const hb = W.buildingAt(w4, x, y);
+				if (hb === undefined && outside === undefined) outside = { x, y };
+				if (hb === bk && inside === undefined) inside = { x, y };
+			}
+		}
+		check(
+			outside !== undefined && inside !== undefined,
+			"ha lugar ao alcance das caixas, fora do banco e no gabinete ao lado",
+			JSON.stringify({ outside, inside }),
+		);
+		const sim4 = new ServerSimulation({
+			world: w4,
+			clock: new WorldClock({ day: 1, dayTime: 12 }),
+			zombies: false,
+			interactive: true,
+		});
+		const spots = [outside, inside].filter(Boolean);
+		const who = spots.map((s, i) => addPlayer(sim4, i, s.x, s.y));
+		for (let i = 0; i < Math.ceil(sim4.simHz * 1.2); i++) sim4.step();
+		check(bx.lootItems.length > 0, "as caixas rolaram (alguem chegou perto)");
+		const flags = drain(sim4).filter(
+			p => p.ev.t === P.WorldEv.LootFlag && p.ev.buildingId === bx.id && p.ev.hasLoot,
+		);
+		checkEq(
+			flags.length,
+			0,
+			"ninguem fora da caixa-forte recebe o LootFlag das caixas (nem pela parede, nem do gabinete)",
+		);
+		for (let i = 0; i < spots.length; i++) {
+			const where = i === 0 ? "atras da parede, fora do banco" : "no gabinete ao lado";
+			check(IQ.interactTarget(w4, spots[i].x, spots[i].y)?.solid !== bx, `${where}: o alvo do E nao e as caixas`);
+			const cw = W.generateTown(7331);
+			const cbx = cw.solids.find(s => s.id === bx.id);
+			cbx.lootItems = [{ kind: 4, id: 27, count: 1 }];
+			const refs = {
+				world: cw,
+				pendingPlace: -1,
+				save: SAVE.defaultSave(),
+				players: [],
+				zombies: [],
+				player: { x: spots[i].x, y: spots[i].y, dead: false },
+				input: { keyE: false },
+			};
+			check(
+				CInter.interactHint(refs, spots[i]) !== "E: Open deposit boxes",
+				`${where}: a pilula nao oferece as caixas, mesmo sabendo que tem algo nelas`,
+				String(CInter.interactHint(refs, spots[i])),
+			);
+			const before = bx.lootItems.length;
+			send(who[i], 50 + i, 0, PRESS_E, sim4.tick / sim4.simHz);
+			const res = run(sim4, 1);
+			check(
+				bx.lootItems.length === before && !res.some(s => s.outcome.kind === "pump" && s.outcome.solid === bx),
+				`${where}: o E nao esvazia as caixas`,
+			);
+		}
+		// from inside the vault, all of it does (the cracked door, a body at the boxes)
+		const vd = w4.solids.find(s => V.isVaultDoor(s) && s.bankId === bk.id);
+		vd.open = true;
+		const n = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] }[bx.face];
+		const vin = { x: bx.x + bx.w / 2 + n[0] * (bx.w / 2 + 26), y: bx.y + bx.h / 2 + n[1] * (bx.h / 2 + 26) };
+		checkEq(IQ.interactTarget(w4, vin.x, vin.y)?.solid, bx, "dentro da caixa-forte, o alvo do E sao as caixas");
+	}
+	// L1: nothing spawns inside a vault -- no zombie and no item of the ring (population.ts ringOpen)
+	{
+		const w5 = W.generateTown(7331);
+		const bk = w5.solids.find(s => s.kind === "building" && s.buildingType === 22);
+		const vr = bk.rooms.find(r => r.kind === "vault");
+		const vx = vr.x + vr.w / 2;
+		const vy = vr.y + vr.h / 2;
+		const POP = readFileSync(join(SRC, "shared/sim/ai/population.ts"), "utf8");
+		check(
+			/inAnyVault\(world, p\.x, p\.y\)\) continue/.test(POP) &&
+				V.inAnyVault(w5, vx, vy) &&
+				!V.inAnyVault(w5, bk.x - 50, vy),
+			"o anel de nascimento (zumbis e itens) pula todo ponto dentro de uma caixa-forte",
+		);
+	}
+	// L2: the work's 0.5 s grace is refreshed by a command that arrived, not by the last input repeated: a client that
+	// sends one packet with E down and goes silent stops working within the grace (the idle fill repeats `held`)
+	{
+		const w6 = W.serverWorld(W.generateTown(7331));
+		const d6 = w6.solids.find(s => V.isVaultDoor(s));
+		const sim6 = newSim(w6);
+		const c = addPlayer(sim6, 0, at.x, at.y);
+		addItem(c.save, V.VAULT_TOOL_KIND, V.VAULT_TOOL_INDEX, 1);
+		const cmd = P.makeCommand(1, 0, 0, 0, HOLD, PRESS_E);
+		PL.ingestInput(c, P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [cmd] }), sim6.tick / sim6.simHz);
+		run(sim6, 1);
+		check(sim6.interaction.vaults.working(0), "o aperto que chegou comeca o trabalho");
+		run(sim6, Math.ceil(sim6.simHz * (V.VAULT_GRACE_S + 0.2)));
+		check(!sim6.interaction.vaults.working(0), "sem comando novo, o trabalho para dentro da tolerancia (0,5 s)");
+		run(sim6, Math.ceil(sim6.simHz * (V.VAULT_CRACK_S + 2)));
+		checkEq(d6.open, false, "e um cliente calado com o E apertado nunca arromba o cofre");
+	}
+}
+
+section(
+	"aa) o vidro das janelas (EDI-18): intacta segura corpo e bala e nao os olhos; quebra por E, lamina e tiro, com alcance, linha, ritmo e teto por tick; o fio e o WorldInit",
+);
+{
+	const WIN = require(join(SRC, "shared/game/windows.ts"));
+	const { ServerWindows, WINDOW_BREAK_BURST } = require(join(SRC, "server/sim/windows.ts"));
+	const { ServerCombat } = require(join(SRC, "server/sim/combat.ts"));
+	const { blocksSight } = require(join(SRC, "shared/sim/ai/perception.ts"));
+	const IQ = require(join(SRC, "shared/sim/interactQuery.ts"));
+	const Mirror = require(join(SRC, "client/net/worldMirror.ts"));
+	const CInter = require(join(SRC, "client/systems/interaction.ts"));
+	// townCache.ts reads the client's RunService when it loads (the lobby's town, MP-24): a stand-in, only for the load
+	// -- this suite asks it nothing but `townFingerprint`
+	const hadGame = globalThis.game;
+	const signal = { Connect: () => ({ Connected: true, Disconnect() {} }) };
+	globalThis.game ??= { GetService: () => ({ RenderStepped: signal, Heartbeat: signal, Stepped: signal }) };
+	const { townFingerprint } = require(join(SRC, "client/boot/townCache.ts"));
+	globalThis.game = hadGame;
+	const { stepPlayer } = require(join(SRC, "shared/sim/playerMove.ts"));
+	const { boxesIn } = require(join(SRC, "server/sim/enclosure.ts"));
+	const { WorldOut } = require(join(SRC, "server/sim/worldOut.ts"));
+	const TICK_DT = 1 / CFG.SIM_HZ;
+	const info = msg => console.log(`        ${msg}`);
+	/** a pane of glass in a wall along x at (x, y): 80 x 20 (or 20 x 80 along y), as the generator lays one */
+	const pane = (world, x, y, alongY = false) =>
+		W.addSolid(world, {
+			kind: "window",
+			x,
+			y,
+			w: alongY ? 20 : 80,
+			h: alongY ? 80 : 20,
+			hp: WIN.GLASS_HITS,
+			hpMax: WIN.GLASS_HITS,
+			destructible: false,
+			tags: "window",
+			parentId: 1,
+		});
+	const wallAt = (world, x, y, w, h) =>
+		W.addSolid(world, {
+			kind: w >= h ? "wall_h" : "wall_v",
+			x,
+			y,
+			w,
+			h,
+			hp: 999999,
+			hpMax: 999999,
+			destructible: false,
+			tags: "bwall",
+			parentId: 1,
+		});
+	/** a body walking north through the gap from 40 u south of it: how far north of the wall's middle it ends */
+	const through = (world, x, r = PH.PLAYER_RADIUS) => {
+		let px = x;
+		let py = 1050;
+		for (let i = 0; i < 60; i++) {
+			const m = PH.moveActor(world, px, py, r, 0, -4);
+			px = m.x;
+			py = m.y;
+		}
+		return 1010 - py;
+	};
+
+	// ---- the two states, on the world's own physics
+	{
+		const world = emptyWorld();
+		wallAt(world, 900, 1000, 100, 20);
+		const g = pane(world, 1000, 1000);
+		wallAt(world, 1080, 1000, 100, 20);
+		check(WIN.windowIntact(g) && W.isBlocking(g), "intacta: o vidro e solido (isBlocking)");
+		check(
+			through(world, 1040) < 0,
+			"e um corpo nao passa (moveActor, o mesmo do servidor, da predicao e da horda)",
+		);
+		check(PH.raycast(world, 1040, 1300, -Math.PI / 2, 600).solid === g, "a bala para no vidro (blocksShots)");
+		check(!blocksSight(g), "e os olhos atravessam (IA-01: vidro nao esconde ninguem)");
+		checkEq(PH.vaultFactor(world, 1040, 1010), 1, "e ninguem 'pula' um vidro inteiro: sem a lentidao do parapeito");
+		check(WIN.breakWindow(world, g), "breakWindow quebra");
+		check(
+			WIN.windowBroken(g) && !W.isBlocking(g) && g.open === true && g.hp === 0,
+			"quebrada: o vao aberto da EDI-10 (passable, open, hp 0)",
+		);
+		check(through(world, 1040) > 30, "e o corpo passa, pulando o parapeito");
+		checkEq(PH.vaultFactor(world, 1040, 1010), PH.VAULT_SLOW, "na lentidao do parapeito (VAULT_SLOW)");
+		check(!WIN.breakWindow(world, g), "e nao quebra duas vezes");
+		checkEq(g.hpMax, WIN.GLASS_HITS, "o hpMax guarda que ela nasceu com vidro (o WorldInit so manda estas)");
+	}
+
+	// ---- E, through the real wire: the pane the SERVER's query finds at the server's position
+	{
+		const world = emptyWorld();
+		const sim = newSim(world);
+		const fx = [];
+		sim.onFx = e => fx.push(e);
+		wallAt(world, 900, 1000, 100, 20);
+		const g = pane(world, 1000, 1000);
+		wallAt(world, 1080, 1000, 100, 20);
+		const p = addPlayer(sim, 0, 1040, 1040);
+		check(
+			IQ.interactTarget(world, 1040, 1040) === undefined && IQ.nearestIntactWindow(world, 1040, 1040) === g,
+			"o vidro nunca e o alvo do E de sempre: e a sua propria intencao (nearestIntactWindow, nota 23)",
+		);
+		{
+			const refs = { world, pendingPlace: -1, save: SAVE.defaultSave(), players: [], zombies: [] };
+			checkEq(
+				CInter.interactHint(refs, { x: 1040, y: 1040 }),
+				"E: Break window",
+				"e a pilula diz o que o E faz (LEG-01)",
+			);
+		}
+		drain(sim);
+		// M1 (review of ef98768): a press without the glass bit never breaks glass, even with the pane right there
+		send(p, 1, 0, PRESS_E);
+		const plain = run(sim, 1);
+		check(
+			WIN.windowIntact(g) && plain.every(s => s.outcome.kind !== "window"),
+			"um E sem HeldBit.Glass (um E de outra coisa) nao quebra o vidro, nem com ele ao alcance",
+			plain.map(s => s.outcome.kind).join(",") || "nada",
+		);
+		send(p, 2, 0, PRESS_E, 0, P.HeldBit.Glass);
+		const seen = run(sim, 1);
+		check(WIN.windowBroken(g), "o E com HeldBit.Glass (a pilula era a janela) quebrou o vidro");
+		checkEq(seen[0]?.outcome.kind, "window", "e o servidor diz o que o E fez");
+		const sets = drain(sim).filter(d => d.ev.t === P.WorldEv.DoorSet && d.ev.id === g.id);
+		checkEq(sets.length, 1, "um DoorSet da janela foi enfileirado");
+		check(
+			sets[0]?.slot === CFG.SLOT_NONE && sets[0]?.ev.state === P.SolidState.Open,
+			"para TODO MUNDO, com o vao 'aberto' (todos preveem o corpo contra ele, nota 23)",
+		);
+		check(
+			fx.some(e => e.t === P.FxType.Debris && e.material === 6 && e.count >= 8),
+			"e o vidro no chao (Fx Debris 'glass'), que o cliente toca e desenha",
+		);
+		check(IQ.interactTarget(world, 1040, 1040) === undefined, "quebrada, o E ali nao faz mais nada");
+		{
+			const refs = { world, pendingPlace: -1, save: SAVE.defaultSave(), players: [], zombies: [] };
+			checkEq(CInter.interactHint(refs, { x: 1040, y: 1040 }), undefined, "e a pilula some");
+		}
+	}
+
+	// ---- M1 (review of ef98768): the glass is its own intent, in both directions
+	{
+		const world = emptyWorld();
+		const sim = newSim(world);
+		wallAt(world, 900, 1000, 100, 20);
+		const g = pane(world, 1000, 1000);
+		wallAt(world, 1080, 1000, 100, 20);
+		const a = addPlayer(sim, 0, 1040, 1040);
+		// a pistol on the floor right under the window, inside E's reach (a weapon: taken with E, never walked over)
+		const first = W.spawnGroundItem(world, 1, 10, 1, 1040, 1050);
+		{
+			const refs = { world, pendingPlace: -1, save: SAVE.defaultSave(), players: [], zombies: [] };
+			check(
+				CInter.interactHint(refs, { x: 1040, y: 1040 }) !== CInter.WINDOW_HINT,
+				"com um item ao alcance, a pilula e a do item: E nao e o vidro",
+			);
+		}
+		drain(sim);
+		send(a, 1, 0, PRESS_E);
+		const took = run(sim, 1);
+		check(
+			!world.items.includes(first) && WIN.windowIntact(g),
+			"o E para o item pega o item e o vidro fica inteiro",
+			took.map(s => s.outcome.kind).join(","),
+		);
+		// the same spot, an item again, and a press that SAYS glass (a client whose world had no item there yet)
+		const second = W.spawnGroundItem(world, 1, 10, 1, 1040, 1050);
+		run(sim, Math.ceil(sim.simHz * 0.25));
+		send(a, 2 + Math.ceil(sim.simHz * 0.25), 0, PRESS_E, 0, P.HeldBit.Glass);
+		const broke = run(sim, 1);
+		check(
+			WIN.windowBroken(g) && world.items.includes(second),
+			"o E que diz 'vidro' quebra o vidro e nao pega nada",
+			broke.map(s => s.outcome.kind).join(","),
+		);
+		// with no pane left at hand, a press that says glass does nothing else either: refused, counted
+		run(sim, Math.ceil(sim.simHz * 0.25));
+		const n0 = sim.windows.refusedOf(0);
+		send(a, 3 + Math.ceil(sim.simHz * 0.5), 0, PRESS_E, 0, P.HeldBit.Glass);
+		const none = run(sim, 1);
+		check(
+			world.items.includes(second) &&
+				none.length === 1 &&
+				none[0].outcome.kind === "refused" &&
+				sim.windows.refusedOf(0) === n0 + 1,
+			"sem vidro ao alcance, o E que diz 'vidro' e recusado (e contado como evidencia) e o item fica",
+			none.map(s => `${s.outcome.kind}/${s.outcome.why ?? ""}`).join(","),
+		);
+	}
+
+	// ---- M1 on the client: the glass bit is set only when the hint was the window, and rides the E press's command
+	{
+		const { CommandStream } = require(join(SRC, "client/net/commands.ts"));
+		const auth = require(join(SRC, "client/net/authority.ts"));
+		const { InputState } = require(join(SRC, "shared/engine/input.ts"));
+		const stream = new CommandStream();
+		stream.reset(0);
+		const raw = { moveX: 0, moveY: 0, magnitude: 0, aim: 0, held: P.HeldBit.Action };
+		const out = [];
+		// a 240 FPS frame builds nothing: the press and its intent wait for the next command, together
+		stream.addEdges(false, false, true, false, true);
+		stream.sample(1 / 240, raw, out);
+		stream.sample(1 / 60, raw, out);
+		stream.sample(1 / 60, raw, out);
+		const withEdge = out.filter(c => P.edgeCount(c.edges, P.EdgeShift.ActionPress) > 0);
+		check(
+			withEdge.length === 1 &&
+				(withEdge[0].held & P.HeldBit.Glass) !== 0 &&
+				out.filter(c => (c.held & P.HeldBit.Glass) !== 0).length === 1,
+			"HeldBit.Glass vai so no comando que leva o E (mesmo com um quadro sem comando no meio)",
+			`${out.length} comandos, ${withEdge.length} com o E`,
+		);
+		out.length = 0;
+		stream.addEdges(false, false, true, false, false);
+		stream.sample(1 / 60, raw, out);
+		check(out.length === 1 && (out[0].held & P.HeldBit.Glass) === 0, "e um E comum nunca o leva");
+		// the interaction: online, a press whose target is the window marks the intent; one for an item does not (the
+		// pickup feedback notes the press time with Luau's os.clock, which this suite does not otherwise need)
+		auth.setWorldAuthority({ owned: () => true, send: () => false, buildEdge: () => {}, reserveSpent: () => {} });
+		const hadOs = globalThis.os;
+		globalThis.os ??= { clock: () => performance.now() / 1000 };
+		try {
+			const world = emptyWorld();
+			wallAt(world, 900, 1000, 100, 20);
+			pane(world, 1000, 1000);
+			wallAt(world, 1080, 1000, 100, 20);
+			const input = new InputState();
+			const refs = { world, pendingPlace: -1, save: SAVE.defaultSave(), players: [], zombies: [], input, fx: [] };
+			const inter = new CInter.Interaction();
+			input.actionPressed = true;
+			inter.tryInteract(refs, { x: 1040, y: 1040 });
+			const atPane = input.actionGlass;
+			input.beginFrame();
+			W.spawnGroundItem(world, 4, 23, 5, 1040, 1050);
+			input.actionPressed = true;
+			inter.tryInteract(refs, { x: 1040, y: 1040 });
+			check(
+				atPane === true && input.actionGlass === false,
+				"no cliente, o E sob a pilula 'E: Break window' marca a intencao; o E para um item nao",
+			);
+		} finally {
+			auth.setWorldAuthority(undefined);
+			globalThis.os = hadOs;
+		}
+	}
+
+	// ---- reach and line: the server's position, never through a wall
+	{
+		const world = emptyWorld();
+		const sim = newSim(world);
+		const g = pane(world, 1000, 1000);
+		const far = addPlayer(sim, 0, 1040, 1080);
+		send(far, 1, 0, PRESS_E, 0, P.HeldBit.Glass);
+		run(sim, 1);
+		check(WIN.windowIntact(g), "a 60 u do vidro, nem o E que diz 'vidro' quebra nada");
+		check(sim.windows.refusedOf(0) === 1, "e a tentativa conta como evidencia do slot (L5)");
+		checkEq(
+			sim.windows.byHand(0, far.state, g, WIN.WINDOW_REACH),
+			"range",
+			"e um pedido direto e recusado: 'range'",
+		);
+		// a wall between the survivor and the glass (a partition 6 u deep, 5 u in front of it)
+		wallAt(world, 960, 1025, 160, 6);
+		const behind = addPlayer(sim, 1, 1040, 1045);
+		checkEq(
+			sim.windows.byHand(1, behind.state, g, WIN.WINDOW_REACH),
+			"blocked",
+			"atras de uma parede, perto o bastante: 'blocked' (a linha e do servidor)",
+		);
+		check(
+			IQ.nearestIntactWindow(world, 1040, 1045) === undefined,
+			"e a pilula nao oferece o vidro atras da parede: o mesmo teste do servidor (L1, paneAtHand)",
+		);
+		check(WIN.windowIntact(g), "e o vidro continua inteiro");
+	}
+
+	// ---- L1: at an angle by the jamb, the line reaches a point INSIDE the pane: the wall it sits in is not in the way
+	{
+		const world = emptyWorld();
+		const sim = newSim(world);
+		wallAt(world, 900, 1000, 100, 20);
+		const g = pane(world, 1000, 1000);
+		wallAt(world, 1080, 1000, 100, 20);
+		const p = addPlayer(sim, 0, 1086, 1036);
+		checkEq(IQ.paneAtHand(world, g, 1086, 1036, WIN.WINDOW_REACH), "ok", "de viés junto ao batente: ao alcance");
+		check(IQ.nearestIntactWindow(world, 1086, 1036) === g, "a pilula oferece o vidro");
+		checkEq(
+			sim.windows.byHand(0, p.state, g, WIN.WINDOW_REACH),
+			"broken",
+			"e o servidor o quebra (hint = servidor)",
+		);
+	}
+
+	// ---- the rate: by hand, WINDOW_BREAK_RATE a second after a burst of WINDOW_BREAK_BURST
+	{
+		const world = emptyWorld();
+		const sim = newSim(world);
+		const panes = [0, 1, 2, 3].map(i => pane(world, 1000 + i * 200, 1000));
+		const p = addPlayer(sim, 0, 1040, 1030);
+		const got = panes.map(g => {
+			p.state.x = g.x + 40;
+			return sim.windows.byHand(0, p.state, g, WIN.WINDOW_REACH);
+		});
+		checkEq(
+			got.join(","),
+			`${Array(WINDOW_BREAK_BURST).fill("broken").join(",")},rate`,
+			`a mao quebra ${WINDOW_BREAK_BURST} de uma vez, a seguinte espera o ritmo`,
+		);
+		run(sim, Math.ceil(sim.simHz * 0.55));
+		p.state.x = panes[3].x + 40;
+		checkEq(sim.windows.byHand(0, p.state, panes[3], WIN.WINDOW_REACH), "broken", "meio segundo depois, quebra");
+	}
+
+	// ---- the review of b61425a: the evidence (§9.3) is the E presses for the glass, never a blade's swing (the combat --
+	// the swing's arc -- lives with the horde: an empty street, emptied every tick)
+	{
+		const world = emptyWorld();
+		const sim = new ServerSimulation({
+			world,
+			clock: new WorldClock({ day: 1, dayTime: 12 }),
+			zombies: true,
+			interactive: true,
+		});
+		const step = sim.step.bind(sim);
+		sim.step = () => {
+			sim.horde.zombies.length = 0;
+			step();
+		};
+		const g = pane(world, 1000, 1000);
+		const s = SAVE.defaultSave();
+		s.equipWeapon = 0;
+		const p = addPlayer(sim, 0, 1040, 1030, s);
+		const up = -Math.PI / 2;
+		// the hand's bucket spent (a private field: the test sets the scene), so the glass a swing crosses is refused
+		const town0 = sim.windows.refused.rate;
+		let seq = 1;
+		for (; seq < 30 && sim.windows.refused.rate === town0; seq++) {
+			sim.windows.tokens[0] = 0;
+			send(p, seq, up, seq === 1 ? P.packEdges(1, 0, 0, 0) : 0, sim.tick / sim.simHz, P.HeldBit.Attack);
+			sim.step();
+		}
+		check(
+			sim.windows.refused.rate === town0 + 1 && WIN.windowIntact(g) && sim.windows.refusedOf(0) === 0,
+			"a lamina que cruza o vidro alem do ritmo e recusada (o vidro fica), e nao e evidencia contra o slot: o golpe " +
+				"mirava um zumbi, nao o vidro",
+			`cidade: ${sim.windows.refused.rate - town0} recusa(s) por ritmo, slot: ${sim.windows.refusedOf(0)}`,
+		);
+		sim.windows.tokens[0] = 0;
+		run(sim, Math.ceil(sim.simHz * 0.3));
+		sim.windows.tokens[0] = 0;
+		send(p, seq + Math.ceil(sim.simHz * 0.3), 0, PRESS_E, sim.tick / sim.simHz, P.HeldBit.Glass);
+		const pressed = run(sim, 1);
+		check(
+			pressed[0]?.outcome.kind === "refused" && WIN.windowIntact(g) && sim.windows.refusedOf(0) === 1,
+			"o E para o vidro, recusado pelo mesmo ritmo, e evidencia (L5)",
+			pressed.map(e => `${e.outcome.kind}/${e.outcome.why ?? ""}`).join(",") || "nada",
+		);
+	}
+
+	// ---- the tick's budget: whatever breaks them, WINDOW_BREAKS_PER_TICK a tick
+	{
+		const world = emptyWorld();
+		const sim = newSim(world);
+		const panes = [0, 1, 2, 3, 4, 5].map(i => pane(world, 1000 + i * 200, 1000));
+		sim.windows.beginTick(TICK_DT);
+		const got = panes.map(g => sim.windows.byShot(g));
+		checkEq(
+			got.filter(s => s === "broken").length,
+			WIN.WINDOW_BREAKS_PER_TICK,
+			`no mesmo tick quebram ${WIN.WINDOW_BREAKS_PER_TICK} (o resto: 'budget')`,
+		);
+		sim.windows.beginTick(TICK_DT);
+		const rest = panes.filter(g => WIN.windowIntact(g)).map(g => sim.windows.byShot(g));
+		check(rest.length > 0 && rest.every(s => s === "broken"), "e o resto no tick seguinte");
+	}
+
+	// ---- a shot and a blade: the combat's own ray and arc (server/sim/combat.ts `glass`)
+	{
+		const world = emptyWorld();
+		const out = new WorldOut();
+		const windows = new ServerWindows({ world, out, horde: () => undefined });
+		const g = pane(world, 1000, 1000);
+		const back = W.addSolid(world, {
+			kind: "wall_h",
+			x: 960,
+			y: 700,
+			w: 160,
+			h: 20,
+			hp: 999999,
+			hpMax: 999999,
+			destructible: false,
+			tags: "bwall",
+		});
+		const shots = [];
+		const combat = new ServerCombat({
+			world,
+			targets: { zombies: () => [], bosses: () => [] },
+			random: () => 0.5,
+			hooks: {
+				glass: (s, melee, reach) => windows.byShot(s) === "broken",
+				fx: e => {
+					if (e.t === P.FxType.Shot) shots.push(e);
+				},
+			},
+		});
+		const s = SAVE.defaultSave();
+		s.invenWeapon[10] = 1;
+		s.equipWeapon = 10;
+		s.ammoNormal = 20;
+		const sp = PL.createServerPlayer({ slot: 0, userId: 1, name: "p" }, s, 1040, 1300, 0);
+		sp.state.x = 1040;
+		sp.state.y = 1300;
+		const up = -Math.PI / 2;
+		const fire = seq => {
+			const cmd = P.makeCommand(seq, 0, 0, up, P.HeldBit.Attack, P.packEdges(1, 0, 0, 0));
+			stepPlayer(world, sp.state, s, cmd, TICK_DT);
+			combat.stepPlayer(sp, cmd, seq, TICK_DT);
+		};
+		fire(1);
+		check(WIN.windowBroken(g), "um tiro de pistola de 280 u quebra o vidro (o raio e a linha e o alcance)");
+		const firstEnd = shots[0]?.hits[0]?.y ?? 0;
+		check(Math.abs(firstEnd - 1020) < 2, "e a bala para no vidro", `fim em y ${firstEnd.toFixed(0)}`);
+		for (let t = 2; t < 60 && shots.length < 2; t++) fire(t);
+		const secondEnd = shots[1]?.hits[0]?.y ?? 9999;
+		check(
+			Math.abs(secondEnd - back.y - back.h) < 2,
+			"o tiro seguinte atravessa o vao aberto",
+			`fim em y ${secondEnd}`,
+		);
+		checkEq(out.size(), 1, "e so a quebra foi para o fio (um DoorSet)");
+
+		// a blade: the dagger's arc crossing a pane 10 u from the survivor
+		const g2 = pane(world, 3000, 1000);
+		const blade = new ServerCombat({
+			world,
+			targets: { zombies: () => [], bosses: () => [] },
+			random: () => 0.5,
+			hooks: { glass: (x, melee, reach) => melee && windows.byHand(1, sp2.state, x, reach) === "broken" },
+		});
+		const s2 = SAVE.defaultSave();
+		s2.equipWeapon = 0;
+		const sp2 = PL.createServerPlayer({ slot: 1, userId: 2, name: "q" }, s2, 3040, 1030, 0);
+		sp2.state.x = 3040;
+		sp2.state.y = 1030;
+		windows.beginTick(TICK_DT);
+		for (let t = 1; t < 30 && WIN.windowIntact(g2); t++) {
+			const cmd = P.makeCommand(t, 0, 0, up, P.HeldBit.Attack, P.packEdges(t === 1 ? 1 : 0, 0, 0, 0));
+			stepPlayer(world, sp2.state, s2, cmd, TICK_DT);
+			blade.stepPlayer(sp2, cmd, t, TICK_DT);
+		}
+		check(
+			WIN.windowBroken(g2),
+			"a lamina de uma adaga quebra o vidro que o arco cruza (alcance, linha e ritmo da mao)",
+		);
+	}
+
+	// ---- EDI-13 over glass, and MP-24: a pane is a way out
+	{
+		const world = W.serverWorld(W.generateTown(DESIGN.TOWN_SEED));
+		const sim = newSim(world);
+		let win;
+		let house;
+		const NORMAL = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] };
+		// a pane onto open ground, with room for a body 64 u inside it: the town's first one may look onto the 56 u
+		// alley by the map's border wall, where no fortification goes (the everyday town moved the buildings round; §t
+		// picks its window the same way)
+		const roomBefore = o => {
+			const n = NORMAL[o.side];
+			if (PH.circleBlocked(world, o.x + o.w / 2 - n[0] * 64, o.y + o.h / 2 - n[1] * 64, 16) !== undefined)
+				return false;
+			let x = o.x + o.w / 2 + n[0] * 40;
+			let y = o.y + o.h / 2 + n[1] * 40;
+			for (let i = 0; i < 30; i++) {
+				const r = PH.moveActor(world, x, y, 16, n[0] * 4, n[1] * 4);
+				x = r.x;
+				y = r.y;
+			}
+			return (x - (o.x + o.w / 2)) * n[0] + (y - (o.y + o.h / 2)) * n[1] > 100;
+		};
+		for (const b of world.solids) {
+			if (win !== undefined || b.kind !== "building") continue;
+			for (const o of b.openings ?? []) {
+				if (o.kind === "window" && o.broken !== true && win === undefined && roomBefore(o)) {
+					win = o;
+					house = b;
+				}
+			}
+		}
+		check(win !== undefined && WIN.windowIntact(win.glass), "a cidade tem janelas com vidro", house?.tags);
+		const n = NORMAL[win.side];
+		const q = addPlayer(sim, 0, win.x + win.w / 2 - n[0] * 64, win.y + win.h / 2 - n[1] * 64);
+		q.state.angle = Math.atan2(n[1], n[0]);
+		sim.build.hold(0, 10, undefined);
+		const placed = sim.build.place(0, q.state, [q.state], []);
+		check(
+			placed.kind === "placed" && placed.solid.x === win.x && placed.solid.w === win.w,
+			"uma barricada mirada numa janela COM vidro entra e preenche o vao (EDI-13 sobre vidro ou vao aberto)",
+			placed.kind,
+		);
+		// L3 (review of ef98768): only a fortification stands on the glass -- anything else finds a wall there
+		{
+			const PLC = require(join(SRC, "shared/sim/placement.ts"));
+			const box = emptyWorld();
+			const g = pane(box, 1000, 1000);
+			const over = { x: 1010, y: 990, w: 40, h: 40 };
+			const kinds = Object.values(PLC.PLACEABLES);
+			const lamp = kinds.find(d => d.kind === "lamp");
+			const door = kinds.find(d => d.kind === "door");
+			const bar = kinds.find(d => d.kind === "barricade");
+			check(
+				!PLC.placementValid(box, over, [], [], lamp) &&
+					!PLC.placementValid(box, over, [], []) &&
+					PLC.placementValid(box, over, [], [], bar) &&
+					PLC.placementValid(box, over, [], [], door),
+				"sobre um vidro so entra barricada ou porta: um lampiao (ou um pedido sem tipo) encontra uma parede",
+			);
+			WIN.breakWindow(box, g);
+			check(
+				PLC.placementValid(box, over, [], [], lamp),
+				"(o vao aberto segue como sempre foi: passavel, EDI-10)",
+			);
+		}
+		// a room closed but for its glass: the glass is a way out, so nothing that closes the rest seals anybody in
+		const box = emptyWorld();
+		wallAt(box, 1000, 1000, 400, 20);
+		wallAt(box, 1000, 1380, 400, 20);
+		wallAt(box, 1000, 1020, 20, 360);
+		wallAt(box, 1380, 1020, 20, 150);
+		pane(box, 1380, 1170, true);
+		wallAt(box, 1380, 1250, 20, 130);
+		// the room's only doorway, 96 u in the west wall, is what a barricade would close
+		W.removeSolid(
+			box,
+			W.querySolids(box, 1001, 1100, 1019, 1101).find(s => s.kind === "wall_v"),
+		);
+		wallAt(box, 1000, 1020, 20, 160);
+		wallAt(box, 1000, 1276, 20, 104);
+		const inside = SAVE.defaultSave();
+		const body = PL.createServerPlayer({ slot: 0, userId: 1, name: "p" }, inside, 1200, 1200, 0).state;
+		body.x = 1200;
+		body.y = 1200;
+		check(
+			boxesIn(box, { x: 1000, y: 1180, w: 20, h: 96 }, true, [body]) === undefined,
+			"MP-24: fechar a porta de um comodo cujo vidro e a outra saida nao prende ninguem (vidro se quebra com E)",
+		);
+	}
+
+	// ---- the wire: a newcomer hears exactly the panes broken since the town was generated, and the mirror agrees
+	{
+		const world = W.serverWorld(W.generateTown(DESIGN.TOWN_SEED));
+		const sim = newSim(world);
+		const intact = world.solids.filter(s => WIN.windowIntact(s));
+		const born = world.solids.filter(s => WIN.windowBroken(s));
+		const all = intact.length + born.length;
+		info(
+			`a cidade ${DESIGN.TOWN_SEED}: ${all} janelas, ${born.length} nascidas quebradas (${((born.length / all) * 100).toFixed(0)}%)`,
+		);
+		check(born.length / all >= 0.2 && born.length / all <= 0.35, "20-35% das janelas nascem quebradas (EDI-18)");
+		const smashed = [intact[3], intact[40], intact[200]];
+		sim.windows.beginTick(TICK_DT);
+		for (const g of smashed) sim.windows.byShot(g);
+		drain(sim);
+		const sent = [];
+		const replicator = new Replicator(
+			sim,
+			{
+				snap: () => {},
+				fx: () => {},
+				world: (slot, packet) => sent.push({ slot, packet }),
+				worldAll: packet => sent.push({ slot: CFG.SLOT_NONE, packet }),
+			},
+			{ tick0Time: 0, mapHash: mapHashOf(world) },
+		);
+		const late = addPlayer(sim, 0, 3000, 3000);
+		replicator.welcome(late);
+		replicator.afterTick(1);
+		const got = [];
+		for (const s of sent.filter(x => x.slot === 0)) {
+			for (const e of P.decodeWorld(s.packet).events) got.push(e);
+		}
+		const windowSets = got.filter(
+			e => e.t === P.WorldEv.DoorSet && world.solids.some(s => s.id === e.id && s.kind === "window"),
+		);
+		checkEq(
+			windowSets
+				.map(e => e.id)
+				.sort((a, b) => a - b)
+				.join(","),
+			smashed
+				.map(g => g.id)
+				.sort((a, b) => a - b)
+				.join(","),
+			"o WorldInit leva um DoorSet por vidro quebrado DEPOIS da geracao, e so eles (os nascidos quebrados vem da semente)",
+		);
+		// the client: its own copy of the town, reset and laid over with that WorldInit, has every pane the server has
+		const mirror = W.generateTown(DESIGN.TOWN_SEED);
+		const printBefore = townFingerprint(mirror);
+		Mirror.forgetMirrorIndex();
+		Mirror.resetMirror(mirror);
+		for (const e of got) if (Mirror.isMirrorEvent(e)) Mirror.applyMirrorEvent(mirror, e);
+		const serverState = new Map(
+			world.solids.filter(s => s.kind === "window").map(s => [s.id, WIN.windowIntact(s)]),
+		);
+		const differ = mirror.solids.filter(s => s.kind === "window" && serverState.get(s.id) !== WIN.windowIntact(s));
+		checkEq(differ.length, 0, "e o espelho do cliente fica com cada janela como a do servidor");
+		check(
+			townFingerprint(mirror) !== printBefore,
+			"e a impressao digital da cidade muda (a do lobby nunca vai para a partida)",
+		);
+		// the mirror resets to the generated town: every pane back, the born-broken ones still open
+		Mirror.resetMirror(mirror);
+		const fresh = W.generateTown(DESIGN.TOWN_SEED);
+		const freshState = new Map(fresh.solids.filter(s => s.kind === "window").map(s => [s.id, WIN.windowIntact(s)]));
+		checkEq(
+			mirror.solids.filter(s => s.kind === "window" && freshState.get(s.id) !== WIN.windowIntact(s)).length,
+			0,
+			"um InitBegin novo devolve o espelho a cidade gerada (os vidros de volta, os nascidos quebrados abertos)",
+		);
+		Mirror.forgetMirrorIndex();
+		// the worst case: every pane smashed is one DoorSet each, 6 B -- well inside one 16 KB batch
+		const everything = {
+			tick: 1,
+			events: intact.map(g => ({ t: P.WorldEv.DoorSet, id: g.id, state: P.SolidState.Open })),
+		};
+		const enc = P.encodeWorld(everything);
+		const total = enc.packets.reduce((n, pk) => n + buffer.len(pk), 0);
+		info(`todos os ${intact.length} vidros quebrados: ${total} B de WorldInit (${enc.packets.length} pacote(s))`);
+		check(enc.packets.length === 1 && total < 16384, "a cidade inteira quebrada cabe num lote do WorldInit");
 	}
 }
 

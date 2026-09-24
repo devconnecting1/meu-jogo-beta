@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * Project Z UI skin: generates the 9-slice textures of the "Pixel Quest relief" kit into design/ui-skin/.
+ * Last Town UI skin: generates the 9-slice textures of the "Pixel Quest relief" kit into design/ui-skin/.
  *
  * Every texture is GREYSCALE + ALPHA: the game tints it with ImageColor3 (an exact theme token), so the
  * colour audit of the instances keeps seeing tokens only. White (255) = the tint at full strength, a darker
