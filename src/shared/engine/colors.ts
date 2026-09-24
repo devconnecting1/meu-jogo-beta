@@ -51,6 +51,11 @@ export const COLORS = {
 	treeLeaf: Color3.fromRGB(48, 110, 48),
 	treeLeafDark: Color3.fromRGB(34, 84, 38),
 	treeLeafLight: Color3.fromRGB(74, 138, 64),
+	/** the town's other trees (shared/data/trees.ts, VEG-06): a pine's blue-green, a young tree's, a dead one's wood */
+	treePine: Color3.fromRGB(38, 90, 66),
+	treePineDark: Color3.fromRGB(26, 66, 50),
+	treeYoung: Color3.fromRGB(116, 158, 56),
+	treeDead: Color3.fromRGB(136, 128, 114),
 	player: Color3.fromRGB(90, 160, 220),
 	playerDark: Color3.fromRGB(50, 100, 160),
 	playerSkin: Color3.fromRGB(226, 186, 150),

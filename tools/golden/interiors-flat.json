@@ -1,174 +1,270 @@
 {
-	"note": "draw-call digests of each building type's first building seen from inside with no world art (tools/test-world-art.mjs --golden-interiors)",
-	"recordedFrom": "the everyday town with the window glass (780f2b5), re-recorded on purpose after the review of e9b0fbb (L5): the town's fixtures seen round each building (lamps, hydrants, benches, a yard's things) are the lean flat fallback, two Frames at most; the interiors themselves are 780f2b5's",
+	"note": "draw-call digests of each building type's first building seen from inside with no world art (tools/test-world-art.mjs --golden-interiors); noTrees: the same with the trees' drawing stubbed out (the town round the building, VEG-06)",
+	"recordedFrom": "the trees' kinds (VEG-06, 2026-09-24) over 71ff847 (the everyday town, the weather and the entrances): the interiors are untouched, the town round each building is not -- its trees' crowns are their kinds' sizes and greens, a park's trees in groves; with the trees' drawing stubbed out (noTrees) each of the 24 buildings is 71ff847's, call for call (recorded with PZ_SRC on 71ff847 and compared). The golden before it: the entrances (ART-17), re-recorded on c638602: the flat entrance outside each doorway by its type",
 	"scenes": {
 		"type1": {
 			"building": 51,
 			"x": 656,
 			"y": 1164,
-			"count": 935,
-			"sha1": "fe9ac487200264b52c51b6a2a20fffdd03a86d63"
+			"count": 956,
+			"sha1": "4fd45b8d459bce5c92b854565810bfa2a038b031",
+			"noTrees": {
+				"count": 900,
+				"sha1": "f9f110f88de0c10ea9691ba6bdf0f917a78fe6da"
+			}
 		},
 		"type2": {
 			"building": 56,
 			"x": 712,
 			"y": 2776,
-			"count": 1210,
-			"sha1": "8676efe1b89cd040837add3c0163d8823c87d65b"
+			"count": 1217,
+			"sha1": "40ff0ed8a03271f6543419d3f2624145117c95c5",
+			"noTrees": {
+				"count": 1161,
+				"sha1": "3aa4a6526800561386265879822f5ee60e89eeeb"
+			}
 		},
 		"type3": {
 			"building": 116,
 			"x": 4632,
 			"y": 2800,
-			"count": 1876,
-			"sha1": "7d9cd63297c86c0bd21b173d1311f61c6bc7bea5"
+			"count": 1883,
+			"sha1": "7b3e4576f930a9ffa334c38b2c3696723f6ce510",
+			"noTrees": {
+				"count": 1743,
+				"sha1": "c84770402213dc30e9e822b12f96a649318e6d3e"
+			}
 		},
 		"type4": {
 			"building": 89,
 			"x": 2816,
 			"y": 8952,
-			"count": 1373,
-			"sha1": "d937a4076fe4abf3b0f4b4d49d0c8ddc49c243bf"
+			"count": 1380,
+			"sha1": "1432046ecde39535ed5e68f1e8828f60d3676dde",
+			"noTrees": {
+				"count": 1296,
+				"sha1": "4863ee4d07c384cea9fbcb7788786c2649cf6ae4"
+			}
 		},
 		"type5": {
 			"building": 62,
 			"x": 1260,
 			"y": 6988,
-			"count": 1588,
-			"sha1": "e24eafd197e69207673ecbfdf04dd5b69ea731f6"
+			"count": 1610,
+			"sha1": "f344991156287d69d65de3fb1aee78fdb7282235",
+			"noTrees": {
+				"count": 1398,
+				"sha1": "aacc0f8c11753241f33b1e0c83ce546958ffe700"
+			}
 		},
 		"type6": {
 			"building": 71,
 			"x": 696,
 			"y": 8904,
-			"count": 1273,
-			"sha1": "85d9154e0fe34ac2d9d4d6aac0eba32ac415bc88"
+			"count": 1288,
+			"sha1": "9e9ff5c8585d42a72df3cd66a16f205fd72646b6",
+			"noTrees": {
+				"count": 1064,
+				"sha1": "4c8f0ac6a2989a72b2093281a7b65d31599fa55b"
+			}
 		},
 		"type7": {
 			"building": 143,
 			"x": 6592,
 			"y": 8896,
-			"count": 1340,
-			"sha1": "fb9452d25b4d06b7dac6bf092fcc64f9680ae1b9"
+			"count": 1331,
+			"sha1": "3cf788a73e41dfb1922716d63f0e58eaea2b8eb5",
+			"noTrees": {
+				"count": 1215,
+				"sha1": "555cd9c058cd9b44d3ea3cd77a74fe46a674e675"
+			}
 		},
 		"type8": {
 			"building": 135,
 			"x": 6568,
 			"y": 7308,
-			"count": 1895,
-			"sha1": "321cdafeb87289c0a7d20f6d54c9bd71f42ed3c0"
+			"count": 1902,
+			"sha1": "6dea1195e7ac0c83c56b5d958abbb12044b881b0",
+			"noTrees": {
+				"count": 1738,
+				"sha1": "8c22311ad05c514969cd353791aedef2c9bdef52"
+			}
 		},
 		"type9": {
 			"building": 136,
 			"x": 7100,
 			"y": 6600,
-			"count": 1503,
-			"sha1": "2fd197931308e18955a34376b3e1ff0deb54d255"
+			"count": 1510,
+			"sha1": "440fb49ec2aec95da1b387a756d726f1cbd0dc64",
+			"noTrees": {
+				"count": 1394,
+				"sha1": "dd3f8f9a568fff57b8ebf0b07a36c11c0f43d781"
+			}
 		},
 		"type10": {
 			"building": 358,
 			"x": 18504,
 			"y": 7300,
-			"count": 1631,
-			"sha1": "1ce983e721069f31370dfb4f8d3902a35c43c59a"
+			"count": 1622,
+			"sha1": "dbb052e79751db1916d488b5fdaa185857fae71c",
+			"noTrees": {
+				"count": 1462,
+				"sha1": "302255a1873dcb3d7a612756b8983f6fcf2047ec"
+			}
 		},
 		"type11": {
 			"building": 251,
 			"x": 10704,
 			"y": 4632,
-			"count": 1483,
-			"sha1": "8ec21620e3dba1d2583404bc1cf81cee2bae28eb"
+			"count": 1486,
+			"sha1": "604bab267d2d59f65ceae66a72bbfcabeef7bdda",
+			"noTrees": {
+				"count": 1390,
+				"sha1": "64c4b5cdbc0cbdaf47fb4efbe2cb2b5079b45cb3"
+			}
 		},
 		"type12": {
 			"building": 1451,
 			"x": 15120,
 			"y": 3464,
-			"count": 2091,
-			"sha1": "cecf7fb0b3b1b897f0853f1de6782c97377f99b0"
+			"count": 2077,
+			"sha1": "bc5772e7018c2b1abd6256cbf7c1c1ac71eb67d6",
+			"noTrees": {
+				"count": 1929,
+				"sha1": "832eb39f1ac6cda6bc88190392cd2c3b13e90e02"
+			}
 		},
 		"type13": {
 			"building": 1454,
 			"x": 15528,
 			"y": 2704,
-			"count": 1882,
-			"sha1": "9a0e55e8336dcaf638e9c03c30015267e7e78b3a"
+			"count": 1890,
+			"sha1": "4f318474633710bb92c40fdd1a4d9445f7f0c84e",
+			"noTrees": {
+				"count": 1574,
+				"sha1": "91bbe12e48950594798fa670b8fd4ade3ed2f4c7"
+			}
 		},
 		"type14": {
 			"building": 1452,
 			"x": 14624,
 			"y": 3168,
-			"count": 1925,
-			"sha1": "3533aacbfbd19e637d134fb901c6309e595f63b1"
+			"count": 1952,
+			"sha1": "32772a077ceae8c6e22a2641073cbab8c54c2583",
+			"noTrees": {
+				"count": 1776,
+				"sha1": "bffc8d98060c857b06cf875c7a52c0fbe62750c0"
+			}
 		},
 		"type15": {
 			"building": 1453,
 			"x": 14624,
 			"y": 2704,
-			"count": 1847,
-			"sha1": "d928abefaed399d5cdc75d6349a0979cea9861b1"
+			"count": 1869,
+			"sha1": "c0713989e493ec7a1b995f1200553ddc2e1140ac",
+			"noTrees": {
+				"count": 1701,
+				"sha1": "8435a57b056587a5daa5ad47b5047ad1352653ef"
+			}
 		},
 		"type16": {
 			"building": 226,
 			"x": 8520,
 			"y": 9548,
-			"count": 1476,
-			"sha1": "9d4c4571b6e89a41f67957790fafc70abada3789"
+			"count": 1483,
+			"sha1": "c8713fa62e91058f4a600b6daab660df506985e4",
+			"noTrees": {
+				"count": 1399,
+				"sha1": "b0637f060d8edc80c39786900fc2d8fd0a38f0da"
+			}
 		},
 		"type17": {
 			"building": 337,
 			"x": 16656,
 			"y": 7292,
-			"count": 1487,
-			"sha1": "8d9d6bd138c9dd627966fc5f83bd8b313848046a"
+			"count": 1494,
+			"sha1": "307425a215a8f116bf6e4463b3183e5c9a9ebfa4",
+			"noTrees": {
+				"count": 1230,
+				"sha1": "6531bb75f9dda6443df5813eab21e58cf27e946b"
+			}
 		},
 		"type18": {
 			"building": 262,
 			"x": 10704,
 			"y": 8984,
-			"count": 1542,
-			"sha1": "ae5a84a03e0e63d8927df2ab1d334a9bc7c136a3"
+			"count": 1556,
+			"sha1": "7333b0c42023aa2de2053a36d0b64494a5d87a3d",
+			"noTrees": {
+				"count": 1384,
+				"sha1": "1e82bf47f127314ca171b58b2111f69ef2b466d4"
+			}
 		},
 		"type19": {
 			"building": 231,
 			"x": 8440,
 			"y": 10832,
-			"count": 1713,
-			"sha1": "d356bafba91e045958b3244531b18c6f90dd3ead"
+			"count": 1715,
+			"sha1": "fb5d1d1e6d74351c7762c6da3b6d9e90fa06300e",
+			"noTrees": {
+				"count": 1543,
+				"sha1": "ce6367ed09d9abf56762748449018d1804dbeaac"
+			}
 		},
 		"type22": {
 			"building": 216,
 			"x": 8956,
 			"y": 7008,
-			"count": 1978,
-			"sha1": "969c77fdb348f55f660c463b99e50ac9375993d0"
+			"count": 1985,
+			"sha1": "bb783c8db787b6f8469850c331fd0b6f634b99dc",
+			"noTrees": {
+				"count": 1821,
+				"sha1": "ef552f35b02b2ba82dffb21e2c5381640e6e89d1"
+			}
 		},
 		"type23": {
 			"building": 134,
 			"x": 6632,
 			"y": 4600,
-			"count": 1541,
-			"sha1": "f681d1988880c05545d544131d6234bb586ce8fe"
+			"count": 1548,
+			"sha1": "1f0e69bba29d220a8a53f1a1881fb95d6e18fcac",
+			"noTrees": {
+				"count": 1320,
+				"sha1": "bd2303a398193e0a4f7f440c7a7f1d3a4540e206"
+			}
 		},
 		"type24": {
 			"building": 376,
 			"x": 20456,
 			"y": 6924,
-			"count": 873,
-			"sha1": "3f612b172fcf1dfdab5fc58f59a6a04ff0e76ad6"
+			"count": 880,
+			"sha1": "0c82bf78381fdda7ef3dc0f12455e7c8684409cd",
+			"noTrees": {
+				"count": 768,
+				"sha1": "563bcfafc8791d9ec520c17401bc33d6969efe0a"
+			}
 		},
 		"type25": {
 			"building": 225,
 			"x": 8520,
 			"y": 8896,
-			"count": 1640,
-			"sha1": "3c0a40c0691d974e7e4e3a329b59eab5566a1ce2"
+			"count": 1647,
+			"sha1": "304227f3e73dc4422d36154795544ac22d29e151",
+			"noTrees": {
+				"count": 1543,
+				"sha1": "efb6e40cc349c44325662e4d00c0daad60eff14f"
+			}
 		},
 		"type26": {
 			"building": 230,
 			"x": 9108,
 			"y": 10840,
-			"count": 1730,
-			"sha1": "95fc17b5aee86ab139d3d0f060c68b8047a41b1e"
+			"count": 1729,
+			"sha1": "199cc0c8ccd7af169b4acf0b02e9f0576f5fef25",
+			"noTrees": {
+				"count": 1577,
+				"sha1": "2a0e3e03001452a541b665ed39e18e1c4415930e"
+			}
 		}
 	}
 }

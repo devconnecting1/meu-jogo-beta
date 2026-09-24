@@ -205,6 +205,20 @@ const GROUNDS = {
 			extremes(`rug ${n}`, img, (x, y) => x >= x0 && x < x0 + w && y >= y0 && y < y0 + h);
 		}
 	}
+	// the doorsteps (ART-17): a zombie at a door stands on a coir or rubber mat, a ramp's warning strip, a school's
+	// steps, a bay's hazard paint -- every stoop's darkest and lightest texel, in each of its looks
+	const EA = join(SRC, "client/view/entranceAtlas.ts");
+	const doors = join(ART_DIR, "entrances.png");
+	if (existsSync(EA) && existsSync(doors)) {
+		const { ENTRANCE_CELLS } = require(EA);
+		const img = decodePNG(readFileSync(doors));
+		for (const [key, c] of Object.entries(ENTRANCE_CELLS)) {
+			const [part, kind, side, look] = key.split(":");
+			if (part !== "stoop" || side !== "bottom") continue;
+			const [x0, y0, w, h] = c;
+			extremes(`${kind} doorstep ${look}`, img, (x, y) => x >= x0 && x < x0 + w && y >= y0 && y < y0 + h);
+		}
+	}
 }
 {
 	// a fight's blood (ART-15): a mark over a zombie standing in a stain, wet (a survivor's red, the horde's dark red)

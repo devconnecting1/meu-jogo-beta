@@ -262,52 +262,12 @@
 			"description": "soft rectangular drop shadow"
 		},
 		{
-			"name": "canopy0",
-			"file": "canopy0.png",
-			"kind": "mask",
-			"w": 40,
-			"h": 40,
-			"description": "tree crown 1: silhouette + leaves (tint: foliage)"
-		},
-		{
-			"name": "canopyShade0",
-			"file": "canopyShade0.png",
-			"kind": "overlay",
-			"w": 40,
-			"h": 40,
-			"description": "tree crown 1: light, shadow and outline"
-		},
-		{
-			"name": "canopy1",
-			"file": "canopy1.png",
-			"kind": "mask",
-			"w": 40,
-			"h": 40,
-			"description": "tree crown 2: silhouette + leaves (tint: foliage)"
-		},
-		{
-			"name": "canopyShade1",
-			"file": "canopyShade1.png",
-			"kind": "overlay",
-			"w": 40,
-			"h": 40,
-			"description": "tree crown 2: light, shadow and outline"
-		},
-		{
-			"name": "canopy2",
-			"file": "canopy2.png",
-			"kind": "mask",
-			"w": 40,
-			"h": 40,
-			"description": "tree crown 3: silhouette + leaves (tint: foliage)"
-		},
-		{
-			"name": "canopyShade2",
-			"file": "canopyShade2.png",
-			"kind": "overlay",
-			"w": 40,
-			"h": 40,
-			"description": "tree crown 3: light, shadow and outline"
+			"name": "trees",
+			"file": "trees.png",
+			"kind": "atlas",
+			"w": 512,
+			"h": 266,
+			"description": "trees: 41 crowns of 8 kinds (greyscale masks, tint: foliage; their light below) and the trunk (client/view/worldView.ts)"
 		},
 		{
 			"name": "car0",
@@ -1488,6 +1448,14 @@
 			"w": 1024,
 			"h": 662,
 			"description": "the town's fixtures: 306 cells of market, street, park, backyard and building-site pieces and their ground (client/view/townPropArt.ts)"
+		},
+		{
+			"name": "entrances",
+			"file": "entrances.png",
+			"kind": "atlas",
+			"w": 1024,
+			"h": 176,
+			"description": "the buildings' entrances: 836 cells of stoops, door leaves, frames and lintels, each side baked on its own (client/view/entranceArt.ts)"
 		},
 		{
 			"name": "wordmark",
