@@ -1241,6 +1241,41 @@ test("Fx: round trip, batching and sizes", () => {
 	eq("empty batch", P.encodeFx({ tick: 1, events: [] }).packets.length, 0);
 });
 
+test("Fx: blood with no direction stays with none (a kill sprays all round, not to +x)", () => {
+	const events = [
+		{ t: P.FxType.Blood, x: 1000, y: 2000, amount: 10, kind: P.BloodKind.Horde },
+		{ t: P.FxType.Blood, x: 1000, y: 2000, angle: 0, amount: 3, kind: P.BloodKind.Horde },
+		{ t: P.FxType.Blood, x: 1000, y: 2000, angle: 2, amount: 4, kind: P.BloodKind.Red },
+		{ t: P.FxType.Blood, x: 1000, y: 2000, amount: 4, kind: P.BloodKind.Red },
+	];
+	const res = P.encodeFx({ tick: 9, events });
+	const got = P.decodeFx(res.packets[0]).events;
+	eq("four events", got.length, 4);
+	eq("a kill: no direction", got[0].angle, undefined);
+	angNear("a hit to +x keeps its direction", got[1].angle, 0, ANG8_TOL);
+	angNear("a bite keeps its direction", got[2].angle, 2, ANG8_TOL);
+	eq("a bite with none: none", got[3].angle, undefined);
+	eq("the horde's kind survives the flag", got[0].kind, P.BloodKind.Horde);
+	eq("a survivor's too", got[3].kind, P.BloodKind.Red);
+	const one = P.encodeFx({ tick: 1, events: [events[0]] });
+	const two = P.encodeFx({ tick: 1, events: [events[1]] });
+	eq("no byte more for the flag", buffer.len(one.packets[0]), buffer.len(two.packets[0]));
+	const bytes = bytesOf(one.packets[0]);
+	bytes[bytes.length - 1] = 0x82;
+	eq("an undirected kind past the last is refused", P.decodeFx(bufOf(bytes)), undefined);
+	// the flag is the kind byte's top bit: every kind must stay below it, or a kind would read as "no direction"
+	ok(
+		Object.values(P.BloodKind).every(k => Number.isInteger(k) && k >= 0 && k < 0x80),
+		`every BloodKind stays below the 0x80 flag (${JSON.stringify(P.BloodKind)})`,
+	);
+	for (const kind of Object.values(P.BloodKind)) {
+		const back = P.decodeFx(
+			P.encodeFx({ tick: 2, events: [{ t: P.FxType.Blood, x: 5, y: 5, amount: 1, kind }] }).packets[0],
+		);
+		eq(`kind ${kind} with no direction comes back the same kind`, back.events[0].kind, kind);
+	}
+});
+
 test("Fx: malformed packets are refused", () => {
 	const pkt = P.encodeFx({ tick: 3, events: [randFxEvent(), randFxEvent()] }).packets[0];
 	const good = bytesOf(pkt);
@@ -1650,8 +1685,57 @@ test("World: the roster carries the title under the name, and nothing but a real
 		eq(`TitleUnlocked naming title byte ${bad}`, P.decodeWorld(bufOf(b)), undefined);
 	}
 	const bogusKind = raw.slice();
-	bogusKind[6] = P.AnnounceKind.TitleUnlocked + 1;
-	eq("an Announce kind past TitleUnlocked", P.decodeWorld(bufOf(bogusKind)), undefined);
+	const lastKind = Math.max(...Object.values(P.AnnounceKind));
+	bogusKind[6] = lastKind + 1;
+	eq(
+		"an Announce kind past the last one (BreakNudge)",
+		lastKind === P.AnnounceKind.BreakNudge ? P.decodeWorld(bufOf(bogusKind)) : `a new last kind ${lastKind}`,
+		undefined,
+	);
+
+	// UI-13 (protocol note 24): Announce{Died, arg = the cause} -- the kind in bits 0-2, bit 3 for night, nothing else
+	const DC = require(join(SRC, "shared/data/deathCause.ts"));
+	for (const kind of [DC.DeathKind.Horde, DC.DeathKind.Hunger, DC.DeathKind.Poison, DC.DeathKind.Boss]) {
+		for (const night of [false, true]) {
+			const arg = DC.deathWireOf(kind, night);
+			const d = P.decodeWorld(
+				P.encodeWorld({ tick: 2, events: [{ t: P.WorldEv.Announce, msg: P.AnnounceKind.Died, arg }] })
+					.packets[0],
+			);
+			eq(`Died ${kind}${night ? " at night" : ""} decodes`, d?.events[0].arg, arg);
+			const note = DC.deathFromWire(d?.events[0].arg ?? -1);
+			ok(note?.kind === kind && note?.night === night, `Died ${kind}/${night} reads back as the same cause`);
+		}
+	}
+	eq("the Unknown cause is never written", DC.deathWireOf(DC.DeathKind.Unknown, true), undefined);
+	const died = bytesOf(
+		P.encodeWorld({ tick: 2, events: [{ t: P.WorldEv.Announce, msg: P.AnnounceKind.Died, arg: 1 }] }).packets[0],
+	);
+	for (const bad of [0, 5, 7, 8, 13, 16, 17, 255, 65535]) {
+		const b = died.slice();
+		b[7] = bad & 255;
+		b[8] = (bad >> 8) & 255;
+		eq(`Died with a cause the server never writes (${bad})`, P.decodeWorld(bufOf(b)), undefined);
+	}
+	// BEM-04 (protocol note 24): Announce{BreakNudge} carries arg 0 and nothing else
+	const nudge = P.encodeWorld({
+		tick: 3,
+		events: [{ t: P.WorldEv.Announce, msg: P.AnnounceKind.BreakNudge, arg: 0 }],
+	}).packets[0];
+	const nudged = P.decodeWorld(nudge);
+	ok(
+		nudged?.events.length === 1 &&
+			nudged.events[0].t === P.WorldEv.Announce &&
+			nudged.events[0].msg === P.AnnounceKind.BreakNudge &&
+			nudged.events[0].arg === 0,
+		"BreakNudge (arg 0) decodes",
+	);
+	for (const bad of [1, 8, 255, 65535]) {
+		const b = bytesOf(nudge).slice();
+		b[7] = bad & 255;
+		b[8] = (bad >> 8) & 255;
+		eq(`BreakNudge with an arg the server never writes (${bad})`, P.decodeWorld(bufOf(b)), undefined);
+	}
 	// a boss kill keeps carrying any u16: the check is for titles only
 	const boss = P.decodeWorld(
 		P.encodeWorld({ tick: 1, events: [{ t: P.WorldEv.Announce, msg: 5, arg: 900 }] }).packets[0],

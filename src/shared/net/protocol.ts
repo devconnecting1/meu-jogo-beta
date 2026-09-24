@@ -130,6 +130,27 @@
  *     admin, asked for a new town; server/match/townRestart.ts). The client words the news by it -- a town that was
  *     restarted did not fall. Anything above WORLD_RESET_CAUSE_MAX drops the event, like a bad seed. The town's NAME
  *     is not on the wire: every side derives it from the seed (shared/data/townNames.ts).
+ * 22. (ART-15, the blood's direction) `Blood`'s kind byte carries BLOOD_UNDIRECTED (0x80) when the blood has no
+ *     direction -- a kill, a bite the simulation gave no angle --, and its angle byte (still sent, 0) means nothing:
+ *     the client sprays it all round. No byte more. Before, "no direction" travelled as angle 0 and every such spray
+ *     and stain went to +x. `BloodKind.Green` is now `BloodKind.Horde` (same value, 1): the horde bleeds dark red.
+ * 24. (UI-13 / BEM-04 / BEM-08, the death screen teaches, the dawn card's break line) No new message and no byte more
+ *     per event: two more AnnounceKinds, both S→C only, reliable and DIRECTED (`queueFor(slot)`, like TitleUnlocked):
+ *       - `Died` (7), whose `arg` is the cause of this survivor's death, read by the server off the lethal damage
+ *         (shared/data/deathCause.ts `deathKindOf`, the same rule as the analytics `Died` event): the kind in bits 0-2
+ *         (1 horde, 2 hunger, 3 poison, 4 boss) and bit 3 set when it happened at night (19:00-06:00) --
+ *         `deathWireOf`. server/sim/life.ts `died` -> server/net/replication.ts `died`; the life record keeps it and
+ *         `enter` sends it again, after the welcome's PlayerLife Dead, to a survivor who comes back to the same death
+ *         (Home and PLAY, a reconnect). Nobody else hears why somebody died. The decoder refuses any arg
+ *         `deathFromWire` does not know (kind 0 or > 4, any other bit).
+ *       - `BreakNudge` (8), arg 0 and nothing else: the SERVER's rule gave this survivor the break line at dawn
+ *         (shared/data/wellbeing.ts `breakNudgeEarned`: a session of BREAK_NUDGE_MIN minutes, the night lived standing
+ *         since midnight; once per session, decided in server/main.server.ts, which also logs the analytics
+ *         `BreakNudge`), so the line the player reads and the event the dashboard counts are one decision.
+ *     The client never lets either reach the round banner (netClient.ts: each is noted for its screen and nothing
+ *     else). A client and its server always run the same build, so no older decoder ever meets the new kinds. Neither
+ *     carries anything the survivor could not see or know: their own hunger and poison, whether a boss stood within
+ *     BOSS_REACH (bosses are on the snapshot), and how long they have played. No C→S change.
  */
 import {
 	NetReader,
@@ -167,6 +188,7 @@ import {
 	ZOMBIE_TYPE_MAX,
 } from "./mpConfig";
 import { OUTFIT_LOOK_MAX, PET_LOOK_MAX } from "shared/data/cosmetics";
+import { deathFromWire } from "shared/data/deathCause";
 import { POWER_STATE_MASK, powerFlying } from "shared/data/power";
 import { TITLE_WIRE_MAX } from "shared/data/titles";
 import { SAVE_LIMITS } from "shared/game/save";
@@ -1029,11 +1051,19 @@ export const ProjEndHow = {
 } as const;
 const PROJ_END_MAX = 4;
 
+/** whose blood: a survivor's bright red, or the horde's dark red (it was `Green`, the colour before ART-15, LEG-02) */
 export const BloodKind = {
 	Red: 0,
-	Green: 1,
+	Horde: 1,
 } as const;
+/** must stay below BLOOD_UNDIRECTED: that bit of the same byte is the "no direction" flag (test:net checks it) */
 const BLOOD_KIND_MAX = 1;
+/**
+ * Set on a Blood event's kind byte when it has no direction (a kill, a bite the simulation gave no angle): its angle
+ * byte is then 0 and means nothing, and the client sprays it all round. Without it a kill's spray and its stain were
+ * thrown to +x on every client (the angle 0 of "no angle").
+ */
+const BLOOD_UNDIRECTED = 0x80;
 
 /** pellets per ShotResult (shotgun: 5) */
 export const FX_SHOT_MAX_HITS = 16;
@@ -1091,7 +1121,8 @@ export interface FxBlood {
 	t: typeof FxType.Blood;
 	x: number;
 	y: number;
-	angle: number;
+	/** the way the blood was thrown (attacker -> target); undefined: no way, all round */
+	angle?: number;
 	/** particles, 0..255 */
 	amount: number;
 	/** BloodKind */
@@ -1214,9 +1245,9 @@ function writeFxEvent(w: NetWriter, e: FxEvent): void {
 		case FxType.Blood:
 			w.pos(e.x);
 			w.pos(e.y);
-			w.angle8(e.angle);
+			w.angle8(e.angle ?? 0);
 			w.u8(e.amount);
-			w.u8(clampInt(e.kind, 0, BLOOD_KIND_MAX));
+			w.u8(clampInt(e.kind, 0, BLOOD_KIND_MAX) + (e.angle === undefined ? BLOOD_UNDIRECTED : 0));
 			break;
 		case FxType.Debris:
 			w.pos(e.x);
@@ -1297,9 +1328,11 @@ function readFxEvent(r: NetReader): FxEvent | undefined {
 		const y = r.pos();
 		const angle = r.angle8();
 		const amount = r.u8();
-		const kind = r.u8();
+		const flags = r.u8();
+		const undirected = flags >= BLOOD_UNDIRECTED;
+		const kind = undirected ? flags - BLOOD_UNDIRECTED : flags;
 		if (kind > BLOOD_KIND_MAX) return undefined;
-		return { t: FxType.Blood, x, y, angle, amount, kind };
+		return { t: FxType.Blood, x, y, angle: undirected ? undefined : angle, amount, kind };
 	} else if (t === FxType.Debris) {
 		const x = r.pos();
 		const y = r.pos();
@@ -1486,8 +1519,18 @@ export const AnnounceKind = {
 	BossKilled: 5,
 	/** (MON-05) arg = the title byte (`titleToWire`, 1..TITLE_WIRE_MAX); sent only to the survivor who earned it */
 	TitleUnlocked: 6,
+	/**
+	 * (UI-13, note 24) arg = why this survivor just died (shared/data/deathCause.ts `deathWireOf`: the kind, and bit 3 for
+	 * night); sent only to the survivor who died
+	 */
+	Died: 7,
+	/**
+	 * (BEM-04, note 24) arg = 0: the server's rule gave this survivor the dawn card's break line (a long session, a night
+	 * lived standing); sent only to them, once per session. The client shows the line because the server said so
+	 */
+	BreakNudge: 8,
 } as const;
-const ANNOUNCE_KIND_MAX = 6;
+const ANNOUNCE_KIND_MAX = 8;
 
 export interface WSolidAdd {
 	t: typeof WorldEv.SolidAdd;
@@ -1934,6 +1977,10 @@ function readWorldEvent(r: NetReader): WorldEvent | undefined {
 		if (msg < 1 || msg > ANNOUNCE_KIND_MAX) return undefined;
 		// MON-05: a title that does not exist is not something to announce
 		if (msg === AnnounceKind.TitleUnlocked && (arg < 1 || arg > TITLE_WIRE_MAX)) return undefined;
+		// note 24: a cause the server never writes (kind 0 or past the table, a stray bit) is malformed
+		if (msg === AnnounceKind.Died && deathFromWire(arg) === undefined) return undefined;
+		// ...and the break line carries nothing: any other arg is malformed
+		if (msg === AnnounceKind.BreakNudge && arg !== 0) return undefined;
 		return { t: WorldEv.Announce, msg, arg };
 	} else if (t === WorldEv.ZombieDied) {
 		const netId = r.u16();

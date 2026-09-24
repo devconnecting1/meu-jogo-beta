@@ -1734,21 +1734,46 @@ section("11) SessionEnded: where and when each session quit; Died: the cause, re
 	const dead = s.join(newUser(), "deadquit");
 	const hungry = s.join(newUser(), "hungry");
 	const poisoned = s.join(newUser(), "poisoned");
-	for (const p of [dead, hungry, poisoned]) {
+	const bitten = s.join(newUser(), "bitten");
+	for (const p of [dead, hungry, poisoned, bitten]) {
 		s.immortal.add(p);
 		s.enter(p);
 	}
-	s.run(1.2);
-	s.body(hungry).state.hungry = 0;
-	s.kill(hungry);
-	s.body(poisoned).state.buffs.poison = 5;
-	s.kill(poisoned);
+	// past the entry's spawn shield (server/sim/players.ts SPAWN_SHIELD_S)
+	s.run(3.5);
+	/** the body left to its own vitals: no god mode, and the hunger `immortal` refills no more */
+	const mortal = p => {
+		s.immortal.delete(p);
+		const st = s.body(p).state;
+		st.godMode = false;
+		return st;
+	};
+	// L8 of the review of ca9494a: the cause is the LETHAL damage's source. The empty stomach takes the last hp...
+	const h = mortal(hungry);
+	h.hungry = 0;
+	h.hp = 0.005;
+	// ...the poison takes the last hp of a fed body...
+	const q = mortal(poisoned);
+	q.hungry = q.hungryMax;
+	q.buffs.poison = 5;
+	q.hp = 0.01;
+	s.run(0.2);
+	// ...and a starving body a blow finishes was killed by the blow
+	const b = mortal(bitten);
+	b.hungry = 0;
+	s.run(0.5);
+	const starvingWhenBitten = b.lastHurt;
+	s.kill(bitten);
 	s.kill(dead);
 	const cause = p => customs(s, p.UserId, A.EVENT.Died)[0]?.fields.CustomField03;
 	check(
-		cause(hungry) === "Cause - Hunger" && cause(poisoned) === "Cause - Poison" && cause(dead) === "Cause - Horde",
-		"a starving death is Hunger, a poisoned one Poison, any other with no boss about the Horde",
-		`${cause(hungry)}, ${cause(poisoned)}, ${cause(dead)}`,
+		cause(hungry) === "Cause - Hunger" &&
+			cause(poisoned) === "Cause - Poison" &&
+			cause(dead) === "Cause - Horde" &&
+			cause(bitten) === "Cause - Horde" &&
+			starvingWhenBitten === 2,
+		"the stomach's last tick is Hunger, the poison's Poison; a blow with no boss about is the Horde -- a starving body's too",
+		`${cause(hungry)}, ${cause(poisoned)}, ${cause(dead)}, ${cause(bitten)} (lastHurt before the blow ${starvingWhenBitten})`,
 	);
 	s.run(1.2);
 	s.quit(lobby);
@@ -1780,14 +1805,20 @@ section("11) SessionEnded: where and when each session quit; Died: the cause, re
 		"the same player back at night: Visit - Returning, Time - Night",
 		JSON.stringify(second),
 	);
-	// the cause's rule on its own: a boss within a needle's reach, a dead one or a far one does not count
-	const body = { x: 0, y: 0, hungry: 50, buffs: { poison: 0 } };
+	// the cause's rule on its own: a blow is a boss's within a needle's reach (a dead or a far boss does not count); the
+	// stomach's or the poison's last tick is theirs whoever stands near; rotten meat is nobody's to name
+	const body = { x: 0, y: 0, lastHurt: 1 };
+	const near = [{ x: 10, y: 0, hp: 10 }];
 	check(
 		A.causeOfDeath(body, [{ x: A.BOSS_REACH - 1, y: 0, hp: 10 }]) === "Cause - Boss" &&
 			A.causeOfDeath(body, [{ x: A.BOSS_REACH + 1, y: 0, hp: 10 }]) === "Cause - Horde" &&
 			A.causeOfDeath(body, [{ x: 10, y: 0, hp: 0 }]) === "Cause - Horde" &&
+			A.causeOfDeath({ x: 0, y: 0 }, undefined) === "Cause - Horde" &&
+			A.causeOfDeath({ x: 0, y: 0, lastHurt: 2 }, near) === "Cause - Hunger" &&
+			A.causeOfDeath({ x: 0, y: 0, lastHurt: 3 }, near) === "Cause - Poison" &&
+			A.causeOfDeath({ x: 0, y: 0, lastHurt: 4 }, near) === "Cause - Unknown" &&
 			A.causeOfDeath(undefined, undefined) === "Cause - Unknown",
-		"causeOfDeath: a living boss within BOSS_REACH is Boss; a far or a dead one is not",
+		"causeOfDeath: the lethal damage's source -- a blow near a living boss is Boss, else Horde; hunger and poison are theirs",
 	);
 });
 
@@ -1795,12 +1826,19 @@ section("11) SessionEnded: where and when each session quit; Died: the cause, re
 
 /*
  * The review of 6e6dfa0: a survivor who quits mid-bite leaves the body 5 s in the fight (§7.2, the combat-log guard),
- * and it can die there. The session is summed up when the body comes out, so the Died is logged BEFORE SessionEnded and
- * SessionEnded says "Dead" -- whichever PlayerRemoving handler runs first (Roblox sets no order: analytics' own may ask
- * before the host has started the guard). One who quits out of any fight is summed up at once, as always.
+ * and it can die there -- after the session ended. Events are logged only while the Player is here (BEM-04,
+ * `playerLeft`), so the session is summed up at the departure as always (SessionEnded "Where - City": where it left
+ * the body), and the death in the guard is NOT logged after it: no Died, no Rebirth funnel for somebody gone. It is in
+ * the save (runOver). Whichever PlayerRemoving handler runs first (Roblox sets no order). Before: a Died (and its
+ * Rebirth funnel step) came in after SessionEnded, for a Player already gone.
  */
-section("11b) a death in the combat-log guard: Died before SessionEnded, and SessionEnded says Dead", () => {
+section("11b) a death in the combat-log guard: nothing logged after SessionEnded for a player who left", () => {
 	const { createZombie } = require(join(SRC, "shared/game/entities.ts"));
+	/** the stored document, as the next session anywhere would load it */
+	const stored = userId => {
+		const doc = fakeStore(require(join(SRC, "server/save/stores.ts")).SAVE_STORE).data.get(String(userId));
+		return doc === undefined ? undefined : typeof doc.data === "string" ? JSON.parse(doc.data) : doc.data;
+	};
 	for (const reversed of [false, true]) {
 		const s = bootServer();
 		const A = s.A;
@@ -1821,36 +1859,24 @@ section("11b) a death in the combat-log guard: Died before SessionEnded, and Ses
 		s.run(0.3);
 		sp.state.hp = 3;
 		s.quit(p, reversed);
-		const endedAtQuit = customs(s, p.UserId, A.EVENT.SessionEnded).length;
+		const atQuit = s.of(p.UserId).length;
+		const lingering = s.host.lingering(p.UserId);
 		s.run(7);
-		const rows = s.of(p.UserId, "custom");
-		const died = rows.findIndex(r => r.name === A.EVENT.Died);
-		const ended = rows.findIndex(r => r.name === A.EVENT.SessionEnded);
+		const rows = s.of(p.UserId);
+		const after = rows.slice(atQuit);
+		const ended = customs(s, p.UserId, A.EVENT.SessionEnded);
 		const order = reversed ? "analytics' handler first" : "the host's handler first";
 		check(
-			sp.state.dead &&
-				endedAtQuit === 0 &&
-				died >= 0 &&
-				ended > died &&
-				rows[ended].fields.CustomField01 === "Where - Dead" &&
-				customs(s, p.UserId, A.EVENT.SessionEnded).length === 1,
-			`(${order}) quit mid-bite, died in the guard: Died, then one SessionEnded "Where - Dead"`,
-			`dead ${sp.state.dead}; SessionEnded at the quit ${endedAtQuit}; order ${rows.map(r => r.name).join(" > ")}; ` +
-				`where ${rows[ended]?.fields.CustomField01}`,
-		);
-	}
-	// out of any fight: summed up at the departure, as always
-	{
-		const s = bootServer();
-		const A = s.A;
-		const p = s.join(newUser(), "calm");
-		s.enter(p);
-		s.sim.horde.zombies.length = 0;
-		s.run(1.2);
-		s.quit(p);
-		check(
-			customs(s, p.UserId, A.EVENT.SessionEnded).length === 1,
-			"out of any fight: SessionEnded at the departure, as before",
+			lingering &&
+				sp.state.dead &&
+				ended.length === 1 &&
+				ended[0].fields.CustomField01 === "Where - City" &&
+				after.length === 0 &&
+				stored(p.UserId)?.runOver === true,
+			`(${order}) quit mid-bite, died in the guard: SessionEnded at the departure, nothing after it; the death is in ` +
+				"the save",
+			`dead ${sp.state.dead}; SessionEnded ${ended.length} (${ended[0]?.fields.CustomField01}); after the departure: ` +
+				`${after.map(r => r.name ?? r.kind).join(", ") || "nothing"}; stored runOver ${stored(p.UserId)?.runOver}`,
 		);
 	}
 });
@@ -1965,6 +1991,365 @@ section("12) experiments: the welcome pack is read from the player's snapshot, o
 
 // ================================================================ 13: the catalogue within the documented limits
 
+section("12c) the wellbeing guards (DESIGN_RULES BEM-07, docs/ANALYTICS.md §15): the tail, the dawn, the break", () => {
+	const W = require(join(SRC, "shared/data/wellbeing.ts"));
+	const { readFileSync } = require("node:fs");
+	// the buckets of the tail: a percentile is not on the dashboard, so the share past 2 h / 3 h is counted by bucket
+	const cuts = [0, 14.9, 15, 59.9, 60, 119.9, 120, 179.9, 180, 600].map(m => AN.lengthBucket(m));
+	check(
+		JSON.stringify(cuts) ===
+			JSON.stringify([
+				"0-14 min",
+				"0-14 min",
+				"15-59 min",
+				"15-59 min",
+				"1-2 h",
+				"1-2 h",
+				"2-3 h",
+				"2-3 h",
+				"3 h+",
+				"3 h+",
+			]),
+		"SessionLength's buckets: 0-14 min, 15-59 min, 1-2 h, 2-3 h, 3 h+ (the edges where they belong)",
+		JSON.stringify(cuts),
+	);
+	// a town whose clock the test drives: noon for the first 95 minutes, then a night that runs to 06:30 in 200 s
+	const h = makeCore();
+	let t = 0;
+	const NIGHT_AT = 95 * 60;
+	const hour = () => (t < NIGHT_AT ? 12 : Math.min(6.5, 1 + ((t - NIGHT_AT) / 200) * 5.5));
+	const bodies = new Map();
+	h.core.bindWorld({
+		dayTime: hour,
+		day: () => (t < NIGHT_AT ? 1 : 2),
+		bodyOf: pl => bodies.get(pl.UserId),
+		standing: () => 1,
+	});
+	const load = (id, name) => {
+		const pl = fakePlayer(id, name);
+		h.core.sessionLoaded(pl, "ok", blankSave());
+		h.core.enteredWorld(pl);
+		bodies.set(id, { dead: false });
+		return pl;
+	};
+	const leaver = load(1501, "leaver");
+	const stayer = load(1502, "stayer");
+	const risen = load(1503, "risen");
+	let fresh;
+	let dawnAt;
+	let leftAt;
+	const step = () => {
+		t += 1;
+		h.advance(1);
+		h.core.poll();
+	};
+	while (t < NIGHT_AT + 400) {
+		// a short session: it joins 30 minutes before the night
+		if (t === NIGHT_AT - 30 * 60) fresh = load(1504, "short");
+		step();
+		if (dawnAt === undefined && t > NIGHT_AT && hour() >= 6) {
+			dawnAt = t;
+			// the server's decision at 06:00 (server/main.server.ts `sim.onDawn`, tested end to end in 12d): the line went
+			// to the leaver and the stayer; the others did not earn it. A second call is the same session's: ignored
+			h.core.breakNudge(leaver);
+			h.core.breakNudge(stayer);
+			h.core.breakNudge(stayer);
+		}
+		// the leaver goes 30 s after the dawn, the dawn window still open (06:00-07:30)
+		if (dawnAt !== undefined && leftAt === undefined && t === dawnAt + 30) {
+			leftAt = t;
+			leaver.Parent = undefined;
+			h.core.playerLeft(leaver);
+		}
+	}
+	const nudges = id => h.rows.filter(r => r.userId === id && r.kind === "custom" && r.name === AN.EVENT.BreakNudge);
+	const ended = id => h.rows.find(r => r.userId === id && r.name === AN.EVENT.SessionEnded);
+	const length = id => h.rows.find(r => r.userId === id && r.name === AN.EVENT.SessionLength);
+	check(
+		nudges(1501).length === 1 &&
+			nudges(1501)[0].fields.CustomField01 === "Left - Yes" &&
+			nudges(1501)[0].t === leftAt,
+		"told the line and left 30 s after it: one BreakNudge, Left - Yes -- logged AT the leave, while the Player is still there",
+		JSON.stringify(nudges(1501).map(r => [r.fields, r.t - leftAt])),
+	);
+	check(
+		nudges(1502).length === 1 &&
+			nudges(1502)[0].fields.CustomField01 === "Left - No" &&
+			nudges(1502)[0].t - dawnAt > W.BREAK_NUDGE_LEFT_S &&
+			nudges(1502)[0].t - dawnAt <= W.BREAK_NUDGE_LEFT_S + 2,
+		"one that stayed: Left - No, sent when the 2 minutes ran out (and only once, told twice or not)",
+		JSON.stringify(nudges(1502).map(r => [r.fields.CustomField01, r.t - dawnAt])),
+	);
+	check(
+		nudges(1503).length === 0 && nudges(1504).length === 0,
+		"no BreakNudge for a session the server did not give the line to: analytics decides nothing of its own",
+	);
+	check(
+		ended(1501)?.fields.CustomField02 === "Time - Dawn" &&
+			length(1501)?.fields.CustomField01 === "Length - 1-2 h" &&
+			length(1501)?.value === ended(1501)?.value,
+		"the leaver's SessionEnded says Time - Dawn (06:00-07:30), and its SessionLength is the same minutes, Length - 1-2 h",
+		JSON.stringify([ended(1501)?.fields, length(1501)?.fields, length(1501)?.value]),
+	);
+	// the others leave later in the day: after the dawn window it is Day again
+	t += 1;
+	const late = () => {
+		for (const pl of [stayer, risen, fresh]) {
+			pl.Parent = undefined;
+			h.core.playerLeft(pl);
+		}
+		h.core.poll();
+	};
+	const hourBefore = hour();
+	late();
+	check(
+		hourBefore >= 6 &&
+			hourBefore < W.DAWN_END_HOUR &&
+			ended(1502)?.fields.CustomField02 === "Time - Dawn" &&
+			length(1504)?.fields.CustomField01 === "Length - 15-59 min",
+		"still in the dawn window: Time - Dawn for the others too; the short session is Length - 15-59 min",
+		JSON.stringify([hourBefore, ended(1502)?.fields, length(1504)?.fields]),
+	);
+	check(
+		W.isDawnAt(6) && W.isDawnAt(7.49) && !W.isDawnAt(7.5) && !W.isDawnAt(5.99) && !W.isDawnAt(12),
+		"the dawn window is 06:00 to 07:30 of the world clock (shared/data/wellbeing.ts isDawnAt)",
+	);
+	check(
+		W.BREAK_NUDGE_MIN === 90 &&
+			readFileSync(join(SRC, "shared/data/lang.ts"), "utf8").includes(
+				'"You\'ve played for over 90 minutes. Dawn is a good time for a break."',
+			),
+		"the line the player reads says the number the rule uses (BREAK_NUDGE_MIN = 90)",
+	);
+
+	// how they left (L7 of the reviews of ca9494a and 440af66): the verdict is logged AT the leave (PlayerRemoving: the
+	// Player is still there), and only a leave of their own is a Yes -- a kick, a teleport to another server of this
+	// game, a close or a restart under way, a leave noticed late: `Left - Unknown`
+	{
+		const c = makeCore();
+		const ids = [2101, 2102, 2103, 2104, 2105, 2106, 2107];
+		const pl = new Map(
+			ids.map(id => {
+				const p = fakePlayer(id, `leave${id}`);
+				c.core.sessionLoaded(p, "ok", blankSave());
+				c.core.enteredWorld(p);
+				return [id, p];
+			}),
+		);
+		c.core.poll();
+		for (const p of pl.values()) c.core.breakNudge(p);
+		c.advance(10);
+		// 2104 asked for a teleport (Play solo, the Servers list) that went through; 2105 asked for one that failed, and
+		// only left 90 s later -- a leave of its own
+		c.core.teleporting(pl.get(2104));
+		c.core.teleporting(pl.get(2105));
+		c.advance(5);
+		const leave = (id, how) => {
+			pl.get(id).Parent = undefined;
+			c.core.playerLeft(pl.get(id), how);
+		};
+		leave(2101, "left");
+		leave(2103, "kicked");
+		leave(2104, "left");
+		c.advance(85);
+		leave(2105, "left");
+		// 2106 is gone without a PlayerRemoving this module saw: the poll notices it, late
+		pl.get(2106).Parent = undefined;
+		c.core.poll();
+		const left = id =>
+			c.rows.filter(r => r.userId === id && r.name === AN.EVENT.BreakNudge).map(r => r.fields.CustomField01);
+		const got = Object.fromEntries(ids.map(id => [id, left(id).join()]));
+		check(
+			got[2101] === "Left - Yes" &&
+				got[2103] === "Left - Unknown" &&
+				got[2104] === "Left - Unknown" &&
+				got[2105] === "Left - Yes" &&
+				got[2106] === "Left - Unknown" &&
+				got[2102] === "" &&
+				got[2107] === "",
+			"a leave of their own is Yes; a kick (admin, flood), a teleport's leave, a leave the poll found late: Unknown; a teleport that failed long before is not",
+			JSON.stringify(got),
+		);
+		// then the platform schedules a restart: 2107 leaves after it -- the restart's; 2102 is still here at the close
+		c.core.restartScheduled();
+		leave(2107, "left");
+		c.core.shutdown();
+		check(
+			left(2107).join() === "Left - Unknown" && left(2102).join() === "Left - Unknown" && left(2101).length === 1,
+			"a leave once a restart is scheduled, and a player the close finds here: Unknown -- nothing logged twice",
+			JSON.stringify([left(2107), left(2102), left(2101)]),
+		);
+		check(
+			AN.exitHow(Enum.PlayerExitReason.CreatorKick) === "kicked" &&
+				AN.exitHow(Enum.PlayerExitReason.PlatformKick) === "kicked" &&
+				AN.exitHow(Enum.PlayerExitReason.Unknown) === "left" &&
+				AN.exitHow(undefined) === "left",
+			"PlayerExitReason: CreatorKick (Player:Kick -- the admin's and the flood kick) and PlatformKick are kicks; Unknown, the catch-all, is a leave",
+		);
+		const src = readFileSync(join(SRC, "server/analytics/events.ts"), "utf8");
+		const hosts = ["server/match/matchHost.ts", "server/match/serverList.ts"].map(f =>
+			readFileSync(join(SRC, f), "utf8"),
+		);
+		check(
+			/Players\.PlayerRemoving\.Connect\(\(player, reason\) =>\s*guard\(c => c\.playerLeft\(player, exitHow\(reason\)\)\),?\s*\);/.test(
+				src,
+			) &&
+				/game\.ServerRestartScheduled\.Connect\(\(\) => guard\(c => c\.restartScheduled\(\)\)\)/.test(src) &&
+				hosts.every(h =>
+					/Analytics\.teleporting\(player\);[^]{0,400}TeleportAsync\(game\.PlaceId, \[player\]/.test(h),
+				),
+			"wired: PlayerRemoving hands its exit reason in, a scheduled restart is heard, and both teleports (Play solo, the Servers list) are marked BEFORE TeleportAsync",
+		);
+	}
+});
+
+section("12d) the break line is ONE decision, the server's: the line a player gets and the event counted agree", () => {
+	const s = bootServer();
+	const W = require(join(SRC, "shared/data/wellbeing.ts"));
+	// every Announce{BreakNudge} a client receives, counted as it goes out (the fake remote keeps only its last 4000
+	// sends, fewer than three nights of World batches)
+	const world = s.env.services.ReplicatedStorage.FindFirstChild("Net").FindFirstChild("World");
+	const nudged = new Map();
+	const fireClient = world.FireClient.bind(world);
+	world.FireClient = (player, ...args) => {
+		const batch = s.P.decodeWorld(args[0]);
+		for (const e of batch?.events ?? []) {
+			if (e.t === s.P.WorldEv.Announce && e.msg === s.P.AnnounceKind.BreakNudge) {
+				nudged.set(player, (nudged.get(player) ?? 0) + 1);
+			}
+		}
+		return fireClient(player, ...args);
+	};
+	const fireAll = world.FireAllClients.bind(world);
+	let broadcast = 0;
+	world.FireAllClients = (...args) => {
+		const batch = s.P.decodeWorld(args[0]);
+		for (const e of batch?.events ?? []) {
+			if (e.t === s.P.WorldEv.Announce && e.msg === s.P.AnnounceKind.BreakNudge) broadcast += 1;
+		}
+		return fireAll(...args);
+	};
+	const told = p => nudged.get(p) ?? 0;
+	const counted = p => customs(s, p.UserId, s.A.EVENT.BreakNudge).map(r => r.fields.CustomField01);
+	/**
+	 * From `hour` (before midnight) the world runs to the next 06:00; `during(clock)` runs every beat after midnight.
+	 * 30 beats a second: the simulation runs at most MAX_CATCHUP_TICKS (2) ticks a heartbeat, so the night is real time.
+	 */
+	const toDawn = (hour, during) => {
+		s.sim.clock.setClock(hour);
+		let wrapped = false;
+		return s.runUntil(
+			() => {
+				const c = s.sim.clock;
+				if (c.dayTime < hour - 1) wrapped = true;
+				if (wrapped) during?.(c);
+				return wrapped && c.dayTime >= 6;
+			},
+			400,
+			1 / 30,
+		);
+	};
+	s.sim.clock.setClock(12);
+	const long = s.join(newUser(), "long");
+	const away = s.join(newUser(), "away");
+	const kicked = s.join(newUser(), "kicked");
+	for (const p of [long, away, kicked]) {
+		s.immortal.add(p);
+		s.enter(p);
+	}
+	s.run(1.2);
+	// BREAK_NUDGE_MIN of session go by on the server's clock (the world's is set below)
+	clockNow += (W.BREAK_NUDGE_MIN + 1) * 60;
+	const short = s.join(newUser(), "short");
+	s.immortal.add(short);
+	s.enter(short);
+	// `away` is in the lobby at midnight and walks back in at 03:00: it did not live this night
+	s.intent(away, s.P.IntentKind.LeaveWorld);
+	s.run(0.6);
+	let backIn = false;
+	const first = toDawn(23.9, c => {
+		if (!backIn && c.dayTime >= 3) {
+			backIn = true;
+			s.enter(away);
+		}
+	});
+	s.run(0.5);
+	check(
+		first >= 0 &&
+			backIn &&
+			told(long) === 1 &&
+			told(kicked) === 1 &&
+			told(short) === 0 &&
+			told(away) === 0 &&
+			broadcast === 0,
+		`at 06:00 the line goes to each ${W.BREAK_NUDGE_MIN}-minute session that lived the night standing, to it alone (Announce{BreakNudge}, directed)`,
+		JSON.stringify({ first, long: told(long), kicked: told(kicked), short: told(short), away: told(away) }),
+	);
+	// `kicked` is kicked 10 s later (an admin's kick, the flood kick: Player:Kick is PlayerExitReason.CreatorKick),
+	// through the module's own PlayerRemoving handler
+	s.run(10, 0.25);
+	{
+		const { Players } = s.env.services;
+		Players.list = Players.list.filter(x => x !== kicked);
+		Players.PlayerRemoving.Fire(kicked, Enum.PlayerExitReason.CreatorKick);
+		kicked._parent = undefined;
+	}
+	// the long one reads it and goes, 30 s after it
+	s.run(20, 0.25);
+	s.quit(long);
+	const longAt = counted(long);
+	s.run(7, 0.25);
+	check(
+		JSON.stringify(longAt) === '["Left - Yes"]' &&
+			JSON.stringify(counted(long)) === '["Left - Yes"]' &&
+			JSON.stringify(counted(kicked)) === '["Left - Unknown"]' &&
+			counted(short).length === 0 &&
+			counted(away).length === 0,
+		"...and the event counts exactly those told: Left - Yes logged at the leave itself; the kicked one's Unknown; none for the others",
+		JSON.stringify({ long: counted(long), kicked: counted(kicked), short: counted(short), away: counted(away) }),
+	);
+	// the next night `away` lives standing: its line then -- and it stays past the 2 minutes (Left - No)
+	const second = toDawn(23.9);
+	s.run(0.5);
+	const awayAfterSecond = told(away);
+	s.run(W.BREAK_NUDGE_LEFT_S + 2, 0.25);
+	// `short` is a long session by the third night; `away` already had its line this session
+	clockNow += (W.BREAK_NUDGE_MIN + 1) * 60;
+	const third = toDawn(23.9);
+	s.run(0.5);
+	check(
+		second >= 0 &&
+			third >= 0 &&
+			awayAfterSecond === 1 &&
+			JSON.stringify(counted(away)) === '["Left - No"]' &&
+			told(away) === 1 &&
+			told(short) === 1,
+		"a session that lives the next night gets its line then (and stayed: Left - No); once a session -- the third dawn tells it nothing, and tells the now-long one",
+		JSON.stringify({
+			second,
+			third,
+			awayAfterSecond,
+			away: told(away),
+			short: told(short),
+			counted: counted(away),
+		}),
+	);
+	// the server closes (an update) inside the 2 minutes after `short`'s line: nobody can say it chose to go
+	const sent = new Map([long, away, short, kicked].map(p => [p, told(p)]));
+	s.shutdown();
+	check(
+		JSON.stringify(counted(short)) === '["Left - Unknown"]' && JSON.stringify(counted(away)) === '["Left - No"]',
+		"a close inside the 2 minutes: Left - Unknown, never Yes",
+		JSON.stringify({ away: counted(away), short: counted(short) }),
+	);
+	const disagree = [long, away, short, kicked].filter(p => sent.get(p) !== counted(p).length);
+	check(
+		disagree.length === 0,
+		"every line counted is a line sent, and every line sent is counted (told = BreakNudge rows, per player)",
+		disagree.map(p => `${p.Name}: told ${sent.get(p)}, counted ${counted(p).length}`).join("; "),
+	);
+});
+
 section(
 	"12b) MP-26: JoinedFromList is counted where the player ARRIVES (review of 0b44458, L5), once a session",
 	() => {
@@ -2047,7 +2432,9 @@ section("13) every row of this run: within the documented limits, low cardinalit
 	const allowed = [
 		`Life day - ${bucket}`,
 		`World day - ${bucket}`,
-		"Time - (Night|Day)",
+		"Time - (Night|Dawn|Day)",
+		"Length - (0-14 min|15-59 min|1-2 h|2-3 h|3 h\\+)",
+		"Left - (Yes|No|Unknown)",
 		"Survivors - (Solo|Group)",
 		"Cause - (Hunger|Poison|Boss|Horde|Unknown)",
 		"Choice - (Accepted|Declined)",
@@ -2103,8 +2490,10 @@ section("13) every row of this run: within the documented limits, low cardinalit
 		TITLES.length + // TitleEarned
 		5 + // SessionKills
 		3 + // Crafted
-		3 * 2 * 2 + // SessionEnded (+ its combos without the hour)
+		3 * 3 * 2 + // SessionEnded: where x time (night, dawn, day) x visit (+ its combos without the hour)
 		3 * 2 +
+		5 + // SessionLength: the length bucket
+		3 + // BreakNudge: left, stayed, or a close nobody can read
 		(A.WEAPON_KIND_NAMES.length + 2) + // WeaponKills
 		4 + // Rebirth economy: Continue
 		2 + // Shop economy: Category

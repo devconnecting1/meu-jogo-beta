@@ -39,6 +39,8 @@
  * the Funnel page charts.
  */
 import { GAME_NAME } from "shared/module";
+import { DeathBody, DeathBoss, DeathKind, deathKindOf } from "shared/data/deathCause";
+import { BREAK_NUDGE_LEFT_S, isDawnAt } from "shared/data/wellbeing";
 import { COSTUMES, SHOP_PACKS, rebirthPrice } from "shared/data/shop";
 import { TITLES, TitleId } from "shared/data/titles";
 import { PlayerSaveData, ownsTitle } from "shared/game/save";
@@ -62,6 +64,19 @@ export const DEFERRED_MAX = 512;
 export const POLL_S = 1;
 /** a player who left is forgotten this long after, so a hook that runs late in the leave (a death) still finds them */
 const LEAVE_GRACE_S = 15;
+/**
+ * BEM-04: a player who leaves this soon (seconds) after a teleport was asked for them (the Play solo trip, the Servers
+ * list's join: `teleporting`) went to another server of this game, not on a break (`Left - Unknown`)
+ */
+const TELEPORT_LEAVE_S = 60;
+
+/**
+ * How a player left the server (`playerLeft`): of their own accord as far as the engine says (`left`: the exit reason
+ * is the catch-all Unknown -- the close button, a lost connection, a teleport), `kicked` (PlayerExitReason CreatorKick
+ * or PlatformKick: an admin's kick, the flood kick, the platform's), or `missed` (the Player was already gone when a
+ * poll noticed it: when and why are not known).
+ */
+export type LeaveHow = "left" | "kicked" | "missed";
 /** a fault is warned at most this often (seconds): a bug here must be visible, never a flood */
 const FAULT_LOG_S = 60;
 
@@ -166,8 +181,8 @@ export function routeName(route: string): string {
 export const TRIP_STAGES = ["Reserve", "Teleport", "Init"];
 export const TRIP_RESULTS = ["reserve", "teleport", "full", "flooded", "denied", "timeout", "cancelled"];
 
-/** a living boss this close to a body at its death is what killed it: a needle's reach (shared/sim/ai/bossBrain.ts) */
-export const BOSS_REACH = 900;
+/** a living boss this close to a body at its death is what killed it: a needle's reach (shared/data/deathCause.ts) */
+export { BOSS_REACH } from "shared/data/deathCause";
 
 /**
  * The weapon kinds of the kill credit (shared/data/kinds.ts WeaponKind, 1-8), by name, for WeaponKills. A machine's
@@ -190,6 +205,13 @@ export const EVENT = {
 	SessionEnded: "SessionEnded",
 	/** a session's killing blows with one kind of weapon (one per kind used, on leaving) */
 	WeaponKills: "WeaponKills",
+	/**
+	 * BEM-07's guard on the tail (docs/ANALYTICS.md §15): a session's length in minutes, bucketed -- the dashboards give
+	 * a custom value's mean, min and max but no percentile, so the share of sessions past 2 h / 3 h is read by `Length`
+	 */
+	SessionLength: "SessionLength",
+	/** BEM-04: the server gave this session the dawn card's break line, and whether they left soon after */
+	BreakNudge: "BreakNudge",
 	/** MP-26: a player ARRIVED from another public server's Servers list (server/match/townServices.ts) */
 	JoinedFromList: "JoinedFromList",
 	/** P0-1: a joining player was offered a town of their own (the public town was far past their record) */
@@ -292,6 +314,15 @@ export function dayBucket(day: number): string {
 	return "30+";
 }
 
+/** "0-14 min", "15-59 min", "1-2 h", "2-3 h", "3 h+": a session's length, for the tail guard (BEM-07) */
+export function lengthBucket(minutes: number): string {
+	if (minutes < 15) return "0-14 min";
+	if (minutes < 60) return "15-59 min";
+	if (minutes < 120) return "1-2 h";
+	if (minutes < 180) return "2-3 h";
+	return "3 h+";
+}
+
 function killBucket(kills: number): string {
 	if (kills <= 0) return "0";
 	if (kills < 10) return "1-9";
@@ -319,38 +350,18 @@ export function weaponName(kind: number): string {
 	return WEAPON_KIND_NAMES[kind - 1] ?? "Other";
 }
 
-/** what a body carries into its death, as far as the cause goes (a PlayerState is one) */
-export interface DeathBody {
-	x: number;
-	y: number;
-	/** 0 = starving: the hunger drain is taking hp (shared/sim/playerMove.ts) */
-	hungry: number;
-	buffs: { poison: number };
-}
+export type { DeathBody, DeathBoss } from "shared/data/deathCause";
 
-/** a boss as far as the cause goes (a BossState is one) */
-export interface DeathBoss {
-	x: number;
-	y: number;
-	hp: number;
-}
+/** the dashboard's word for each cause (shared/data/deathCause.ts DeathKind, by value) */
+const CAUSE_NAMES = ["Cause - Unknown", "Cause - Horde", "Cause - Hunger", "Cause - Poison", "Cause - Boss"];
 
 /**
  * Why a survivor died, from what the server holds at that instant (the damage itself carries no source): starving,
  * poisoned, a living boss within a needle's reach, or else the horde. Low cardinality by construction: four values.
+ * The rule is shared/data/deathCause.ts `deathKindOf`, the same one the dead survivor's death screen is told (UI-13).
  */
 export function causeOfDeath(body: DeathBody | undefined, bosses: ReadonlyArray<DeathBoss> | undefined): string {
-	if (body === undefined) return "Cause - Unknown";
-	if (body.hungry <= 0) return "Cause - Hunger";
-	if (body.buffs.poison > 0) return "Cause - Poison";
-	if (bosses !== undefined) {
-		for (const b of bosses) {
-			const dx = b.x - body.x;
-			const dy = b.y - body.y;
-			if (b.hp > 0 && dx * dx + dy * dy <= BOSS_REACH * BOSS_REACH) return "Cause - Boss";
-		}
-	}
-	return "Cause - Horde";
+	return CAUSE_NAMES[deathKindOf(body, bosses)] ?? CAUSE_NAMES[DeathKind.Unknown];
 }
 
 /** a life's funnel session: `runRev` less the continues bought in it -- a paid Rebirth moves both, a new life resets
@@ -429,6 +440,16 @@ interface Entry {
 	/** where the last read found them (`poll`): a body in the city, and the world's hour a night one */
 	inWorld: boolean;
 	atNight: boolean | undefined;
+	/** ...and the dawn window (06:00-07:30, shared/data/wellbeing.ts `isDawnAt`): the healthy stopping point (BEM-04) */
+	atDawn: boolean;
+	/**
+	 * clock() when the server told this session the dawn card's break line (BEM-04: server/main.server.ts decides and
+	 * calls `breakNudge` in the same step, so a line counted is a line sent), and whether its BreakNudge went out
+	 */
+	nudgedAt?: number;
+	nudgeLogged: boolean;
+	/** clock() a teleport to another server of this game was last asked for them (`teleporting`) */
+	teleportAt?: number;
 	/** tonight's Night funnel session, while it is open */
 	night?: { id: string; step: number };
 	/** the shop visit that is open, and the rate guard on opening one */
@@ -450,12 +471,6 @@ export interface WorldView {
 	bodyOf(player: Player): { dead: boolean } | undefined;
 	/** survivors standing in the city (alive) */
 	standing(): number;
-	/**
-	 * Does the combat-log guard still hold this user's body in the city (server/net/mpHost.ts `linger`, LINGER_S)? A
-	 * session that left in a fight is summed up when the body comes out, so a death in the guard is logged BEFORE
-	 * SessionEnded, and SessionEnded says "Dead". Absent: nobody is ever held.
-	 */
-	lingering?(userId: number): boolean;
 }
 
 export interface AnalyticsOptions {
@@ -501,6 +516,11 @@ export class ServerAnalytics {
 	/** the world clock at the last read, to find the hours crossed since (the Night funnel) */
 	private lastHour?: number;
 	private lastDay?: number;
+	/**
+	 * BEM-04: the server is closing (BindToClose began) or a restart is scheduled (DataModel.ServerRestartScheduled): a
+	 * leave from now on is the close's, not a choice (`Left - Unknown`)
+	 */
+	private closing = false;
 
 	constructor(sink: AnalyticsSink, options: AnalyticsOptions) {
 		this.sink = sink;
@@ -738,6 +758,9 @@ export class ServerAnalytics {
 			loadedAt: old?.loadedAt ?? this.clock(),
 			inWorld: old !== undefined && old.inWorld,
 			atNight: old?.atNight,
+			atDawn: old?.atDawn ?? false,
+			nudgedAt: old?.nudgedAt,
+			nudgeLogged: old?.nudgeLogged ?? false,
 			shopOpenedAt: old?.shopOpenedAt ?? -math.huge,
 			shopVisits: old?.shopVisits ?? 0,
 		};
@@ -773,23 +796,40 @@ export class ServerAnalytics {
 	}
 
 	/**
-	 * The player left the server: the session's aggregates, once (Players.PlayerRemoving, BindToClose). One who left in
-	 * a fight leaves a body the combat-log guard holds a few seconds more (`WorldView.lingering`): the session is summed
-	 * up when it comes out (`poll`), so a death in the guard is its Died, logged before SessionEnded, and SessionEnded
-	 * says where the body ended ("Dead"). The session's length is still counted to the departure.
+	 * The player left the server: the session's aggregates, once (Players.PlayerRemoving, BindToClose), and the break
+	 * line's verdict (BEM-04) -- logged HERE, while the Player is still there: the engine reference types
+	 * LogCustomEvent's player as a Player and fires PlayerRemoving "right before" that Player is destroyed, and nothing
+	 * documents an event for a Player already gone. `how`: see LeaveHow.
 	 */
-	playerLeft(player: Player): void {
+	playerLeft(player: Player, how: LeaveHow = "left"): void {
 		this.arrivals.delete(player);
 		const e = this.entries.get(player);
 		if (e === undefined) return;
-		if (e.leftAt === undefined) e.leftAt = this.clock();
-		if (this.held(e)) return;
+		const first = e.leftAt === undefined;
+		if (first) e.leftAt = this.clock();
 		this.summarize(e);
+		if (!first) return;
+		// a kick, a teleport to another server of this game, a close under way, a leave noticed late: not a break taken
+		const teleport = e.teleportAt;
+		const teleported = teleport !== undefined && (e.leftAt ?? 0) - teleport <= TELEPORT_LEAVE_S;
+		this.nudgeVerdict(e, this.closing || how !== "left" || teleported);
 	}
 
-	/** is this entry's body still held in the city by the combat-log guard? */
-	private held(e: Entry): boolean {
-		return this.world?.lingering?.(e.userId) === true;
+	/**
+	 * BEM-04: a teleport to another server of this game was asked for this player (server/match/matchHost.ts's Play solo
+	 * trip, server/match/serverList.ts's join), right before TeleportAsync: a leave soon after it is that teleport's.
+	 */
+	teleporting(player: Player): void {
+		const e = this.entries.get(player);
+		if (e !== undefined) e.teleportAt = this.clock();
+	}
+
+	/**
+	 * BEM-04: the platform scheduled a restart of this server (DataModel.ServerRestartScheduled: an update, maintenance):
+	 * every leave from now on may be the restart's -- `Left - Unknown`, never a choice read into it.
+	 */
+	restartScheduled(): void {
+		this.closing = true;
 	}
 
 	private summarize(e: Entry): void {
@@ -799,14 +839,21 @@ export class ServerAnalytics {
 		// the quit point, lobby sessions included (a new player who never walks in is the drop-off that matters most).
 		// Where and when come from the last once-a-second read, never from now: the host's own PlayerRemoving may
 		// already have taken the body out of the city (the two handlers run in no set order)
-		const minutes = math.max(0, (e.leftAt ?? this.clock()) - e.loadedAt) / 60;
+		const endedAt = e.leftAt ?? this.clock();
+		const minutes = math.max(0, endedAt - e.loadedAt) / 60;
 		const where = e.save.runOver ? "Dead" : e.inWorld ? "City" : "Lobby";
 		const fields: CustomFields = {
 			CustomField01: `Where - ${where}`,
 			CustomField03: e.fresh ? "Visit - First" : "Visit - Returning",
 		};
-		if (e.atNight !== undefined) fields.CustomField02 = e.atNight ? "Time - Night" : "Time - Day";
-		this.custom(e, EVENT.SessionEnded, math.floor(minutes * 10 + 0.5) / 10, fields);
+		// BEM-07: the dawn is told apart from the rest of the day -- the share of sessions that end there is a guard
+		if (e.atNight !== undefined) {
+			fields.CustomField02 = e.atNight ? "Time - Night" : e.atDawn ? "Time - Dawn" : "Time - Day";
+		}
+		const tenths = math.floor(minutes * 10 + 0.5) / 10;
+		this.custom(e, EVENT.SessionEnded, tenths, fields);
+		// BEM-07: the tail of the session length, by bucket (no percentile on a custom value: docs/ANALYTICS.md §15)
+		this.custom(e, EVENT.SessionLength, tenths, { CustomField01: `Length - ${lengthBucket(minutes)}` });
 		if (!e.entered) return;
 		const kills = math.max(0, e.save.zombieKills - e.killsAtLoad);
 		this.custom(e, EVENT.SessionKills, kills, { CustomField01: `Kills - ${killBucket(kills)}` });
@@ -821,9 +868,41 @@ export class ServerAnalytics {
 		if (e.used > 0) this.custom(e, EVENT.ItemsUsed, e.used);
 	}
 
-	/** BindToClose: every session still here is summarized, and the queue gets what the window still allows */
+	/**
+	 * BEM-04: the server told this player the dawn card's break line (server/main.server.ts, the same step that sends
+	 * `Announce{BreakNudge}`). Once per session; its `BreakNudge` goes out when they leave (`playerLeft`), or
+	 * BREAK_NUDGE_LEFT_S later with them still here.
+	 */
+	breakNudge(player: Player): void {
+		const e = this.entries.get(player);
+		if (e === undefined || e.ephemeral || e.leftAt !== undefined || e.nudgedAt !== undefined) return;
+		e.nudgedAt = this.clock();
+	}
+
+	/**
+	 * BEM-04: the verdict on a break line told and not yet logged -- did they leave within BREAK_NUDGE_LEFT_S of it?
+	 * `unknown`: a close, a kick or a teleport took them, so nobody can say they chose to go (docs/ANALYTICS.md §15).
+	 */
+	private nudgeVerdict(e: Entry, unknown: boolean): void {
+		const at = e.nudgedAt;
+		if (at === undefined || e.nudgeLogged || e.ephemeral) return;
+		e.nudgeLogged = true;
+		let left = "Left - No";
+		if (unknown) left = "Left - Unknown";
+		else if (e.leftAt !== undefined && e.leftAt - at <= BREAK_NUDGE_LEFT_S) left = "Left - Yes";
+		this.custom(e, EVENT.BreakNudge, undefined, { CustomField01: left });
+	}
+
+	/**
+	 * BindToClose: every session still here is summarized, and the queue gets what the window still allows. A break line
+	 * still waiting for its verdict is the close's (`Left - Unknown`), and so is every leave after this.
+	 */
 	shutdown(): void {
-		for (const [, e] of this.entries) this.summarize(e);
+		this.closing = true;
+		for (const [, e] of this.entries) {
+			this.summarize(e);
+			this.nudgeVerdict(e, true);
+		}
 		this.drain();
 	}
 
@@ -835,15 +914,16 @@ export class ServerAnalytics {
 		const hours = this.hoursCrossed();
 		for (const [player, e] of this.entries) {
 			// a removal this module missed (a Player already parented to nil) is a leave too
-			if (e.leftAt === undefined && player.Parent === undefined) this.playerLeft(player);
+			if (e.leftAt === undefined && player.Parent === undefined) this.playerLeft(player, "missed");
 			if (e.leftAt !== undefined) {
-				// a departure the combat-log guard held: summed up once the body is out (LINGER_S), before the grace ends
-				if (!e.summarized && (!this.held(e) || now - e.leftAt >= LEAVE_GRACE_S)) this.summarize(e);
 				if (now - e.leftAt >= LEAVE_GRACE_S) gone.push(player);
 				continue;
 			}
 			this.pollEntry(e);
 			for (const step of hours) this.nightPhase(e, step);
+			// BEM-04: the break line stood for BREAK_NUDGE_LEFT_S and they are still here
+			const nudgedAt = e.nudgedAt;
+			if (nudgedAt !== undefined && now - nudgedAt > BREAK_NUDGE_LEFT_S) this.nudgeVerdict(e, false);
 		}
 		for (const player of gone) {
 			const e = this.entries.get(player);
@@ -913,8 +993,11 @@ export class ServerAnalytics {
 		const save = e.save;
 		const w = this.world;
 		if (w !== undefined) {
-			e.inWorld = w.bodyOf(e.player) !== undefined;
-			e.atNight = isNightAt(w.dayTime());
+			const body = w.bodyOf(e.player);
+			e.inWorld = body !== undefined;
+			const hour = w.dayTime();
+			e.atNight = isNightAt(hour);
+			e.atDawn = isDawnAt(hour);
 		}
 		const key = lifeKeyOf(save);
 		if (key !== e.lifeKey) {
@@ -1065,6 +1148,12 @@ export class ServerAnalytics {
 	 * The server killed this survivor (server/sim/life.ts `died`, after `lifeDeaths` counted it). `survivors` is who
 	 * is in the world with them (kept for the callers; the group question moved to the Night funnel's first step);
 	 * `body` and `bosses` are what the cause is read from (`causeOfDeath`).
+	 *
+	 * Not for a player who has LEFT (review of 6e6dfa0): the combat-log guard keeps a body in the fight LINGER_S after
+	 * its player quit (server/net/mpHost.ts `linger`), and it can die there. Their session already ended -- SessionEnded
+	 * went out at the departure, with the Player still here (`playerLeft`: nothing documents an event for a Player
+	 * already gone) -- so that death is not logged: no Died after SessionEnded, no Rebirth funnel for somebody who
+	 * cannot pay one. It is in the save (`runOver`), which is what the next session starts from.
 	 */
 	death(
 		save: PlayerSaveData,
@@ -1074,7 +1163,7 @@ export class ServerAnalytics {
 		bosses?: ReadonlyArray<DeathBoss>,
 	): void {
 		const e = this.entryOfSave(save);
-		if (e === undefined) return;
+		if (e === undefined || e.leftAt !== undefined) return;
 		e.lastDay = save.day;
 		e.lastDeaths = save.deathCount;
 		// tonight is over for them: a Rebirth before the next hour is a new body, not a night lived through
@@ -1407,10 +1496,21 @@ function boot(): ServerAnalytics | undefined {
 			Workspace.SetAttribute("pz_analytics_dropped", s.dropped);
 		});
 	});
-	Players.PlayerRemoving.Connect(player => guard(c => c.playerLeft(player)));
+	// the exit reason tells a kick (an admin's, the flood kick, the platform's) from a leave; Unknown is the catch-all
+	Players.PlayerRemoving.Connect((player, reason) => guard(c => c.playerLeft(player, exitHow(reason))));
 	game.BindToClose(() => guard(c => c.shutdown()));
+	// a restart the platform scheduled (an update, maintenance) is a close that comes with warning: leaves from then on
+	// are its (absent in an old engine or a test's fake: then only BindToClose says so)
+	pcall(() => game.ServerRestartScheduled.Connect(() => guard(c => c.restartScheduled())));
 	print(`[${GAME_NAME}] analytics on${inStudio ? " (Studio: counted, never sent)" : ""}`);
 	return core;
+}
+
+/** PlayerRemoving's exit reason as the break line's verdict reads it: a kick of any kind is not a leave */
+export function exitHow(reason: Enum.PlayerExitReason | undefined): LeaveHow {
+	return reason === Enum.PlayerExitReason.CreatorKick || reason === Enum.PlayerExitReason.PlatformKick
+		? "kicked"
+		: "left";
 }
 
 /** the running instance, for the admin panel and the tests */
@@ -1431,6 +1531,16 @@ function guard(fn: (core: ServerAnalytics) => void): void {
 /** server/main.server.ts `loadSession`: the save loaded (`status` "new" = a first visit; `arm`, its experiment) */
 export function sessionLoaded(player: Player, status: string, save: PlayerSaveData, arm?: string): void {
 	guard(c => c.sessionLoaded(player, status, save, arm));
+}
+
+/** server/main.server.ts `sim.onDawn`: this player was just told the dawn card's break line (BEM-04) */
+export function breakNudge(player: Player): void {
+	guard(c => c.breakNudge(player));
+}
+
+/** server/match/*: a teleport of this player to another server of this game is about to be asked (BEM-04) */
+export function teleporting(player: Player): void {
+	guard(c => c.teleporting(player));
 }
 
 /** server/net/mpHost.ts: the town the Night funnel follows (undefined when the host stops) */

@@ -383,7 +383,10 @@ export function weaponParts(visual, len) {
 
 const ZOMBIE_SHOES = charRamp(56, 54, 50);
 const ZOMBIE_HAIR = charRamp(50, 44, 36);
-/** the victims' blood on a zombie's mouth, hands and shirt: dried to a dark red (LEG-02: red is human blood) */
+/**
+ * the victims' blood on a zombie's mouth, hands and shirt: a survivor's red, dried darker (LEG-02: a survivor bleeds a
+ * bright red, the horde a dark brownish one; this is what they did, not what they bleed)
+ */
 const BLOOD = charRamp(128, 22, 26);
 const ACID = rampOf(PALETTE.acid);
 const BOIL = charRamp(238, 176, 72);

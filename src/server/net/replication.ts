@@ -820,6 +820,22 @@ export class Replicator {
 		this.queueFor(slot, { t: WorldEv.Announce, msg: AnnounceKind.TitleUnlocked, arg: titleToWire(titleId) });
 	}
 
+	/**
+	 * UI-13 (protocol note 24): why the survivor in `slot` just died, for their death screen -- `arg` is
+	 * shared/data/deathCause.ts `deathWireOf`. Reliable and DIRECTED like a title: their news, nobody else's.
+	 */
+	died(slot: number, arg: number): void {
+		this.queueFor(slot, { t: WorldEv.Announce, msg: AnnounceKind.Died, arg });
+	}
+
+	/**
+	 * BEM-04 (protocol note 24): the survivor in `slot` earned the dawn card's break line (server/main.server.ts decides,
+	 * shared/data/wellbeing.ts `breakNudgeEarned`). Directed, like a title.
+	 */
+	breakNudge(slot: number): void {
+		this.queueFor(slot, { t: WorldEv.Announce, msg: AnnounceKind.BreakNudge, arg: 0 });
+	}
+
 	// ------------------------------------------------------------ per tick (§3.1 step 4)
 
 	/** call once per simulation tick, after the step */
@@ -1156,11 +1172,11 @@ export class Replicator {
 				if (e.x !== undefined && e.y !== undefined) this.place(en, e.x, e.y);
 			} else {
 				this.place(en, e.x, e.y);
-				// what shows a zombie: its green blood, its debris (a chewed wall, an exploder), a spit, a sound. A survivor's
-				// red blood, an explosion (its own light), a boss's needle, a survivor's arrow: sent in range, as a survivor
-				// or a boss is
+				// what shows a zombie: its blood (BloodKind.Horde), its debris (a chewed wall, an exploder), a spit, a sound.
+				// A survivor's blood (Red), an explosion (its own light), a boss's needle, a survivor's arrow: sent in range,
+				// as a survivor or a boss is
 				if (e.t === FxType.Blood) {
-					en.sight = e.kind === BloodKind.Green;
+					en.sight = e.kind === BloodKind.Horde;
 				} else if (e.t === FxType.Debris) {
 					en.sight = e.material !== BOSS_DEBRIS;
 				} else if (e.t === FxType.Sound) {

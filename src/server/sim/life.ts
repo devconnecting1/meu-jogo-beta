@@ -38,6 +38,7 @@
  * Pure module: no Instances, no services, no os.clock. server/net/mpHost.ts feeds `step(dt)` from its Heartbeat and
  * maps Players to UserIds; tools/test-body.mjs drives the real host through its remotes.
  */
+import { deathKindOf, deathWireOf } from "shared/data/deathCause";
 import { rebirthPrice } from "shared/data/shop";
 import { WEAPONS, WeaponDef, usesMagazine } from "shared/data/weapons";
 import { PLAYER_RADIUS, circleBlocked } from "shared/game/physics";
@@ -53,7 +54,7 @@ import { PlayerSaveData, SAVE_LIMITS, ownsWeapon, resetRun } from "shared/game/s
 import { countLifeDeath } from "../save/achievements";
 import type { ShopActionReason } from "shared/net/net";
 import { LifeState } from "shared/net/protocol";
-import { DAY_BREAK_HOUR, daybreakWaitSeconds } from "shared/sim/clock";
+import { DAY_BREAK_HOUR, daybreakWaitSeconds, isNightAt } from "shared/sim/clock";
 import { isFuelWeapon } from "./combat";
 import { SPAWN_SHIELD_S, ServerPlayer, SpawnQuery, adoptSave, createServerPlayer, findSpawnPoint } from "./players";
 import { canEscape } from "./enclosure";
@@ -268,6 +269,11 @@ export interface LifeWire {
 	left(slot: number): void;
 	/** a reliable PlayerLife delta (§4.5) */
 	life(slot: number, state: number): void;
+	/**
+	 * UI-13: why the survivor in `slot` died, to them alone (`Announce{Died}`, protocol note 24; `arg` is
+	 * shared/data/deathCause.ts `deathWireOf`). Optional: a keeper wired to no client (a test) has nobody to tell.
+	 */
+	died?(slot: number, arg: number): void;
 }
 
 /** what `onWorldWiped` is told */
@@ -339,6 +345,12 @@ interface LifeRecord {
 	 * somebody still stood was only a departure.
 	 */
 	leftWhileLost: boolean;
+	/**
+	 * UI-13: the `Announce{Died}` arg of this survivor's last death (shared/data/deathCause.ts `deathWireOf`), told
+	 * again whenever they come back to the world still dead (`enter`); forgotten when they stand up. Undefined: none
+	 * known (a death this server did not see, one carried in over from another session's save).
+	 */
+	lastDeath?: number;
 }
 
 /** the v3 run body as the last departure wrote it (§7.2) */
@@ -455,6 +467,7 @@ export class LifeKeeper {
 			if (state !== undefined && owns && !rec.unloaded) unloadMagazine(state, save);
 			state = undefined;
 			rec.dead = false;
+			rec.lastDeath = undefined;
 			rec.downFor = undefined;
 			rec.fullNext = true;
 		}
@@ -506,6 +519,9 @@ export class LifeKeeper {
 		if (state.dead) rec.declined = false;
 		if (owns) save.runOver = state.dead;
 		this.wire.welcome(sp);
+		// UI-13: back in the street to wait, the death screen still says why -- after the welcome's own PlayerLife Dead,
+		// on the same directed, ordered channel (the review of ca9494a, L3)
+		if (state.dead && rec.lastDeath !== undefined) this.wire.died?.(slot, rec.lastDeath);
 		return sp;
 	}
 
@@ -591,8 +607,15 @@ export class LifeKeeper {
 			this.onSaveChanged?.(sp.userId);
 		}
 		this.wire.life(sp.slot, LifeState.Dead);
-		// the body and the bosses standing are what the cause is read from (hunger, poison, a boss, the horde)
-		Analytics.death(sp.save, this.sim.clock.dayTime, this.sim.count(), sp.state, this.sim.horde?.bossRoster.list);
+		// the body and the bosses standing are what the cause is read from (hunger, poison, a boss, the horde): the
+		// dead survivor is told (UI-13, their death screen teaches), and the dashboard counts it -- one rule for both
+		const bosses = this.sim.horde?.bossRoster.list;
+		const dayTime = this.sim.clock.dayTime;
+		const arg = deathWireOf(deathKindOf(sp.state, bosses), isNightAt(dayTime));
+		// kept with the record, so a survivor who comes back to this death (Home and PLAY, a reconnect) hears it again
+		rec.lastDeath = arg;
+		if (arg !== undefined) this.wire.died?.(sp.slot, arg);
+		Analytics.death(sp.save, dayTime, this.sim.count(), sp.state, bosses);
 	}
 
 	/**
@@ -610,6 +633,7 @@ export class LifeKeeper {
 		rec.body = undefined;
 		rec.unloaded = false;
 		rec.dead = false;
+		rec.lastDeath = undefined;
 		rec.downFor = undefined;
 		rec.declined = false;
 		rec.fullNext = true;
@@ -699,6 +723,7 @@ export class LifeKeeper {
 		rec.body = undefined;
 		rec.unloaded = false;
 		rec.dead = false;
+		rec.lastDeath = undefined;
 		rec.downFor = undefined;
 		rec.declined = false;
 		rec.fullNext = false;
@@ -909,6 +934,7 @@ export class LifeKeeper {
 		}
 		rec.save = save;
 		rec.dead = false;
+		rec.lastDeath = undefined;
 		rec.downFor = undefined;
 		rec.declined = false;
 		rec.fullNext = true;
@@ -983,6 +1009,8 @@ export class LifeKeeper {
 		const dead = b.runRev === save.runRev ? rec.dead || (owns && save.runOver) : owns && save.runOver;
 		if (dead && !rec.dead) rec.downFor = daybreakWaitSeconds(this.sim.clock.dayTime);
 		if (!dead) rec.downFor = undefined;
+		// a death that moved in from elsewhere is not the one this record saw
+		if (!(dead && rec.dead)) rec.lastDeath = undefined;
 		rec.dead = dead;
 		return false;
 	}
@@ -1069,6 +1097,7 @@ export class LifeKeeper {
 		sp.state = freshBody(sp.save, spawn.x, spawn.y, true);
 		sp.spawnShieldUntil = sim.tick + math.floor(SPAWN_SHIELD_S * sim.simHz);
 		rec.dead = false;
+		rec.lastDeath = undefined;
 		rec.downFor = undefined;
 		rec.declined = false;
 		rec.fullNext = false;

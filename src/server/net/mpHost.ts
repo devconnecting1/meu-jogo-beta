@@ -434,6 +434,9 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		life(slot, state) {
 			replicator.life(slot, state);
 		},
+		died(slot, arg) {
+			replicator.died(slot, arg);
+		},
 	});
 	// the death goes out reliably (§4.5), `runOver` goes into the save the same tick, and the daybreak countdown
 	// starts — on every server kind (server/sim/life.ts rules 4 and 5)
@@ -880,6 +883,8 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	let admitAt = 0;
 	let metricAt = 0;
 	let lastError = "";
+	/** the combat-log guard's own last failure (`stepLingers` runs apart from the tick), logged once per message */
+	let lastGuardError = "";
 	/**
 	 * Heartbeats whose work threw, since boot (`pz_tick_errors`). A repeat of the last message is not logged again, so
 	 * this is the only place a steady failure shows how often it happens.
@@ -1003,8 +1008,12 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		debug.setmemorycategory("PZ.sim");
 		// the combat-log guard first, and apart: a tick that throws must not hold a body (and its final write) in it
 		if (lingers.size() > 0) {
-			const [guardOk, guardErr] = xpcall(stepLingers, tickTrace, now);
-			if (!guardOk) warn(`[${GAME_NAME}] the combat-log guard failed: ${tostring(guardErr)}`);
+			const [ok, err] = xpcall(stepLingers, tickTrace, now);
+			// once per distinct failure, like the tick's own (a guard that throws every frame is one line, not sixty)
+			if (!ok && tostring(err) !== lastGuardError) {
+				lastGuardError = tostring(err);
+				warn(`[${GAME_NAME}] the combat-log guard failed: ${tostring(err)}`);
+			}
 		}
 		const [ok, err] = xpcall(beatBody, tickTrace);
 		// a tick that threw left the labels it was inside open (see `profiler`)
@@ -1202,18 +1211,6 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			let n = 0;
 			for (const sp of sim.players()) if (!sp.state.dead) n += 1;
 			return n;
-		},
-		// held by the combat-log guard -- or about to be: the PlayerRemoving handlers run in no set order, and analytics'
-		// may ask before this host's has started the guard. The same `inFight`, at the same instant, decides both
-		lingering(userId) {
-			if (lingers.has(userId)) return true;
-			if (stopped) return false;
-			for (const [player, link] of links) {
-				if (player.UserId !== userId || link.slot === undefined) continue;
-				const sp = sim.get(link.slot);
-				if (sp !== undefined && inFight(sp, os.clock())) return true;
-			}
-			return false;
 		},
 	});
 

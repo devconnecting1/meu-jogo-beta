@@ -233,6 +233,15 @@ export class Prediction {
 		return this.snaps;
 	}
 
+	/**
+	 * The HP of the last self block this survivor adopted -- the server's number, not the prediction's (undefined before
+	 * the first one of this attach, and while detached). BEM-04: the dawn card's "damage taken" counts what the server's
+	 * body lost, so a prediction's wobble around the ack is never tallied as a hit (client/main.client.ts `stepNight`).
+	 */
+	serverHp(): number | undefined {
+		return this.player !== undefined ? this.seenHp : undefined;
+	}
+
 	/** the simulated position (no visual offset, no render lead) */
 	exact(): { x: number; y: number } {
 		return { x: this.exactX, y: this.exactY };

@@ -39,6 +39,7 @@
  * tools/test-serverlist.mjs runs all of it under Node against fakes, quota included.
  */
 import { SERVER_ROWS_MAX, ServerRow, TownRefusal, TownResponse, isJobId } from "shared/net/townNet";
+import * as Analytics from "../analytics/events";
 
 /** the sorted map every public server writes its entry to (memory stores are kept apart between Studio and live) */
 export const SERVER_LIST_MAP = "ProjectZ_Servers";
@@ -517,6 +518,8 @@ export function startServerList(game_: ServerListGame, notify: (player: Player, 
 			const ts = service as TeleportService;
 			teleportService = ts;
 			teleport = (player, jobId) => {
+				// BEM-04: a leave after this is the teleport's, not a break taken (the BreakNudge's `Left - Unknown`)
+				Analytics.teleporting(player);
 				const options = new Instance("TeleportOptions");
 				options.ServerInstanceId = jobId;
 				options.SetTeleportData(SERVER_LIST_TELEPORT_DATA);
