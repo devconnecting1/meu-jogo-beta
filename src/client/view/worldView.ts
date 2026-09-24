@@ -166,7 +166,6 @@ const PORCH_TINT = Color3.fromRGB(214, 206, 196);
 /** the paint and body of a burnt-out car */
 const BURNT = Color3.fromRGB(66, 60, 56);
 const DOOR_GAP = Color3.fromRGB(28, 28, 30);
-const STEP = COLORS.sidewalk.Lerp(WHITE, 0.3);
 const CHIMNEY = Color3.fromRGB(122, 74, 58);
 /**
  * Kerb stones inside the road edge: 12 units of stone (the flat curb is 6) and, baked into the same texture, 4 of
@@ -863,9 +862,10 @@ export class WorldView {
 		}
 		// the inside, only while the roof is not on (a closed roof covers the whole footprint)
 		if (!this.interior.roofOpaque(s)) this.drawInterior(r, cam, s, v, false);
-		// doormats outside every door, and the glass under every broken window (EDI-18): read with the roof closed
+		// the entrance outside every door (ART-17), and the glass under every broken window (EDI-18): read with the roof
+		// closed
 		if (s.openings !== undefined) {
-			this.interior.drawDoormats(r, cam, s, v, undefined);
+			this.interior.drawEntrances(r, cam, s, v);
 			this.interior.drawWindowShards(r, cam, s, v);
 		} else {
 			this.drawPlainEntrance(r, cam, s, -1, BLACK);
@@ -1849,10 +1849,10 @@ export class WorldView {
 		}
 		// the rooms' floors, the decoration and the frames (only while the roof is not on)
 		if (!this.interior.roofOpaque(s)) this.drawInterior(r, cam, s, v, true);
-		// the doorstep and the mat on it, at every door, and the glass under every broken window (EDI-18): the entrances
-		// read even with the roof closed
+		// the entrance at every door -- the doorstep and its mat, a shop's glass doors, a hospital's ramp (ART-17) -- and
+		// the glass under every broken window (EDI-18): the entrances read even with the roof closed
 		if (s.openings !== undefined) {
-			this.interior.drawDoormats(r, cam, s, v, STEP);
+			this.interior.drawEntrances(r, cam, s, v);
 			this.interior.drawWindowShards(r, cam, s, v);
 		} else {
 			this.drawPlainEntrance(r, cam, s, -1, BLACK);

@@ -177,6 +177,12 @@ export function preloadWorldArt(): void {
 			lost.add("townProps");
 			warn("[world] the town's fixtures' atlas did not load: the fixtures are drawn with Frames");
 		}
+		// the entrances' atlas (ART-17): a doorstep that never arrives would be a door with nothing in front of it, so
+		// the entrances go back to their flat drawing
+		if (WORLD_ART.entrances.id !== "" && missing.includes(WORLD_ART.entrances.id)) {
+			lost.add("entrances");
+			warn("[world] the entrances' atlas did not load: the doors are drawn flat");
+		}
 		if (lost.size() > 0) changed();
 		warn("[world] some art textures are slow; keeping the art");
 	});

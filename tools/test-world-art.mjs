@@ -84,7 +84,15 @@
  *      sill tint and the glass on the floor; with the interiors' atlas, its cells: `windowGlass:<side>` for the pane,
  *      `window:<side>` for the empty frame and `glass:h|v` for the shards, outside and in. No
  *      sprite of the glass is over a body in the frame or an item; panes breaking in view create no Instance.
- *  15. THE TREES (VEG-06, shared/data/trees.ts, tools/tree-art.mjs). One greyscale atlas: every kind in its looks, each
+ *  15. THE ENTRANCES (ART-17, client/view/entrances.ts + entranceArt.ts). With no id of the entrances' atlas the art
+ *      draws nothing and every doorway is flat, at most two Frames on the ground and one on the roof's edge, the kinds
+ *      told apart; with it, in five towns every doorway has its stoop, frame and lintel; the stoop starts at the wall's
+ *      outside face, the lintel lies inside the footprint (LEG-03), a single door draws one leaf and a double door at
+ *      most its two (ESC-02), no leaf stands in the passage (the gap less 20 u at
+ *      each jamb, 72 u in and 48 u out: EDI-09) nor on anything of the town, every leaf rests somewhere, a few house
+ *      doors are torn off or were boarded up (APO-01), a doorway costs at most 4 / 1 / 3 sprites, and the four sides
+ *      are four bakes (the light never turns with a door). §5 measures the bodies on every kind of doorstep.
+ *  16. THE TREES (VEG-06, shared/data/trees.ts, tools/tree-art.mjs). One greyscale atlas: every kind in its looks, each
  *      a square of its kind's size, none over another and none a turned or mirrored copy of another; every crown
  *      lighter to the left and above, texel by texel (never turned after lighting); the trunk's cell is the 44 u
  *      collision box. Drawn: a tree is its cell at its size and never turned -- shadow, trunk, crown and light, 4
@@ -1109,6 +1117,52 @@ function silhouette(ground, withBody) {
 			res["zombie.chars"] >= 40 && res["survivor.chars"] >= 35,
 			"and with the characters' art too",
 			`walker ${f("zombie", "chars")}, survivor ${f("survivor", "chars")} ΔE`,
+		);
+	}
+}
+{
+	// ART-17: on the doorstep of every kind of entrance -- a coir mat, a rubber mat, a ramp's warning strip, a school's
+	// steps, a bay's hazard paint --, with the roof on, a walker and the survivor clear the open ground's bars
+	const EN_MODULE = join(SRC, "client/view/entrances.ts");
+	if (existsSync(EN_MODULE)) {
+		const EN = require(EN_MODULE);
+		const seen = new Set();
+		for (const b of world.solids) {
+			if (b.kind !== "building") continue;
+			for (const o of b.openings ?? []) {
+				if (o.kind !== "door") continue;
+				const style = EN.entranceStyle(b.buildingType, o.main);
+				if (seen.has(style.stoop)) continue;
+				const nx = o.side === "left" ? -1 : o.side === "right" ? 1 : 0;
+				const ny = o.side === "top" ? -1 : o.side === "bottom" ? 1 : 0;
+				// on the stoop, a body's radius off the wall's face, in the middle of the doorway
+				const p = { x: o.x + o.w / 2 + nx * (o.w / 2 + 20), y: o.y + o.h / 2 + ny * (o.h / 2 + 20) };
+				if (nx === 0) p.y = ny > 0 ? o.y + o.h + 20 : o.y - 20;
+				else p.x = nx > 0 ? o.x + o.w + 20 : o.x - 20;
+				if (pointInSolid(world, p.x, p.y, 17) !== undefined) continue;
+				seen.add(style.stoop);
+				const res = {};
+				for (const actor of ["zombie", "survivor"]) {
+					for (const look of ["flat", "town", "chars"]) {
+						const base = shot(p, actor === "zombie" ? "zombieShadow" : "none", look);
+						res[`${actor}.${look}`] = silhouette(base, shot(p, actor, look));
+					}
+				}
+				const f = (actor, look) => res[`${actor}.${look}`].toFixed(1);
+				check(
+					res["zombie.town"] >= 25 &&
+						res["survivor.town"] >= 30 &&
+						res["zombie.chars"] >= 40 &&
+						res["survivor.chars"] >= 35,
+					`on a ${style.stoop.padEnd(11)} doorstep (${style.name}): both clear the open ground's bars`,
+					`walker ${f("zombie", "flat")} -> ${f("zombie", "town")} -> art ${f("zombie", "chars")}, survivor ${f("survivor", "flat")} -> ${f("survivor", "town")} -> art ${f("survivor", "chars")} ΔE`,
+				);
+			}
+		}
+		check(
+			[...seen].length >= 9,
+			"a doorstep of every kind of entrance in the town was measured",
+			`${[...seen].join(", ")}`,
 		);
 	}
 }
@@ -4074,10 +4128,288 @@ section("14) window glass (EDI-18): intact and broken read apart from the street
 	);
 }
 
-// ================================================================ 15. the trees (VEG-06)
+// ================================================================ 15. the entrances (ART-17)
+
+section("15) the entrances (ART-17): each doorway its own, the gap left open, every side its own bake, cheap");
+{
+	const EA_MODULE = join(SRC, "client/view/entranceArt.ts");
+	if (!existsSync(EA_MODULE)) {
+		console.log("  (no client/view/entranceArt.ts in this checkout)");
+	} else {
+		const EA = require(EA_MODULE);
+		const EN = require(join(SRC, "client/view/entrances.ts"));
+		const { ENTRANCE_CELLS, ENTRANCE_SINGLE_LEAF: SINGLE } = require(join(SRC, "client/view/entranceAtlas.ts"));
+		const { InteriorView } = require(join(SRC, "client/view/interiorView.ts"));
+		const { insideBuilding, querySolids } = require(join(SRC, "shared/game/world.ts"));
+		const cam = new Camera();
+		const count = { n: 0 };
+		const rec = {
+			drawRect: () => count.n++,
+			drawCircle: () => count.n++,
+		};
+		const all = { minX: -1e9, minY: -1e9, maxX: 1e9, maxY: 1e9 };
+		const doorsOf = b => (b.openings ?? []).filter(o => o.kind === "door");
+		// --- without the atlas (ART-01): the art answers false, and each entrance is at most two Frames on the ground
+		// and one on the roof's edge (ART-16's budget for the flat drawing)
+		{
+			setArt(Object.fromEntries(Object.entries(ALL.ids).filter(([name]) => name !== "entrances")));
+			const iv = new InteriorView();
+			iv.useWorld(world);
+			let silent = true;
+			let worstGround = 0;
+			let worstRoof = 0;
+			let doors = 0;
+			for (const b of world.solids) {
+				if (b.kind !== "building") continue;
+				for (const o of doorsOf(b)) {
+					doors++;
+					if (iv.entrances.outside(rec, cam, b, o, all) || iv.entrances.lintel(rec, cam, b, o, 1))
+						silent = false;
+					const one = { ...b, openings: [o] };
+					count.n = 0;
+					iv.drawEntrances(rec, cam, one, all);
+					worstGround = Math.max(worstGround, count.n);
+					count.n = 0;
+					iv.drawRoofMarks(rec, cam, one, 1, COLORS.shadow, all);
+					worstRoof = Math.max(worstRoof, count.n);
+				}
+			}
+			check(silent, "no entrances' atlas: the art draws nothing, the flat entrances stand in (ART-01)");
+			check(
+				worstGround <= 2 && worstRoof <= 1,
+				`flat, each of the ${doors} doorways is at most two Frames on the ground and one on the roof's edge`,
+				`ground ${worstGround}, roof ${worstRoof}`,
+			);
+			const bases = new Set(EN.ENTRANCE_STYLES.map(s => `${s.stoop}:${JSON.stringify(rgb(s.base.color))}`));
+			check(
+				[...bases].length >= 10,
+				"flat, the entrances are told apart on the ground too (step, back step, mats, ramp, steps, runner, bay, service)",
+				`${[...bases].length} kinds`,
+			);
+		}
+		// --- with the atlas, in five towns
+		setArt(ALL.ids);
+		const seeds = [DESIGN.TOWN_SEED, 1, 42, 99991, 123456];
+		const stat = {
+			doors: 0,
+			planned: 0,
+			missing: [],
+			stoopOff: [],
+			roofOff: [],
+			frameOff: [],
+			passage: [],
+			overlap: [],
+			modes: { outFlat: 0, inFlat: 0, inSquare: 0, none: 0 },
+			torn: 0,
+			boarded: 0,
+			houseDoors: 0,
+			shattered: 0,
+			styles: new Set(),
+			worst: { out: 0, inside: 0 },
+			leafCount: [],
+			singles: 0,
+			doubles: 0,
+		};
+		const hitsRect = (a, b) =>
+			a.x < b.x + b.w - 0.5 && a.x + a.w > b.x + 0.5 && a.y < b.y + b.h - 0.5 && a.y + a.h > b.y + 0.5;
+		const bodyOf = p => {
+			const s = p.cell[6] * 4;
+			return { x: p.x, y: p.y, w: p.w - s, h: p.h - s };
+		};
+		for (const seed of seeds) {
+			const w = seed === DESIGN.TOWN_SEED ? world : generateTown(seed);
+			const art = new EA.EntranceArt();
+			art.useWorld(w);
+			for (const b of w.solids) {
+				if (b.kind !== "building") continue;
+				const house = b.buildingType === 1 || b.buildingType === 2;
+				for (const o of doorsOf(b)) {
+					stat.doors++;
+					const plan = art.planOf(b, o);
+					if (plan === undefined) {
+						if (stat.missing.length < 5)
+							stat.missing.push(`type ${b.buildingType} ${o.side} ${o.w}x${o.h}`);
+						continue;
+					}
+					stat.planned++;
+					const style = EN.entranceStyle(b.buildingType, o.main);
+					stat.styles.add(style.name);
+					if (house) stat.houseDoors++;
+					const along = o.side === "top" || o.side === "bottom";
+					const nx = o.side === "left" ? -1 : o.side === "right" ? 1 : 0;
+					const ny = o.side === "top" ? -1 : o.side === "bottom" ? 1 : 0;
+					// the wall's outer face, and the passage: the gap less 20 u at each jamb (a leaf square to the wall
+					// stands in those), 72 u in (the doorway's clear floor, EDI-12) and 48 u out
+					const face = along ? (ny > 0 ? o.y + o.h : o.y) : nx > 0 ? o.x + o.w : o.x;
+					const passage = along
+						? { x: o.x + 20, w: o.w - 40, y: ny > 0 ? o.y - 72 : o.y - 48, h: o.h + 120 }
+						: { y: o.y + 20, h: o.h - 40, x: nx > 0 ? o.x - 72 : o.x - 48, w: o.w + 120 };
+					const stoop = bodyOf(plan.outside[0]);
+					const near = along ? (ny > 0 ? stoop.y : stoop.y + stoop.h) : nx > 0 ? stoop.x : stoop.x + stoop.w;
+					const depth = along ? stoop.h : stoop.w;
+					if (Math.abs(near - face) > 0.01 || depth > 56 || !plan.outside[0].key.startsWith("stoop:"))
+						if (stat.stoopOff.length < 5) stat.stoopOff.push(`${plan.outside[0].key} ${near} vs ${face}`);
+					// the lintel lies on the roof, inside the footprint: never over the street (LEG-03)
+					const l = plan.lintel;
+					const corners = [
+						[l.x + 0.5, l.y + 0.5],
+						[l.x + l.w - 0.5, l.y + 0.5],
+						[l.x + 0.5, l.y + l.h - 0.5],
+						[l.x + l.w - 0.5, l.y + l.h - 0.5],
+					];
+					if (!corners.every(([x, y]) => insideBuilding(b, x, y)) && stat.roofOff.length < 5)
+						stat.roofOff.push(`${l.key} of #${b.id}`);
+					const frame = plan.inside[0];
+					if (!frame.key.startsWith("frame:") || !hitsRect(bodyOf(frame), o)) stat.frameOff.push(frame.key);
+					let leaves = 0;
+					for (const list of [plan.outside, plan.inside]) {
+						for (const p of list) {
+							if (p.key.startsWith("fallen:")) stat.torn++;
+							if (p.key.startsWith("boards:")) stat.boarded++;
+							if (!p.key.startsWith("leaf:")) continue;
+							leaves++;
+							const mode = p.key.split(":")[2];
+							stat.modes[mode]++;
+							if (p.key.startsWith("leaf:glass") && p.key.endsWith(":1")) stat.shattered++;
+							const r = bodyOf(p);
+							// the gap stays open: no leaf across the passage (a torn-off door lies on the ground: floor)
+							if (hitsRect(r, passage) && stat.passage.length < 5)
+								stat.passage.push(`${p.key} of #${b.id}`);
+							// and a leaf rests where nothing is: inside, none of the building's furniture, partitions or
+							// windows; outside, nothing of the town
+							const inside = mode !== "outFlat";
+							for (const s of querySolids(w, r.x, r.y, r.x + r.w, r.y + r.h)) {
+								if (s === b || s.kind === "canopy" || s.kind === "building") continue;
+								if (inside && s.parentId !== b.id) continue;
+								if (hitsRect(r, s) && stat.overlap.length < 5)
+									stat.overlap.push(`${p.key} on ${s.tags}`);
+							}
+						}
+					}
+					// a single door has one leaf, a double door two (a torn-off door lies on the step: one fewer)
+					const perKind = {};
+					for (const list of [plan.outside, plan.inside]) {
+						for (const p of list) {
+							if (!p.key.startsWith("leaf:")) continue;
+							const kind = p.key.split(":")[1];
+							(perKind[kind] ??= []).push(p.key.split(":")[3]);
+						}
+					}
+					for (const [kind, hands] of Object.entries(perKind)) {
+						const single = SINGLE[kind] === true;
+						const bad = single
+							? hands.length > 1
+							: hands.length > 2 || [...new Set(hands)].length !== hands.length;
+						if (bad && stat.leafCount.length < 5)
+							stat.leafCount.push(
+								`${kind} x${hands.length} (${single ? "single" : "double"}) at #${b.id}`,
+							);
+						if (single) stat.singles++;
+						else stat.doubles++;
+					}
+					const want =
+						style.leaves.reduce((n, l) => n + (SINGLE[l.kind] === true ? 1 : 2), 0) -
+						(plan.outside.some(p => p.key.startsWith("fallen:")) ? 1 : 0);
+					stat.modes.none += Math.max(0, want - leaves);
+					stat.worst.out = Math.max(stat.worst.out, plan.outside.length);
+					stat.worst.inside = Math.max(stat.worst.inside, plan.inside.length);
+				}
+			}
+		}
+		check(
+			stat.missing.length === 0,
+			`every doorway of ${seeds.length} towns has its entrance in the atlas (${stat.planned} of ${stat.doors}, ${[...stat.styles].length} styles)`,
+			stat.missing.join("; "),
+		);
+		check(
+			stat.stoopOff.length === 0,
+			"each stoop starts at the wall's outside face and lies at most 56 u out",
+			stat.stoopOff.join("; "),
+		);
+		check(
+			stat.roofOff.length === 0,
+			"each lintel lies on the roof, inside the footprint: nothing of it over the street (LEG-03)",
+			stat.roofOff.join("; "),
+		);
+		check(stat.frameOff.length === 0, "each frame lies across its gap", stat.frameOff.slice(0, 4).join("; "));
+		check(
+			stat.leafCount.length === 0 && stat.singles > 0 && stat.doubles > 0,
+			"a single door (a house's, the gas station's, a service door) draws exactly one leaf, a double door (ESC-02) at most its two",
+			stat.leafCount.join("; ") || `${stat.singles} single doors, ${stat.doubles} double doors drawn`,
+		);
+		check(
+			stat.passage.length === 0,
+			"the gap stays open (EDI-09): no leaf stands in the passage, 72 u in and 48 u out",
+			stat.passage.join("; "),
+		);
+		check(
+			stat.overlap.length === 0,
+			"a leaf rests where nothing stands: no furniture, partition, window or solid of the town under it",
+			stat.overlap.join("; "),
+		);
+		const m = stat.modes;
+		const leafTotal = m.outFlat + m.inFlat + m.inSquare + m.none;
+		console.log(
+			`       leaves: ${m.outFlat} pinned outside, ${m.inFlat} pinned inside, ${m.inSquare} square inside, ${m.none} with nowhere free (${leafTotal})`,
+		);
+		// pinned flat where the wall beside the gap is free (a house's front wall mostly holds the sofa or the TV beside
+		// its door, a back door stands by a corner: that leaf swings square instead, as a real one would stop there)
+		check(
+			m.outFlat + m.inFlat >= leafTotal * 0.25 && m.none <= leafTotal * 0.01,
+			"every leaf rests somewhere (pinned flat against a wall where it is free, else square at its jamb)",
+			`${Math.round(((m.outFlat + m.inFlat) / leafTotal) * 100)} % flat, ${((m.none / leafTotal) * 100).toFixed(1)} % nowhere`,
+		);
+		check(
+			stat.torn > 0 && stat.boarded > 0 && stat.torn + stat.boarded <= stat.houseDoors * 0.15,
+			"a few house doors are torn off or were boarded up and broken through (APO-01), never many",
+			`${stat.torn} torn, ${stat.boarded} boarded of ${stat.houseDoors} house doors; ${stat.shattered} shop leaves shattered`,
+		);
+		check(
+			stat.worst.out <= 4 && stat.worst.inside <= 3,
+			"a doorway costs at most 4 sprites on the ground, 1 on the roof and 3 inside (the stoop, two leaves, one wear)",
+			`${stat.worst.out} / 1 / ${stat.worst.inside}`,
+		);
+		// --- every side its own bake: the light never turns with the door (ART-02). A cell's four sides are not one
+		// picture turned: the "top" cell turned half round is not the "bottom" one
+		{
+			const img = decodePNG(readFileSync(join(ART_DIR, "entrances.png")));
+			const pix = (c, x, y) => {
+				const i = ((c[1] + y) * img.w + c[0] + x) * 4;
+				return (img.data[i] << 24) | (img.data[i + 1] << 16) | (img.data[i + 2] << 8) | img.data[i + 3];
+			};
+			let families = 0;
+			let turned = [];
+			for (const key of Object.keys(ENTRANCE_CELLS)) {
+				if (!key.includes(":bottom")) continue;
+				const top = ENTRANCE_CELLS[key.replace(":bottom", ":top")];
+				const bot = ENTRANCE_CELLS[key];
+				if (top === undefined) continue;
+				families++;
+				const [, , w, h, , , sh] = bot;
+				if (top[2] !== w || top[3] !== h) continue;
+				let same = true;
+				for (let y = 0; y < h - sh && same; y++) {
+					for (let x = 0; x < w - sh && same; x++) {
+						if (pix(bot, x, y) !== pix(top, w - sh - 1 - x, h - sh - 1 - y)) same = false;
+					}
+				}
+				// a cell symmetric under the turn and flat-lit could be the same; one that shades is not
+				if (same && !key.startsWith("frame:")) turned.push(key);
+			}
+			check(
+				turned.length <= families * 0.02,
+				`each side is its own bake (${families} cells looking down, their "top" never merely turned)`,
+				turned.slice(0, 4).join("; "),
+			);
+		}
+		setArt({});
+	}
+}
+
+// ================================================================ 16. the trees (VEG-06)
 
 section(
-	"15) the trees (VEG-06): kinds and looks in one atlas, the light never turns, a cell a sprite, shrubs underfoot",
+	"16) the trees (VEG-06): kinds and looks in one atlas, the light never turns, a cell a sprite, shrubs underfoot",
 );
 {
 	const TD = require(join(SRC, "shared/data/trees.ts"));

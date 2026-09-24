@@ -39,9 +39,11 @@
  *            And the everyday town's fixtures' (`townProps`, tools/town-prop-art.mjs, ART-16): the market's stalls,
  *            tents, crates and carts, the street's lamps, hydrants and benches, the parks' and the backyards' things,
  *            the building site's, and the ground they stand on, its cells in src/client/view/townPropAtlas.ts
+ *            And the buildings' doors (`entrances`, tools/entrance-art.mjs, ART-17): the ground outside each doorway,
+ *            the leaves of its double door, its frame and the lintel over it, its cells in src/client/view/entranceAtlas.ts
  *            And the trees' (`trees`, tools/tree-art.mjs, VEG-06): every kind's crowns in their looks, greyscale (the
  *            tree's green tints them), their light in a second band, and the trunk; its cells in treeAtlas.ts
- *   ui      not town art either: the game's name, LAST TOWN, in the bold pixel font of tools/title-font.mjs (the one
+ *   ui       not town art either: the game's name, LAST TOWN, in the bold pixel font of tools/title-font.mjs (the one
  *            the store art's wordmark uses, docs/promo) -- the lobby's title and the splash (client/ui/logo.ts).
  *            GREYSCALE + alpha like the UI skin: three cells stacked top to bottom (the ink -- outline and hard
  *            shadow --, the fill of LAST, the fill of TOWN), each drawn by its own ImageLabel tinted with a theme
@@ -66,6 +68,7 @@ import { furnitureArt, furnitureAtlasModule, furnitureSheet } from "./furniture-
 import { bloodArt, bloodAtlasModule, bloodSheet } from "./blood-art.mjs";
 import { treeArt, treeAtlasModule, treeSheet } from "./tree-art.mjs";
 import { townPropArt, townPropAtlasModule, townPropSheet } from "./town-prop-art.mjs";
+import { entranceArt, entranceAtlasModule, entranceSheet, SHEET_STYLES } from "./entrance-art.mjs";
 import { dilate, layoutText, TITLE_H } from "./title-font.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -80,6 +83,8 @@ const TREE_TS_OUT = join(ROOT, "src", "client", "view", "treeAtlas.ts");
 const TREE_SHEET = join(ROOT, "docs", "art", "tree-sheet.png");
 const TOWN_PROP_TS_OUT = join(ROOT, "src", "client", "view", "townPropAtlas.ts");
 const TOWN_PROP_SHEET = join(ROOT, "docs", "art", "town-props-sheet.png");
+const ENTRANCE_TS_OUT = join(ROOT, "src", "client", "view", "entranceAtlas.ts");
+const ENTRANCE_SHEET = join(ROOT, "docs", "art", "entrances-sheet.png");
 const SHEET = join(ROOT, "docs", "art", "world-art-sheet.png");
 /** world units per texel */
 const WORLD_TEXEL = 4;
@@ -2088,6 +2093,15 @@ function build() {
 		`the town's fixtures: ${townProps.report.cells} cells of market, street, park, backyard and building-site pieces and their ground (client/view/townPropArt.ts)`,
 		{ townProps },
 	);
+	// the buildings' doors and entrances (DESIGN_RULES ART-17): the stoop, the leaves, the frame, the lintel
+	const entrances = entranceArt({ C });
+	add_(
+		"entrances",
+		"atlas",
+		entrances.atlas,
+		`the buildings' entrances: ${entrances.report.cells} cells of stoops, door leaves, frames and lintels, each side baked on its own (client/view/entranceArt.ts)`,
+		{ entrances },
+	);
 	// the game's name (UI-10): the lobby's title and the splash, not the town -- uploaded with it all the same
 	const mark = wordmark();
 	add_(
@@ -2290,6 +2304,20 @@ function writeTownPropModule() {
 	console.log(`wrote ${TOWN_PROP_SHEET} (${sheet.w}x${sheet.h})`);
 }
 
+/** src/client/view/entranceAtlas.ts and docs/art/entrances-sheet.png (every entrance style, from the street and inside) */
+function writeEntranceModule() {
+	const t = textures.find(x => x.entrances !== undefined);
+	writeFileSync(ENTRANCE_TS_OUT, entranceAtlasModule(t.entrances, t.name));
+	console.log(
+		`wrote ${ENTRANCE_TS_OUT} (${t.entrances.report.cells} cells, ${t.entrances.report.unique} unique, atlas ${t.tex.w} x ${t.tex.h})`,
+	);
+	if (process.argv.includes("--no-sheet")) return;
+	const sheet = entranceSheet(t.entrances, drawText, C, SHEET_STYLES);
+	mkdirSync(dirname(ENTRANCE_SHEET), { recursive: true });
+	writeFileSync(ENTRANCE_SHEET, encodePNG(sheet, true));
+	console.log(`wrote ${ENTRANCE_SHEET} (${sheet.w}x${sheet.h})`);
+}
+
 /** every texture magnified on one page, labelled, tiles shown 2 x 2 so the seams can be checked */
 function contactSheet() {
 	const zoom = 4;
@@ -2305,7 +2333,8 @@ function contactSheet() {
 				t.furniture === undefined &&
 				t.blood === undefined &&
 				t.trees === undefined &&
-				t.townProps === undefined,
+				t.townProps === undefined &&
+				t.entrances === undefined,
 		)
 		.map(t => {
 			const reps = t.kind === "tile" || t.kind === "tileTint" ? 2 : 1;
@@ -2388,6 +2417,7 @@ if (!process.argv.includes("--assets")) {
 	writeBloodModule();
 	writeTreeModule();
 	writeTownPropModule();
+	writeEntranceModule();
 	console.log(`world-art: ${textures.length} textures in ${OUT_DIR} (${(bytes / 1024).toFixed(1)} kB)`);
 	if (!process.argv.includes("--no-sheet")) contactSheet();
 }

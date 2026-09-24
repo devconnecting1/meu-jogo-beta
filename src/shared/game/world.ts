@@ -2054,6 +2054,14 @@ function parkTrees(g: Gen, lot: Lot, n: number, pad: number): void {
 		if (sp === TREE_DEAD) dead = true;
 		planted.push(addTree(g.w, cx, cy, "park", sp));
 	}
+	// Rarely the groves and the lawn run out of tries before the scatter's count (a park whose playground and court
+	// take the open quarters): the rest go on the first free spots of the lawn, row by row, still a body's width apart
+	// -- so the park always plants exactly the scatter's count and every id after it stays where it was
+	for (let y = yard.y + 56; planted.size() < count && y <= yard.y + yard.h - 56; y += 8) {
+		for (let x = yard.x + 56; planted.size() < count && x <= yard.x + yard.w - 56; x += 8) {
+			if (g.placer.canPlace(x - t / 2, y - t / 2, t, t, 40)) planted.push(addTree(g.w, x, y, "park"));
+		}
+	}
 	// the dense spots darker: each crown's green towards the dark by how many trees stand round it
 	for (const s of planted) {
 		const sp = treeSpecies(s.variant ?? 0);
