@@ -55,7 +55,7 @@ import * as Kit from "./window";
  *   │ │                           │  │ [ ] GUN     [S] OUTFIT   [P] PET    │ │
  *   │ └───────────────────────────┘  └────────────────────────────────────┘ │
  *   │  note: packs waiting, the town's day, or the MP-21 choice's words        │
- *   │ [ Home ]                          [ Enter the city · Day 1           ] │
+ *   │ [ Home ]  [ Play solo ]           [ Enter the city · Day 1           ] │
  *   └──────────────────────────────────────────────────────────────────────┘
  *
  * The action row is the only thing that changes with the run (main.client.ts keeps every semantic): Enter the city
@@ -65,6 +65,8 @@ import * as Kit from "./window";
  * price (the steel-blue main action: now, for coins), Wait for daybreak (iron: free, the SAME life wakes at 06:00 --
  * only where the server revives at daybreak and runs the clock) and New game (red: it throws this life away, and
  * the new one still waits for first light), with the MP-21 / MP-22 wording. Home and the X go back to the menu.
+ * Beside Home, Play solo (iron, P0-2: a town of your own, docs/MULTIPLAYER.md §7.4) -- only for a living survivor, on
+ * a server that can send them there (client/net/matchClient.ts asks first; the server decides).
  *
  * Built once per lobby and then only rewritten (the Bag's rule): every row, tile and button exists from the start
  * and a state change writes text and visibility, never an Instance.
@@ -85,6 +87,8 @@ export interface SurvivorState {
 	canWait?: boolean;
 	/** the world's hour, when the server publishes it: the note counts down to 06:00 at night */
 	hour?: number;
+	/** Play solo is on offer here (a hosted server that is not a solo town already, and a handler for it) */
+	playSolo?: boolean;
 }
 
 export interface SurvivorHandlers {
@@ -100,6 +104,8 @@ export interface SurvivorHandlers {
 	onWardrobe: (slot?: number) => void;
 	/** `thenPlay`: the first-run prompt's "Yes": the tutorial, then the city */
 	onTutorial: (thenPlay?: boolean) => void;
+	/** P0-2: a town of your own (client/net/matchClient.ts `askPlaySolo`: a question first, then the server) */
+	onPlaySolo?: () => void;
 }
 
 // ---------------------------------------------------------------- layout (window design units)
@@ -142,6 +148,9 @@ const ACTION_Y = WIN_H - BOTTOM - ACTION_H;
 const HOME_W = 168;
 const MAIN_X = RIGHT_X;
 const MAIN_W = RIGHT_W;
+/** Play solo, between Home and the main action (the room under the stage the action row leaves free) */
+const SOLO_X = PAD + HOME_W + GAP;
+const SOLO_W = MAIN_X - GAP - SOLO_X;
 /** the MP-21 row: New game | Rebirth, or New game | Wait for daybreak | Rebirth when waiting is on offer */
 const NEW_GAME_W = 196;
 const NEW_GAME_W3 = 150;
@@ -160,6 +169,7 @@ const SLOT_KEYS = ["WEAPON", "CLOTHES", "HAND", "GUN", "OUTFIT", "PET"];
 const HELP_TEXT = [
 	"Your survivor as everyone sees them, how long this life has lasted and what you carry.",
 	"Enter the city to play. The town keeps its own day, shared by everyone on this server.",
+	"Play solo takes you to a town of your own, on the day this life has reached: nobody else can join it.",
 	"When a run is over: Rebirth wakes you now for coins, waiting for daybreak is free and keeps this life, and New game starts a new life at day 1.",
 	"Outfits and pets are in the Wardrobe. Everyone sees them, and they change nothing else.",
 ].join("#");
@@ -209,6 +219,7 @@ export class SurvivorScreen {
 	private readonly slots: Array<SlotTile> = [];
 	private readonly note: TextLabel;
 	private readonly enter: TextButton;
+	private readonly solo: TextButton;
 	private readonly newGame: TextButton;
 	private readonly wait: TextButton;
 	private readonly rebirth: TextButton;
@@ -422,6 +433,17 @@ export class SurvivorScreen {
 			font: BOLD,
 			onClick: (): void => handlers.onBack(),
 		});
+		// P0-2: iron, beside Home -- a way to play, never the main action (the steel blue stays on Enter)
+		this.solo = Button(panel, "Solo", tr("Play solo"), {
+			x: SOLO_X,
+			y: ACTION_Y,
+			w: SOLO_W,
+			h: ACTION_H,
+			variant: "secondary",
+			textSize: TEXT.lg,
+			font: BOLD,
+			onClick: (): void => handlers.onPlaySolo?.(),
+		});
 		this.enter = Button(panel, "Enter", "", {
 			x: MAIN_X,
 			y: ACTION_Y,
@@ -595,6 +617,8 @@ export class SurvivorScreen {
 		const over = state.run === "over";
 		const canWait = over && state.canWait === true;
 		setVisible(this.enter, !over);
+		// a living survivor only: a death is answered where it happened (MP-21), and a new life waits for its first light
+		setVisible(this.solo, !over && state.run !== "newLife" && state.playSolo === true);
 		setVisible(this.newGame, over);
 		setVisible(this.wait, canWait);
 		setVisible(this.rebirth, over);

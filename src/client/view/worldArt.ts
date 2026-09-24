@@ -153,6 +153,12 @@ export function preloadWorldArt(): void {
 			lost.add("itemIcons");
 			warn("[world] the item icon atlas did not load: the icons are drawn with Frames");
 		}
+		// the interiors' atlas: furniture that never arrives would be an invisible shelf that still stops the body
+		// (P3, COL-01), so the rooms go back to their Frames
+		if (WORLD_ART.furniture.id !== "" && missing.includes(WORLD_ART.furniture.id)) {
+			lost.add("furniture");
+			warn("[world] the interiors' atlas did not load: the furniture is drawn with Frames");
+		}
 		if (lost.size() > 0) changed();
 		warn("[world] some art textures are slow; keeping the art");
 	});

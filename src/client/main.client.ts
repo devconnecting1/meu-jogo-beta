@@ -40,6 +40,7 @@ import { chooseWeapon } from "./systems/combat";
 import { hintedItem, interactHint } from "./systems/interaction";
 import * as net from "./systems/saveClient";
 import * as Bag from "./net/backpackSync";
+import * as Match from "./net/matchClient";
 import { showLogo } from "./ui/logo";
 import { LobbyHandle, LobbyPage, LobbyStatus, RunState, showLobby } from "./ui/lobby";
 import * as Flyover from "./view/townFlyover";
@@ -451,6 +452,8 @@ function goLobby(page: LobbyPage = "menu"): void {
 			onPage: (p: LobbyPage) => {
 				lobbyNav.page = p;
 			},
+			// P0-2: a town of one's own (docs/MULTIPLAYER.md §7.4): a question, then the server (client/net/matchClient.ts)
+			onPlaySolo: Match.askPlaySolo,
 		},
 		lobbyStatus(),
 		page,
@@ -540,6 +543,8 @@ function pushHud(): void {
 		hitFlash: p.hitFlash ?? 0,
 		// VIT-01: the wait before healing, for the vitals' cue (the HP glow, the fork on FOOD)
 		sinceHurt: p.sinceHurt,
+		// ITM-08: the HEAL and EAT plates -- the shared pick, the use cooldown's sweep, the pulse after a use
+		quick: Bag.quickUse.frame(p, save, os.clock()),
 	});
 	// the compass or the GPS in hand (E2): the needle to the camp, or the map of the streets around you
 	hud.updateNav(refs.world, p.x, p.y, save);
@@ -715,6 +720,8 @@ function mountRun(enterWorld = true): void {
 		ctx.input.actionPressed = true;
 	};
 	hud.mount();
+	// ITM-08: a new body carries no use cooldown and no pending heal of the last one
+	Bag.quickUse.reset();
 	deathShown = false;
 	saveTimer = 0;
 	// F1: a run is the only reason to have a body in the world -- ask for one now, not at connect time
@@ -749,6 +756,20 @@ function mountRun(enterWorld = true): void {
 		if (alive) {
 			warnNoAmmo();
 			trackBefore();
+		}
+		// ITM-08: a quick plate pressed -- H / F, the D-pad's up / down, a click or a tap (setHeld dropped it with a
+		// screen open or the survivor dead): the Bag's own Use, on the item the shared rule picks. Its sound is the
+		// server's (it plays what the item is where it accepted the use); only offline does this client play it
+		if (alive && input.quickUsePressed >= 0) {
+			const p = refs.player;
+			Bag.pressQuick(input.quickUsePressed, p, ctx.save, os.clock(), {
+				send: id => Bag.useItem(p, ctx.save, id),
+				say: text => hud.showMessage(text),
+				heard: id => {
+					if (!Bag.owned()) gameAudio.used(id, p.x, p.y);
+				},
+				tr,
+			});
 		}
 		admin?.beforeUpdate(dt);
 		gameAudio.beforeUpdate(refs);
@@ -890,6 +911,8 @@ netOnTown(onTown);
 // the server's counter reaches its goal; SAV-01: "Saving..." / "Saved" in the corner when the server writes the save;
 // MON-03: "Delivered" when the server's wallet says the packs were opened (into a living body, never at a dead entry)
 startServerNotices(ctx);
+// Play solo and the fresh-town offer (P0-1, P0-2): the Match remote, the lobby card
+Match.startMatchClient(ctx);
 
 function resumeRun(): void {
 	clearScreen();
@@ -1084,7 +1107,15 @@ function playPressed(): void {
 // server's own rule, sent as an intent, and reconciled with the bag the server sends back (QA sweep NET-1..4).
 pack.onUse = id => {
 	if ((ctx.save.invenUse[id] ?? 0) <= 0) return;
-	if (Bag.useItem(loop.getRefs().player, ctx.save, id)) return;
+	const p = loop.getRefs().player;
+	const [hp, hunger] = [p.hp, p.hungry];
+	if (Bag.useItem(p, ctx.save, id)) {
+		// the HUD's quick plates learn of it: the use cooldown's sweep, and the bars as they will be (ITM-08) -- with the
+		// vitals from before the use, which offline is already applied. Its sound is the server's (P0-4); offline, ours
+		Bag.quickUse.noteUse(id, p, os.clock(), -1, hp, hunger);
+		if (!Bag.owned()) gameAudio.used(id, p.x, p.y);
+		return;
+	}
 	// eight verbs still in flight: the click waits for their answers, and "already full" would be a lie
 	if (Bag.busy()) return;
 	// a use is only refused for a held, known item when it would do nothing (hp/hunger already
