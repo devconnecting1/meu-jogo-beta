@@ -90,7 +90,10 @@ function check(ok, what, detail) {
 }
 const info = msg => console.log(`        ${msg}`);
 /** a section that throws (an API missing on an older source tree, say) is a failure, not a crash of the suite */
+/** PZ_BODY_ONLY=20 runs only the sections whose title starts with it (a quicker loop while working on one) */
+const ONLY = process.env.PZ_BODY_ONLY;
 function section(title, fn) {
+	if (ONLY !== undefined && !title.startsWith(ONLY)) return;
 	console.log(`\n${title}`);
 	try {
 		fn();
@@ -145,7 +148,12 @@ globalThis.pcall = (fn, ...args) => {
 };
 globalThis.tostring = v => String(v);
 globalThis.tonumber = v => (Number.isFinite(Number(v)) ? Number(v) : undefined);
-globalThis.$tuple = (...a) => a[0];
+/** what an UpdateAsync transform returned after the value (userIds, metadata): the fake store keeps the userIds */
+let tupleRest = [];
+globalThis.$tuple = (...a) => {
+	tupleRest = a.slice(1);
+	return a[0];
+};
 globalThis.utf8 = { len: s => [Array.from(String(s)).length], offset: (s, n) => n };
 globalThis.string = {
 	char: (...codes) => String.fromCharCode(...codes),
@@ -267,6 +275,8 @@ function fakeStore(name) {
 	const data = new Map();
 	s = {
 		data,
+		/** the UserIds each key was tagged with by its last write (GlobalDataStore: "for GDPR tracking") */
+		userIds: new Map(),
 		/** fault injection: how many of the next calls of each kind throw, as a DataStore outage does */
 		fail: { get: 0, update: 0 },
 		UpdateAsync(key, transform) {
@@ -274,8 +284,12 @@ function fakeStore(name) {
 				s.fail.update -= 1;
 				throw new Error(`injected UpdateAsync failure on ${name}`);
 			}
+			tupleRest = [];
 			const next = transform(clone(data.get(key)));
-			if (next !== undefined) data.set(key, clone(next));
+			if (next !== undefined) {
+				data.set(key, clone(next));
+				s.userIds.set(key, clone(tupleRest[0]));
+			}
 			storeLog.push({ store: name, op: "update", key });
 			return [next];
 		},
@@ -1553,6 +1567,14 @@ section(
 			"and the title record has what was earned",
 			JSON.stringify(record),
 		);
+		// right to erasure: both documents say whose data they hold, in the key's own UserIds (stores.ts ownerTag)
+		const { SAVE_STORE } = require(join(SRC, "server/save/stores.ts"));
+		const tags = [SAVE_STORE, TITLE_STORE].map(n => JSON.stringify(fakeStore(n).userIds.get(String(userId))));
+		check(
+			tags.every(t => t === JSON.stringify([userId])),
+			"the save and the title record are both tagged with the player's UserId",
+			tags.join(" / "),
+		);
 
 		// a server rolled back to v4 code rewrites the save without the three v5 keys
 		s.storeDoc(userId, d => {
@@ -2758,6 +2780,203 @@ section("28) at shutdown, one body that cannot be banked leaves the others banke
 		"…and every save is written, every lock handed back",
 	);
 	check(died.length === 0, "…and no thread died of it", died.join(" | "));
+});
+
+// ================================================================ 29: the admin audit log, through the real remote
+
+/** a Lua pattern (the few classes server/admin/adminServer.ts uses) as a JS RegExp */
+function luaPattern(p) {
+	const cls = { c: "\\x00-\\x1f\\x7f", s: "\\s", d: "0-9", w: "A-Za-z0-9", a: "A-Za-z" };
+	let out = "";
+	let inSet = false;
+	for (let i = 0; i < p.length; i++) {
+		const c = p[i];
+		if (c === "%") {
+			const n = p[++i];
+			if (cls[n] !== undefined) out += inSet ? cls[n] : n === "s" ? "\\s" : `[${cls[n]}]`;
+			else out += `\\${n}`;
+		} else {
+			if (c === "[") inSet = true;
+			if (c === "]") inSet = false;
+			out += c;
+		}
+	}
+	return new RegExp(out, "g");
+}
+
+section("29) the admin audit log: UserIds and filtered text only, one key per server per day (F5, F10, F12)", () => {
+	const s = bootServer();
+	const { ADMIN_LOG_STORE } = require(join(SRC, "server/save/stores.ts"));
+	const LOG = require(join(SRC, "server/admin/auditLog.ts"));
+	const { ADMIN_USER_IDS } = require(join(SRC, "shared/admin/config.ts"));
+	// the Luau the admin server's text handling needs, only for this section
+	const savedMatch = globalThis.string.match;
+	globalThis.string.match = (str, pat) => {
+		const m = new RegExp(luaPattern(pat).source).exec(str);
+		return m === null ? [undefined] : [m[1] ?? m[0]];
+	};
+	Object.defineProperty(String.prototype, "gsub", {
+		value(pat, repl) {
+			let n = 0;
+			const out = this.replace(luaPattern(pat), () => {
+				n += 1;
+				return repl;
+			});
+			return [out, n];
+		},
+		configurable: true,
+		writable: true,
+	});
+	globalThis.error ??= v => {
+		throw v instanceof Error ? v : new Error(String(v));
+	};
+	try {
+		const { Players, TextService, ReplicatedStorage } = s.env.services;
+		// the Roblox text filter: masks one word and, like the real one, long digit runs (a phone number -- or a UserId);
+		// `down` makes it unavailable, as an outage does
+		const filter = { down: false };
+		TextService.FilterStringAsync = text => {
+			if (filter.down) throw new Error("filter unavailable");
+			const masked = text.replace(/badword/g, "#######").replace(/\d{5,}/g, m => "#".repeat(m.length));
+			return { GetNonChatStringForBroadcastAsync: () => masked, GetNonChatStringForUserAsync: () => masked };
+		};
+		const bans = [];
+		Players.BanAsync = cfg => bans.push(cfg);
+		Players.UnbanAsync = () => {};
+		Players.GetBanHistoryAsync = () => ({
+			IsFinished: true,
+			GetCurrentPage: () =>
+				bans.map(b => ({
+					Ban: true,
+					StartTime: "t",
+					Duration: b.Duration,
+					DisplayReason: b.DisplayReason,
+					PrivateReason: b.PrivateReason,
+					PlaceId: 1,
+				})),
+			AdvanceToNextPageAsync: () => {},
+		});
+		Players.GetNameFromUserIdAsync = id => `user${id}`;
+		Players.GetUserIdFromNameAsync = () => {
+			throw new Error("not found");
+		};
+		const store = fakeStore(ADMIN_LOG_STORE);
+		store.ListKeysAsync = prefix => ({
+			GetCurrentPage: () => [...store.data.keys()].filter(k => k.startsWith(prefix)).map(k => ({ KeyName: k })),
+		});
+		// an old single-key log, written by the code before this change: a name, a label, the raw reason
+		store.data.set(LOG.LEGACY_AUDIT_KEY, [
+			{
+				t: 5,
+				adminId: ADMIN_USER_IDS[0],
+				admin: "OwnerName",
+				action: "kick",
+				target: "Victim (4242)",
+				details: "raw words",
+				ok: true,
+			},
+		]);
+
+		const admin = s.join(ADMIN_USER_IDS[0], "OwnerName");
+		const target = s.join(newUser(), "VictimName");
+		target.LocaleId = "en-us";
+		const bystander = s.join(newUser(), "BystanderName");
+		const request = ReplicatedStorage.FindFirstChild("PZAdminNet").FindFirstChild("AdminRequest");
+		const ask = req => request.OnServerInvoke(admin, req);
+
+		let kickedWith;
+		target.Kick = msg => {
+			target.kicked = true;
+			kickedWith = msg;
+		};
+		const kick = ask({ kind: "kick", userId: target.UserId, reason: "you badword" });
+		check(kick.ok === true, "an admin kicks through the real remote", JSON.stringify(kick));
+		check(
+			kickedWith === "You were kicked by an administrator: you #######",
+			"the kicked player reads the lang.ts line and the reason as the filter returned it",
+			kickedWith,
+		);
+		const ban = ask({
+			kind: "ban",
+			target: String(bystander.UserId),
+			duration: "1d",
+			displayReason: "badword exploiting",
+			privateReason: "private raw note badword",
+			applyToUniverse: true,
+			excludeAlts: false,
+		});
+		check(ban.ok === true && bans.length === 1, "a ban goes to BanAsync", JSON.stringify(ban));
+		check(
+			bans[0].DisplayReason === "####### exploiting. The rules and how to appeal are on this experience's page.",
+			"the banned player reads the filtered reason and where the rules and the appeal are",
+			bans[0].DisplayReason,
+		);
+		check(
+			bans[0].PrivateReason.endsWith(`| by admin ${admin.UserId}`) &&
+				!bans[0].PrivateReason.includes("OwnerName"),
+			"the private note names the admin by UserId, not by name",
+			bans[0].PrivateReason,
+		);
+		filter.down = true;
+		const failed = ask({ kind: "announce", text: "secret badword text" });
+		check(failed.ok === false, "an announcement the filter cannot check is refused");
+		filter.down = false;
+		const history = ask({ kind: "banHistory", target: String(bystander.UserId) });
+		const entry = history.data?.entries?.[0];
+		check(
+			entry !== undefined && !entry.privateReason.includes("badword") && !entry.displayReason.includes("badword"),
+			"the ban history is shown back to the admin through the filter (F12)",
+			entry?.privateReason,
+		);
+		check(
+			entry?.privateReason === `private raw note ####### | by admin ${admin.UserId}`,
+			"...only what the admin typed: the game's ' | by admin <UserId>' stays readable (the filter would hash it)",
+			entry?.privateReason,
+		);
+
+		// what reaches the DataStore: this server's key of today, and nothing of the typed text or of anyone's name
+		s.shutdown();
+		const key = LOG.auditKey(os.time(), globalThis.game.JobId);
+		const doc = store.data.get(key);
+		const json = JSON.stringify(doc ?? null);
+		check(Array.isArray(doc) && doc.length === 3, "the entries land in this server's key of the day", key);
+		check(
+			!/badword|secret|raw|OwnerName|VictimName|BystanderName/.test(json) && !json.includes('"admin"'),
+			"no name and no unfiltered text is stored (the failed announcement neither)",
+			json,
+		);
+		check(
+			doc?.some(e => e.action === "kick" && e.targetId === target.UserId && e.details === "you #######") &&
+				doc?.some(
+					e =>
+						e.action === "ban" &&
+						e.targetId === bystander.UserId &&
+						e.details.includes('"####### exploiting"'),
+				),
+			"the kick and the ban are stored by UserId, with the reason as players saw it",
+		);
+		check(!store.data.get(LOG.LEGACY_AUDIT_KEY).some(e => e.t > 5), "nothing is appended to the old single key");
+
+		// the panel reads it back: names looked up now, the old key scrubbed in place
+		const log = ask({ kind: "auditLog" });
+		const shown = log.data ?? [];
+		check(
+			shown.some(
+				e => e.action === "kick" && e.target === `VictimName (${target.UserId})` && e.admin === "OwnerName",
+			),
+			"the panel shows names, looked up when it asks (never stored)",
+			JSON.stringify(shown.slice(0, 2)),
+		);
+		check(
+			shown.some(e => e.t === 5 && e.target === "user4242 (4242)" && e.details === ""),
+			"the old entry shows too, without its raw reason",
+		);
+		const legacy = JSON.stringify(store.data.get(LOG.LEGACY_AUDIT_KEY));
+		check(!/OwnerName|Victim|raw words/.test(legacy), "and the old key was scrubbed in place", legacy);
+	} finally {
+		globalThis.string.match = savedMatch;
+		delete String.prototype.gsub;
+	}
 });
 
 // ================================================================

@@ -44,7 +44,7 @@
 import { GAME_NAME } from "shared/module";
 import { TITLES } from "shared/data/titles";
 import { PlayerSaveData, SAVE_LIMITS } from "shared/game/save";
-import { TITLE_STORE } from "./stores";
+import { ownerTag, TITLE_STORE } from "./stores";
 
 /** what the record keeps: the grow-only half of the v5 save, and which title history it belongs to */
 export interface TitleRecord {
@@ -264,17 +264,24 @@ export function loadTitleRecord(key: string): TitleRecordRead {
  * stamped, all of which the caller then takes into the save. ONE attempt, no wait: it runs inside the session's save,
  * and the next save simply tries again. undefined = not written (logged).
  */
-export function storeTitleRecord(key: string, save: PlayerSaveData, mode: TitleRecordWrite): TitleRecord | undefined {
+export function storeTitleRecord(
+	key: string,
+	save: PlayerSaveData,
+	mode: TitleRecordWrite,
+	userId: number,
+): TitleRecord | undefined {
 	const s = titleStore();
 	if (s === undefined) return undefined;
 	const mine = titleRecordOf(save);
+	const owner = ownerTag(userId);
 	// set inside the transform (the closure hides the assignment from the narrowing, hence the cast)
 	let written = undefined as TitleRecord | undefined;
 	const started = os.clock();
 	const [ok, err] = pcall(() => {
 		s.UpdateAsync<unknown, unknown>(key, old => {
 			written = nextTitleRecord(old, mine, mode);
-			return $tuple(written);
+			// tagged with the player's UserId, like the save (server/save/stores.ts ownerTag)
+			return $tuple(written, owner);
 		});
 	});
 	noteCall(started, ok);

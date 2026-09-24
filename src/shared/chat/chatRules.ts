@@ -54,6 +54,53 @@ export function shouldDeliver(
 	return withinChatRange(speaker, listener);
 }
 
+// ---------------------------------------------------------------- the chat bar (client/chatInput.ts)
+
+/**
+ * May this player type into the chat? Only with a body in the world (MP-18): a line typed in the lobby reaches
+ * nobody, but Roblox always shows the sender their own line, so the bar that seemed to work was a lie. Off it goes
+ * where nobody can hear; with MP_PHASE = 0 everyone hears everyone, so it stays on.
+ */
+export function chatInputEnabled(inWorld: boolean, phase = MP_PHASE): boolean {
+	return phase < 1 || inWorld;
+}
+
+// ---------------------------------------------------------------- whispers (server/chat/proximityChat.ts)
+
+/**
+ * Roblox's default /whisper (/w) command, in TextChatService.TextChatCommands. It is switched OFF (MP-17): a
+ * whisper is a private channel over any distance, so it would carry a voice past earshot and out of the lobby,
+ * where MP-18 says nobody speaks. Disabled, "/w name hi" is no longer intercepted and is simply said out loud.
+ */
+export const WHISPER_COMMAND = "RBXWhisperCommand";
+/** the default whisper channels are "RBXWhisper:<UserId1>_<UserId2>" */
+const WHISPER_PREFIX = "RBXWhisper:";
+
+/** a whisper channel, by its name: one that still appears (a stale client, an engine change) delivers nothing */
+export function isWhisperChannel(name: string): boolean {
+	return name.sub(1, WHISPER_PREFIX.size()) === WHISPER_PREFIX;
+}
+
+/** the aliases of the switched-off command, lower case */
+const WHISPER_ALIASES = ["/w", "/whisper"];
+
+/**
+ * A line typed as a whisper ("/w Bob meet me", "/whisper ..."). With the command off it is no longer intercepted, so
+ * it would be SAID OUT LOUD to everyone in earshot -- a surprise for someone who meant it privately. It is delivered
+ * to nobody instead (server/chat/proximityChat.ts), and the sender is told whispers are off (client/chatInput.ts).
+ */
+export function isWhisperAttempt(text: string): boolean {
+	const t = text.lower();
+	for (const alias of WHISPER_ALIASES) {
+		const n = alias.size();
+		if (t.sub(1, n) !== alias) continue;
+		// (not `next`: roblox-ts keeps that name for Luau's own)
+		const following = t.sub(n + 1, n + 1);
+		if (following === "" || following === " ") return true;
+	}
+	return false;
+}
+
 // ---------------------------------------------------------------- bubbles (client/view/chatBubbles.ts)
 
 /**

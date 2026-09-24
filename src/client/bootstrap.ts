@@ -13,6 +13,7 @@ import { Renderer } from "shared/engine/renderer";
 import { COLORS } from "shared/engine/colors";
 import { defaultSave, PlayerSaveData } from "shared/game/save";
 import { GameContext, GamePhase } from "shared/game/context";
+import { syncChatInput } from "./chatInput";
 import { closeTopScreen } from "./ui/backStack";
 import { warmFightPool } from "./view/poolWarmup";
 
@@ -742,6 +743,8 @@ export function getCtx(): GameContext {
 
 export function setPhase(p: GamePhase): void {
 	ctx.phase = p;
+	// MP-18: the chat bar follows the body -- on in the town (alive or waiting for daybreak), off everywhere else
+	syncChatInput(p === "playing" || p === "dead", ctx.save.settings.langType);
 }
 
 export { RunService, releaseAttack, pressAttack };

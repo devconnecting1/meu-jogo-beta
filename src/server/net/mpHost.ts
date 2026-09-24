@@ -23,6 +23,7 @@
 import { GAME_NAME } from "shared/module";
 import { DESIGN } from "shared/engine/constants";
 import { TITLES } from "shared/data/titles";
+import { floodKickMessage, langTypeOfLocale } from "shared/data/rules";
 import {
 	FLOOD_MESSAGES,
 	FLOOD_MESSAGES_WINDOW_S,
@@ -324,7 +325,9 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		link.kicked = true;
 		const player = link.player;
 		warn(`[${GAME_NAME}] kicking ${player.Name} (${player.UserId}): network flood — ${reason}`);
-		pcall(() => player.Kick("Network flood"));
+		// what the player reads, in their account's language (lang.ts, shared/data/rules.ts)
+		const message = floodKickMessage(langTypeOfLocale(player.LocaleId));
+		pcall(() => player.Kick(message));
 	}
 
 	/** §8.2: the automatic kick, checked after EVERY message, accepted or not */

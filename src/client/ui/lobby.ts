@@ -410,6 +410,8 @@ class MenuPage {
 			THEME.foreground,
 			{ font: BOLD, align: "left", zIndex: sz },
 		);
+		// the player's display name: never captured for automatic translation (compliance F9)
+		this.name.AutoLocalize = false;
 		this.level = Keycap(stage.frame, "Level", "", {
 			x: RIGHT_W - space(5),
 			cy: Kit.SECTION_TITLE_MID,
