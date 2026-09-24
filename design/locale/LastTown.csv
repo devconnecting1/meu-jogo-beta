@@ -792,6 +792,43 @@ You are still here: try again in a moment."
 ,,,"Find it in buildings, craft it in the Craft tab, or unlock outfits and pets in the shop."
 ,,,Search buildings and fallen zombies for food and medicine.
 ,,,"Gather wood, stone and scrap while you explore. Materials are used in the Craft tab."
+,"Bag tab: the constructions you carry (turrets, barricades...), not a verb",,Build
+,button / key hint: put the construction down in the world in front of you,,Place
+,key hint: rotate the construction a quarter turn before placing it,,Turn
+,,,Can't place
+,,,Nothing to build yet
+,,,"Craft turrets, barricades and more in the Craft tab, or find basic kits in town."
+,,,Placing it uses one. Cancelling keeps it.
+,,,That can't be placed
+,,,You don't have one
+,,,Finish the current build first
+,,,You can't place that now
+,,,Get off the vehicle first
+,item type label: a bicycle or motorcycle you ride,,Vehicle
+,,,Stand next to it to craft the desk recipes.
+,,,"Stand next to it to craft every desk recipe, the pro ones too."
+,,,Shoots zombies near it. Needs a battery box nearby.
+,,,Launches a drone that escorts you and shoots. A battery box nearby charges it.
+,,,Switch it on to light the night. Needs a battery box nearby.
+,,,Launches a drone that lights the night around you. A battery box nearby charges it.
+,,,Stores power for the machines around it. Generators charge it.
+,,,Charges the nearest battery box by day.
+,,,"Charges the nearest battery box, day and night."
+,,,Burns its own oil to charge the nearest battery box. Oil from your backpack refuels it.
+,,,Holds the horde back until it breaks. Aim at a doorway or a window to fill it.
+,,,Opens and closes. Aim at a doorway or a window to fill it.
+,,,"Cook next to it while it burns; it lights the night. Burnt out, Wood lights it again."
+,,,"Hot enough to smelt metal, and it cooks too. Burnt out, Wood lights it again."
+,,,Shocks the nearest zombies and holds them still. Needs a battery box nearby.
+,,,Zombies that walk over it are stunned.
+,,,"Switched on and powered, it shows everyone far away the way to it."
+,,,"Switched on and powered, you can cook next to it."
+,,,Smelt metal next to it.
+,,,"Ride it: quiet, and it needs no fuel."
+,,,"Ride it: fast and loud, and it burns Oil from your backpack."
+,"item-card note prefix, followed by weapon names: ""Ammo for Pistol, Revolver.""",,Ammo for
+,,,"Burned by the chainsaw, the flamethrower and the motorcycle; 5 refuel an oil generator."
+,HUD prompt: leave build mode without placing the construction,,Cancel build
 ,,,Ingredients
 ,,,pro craft desk
 ,,,craft desk
@@ -830,6 +867,7 @@ You are still here: try again in a moment."
 ,,,No skill points
 ,,,No skill points to spend. Level up to earn more.
 ,,,"Everything you carry, by kind. Pick an item to see what it is and what you can do with it.
+Build holds the turrets, barricades and other constructions you carry: Place puts one in front of you.
 Craft makes items from materials. Some recipes need a craft desk or a lit fire next to you.
 Level up to earn skill points, and spend them in Skills.
 The backpack and the menu never stop the world: open them somewhere safe."

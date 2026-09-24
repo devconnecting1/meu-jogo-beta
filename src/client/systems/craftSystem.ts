@@ -8,6 +8,7 @@ import type { PlayerState } from "shared/game/player";
 import { addItem, countItem, removeItem, unequipGone } from "shared/sim/inventory";
 import { IntentKind } from "shared/net/intentWire";
 import * as Rule from "shared/sim/craftRule";
+import { KitRefusal, kitRefusal } from "shared/sim/placement";
 import { sendBagVerb, serverOwnsWorld } from "../net/authority";
 import { fxMessage, GameRefs } from "./types";
 
@@ -59,6 +60,9 @@ const STATION_MISSING: Record<CraftStation, string> = {
  */
 export function craftBlocker(refs: GameRefs, r: CraftRecipe): string | undefined {
 	if (refs.pendingPlace >= 0) return "Finish the current build first";
+	// ITM-09: a construction goes onto the cursor, and on a vehicle the attack and E are the bell and the dismount -- the
+	// server refuses it there (server/sim/craft.ts `blocker`), as it refuses the Build tab's Place
+	if (r.craftKind === 1 && refs.player.ride !== undefined) return "Get off the vehicle first";
 	const station = Rule.recipeStation(r);
 	if (station !== undefined && stationNear(refs, station) === undefined) return STATION_MISSING[station];
 	const missing: Array<string> = [];
@@ -76,7 +80,8 @@ export function canCraft(refs: GameRefs, r: CraftRecipe): boolean {
 
 /**
  * Craft a recipe. On failure tells the player why (refs.onMessage) instead of failing silently.
- * Placeables go to build mode (pendingPlace + pendingRecipe so cancelling refunds them).
+ * A construction is a kit the survivor now owns (the Bag's Build tab, DESIGN_RULES ITM-09) and goes straight to build
+ * mode as one (pendingPlace + pendingKit): placing spends it, cancelling leaves it in the backpack.
  * Cooking honours "Chef" (skill 11) and smelting "Dwarf" (skill 12): 15% / 30% chance of double, like item_cook /
  * item_fire (shared/sim/craftRule.ts craftYield, the server's rule too).
  */
@@ -97,11 +102,49 @@ export function craft(refs: GameRefs, recipeId: number): boolean {
 	// in HAND is swapped for the blade by the caller (main.client pack.onCraft), which owns the weapon switch
 	unequipGone(refs.save);
 	if (r.craftKind === 1) {
+		addItem(refs.save, r.resultKind, r.resultIndex, r.resultCount);
 		refs.pendingPlace = r.resultIndex;
-		refs.pendingRecipe = r.id;
+		refs.pendingKit = true;
 	} else {
 		addItem(refs.save, r.resultKind, r.resultIndex, Rule.craftYield(r, refs.save));
 	}
+	return true;
+}
+
+/** what the survivor is told when a kit cannot go onto the cursor (shared/sim/placement.ts KitRefusal) */
+const KIT_REFUSED: Record<KitRefusal, string> = {
+	unknown: "That can't be placed",
+	owned: "You don't have one",
+	busy: "Finish the current build first",
+	dead: "You can't place that now",
+};
+
+/**
+ * Why construction kit `etcId` cannot go from the backpack onto the build cursor now (undefined = it can): the Bag's
+ * Place button (DESIGN_RULES ITM-09). The server's own rule (shared/sim/placement.ts `kitRefusal`), so the Bag never
+ * offers a Place the server would refuse; on a vehicle the survivor is told to get off first.
+ */
+export function placeBlocker(refs: GameRefs, etcId: number): string | undefined {
+	const why = kitRefusal(refs.save, etcId, refs.pendingPlace >= 0, refs.player);
+	if (why === "busy" && refs.pendingPlace < 0) return "Get off the vehicle first";
+	return why === undefined ? undefined : KIT_REFUSED[why];
+}
+
+/**
+ * The Bag's Place (ITM-09): kit `etcId` from the backpack goes onto the build cursor -- build mode, the ghost in front
+ * of the survivor; the attack places it and spends one, E puts it back with nothing lost. From WORLD_SERVER_PHASE the
+ * server does it (the Place verb, predicted here by its own rule); offline this client's own cursor. False (and the
+ * reason told) when it cannot.
+ */
+export function placeKit(refs: GameRefs, etcId: number): boolean {
+	const why = placeBlocker(refs, etcId);
+	if (why !== undefined) {
+		fxMessage(refs, why, refs.player);
+		return false;
+	}
+	if (serverOwnsWorld()) return sendBagVerb(IntentKind.Place, etcId);
+	refs.pendingPlace = etcId;
+	refs.pendingKit = true;
 	return true;
 }
 

@@ -47,6 +47,46 @@ export const MAP_ITEM_LOOT: { tree: Array<MapLootEntry>; car: Array<MapLootEntry
 };
 
 /**
+ * The construction kits a town can hold (docs/DESIGN_RULES.md ITM-09), by ETC id: the BASIC ones -- wooden barricade,
+ * wooden door, campfire, lamp, trap -- a small chance in the containers that would have had them (BUILDING_KITS and
+ * YARD_KITS below). Every other kit -- the desks, the turrets and drones, the battery box and the generators, the steel
+ * barricade and door, the brazier, the cooker and the furnace, the signal generator, the vehicles -- is only ever
+ * crafted: that climb is the progression's. tools/test-items.mjs holds every loot table to this list.
+ */
+export const BASIC_KITS: ReadonlyArray<number> = [10, 11, 14, 4, 17];
+
+/**
+ * (ITM-09) The basic kits a building holds ON TOP of its search, by building type: each line is its own chance of one
+ * kit, rolled once each time the building fills (shared/sim/loot.ts `rollBuildingLoot`, so once per ITEM_RESPAWN_HOURS,
+ * MP-05) and never in place of a slot. The building's own table (TOWN_SPAWNS) is exactly what it was without them, and
+ * the chance written here is the real odds of finding one. The hardware store sold the boarding-up kits, a door in its
+ * frame and traps; the police station's lockers kept the barricades the town boarded its windows with.
+ */
+export const BUILDING_KITS: Record<number, Array<SpawnEntry>> = {
+	16: [
+		{ building: 16, kind: 4, index: 10, min: 0.25, max: 0.25 },
+		{ building: 16, kind: 4, index: 11, min: 0.25, max: 0.25 },
+		{ building: 16, kind: 4, index: 17, min: 0.2, max: 0.2 },
+	],
+	25: [{ building: 25, kind: 4, index: 10, min: 0.25, max: 0.25 }],
+};
+
+/**
+ * (ITM-09) The same for a container out in the open, by its YARD_LOOT key: the construction site's lumber pile now and
+ * then has a barricade knocked together from it (EDI-22), a garden shed the fire pit kit or the work lamp off its shelf
+ * (MOB-06; a lamp needs a battery box to light). On top of the container's slot, like BUILDING_KITS: the lumber pile
+ * always gives its wood. A town has one lumber pile and some seventeen sheds, so a shed's chances are the smallest:
+ * together they give about one kit a town, the hardware store about 0.9 (tools/town-census.mjs, "kits").
+ */
+export const YARD_KITS: Record<string, Array<SpawnEntry>> = {
+	pile0: [{ building: -1, kind: 4, index: 10, min: 0.3, max: 0.3 }],
+	shed: [
+		{ building: -1, kind: 4, index: 14, min: 0.04, max: 0.04 },
+		{ building: -1, kind: 4, index: 4, min: 0.02, max: 0.02 },
+	],
+};
+
+/**
  * What each boss leaves besides its six rolls of the general table: its trophy, as in the original
  * (obj_boss_rewards). The centipede the Flamethrower, the rafflesia a Robot suit, the giant the Plastic armor, the
  * hedgehog three voltage circuits and three radioactive materials. Without this the Flamethrower and the Plastic
@@ -109,6 +149,7 @@ export const YARD_LOOT: Record<string, Array<SpawnEntry>> = {
 		{ building: -1, kind: 3, index: 11, min: 1, max: 1 },
 		{ building: -1, kind: 3, index: 4, min: 1, max: 2 },
 	],
+	// the construction site's lumber (EDI-22; now and then a barricade kit on top: YARD_KITS, ITM-09)
 	pile0: [{ building: -1, kind: 4, index: 23, min: 2, max: 4 }],
 	pile1: [{ building: -1, kind: 4, index: 24, min: 2, max: 4 }],
 	pile2: [{ building: -1, kind: 4, index: 25, min: 1, max: 3 }],

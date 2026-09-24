@@ -19,8 +19,11 @@
  *       Unequip       alive, a real slot 1..5
  *       LearnSkill    alive, a point to spend, below the skill's maximum
  *       Craft         alive, the recipe exists, the station is near the SERVER's position, every ingredient is
- *                     there (checked for all before any is taken), no construction already on the cursor, 4 a
- *                     second (held while it runs)
+ *                     there (checked for all before any is taken), no construction already on the cursor, a
+ *                     construction only on foot (ITM-09, like Place), 4 a second (held while it runs)
+ *       Place         (ITM-09, protocol.ts note 26) alive, on foot, a construction kit (PLACEABLES), the backpack
+ *                     holds one, no construction already on the cursor; on the craft's clock (held while it runs).
+ *                     It only goes onto the cursor: the attack edge places it and spends it (server/sim/build.ts)
  *   - the ACK: the nonce of the last verb handled — applied or refused — per UserId, which the wallet push hands
  *     back (`bag.ack`) so the client stops replaying that prediction;
  *   - the PACKS: a pack bought in the shop is delivered HERE, into the server's save, while the survivor is in the
@@ -53,7 +56,7 @@ const PACK_CHECK_TICKS = 30;
 
 /**
  * Does the SERVER own the backpack? From WORLD_SERVER_PHASE on it does (shared/net/mpConfig.ts): every road that
- * fills it — a pickup, a search, a craft, a refunded build, a pack — runs here, so a report has nothing left to say
+ * fills it — a pickup, a search, a craft, a construction kit, a pack — runs here, so a report has nothing left to say
  * about it. Below that phase the client still loots on its own copy and the report is how that reaches the server.
  */
 export function serverOwnsBackpack(): boolean {
@@ -341,7 +344,8 @@ export class ServerBackpack {
 		const craft = this.options.craft();
 		if (craft === undefined) return false;
 		if (msg.kind === IntentKind.UseItem) return craft.cooling(sp.slot, "use");
-		if (msg.kind === IntentKind.Craft) return craft.cooling(sp.slot, "craft");
+		// a kit onto the cursor shares the craft's clock: both put a construction there
+		if (msg.kind === IntentKind.Craft || msg.kind === IntentKind.Place) return craft.cooling(sp.slot, "craft");
 		return false;
 	}
 
@@ -359,6 +363,7 @@ export class ServerBackpack {
 		if (msg.kind === IntentKind.Unequip) return craft.unequip(save, msg.arg);
 		if (msg.kind === IntentKind.LearnSkill) return craft.learnSkill(save, msg.arg);
 		if (msg.kind === IntentKind.Craft) return craft.craft(sp.slot, sp.state, save, msg.arg);
+		if (msg.kind === IntentKind.Place) return craft.placeKit(sp.slot, sp.state, save, msg.arg);
 		return { kind: "refused", why: "unknown" };
 	}
 

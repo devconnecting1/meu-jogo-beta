@@ -221,6 +221,14 @@ export const CONTEXT = {
 	Unequip: "button: take off/remove the worn item",
 	"Put away": "button: holster your weapon, leaving your hands empty",
 
+	// the Bag's Build tab (ITM-09): the construction kits you carry, and placing one in the world
+	Build: "Bag tab: the constructions you carry (turrets, barricades...), not a verb",
+	Place: "button / key hint: put the construction down in the world in front of you",
+	Turn: "key hint: rotate the construction a quarter turn before placing it",
+	Vehicle: "item type label: a bicycle or motorcycle you ride",
+	"Ammo for": 'item-card note prefix, followed by weapon names: "Ammo for Pistol, Revolver."',
+	"Cancel build": "HUD prompt: leave build mode without placing the construction",
+
 	// wardrobe / titles
 	Status: "wardrobe row label; its value is Locked, Owned or Equipped",
 	Equipped: "wardrobe status: this outfit or pet is worn now",

@@ -1686,9 +1686,9 @@ section("27) os caminhos reais do servidor chamam o credito (craft, madeira, mor
 
 section("28) devolver ou entregar itens nao credita conquista (sem farm de Woods collector: revisao de seguranca)");
 {
-	// the build-cancel refund (server/sim/build.ts `cancel`, and `remove` on the way out of the world): the ingredients
-	// come back through addItem, never through creditTaken -- a credited refund would farm Woods collector (craft a
-	// wooden placeable, cancel, repeat), and a refunded cooking would farm Chef the same way
+	// a construction crafted and cancelled (server/sim/build.ts `cancel`, and `remove` on the way out of the world): the
+	// kit goes into the backpack through addItem (ITM-09) and a cancel refunds nothing -- never through creditTaken,
+	// which would farm Woods collector (craft a wooden placeable, cancel, repeat); a refunded cooking would farm Chef
 	const { ServerBuild } = require(join(SRC, "server/sim/build.ts"));
 	const { WorldOut } = require(join(SRC, "server/sim/worldOut.ts"));
 	const world = createWorld(4000, 4000);
@@ -1705,32 +1705,35 @@ section("28) devolver ou entregar itens nao credita conquista (sem farm de Woods
 			r.ingredients.some(i => i.kind === ItemKind.Etc && i.index === wood),
 	);
 	const s = SAVE.defaultSave();
+	const ROUNDS = 6;
 	for (const ing of recipe.ingredients) {
-		if (ing.kind === ItemKind.Etc) s.invenEtc[ing.index] = ing.count;
-		if (ing.kind === ItemKind.Weapon) s.invenWeapon[ing.index] = ing.count;
-		if (ing.kind === ItemKind.Use) s.invenUse[ing.index] = ing.count;
-		if (ing.kind === ItemKind.Equip) s.invenEquip[ing.index] = ing.count;
+		if (ing.kind === ItemKind.Etc) s.invenEtc[ing.index] = ing.count * ROUNDS;
+		if (ing.kind === ItemKind.Weapon) s.invenWeapon[ing.index] = ing.count * ROUNDS;
+		if (ing.kind === ItemKind.Use) s.invenUse[ing.index] = ing.count * ROUNDS;
+		if (ing.kind === ItemKind.Equip) s.invenEquip[ing.index] = ing.count * ROUNDS;
 	}
 	const woodBefore = s.invenEtc[wood];
+	const woodPer = recipe.ingredients.find(i => i.kind === ItemKind.Etc && i.index === wood).count;
 	const state = PLAYER.createPlayer(s, 1000, 1000);
 	let rounds = 0;
-	for (let i = 0; i < 5; i++) {
+	for (let i = 0; i < ROUNDS - 1; i++) {
 		craft.step(1);
 		build.step(1);
 		const made = craft.craft(0, state, s, recipe.id);
-		const back = build.cancel(0, s);
-		if (made.kind === "holding" && back.kind === "cancelled" && back.refunded === true) rounds += 1;
+		const back = build.cancel(0);
+		if (made.kind === "holding" && back.kind === "cancelled") rounds += 1;
 	}
 	craft.step(1);
 	const last = craft.craft(0, state, s, recipe.id);
-	build.remove(0, s); // leaving the world with it still on the cursor: the same refund
+	build.remove(0); // leaving the world with it still on the cursor: the same, the kit stays
 	check(
-		rounds === 5 &&
+		rounds === ROUNDS - 1 &&
 			last.kind === "holding" &&
-			s.invenEtc[wood] === woodBefore &&
+			s.invenEtc[recipe.resultIndex] === ROUNDS &&
+			s.invenEtc[wood] === woodBefore - woodPer * ROUNDS &&
 			s.achievements.every(v => v === 0),
-		`receita ${recipe.id} (madeira): seis vezes fazer e devolver (cancelar, sair do mundo) -- a madeira volta toda e nenhuma conquista anda`,
-		`${rounds} cancelamentos, madeira ${s.invenEtc[wood]}/${woodBefore}, Woods collector ${s.achievements[AID.WoodsCollector]}`,
+		`receita ${recipe.id} (madeira): seis vezes fazer e tirar do cursor (cancelar, sair do mundo) -- seis kits na mochila, a madeira gasta, nada devolvido e nenhuma conquista anda`,
+		`${rounds} cancelamentos, kits ${s.invenEtc[recipe.resultIndex]}, madeira ${s.invenEtc[wood]}/${woodBefore}, Woods collector ${s.achievements[AID.WoodsCollector]}`,
 	);
 
 	// who may call the two "what came into the backpack" credits at all -- an allowlist, so a new road that fills the
@@ -2523,37 +2526,55 @@ section(
 		"XP, moedas, municao, ajustes e abates esperam o autosave; a primeira olhada so anota",
 	);
 
-	// a rare craft: a weapon or an armour made at a workbench -- not the hands' stick, ammunition, smelting, a meal, a
-	// bandage or a build
+	// a rare craft: a weapon, an armour or a construction kit made at a workbench (ITM-09: the kit is the backpack's now,
+	// a turret eats a pistol) -- not the hands' stick, the hands' craft desk or campfire, ammunition, smelting, a meal or
+	// a bandage
 	const rare = CRAFT_RECIPES.filter(r => CAD.isRareCraft(r.id));
-	const gear = r => r.resultKind === IK.Weapon || r.resultKind === IK.Equip;
+	const gear = r => r.resultKind === IK.Weapon || r.resultKind === IK.Equip || r.craftKind === 1;
+	const bench = r => r.needsDesk || r.needsPro;
 	const cooking = CRAFT_RECIPES.filter(r => r.needsCook === true);
+	const benchKits = CRAFT_RECIPES.filter(r => r.craftKind === 1 && bench(r));
 	check(
 		rare.length > 0 &&
-			rare.every(r => gear(r) && (r.needsDesk || r.needsPro) && r.craftKind !== 1) &&
-			CRAFT_RECIPES.filter(r => gear(r) && (r.needsDesk || r.needsPro)).length === rare.length &&
-			CRAFT_RECIPES.filter(r => r.needsCook || r.needsFire || r.craftKind === 1 || !gear(r)).every(
-				r => !CAD.isRareCraft(r.id),
-			),
-		"craft raro: arma ou equipamento de bancada; nunca comida, fundicao, municao, bandagem nem construcao",
+			rare.every(r => gear(r) && bench(r)) &&
+			CRAFT_RECIPES.filter(r => gear(r) && bench(r)).length === rare.length &&
+			CRAFT_RECIPES.filter(r => r.needsCook || r.needsFire || !gear(r)).every(r => !CAD.isRareCraft(r.id)),
+		"craft raro: arma, equipamento ou kit de construcao de bancada; nunca comida, fundicao, municao nem bandagem",
 		`${rare.length} de ${CRAFT_RECIPES.length} receitas`,
 	);
-	const byHand = CRAFT_RECIPES.filter(r => gear(r) && !r.needsDesk && !r.needsPro);
 	check(
-		byHand.length > 0 && byHand.every(r => !CAD.isRareCraft(r.id)),
-		"...e o que se faz a mao com madeira e pedra (o graveto, o machado de pedra) espera o autosave",
+		benchKits.length > 0 && benchKits.every(r => CAD.isRareCraft(r.id)),
+		"...e toda construcao de bancada (a torreta, que come uma pistola na bancada pro) pede gravacao: o kit fica na mochila (ITM-09; a revisao de 0a7561e, 3)",
+		`${benchKits.length} kits de bancada`,
+	);
+	const byHand = CRAFT_RECIPES.filter(r => gear(r) && !bench(r));
+	check(
+		byHand.length > 0 && byHand.some(r => r.craftKind === 1) && byHand.every(r => !CAD.isRareCraft(r.id)),
+		"...e o que se faz a mao com madeira e pedra (o graveto, o machado de pedra, a bancada, a fogueira) espera o autosave",
 		`${byHand.length} receitas a mao`,
 	);
 	checkArrayEq(
 		[
 			CAD.backpackEvent({ kind: "learned", skill: 0, level: 1 }),
-			CAD.backpackEvent({ kind: "crafted", recipe: rare[0].id, count: 1, heat: undefined }),
+			CAD.backpackEvent({
+				kind: "crafted",
+				recipe: rare.find(r => r.craftKind !== 1).id,
+				count: 1,
+				heat: undefined,
+			}),
 			CAD.backpackEvent({ kind: "crafted", recipe: cooking[0].id, count: 1, heat: "cook" }),
 			CAD.backpackEvent({ kind: "used", item: 0 }),
 			CAD.backpackEvent({ kind: "switched", weapon: 0 }),
+			CAD.backpackEvent({ kind: "holding", placeable: benchKits[0].resultIndex, recipe: benchKits[0].id }),
+			CAD.backpackEvent({ kind: "holding", placeable: benchKits[0].resultIndex }),
+			CAD.backpackEvent({
+				kind: "holding",
+				placeable: byHand.find(r => r.craftKind === 1).resultIndex,
+				recipe: byHand.find(r => r.craftKind === 1).id,
+			}),
 		],
-		["skill", "craft", undefined, undefined, undefined],
-		"da mochila: skill aprendida e craft raro pedem gravacao; o resto espera",
+		["skill", "craft", undefined, undefined, undefined, "craft", undefined, undefined],
+		"da mochila: skill aprendida e craft raro pedem gravacao -- o de uma construcao de bancada tambem; o Place (sem receita) e a construcao feita a mao esperam",
 	);
 
 	// no manual save, anywhere: the client never asks for a write
@@ -2618,6 +2639,15 @@ section(
 				between("function serveEventSaves(", "const WALLET_PUSH_S"),
 			),
 		"os eventos ligados: compra / Rebirth / New game na loja, dia na meia-noite, skill e craft raro na mochila, o resto pela olhada de 1 s",
+	);
+	// ITM-09 (the security review of 0a7561e, 4): the Build tab's Place only puts a kit the backpack holds on the cursor
+	// -- a `holding` with no recipe moves nothing, so it does not dirty the session; a construction's craft (with its
+	// recipe) does
+	check(
+		/const moved =\s*outcome\.kind !== "refused" &&\s*outcome\.kind !== "holstered" &&\s*\(outcome\.kind !== "holding" \|\| outcome\.recipe !== undefined\);\s*if \(moved\) markDirty\(sp\.userId\);/.test(
+			main,
+		),
+		"o Place da aba Build (holding sem receita) nao suja o save; o craft de uma construcao (com a receita) suja",
 	);
 	check(
 		/export function createRemotes\(\)[^]*?return \{\s*loadRequest[^}]*shopAction[^}]*\};/.test(

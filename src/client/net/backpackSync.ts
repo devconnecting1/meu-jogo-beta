@@ -20,7 +20,7 @@ import { IntentKind } from "shared/net/protocol";
 import { BagMirror, PlayerSaveData, readBag, setEquipped } from "shared/game/save";
 import { itemUseEffect, PlayerState } from "shared/game/player";
 import { setWorldAuthority } from "./authority";
-import { BagCursor, BagEntry, EDGE_ENTRY, predictVerb, rebase } from "./bagPrediction";
+import { BagCursor, BagEntry, EDGE_ENTRY, holdsCursor, predictVerb, rebase } from "./bagPrediction";
 import { netHosted, netNextSeq, netRefs, netSendBackpackIntent } from "./netClient";
 import { currentSave, setBagHook } from "../systems/saveClient";
 import { bagGrew } from "../systems/pickups";
@@ -78,6 +78,12 @@ function inFlight(): number {
 	let n = 0;
 	for (const e of entries) if (e.kind !== EDGE_ENTRY) n += 1;
 	return n;
+}
+
+/** a Place or a construction's craft the server has not answered yet: the cursor is still this client's guess */
+function cursorInFlight(): boolean {
+	for (const e of entries) if (holdsCursor(e)) return true;
+	return false;
 }
 
 /** one verb on the wire, remembered until the server answers it (the caller predicted it by the same rule) */
@@ -148,6 +154,14 @@ export function learned(skillId: number): void {
  */
 export { pressQuick, quickUse } from "../systems/quickUse";
 
+/*
+ * The Bag's Place (DESIGN_RULES ITM-09): a construction kit from the Build tab onto the build cursor, and why it cannot
+ * go now. They live in client/systems/craftSystem.ts beside `craft` (the same two roads: the server's Place verb,
+ * predicted, or this client's own cursor offline); main.client.ts reaches them through this module for the same reason
+ * as the quick plates above.
+ */
+export { placeBlocker, placeKit } from "../systems/craftSystem";
+
 // ---------------------------------------------------------------- boot
 
 /** once, at boot: the systems learn who owns the world, and the wallet's bag has somewhere to go */
@@ -164,6 +178,7 @@ export function start(): void {
 		reserveSpent: () => {
 			reserveHoldUntil = os.clock() + RESERVE_HOLD_S;
 		},
+		cursorPending: cursorInFlight,
 	});
 	setBagHook((save, raw) => {
 		if (!owned()) return;
