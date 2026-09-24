@@ -23,6 +23,7 @@ import { setWorldAuthority } from "./authority";
 import { BagCursor, BagEntry, EDGE_ENTRY, predictVerb, rebase } from "./bagPrediction";
 import { netHosted, netNextSeq, netRefs, netSendBackpackIntent } from "./netClient";
 import { currentSave, setBagHook } from "../systems/saveClient";
+import { bagGrew } from "../systems/pickups";
 
 /** a predicted reload's rounds stay spent this long against a bag that does not have the server's reload yet */
 const RESERVE_HOLD_S = 1;
@@ -41,6 +42,17 @@ let bagSave: PlayerSaveData | undefined;
 let bagRunRev = -1;
 let reserveHoldUntil = 0;
 let started = false;
+
+/** everything a bag holds, as one number (weapons, equipment, usables, materials, ammunition) */
+function bagTotal(bag: BagMirror): number {
+	let n = 0;
+	for (const v of bag.invenWeapon) n += v;
+	for (const v of bag.invenEquip) n += v;
+	for (const v of bag.invenUse) n += v;
+	for (const v of bag.invenEtc) n += v;
+	for (const v of bag.ammo) n += v;
+	return n;
+}
 
 /** does the server own the backpack for this client right now? */
 export function owned(): boolean {
@@ -150,6 +162,16 @@ export function start(): void {
 		if (!owned()) return;
 		const bag = readBag(raw);
 		if (bag === undefined) return;
+		// the server's bag against the server's last one, never against the predicted copy: the other half of what
+		// tells a pickup from a prediction undone or a bonus (client/systems/pickups.ts)
+		if (
+			lastBag !== undefined &&
+			save === bagSave &&
+			save.runRev === bagRunRev &&
+			bagTotal(bag) > bagTotal(lastBag)
+		) {
+			bagGrew();
+		}
 		lastBag = bag;
 		bagSave = save;
 		bagRunRev = save.runRev;

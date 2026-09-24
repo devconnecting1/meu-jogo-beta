@@ -32,6 +32,7 @@ import {
 } from "shared/game/world";
 import { fortifies, openingAt, PLACEABLES, PlaceableDef, placedSolid, PlaceRect } from "shared/sim/placement";
 import { isDoor } from "shared/sim/interactQuery";
+import { itemGone, lootGone } from "../systems/pickups";
 
 /** is this one of the interactive-world deltas the mirror applies? */
 export function isMirrorEvent(e: WorldEvent): boolean {
@@ -149,11 +150,16 @@ export function applyMirrorEvent(world: WorldData, e: WorldEvent): void {
 		if (it === undefined) return;
 		ix.items.delete(e.id);
 		removeGroundItem(world, it);
+		// half of what tells this survivor's pickup from a bag that grew for another reason (client/systems/pickups.ts)
+		itemGone(it.x, it.y);
 		return;
 	}
 	if (e.t === WorldEv.LootFlag) {
 		const b = ix.solids.get(e.buildingId);
-		if (b !== undefined && b.kind === "building") b.lootItems = e.hasLoot ? lootPlaceholder() : [];
+		if (b === undefined || b.kind !== "building") return;
+		const had = (b.lootItems?.size() ?? 0) > 0;
+		b.lootItems = e.hasLoot ? lootPlaceholder() : [];
+		if (had && !e.hasLoot) lootGone();
 	}
 }
 

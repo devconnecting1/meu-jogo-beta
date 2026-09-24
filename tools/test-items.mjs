@@ -5052,6 +5052,164 @@ section(
 	},
 );
 
+section('G8. the pickup sound and the "Pick something up" lesson hear pickups, not a backpack that grew', () => {
+	// client/systems/pickups.ts, fed as the client feeds it: the E press (interaction.ts), the server's world deltas
+	// through the real mirror (worldMirror.ts), the server's bag growing bag to bag (backpackSync.ts)
+	const PK = require(join(SRC, "client/systems/pickups.ts"));
+	const Mirror = require(join(SRC, "client/net/worldMirror.ts"));
+	const world = W.createWorld(4000, 4000);
+	Mirror.forgetMirrorIndex();
+	let id = 900;
+	const drop = (x, y) => {
+		id += 1;
+		Mirror.applyMirrorEvent(world, {
+			t: P.WorldEv.ItemAdd,
+			id,
+			kind: ItemKind.Etc,
+			itemId: 23,
+			count: 1,
+			x,
+			y,
+			vx: 0,
+			vy: 0,
+		});
+		return id;
+	};
+	const gone = itemId => Mirror.applyMirrorEvent(world, { t: P.WorldEv.ItemRemove, id: itemId });
+	// a clock of this section's own (the server harness above installed its os.clock)
+	const hadOs = globalThis.os;
+	let t = 5000;
+	globalThis.os = { ...hadOs, clock: () => t };
+	const at = dt => (t += dt);
+	const heard = fn => {
+		const before = PK.pickupCount();
+		fn();
+		return PK.pickupCount() - before;
+	};
+	const cases = [
+		[
+			"my E on an item, the server takes it out of the world and my bag grows: one pickup",
+			1,
+			() => {
+				const it = drop(1000, 1000);
+				at(0.1);
+				PK.pressed("item", 1010, 1000);
+				at(0.15);
+				gone(it);
+				at(0.1);
+				PK.bagGrew();
+			},
+		],
+		[
+			"...in the other order (the bag first, then the ItemRemove): one pickup",
+			1,
+			() => {
+				const it = drop(1200, 1000);
+				PK.pressed("item", 1200, 1010);
+				at(0.2);
+				PK.bagGrew();
+				at(0.1);
+				gone(it);
+			},
+		],
+		[
+			"a Chef's / Dwarf's double coming back, or a construction handed back: the bag grows, nothing left the world",
+			0,
+			() => {
+				at(3);
+				PK.bagGrew();
+				PK.pressed("item", 1300, 1000);
+				at(0.2);
+				PK.bagGrew();
+			},
+		],
+		[
+			"a prediction undone grows only the predicted copy, which is never asked; with no press, a grown bag is nothing",
+			0,
+			() => {
+				at(3);
+				PK.bagGrew();
+				gone(drop(1400, 1000));
+			},
+		],
+		[
+			"somebody else takes the item I pressed on: it leaves the world, my bag does not grow",
+			0,
+			() => {
+				at(3);
+				const it = drop(1500, 1000);
+				PK.pressed("item", 1500, 1000);
+				at(0.1);
+				gone(it);
+			},
+		],
+		[
+			"an item that left the world far from where I pressed is not mine",
+			0,
+			() => {
+				at(3);
+				PK.pressed("item", 2000, 2000);
+				gone(drop(1600, 1000));
+				PK.bagGrew();
+			},
+		],
+		[
+			"an answer later than the window is not the press's",
+			0,
+			() => {
+				at(3);
+				const it = drop(1700, 1000);
+				PK.pressed("item", 1700, 1000);
+				at(2.5);
+				gone(it);
+				PK.bagGrew();
+			},
+		],
+	];
+	checkRows(
+		"each case counts exactly what the server did for this survivor",
+		cases.map(([name, want, fn]) => ({ name, want, fn })),
+		c => {
+			const n = heard(c.fn);
+			return n === c.want ? true : `${c.name}: ${n} pickup(s), want ${c.want}`;
+		},
+	);
+	// a search: the flag of the building I stand in goes down, and my bag grows
+	const house = W.addSolid(world, { kind: "building", tags: "house", x: 100, y: 100, w: 400, h: 400 });
+	house.id = 77;
+	Mirror.forgetMirrorIndex();
+	Mirror.applyMirrorEvent(world, { t: P.WorldEv.LootFlag, buildingId: 77, hasLoot: true });
+	at(3);
+	const searched = heard(() => {
+		PK.pressed("loot", 300, 300);
+		at(0.2);
+		Mirror.applyMirrorEvent(world, { t: P.WorldEv.LootFlag, buildingId: 77, hasLoot: false });
+		PK.bagGrew();
+	});
+	check(searched === 1, "a search: the building's flag goes down and my bag grows, one pickup", `${searched}`);
+	globalThis.os = hadOs;
+	// offline the game's own interaction takes it
+	check(heard(() => PK.took()) === 1, "offline (no MP host) the client's own pickup and search count directly");
+	// the readers and the feeders, by their source
+	const audioSrc = source("client/audio/gameAudio.ts");
+	const lesson = source("client/onboarding/objectives.ts");
+	const inter = source("client/systems/interaction.ts");
+	const sync = source("client/net/backpackSync.ts");
+	check(
+		/if \(pickups > this\.prevPickups\) audio\.play\("pickupItem"\)/.test(audioSrc) &&
+			!/inventoryCount/.test(audioSrc) &&
+			/return pickupCount\(\) > mem\.items;/.test(lesson) &&
+			!/totalItems/.test(lesson),
+		"the pickup sound and the lesson read the pickup count, not the backpack's size",
+	);
+	check(
+		/if \(target\.kind === "item"\) pressed\("item", by\.x, by\.y\)/.test(inter) &&
+			/takeItem\(refs, target\.item\);\s*took\(\);/.test(inter) &&
+			/bagTotal\(bag\) > bagTotal\(lastBag\)/.test(sync),
+		"fed by the E press, the offline pickup and the server's bag against its last one (never the predicted copy)",
+	);
+});
+
 // ---------------------------------------------------------------- verdict
 
 console.log("");
