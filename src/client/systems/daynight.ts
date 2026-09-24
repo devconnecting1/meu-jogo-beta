@@ -20,12 +20,17 @@ import {
 	waveActiveInFlags,
 } from "shared/sim/clock";
 import {
-	FLASH_MIN_GAP_S,
+	FLICKERS_PER_S,
 	flashReveals,
-	flashStrikeSlot,
 	fogDensityAt,
 	isWeather,
-	stormFlashAt,
+	STRIKE_SHOWN_S,
+	stormStrikeAt,
+	strikeFlash,
+	strikeProgress,
+	strikeSeconds,
+	strikeStrength,
+	strikeSwell,
 	thunderMaskAt,
 	Weather,
 	WEATHER_EASE_S,
@@ -62,6 +67,35 @@ const CLOCK_CATCHUP = 0.25;
 /** the same text is not announced twice inside this many seconds (see `announce`) */
 const ANNOUNCE_DEDUPE_S = 3;
 
+/**
+ * The photosensitivity cap on one flash a screen shows (LUZ-05, FLICKERS_PER_S): every value goes through `pass`, and a
+ * rise that would be the (FLICKERS_PER_S + 1)-th rising edge inside the last second is held at the value before it --
+ * whatever the clock did to put a second strike on screen so soon.
+ */
+class FlickerGate {
+	/** `elapsed` of the rising edges shown in the last second, oldest first */
+	private readonly edges = new Array<number>();
+	private prev = 0;
+	private rising = false;
+
+	pass(v: number, now: number): number {
+		if (v > this.prev) {
+			if (!this.rising) {
+				// an edge leaves the window a whole second after it (and a hair more: frame times are sums of floats)
+				while (this.edges.size() > 0 && now - this.edges[0] > 1.001) this.edges.remove(0);
+				// no room for another flicker this second: the rise waits (and the value holds)
+				if (this.edges.size() >= FLICKERS_PER_S) return this.prev;
+				this.edges.push(now);
+				this.rising = true;
+			}
+		} else {
+			this.rising = false;
+		}
+		this.prev = v;
+		return v;
+	}
+}
+
 /** WorldEv.Clock as this class needs it (shared/net/protocol.ts WClock, minus the wire fields) */
 export interface ClockUpdate {
 	/** the WORLD's day (§6.2), which is not any survivor's own day counter */
@@ -94,8 +128,9 @@ export class DayNight {
 	thunderMask = 1;
 	/**
 	 * The lightning ON SCREEN, 0..1 (inside `darkAlpha`), and its Reduce Motion shape: the strike as it is at the RENDER
-	 * time (`renderLagS`), where the horde it lights is drawn; a strike this screen already showed is never shown again,
-	 * and no two start closer than FLASH_MIN_GAP_S (a clock that snaps back replays nothing).
+	 * time (`renderLagS`), where the horde it lights is drawn. Each strike is PLAYED once by this screen, never an earlier
+	 * point of it than it already drew (a clock or a render lag that moves back plays it on in real time instead of
+	 * replaying it), and never more than FLICKERS_PER_S rising edges in any second (`FlickerGate`).
 	 */
 	flash = 0;
 	gentleFlash = 0;
@@ -139,16 +174,26 @@ export class DayNight {
 	/** the visible clock was just jumped: the hours it flew over announce nothing (§3.6 skipped hours) */
 	private snapped = false;
 	private elapsed = 0;
-	/** the weather being eased away from (-1: none) and how far the screen has come, 0..1 (`fogShown`, `darkBase`) */
-	private easeFrom = -1;
+	/**
+	 * A weather change the screen eases through (`fogShown`, `darkBase`): how far it has come (0..1), what the screen
+	 * showed when it began (`easeDark0` / `easeFog0`, taken on the next `updateDark`), and the gap between that and the
+	 * new weather then, which fades out -- so a change in the middle of another eases on from what is on screen.
+	 */
 	private ease = 1;
-	/** the strikes this screen showed on `flashDay` (slots), the one on screen now (-1) and whether it is shown */
+	private easeStart = false;
+	private easeDark0 = 0;
+	private easeFog0 = 0;
+	private easeDark = 0;
+	private easeFog = 0;
+	/** the strikes this screen has played on `flashDay` (slots), the one it is playing (-1), how far into it, how strong */
 	private flashDay = -1;
-	private readonly shownStrikes = new Set<number>();
-	private strikeOn = -1;
-	private strikeShown = false;
-	/** `elapsed` when the last strike shown started */
-	private lastStrikeAt = -math.huge;
+	private readonly played = new Set<number>();
+	private playSlot = -1;
+	private playS = 0;
+	private playPower = 0;
+	/** the cap on each flash's flickers (the real one, the Reduce Motion one) */
+	private readonly sharpGate = new FlickerGate();
+	private readonly swellGate = new FlickerGate();
 	private lastAnnounce = "";
 	private lastAnnounceAt = -ANNOUNCE_DEDUPE_S - 1;
 
@@ -171,7 +216,7 @@ export class DayNight {
 	 */
 	forceWeather(kind: number): void {
 		if (!isWeather(kind)) return;
-		if (kind !== this.weather) this.easeWeatherFrom(this.weather);
+		if (kind !== this.weather) this.easeWeather();
 		this.setWeather(kind);
 		this.updateDark();
 	}
@@ -191,11 +236,14 @@ export class DayNight {
 	}
 
 	/**
-	 * A change the screen lives through: the darkness and the fog it shows go from `from`'s to the new weather's over
-	 * WEATHER_EASE_S instead of jumping (the first delta of a session and a clock taken over are not lived: they snap).
+	 * A change the screen lives through: the darkness and the fog it shows go from what is on screen now to the new
+	 * weather's over WEATHER_EASE_S instead of jumping (the first delta of a session and a clock taken over are not lived:
+	 * they snap). Called before the weather changes: the next `updateDark` measures the gap against the new one.
 	 */
-	private easeWeatherFrom(from: number): void {
-		this.easeFrom = from;
+	private easeWeather(): void {
+		this.easeStart = true;
+		this.easeDark0 = this.darkBase;
+		this.easeFog0 = this.fogShown;
 		this.ease = 0;
 	}
 
@@ -205,7 +253,7 @@ export class DayNight {
 	 */
 	private changeWeather(kind: number, news: boolean): void {
 		if (kind === this.weather) return;
-		if (news) this.easeWeatherFrom(this.weather);
+		if (news) this.easeWeather();
 		else this.ease = 1;
 		this.setWeather(kind);
 		if (!news) return;
@@ -356,7 +404,8 @@ export class DayNight {
 		this.wave3Active = waveActive(3, this.dayTime);
 	}
 
-	private updateDark(): void {
+	/** `dt`: the real seconds of this frame (0 when a delta or an admin changed the clock between frames) */
+	private updateDark(dt = 0): void {
 		// deepest night is capped (the renderer punches light holes around the player and lamps/campfires into
 		// it); "Nocturnal" keeps the original 0.05 advantage. This stays a CLIENT decision even when the hour
 		// comes from the server: the skill belongs to this survivor, and the server's own darkness (the one
@@ -369,31 +418,30 @@ export class DayNight {
 		this.thunderMask = thunderMaskAt(kind, this.day, t);
 		// the lightning where the horde is DRAWN: `renderLagS` behind the clock (never across midnight: no strike is)
 		const at = this.renderLagS > 0 ? math.max(0, t - this.renderLagS * clockSpeed(t)) : t;
-		let flash = stormFlashAt(kind, this.day, at);
-		let slot = flashStrikeSlot();
-		let gentle = 0;
-		if (kind === Weather.Storm) {
-			gentle = stormFlashAt(kind, this.day, at, true);
-			if (slot < 0) slot = flashStrikeSlot();
+		this.playStrikes(kind, at, dt);
+		let flash = 0;
+		let swell = 0;
+		if (this.playSlot >= 0 && kind === Weather.Storm) {
+			flash = strikeFlash(this.playPower, this.playS);
+			swell = strikeSwell(this.playPower, this.playS);
 		}
-		if ((flash > 0 || gentle > 0) && !this.showStrike(slot)) {
-			flash = 0;
-			gentle = 0;
-		} else if (flash <= 0 && gentle <= 0) {
-			this.strikeOn = -1;
-		}
+		flash = this.sharpGate.pass(flash, this.elapsed);
+		swell = this.swellGate.pass(swell, this.elapsed);
 		this.flash = flash;
-		this.gentleFlash = gentle;
+		this.gentleFlash = swell;
 		this.reveal = flashReveals(kind, at, flash);
 		const base = weatherDark(kind, t, nocturnal, 0);
 		this.darkAlpha = flash > 0 ? weatherDark(kind, t, nocturnal, flash) : base;
-		// the screen's darkness and fog ease from the weather it had to the new one (the horde's above do not)
-		if (this.ease < 1 && this.easeFrom >= 0) {
+		// the screen's darkness and fog ease from what it showed to the new weather (the horde's above do not)
+		if (this.easeStart) {
+			this.easeStart = false;
+			this.easeDark = this.easeDark0 - base;
+			this.easeFog = this.easeFog0 - this.fog;
+		}
+		if (this.ease < 1) {
 			const k = this.ease * this.ease * (3 - 2 * this.ease);
-			const fromDark = weatherDark(this.easeFrom, t, nocturnal, 0);
-			const fromFog = fogDensityAt(this.easeFrom, t);
-			this.darkBase = fromDark + (base - fromDark) * k;
-			this.fogShown = fromFog + (this.fog - fromFog) * k;
+			this.darkBase = base + this.easeDark * (1 - k);
+			this.fogShown = math.clamp(this.fog + this.easeFog * (1 - k), 0, 1);
 		} else {
 			this.darkBase = base;
 			this.fogShown = this.fog;
@@ -401,25 +449,28 @@ export class DayNight {
 	}
 
 	/**
-	 * Is strike `slot` of today to be shown? Asked on every frame it lights the sky; the answer is kept while it lasts. A
-	 * strike this screen already showed (the clock snapped back into it: a resync, an admin) is never shown twice, and a
-	 * strike that starts less than FLASH_MIN_GAP_S after the last one shown is not shown at all: the photosensitivity cap
-	 * (≤ 2 flashes a second) holds whatever the clock does.
+	 * The strike this screen plays at render hour `at` (LUZ-05): a strike starts the first frame the hour is inside it (at
+	 * the point the hour is at), and is played once -- on by the hour, and when the hour moves back (a resync, an admin, a
+	 * render lag that relocks) on in real time from the point already drawn, never an earlier one. A strike the screen has
+	 * played is never started again that day.
 	 */
-	private showStrike(slot: number): boolean {
+	private playStrikes(kind: number, at: number, dt: number): void {
 		if (this.day !== this.flashDay) {
 			this.flashDay = this.day;
-			this.shownStrikes.clear();
-			this.strikeOn = -1;
+			this.played.clear();
+			this.playSlot = -1;
 		}
-		if (slot === this.strikeOn) return this.strikeShown;
-		this.strikeOn = slot;
-		this.strikeShown = !this.shownStrikes.has(slot) && this.elapsed - this.lastStrikeAt >= FLASH_MIN_GAP_S;
-		if (this.strikeShown) {
-			this.shownStrikes.add(slot);
-			this.lastStrikeAt = this.elapsed;
+		if (this.playSlot >= 0) {
+			const s = strikeProgress(this.day, this.playSlot, at);
+			this.playS = s >= this.playS ? s : this.playS + math.max(0, dt);
+			if (this.playS >= STRIKE_SHOWN_S) this.playSlot = -1;
 		}
-		return this.strikeShown;
+		const slot = stormStrikeAt(kind, this.day, at);
+		if (slot < 0 || slot === this.playSlot || this.played.has(slot)) return;
+		this.played.add(slot);
+		this.playSlot = slot;
+		this.playS = strikeSeconds();
+		this.playPower = strikeStrength();
 	}
 
 	// ---------------------------------------------------------------- the frame
@@ -444,7 +495,7 @@ export class DayNight {
 		}
 		this.detectAnnounce(prev, this.dayTime);
 		this.updateWaves();
-		this.updateDark();
+		this.updateDark(dt);
 	}
 
 	/**
@@ -490,6 +541,6 @@ export class DayNight {
 		if (this.snapped) this.snapped = false;
 		else this.detectAnnounce(prev, this.dayTime);
 		this.applyServerWaves();
-		this.updateDark();
+		this.updateDark(dt);
 	}
 }

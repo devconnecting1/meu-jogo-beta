@@ -1137,6 +1137,21 @@ section("5) the clock tools move the SERVER's clock for everybody, pay no skippe
 			res.ok && c.weather === 4 && !c.isRaining,
 			res.message,
 		);
+		// a run that comes in while that sky still eases the night is helped by it too (the final review's LOW)
+		const carl = t.s.join(newUser(), "Carl");
+		t.s.enter(carl);
+		t.s.run(0.2);
+		const carlAssisted = !t.s.sim.paysRewards(t.s.body(carl));
+		t.s.run(COOL + 0.1);
+		res = t.tool(t.admin, { op: "weather", weather: 0 });
+		const dana = t.s.join(newUser(), "Dana");
+		t.s.enter(dana);
+		t.s.run(0.2);
+		verify(
+			"a run admitted while the admin's sky eases the night is assisted; once the day's own sky is back, one is not",
+			carlAssisted && res.ok && t.s.sim.paysRewards(t.s.body(dana)),
+			`Carl ${carlAssisted ? "assisted" : "paid"}; Dana ${t.s.sim.paysRewards(t.s.body(dana)) ? "paid" : "assisted"}`,
+		);
 	}
 	{
 		const t = town();
@@ -1200,6 +1215,17 @@ section("5) the clock tools move the SERVER's clock for everybody, pay no skippe
 		"...and every run in the world is assisted (a skip back across midnight would pay a day twice)",
 		!t.pays(t.admin) && !t.pays(t.bob),
 	);
+	// the hands move at most every HANDS_COOLDOWN_S (LUZ-05: a burst of skips through a storm night)
+	const HANDS = WO.ADMIN_WORLD_LIMITS.HANDS_COOLDOWN_S;
+	const beforeSkip = c.dayTime;
+	res = t.tool(t.admin, { op: "night" });
+	verify(
+		`...a skip right after it: refused, the clock moves at most every ${HANDS} s`,
+		!res.ok && /at most every/.test(res.error) && c.dayTime === beforeSkip,
+		res.error,
+	);
+	const hands = () => t.s.run(HANDS + 0.05);
+	hands();
 	res = t.tool(t.admin, { op: "night" });
 	verify(
 		"night from 13:30: 18:59, and the night's horde promised",
@@ -1211,6 +1237,7 @@ section("5) the clock tools move the SERVER's clock for everybody, pay no skippe
 	verify("night at night: refused", !res.ok && /already night/.test(res.error), res.error);
 	const day = c.day;
 	t.tool(t.admin, { op: "clock", hour: 23 });
+	hands();
 	res = t.tool(t.admin, { op: "dawn" });
 	verify(
 		"dawn from 23:00: 06:59 of the NEXT day",
@@ -1226,13 +1253,16 @@ section("5) the clock tools move the SERVER's clock for everybody, pay no skippe
 	res = t.tool(t.admin, { op: "dawn" });
 	verify("dawn by day: refused", !res.ok && /already day/.test(res.error), res.error);
 	t.tool(t.admin, { op: "clock", hour: 12 });
+	hands();
 	res = t.tool(t.admin, { op: "wave" });
 	verify(
 		"wave at noon: wave 1 at 18:59",
 		res.ok && Math.abs(c.dayTime - 18.99) < 1e-6 && res.message === "Wave 1 incoming",
 		res.message,
 	);
+	hands();
 	t.tool(t.admin, { op: "clock", hour: 20 });
+	hands();
 	res = t.tool(t.admin, { op: "wave" });
 	verify(
 		"wave at 20:00: wave 2 at 21:59",
@@ -1240,26 +1270,35 @@ section("5) the clock tools move the SERVER's clock for everybody, pay no skippe
 		res.message,
 	);
 	const d2 = c.day;
+	hands();
 	t.tool(t.admin, { op: "clock", hour: 23 });
+	hands();
 	res = t.tool(t.admin, { op: "wave" });
 	verify(
 		"wave at 23:00: wave 3 at 00:59 of the next day",
 		res.ok && c.day === d2 + 1 && Math.abs(c.dayTime - 0.99) < 1e-6,
 		`${res.message} ${c.day} ${c.dayTime}`,
 	);
+	hands();
 	t.tool(t.admin, { op: "clock", hour: 3 });
+	hands();
 	c.waveQueues[2] = 0;
+	const t3 = c.dayTime;
 	res = t.tool(t.admin, { op: "wave" });
 	verify(
 		"wave at 03:00: wave 3 refilled, the hands stay",
-		res.ok && Math.abs(c.dayTime - 3) < 1e-6 && c.waveQueues[2] > 0 && res.message === "Wave 3 refilled",
+		res.ok && Math.abs(c.dayTime - t3) < 1e-6 && c.waveQueues[2] > 0 && res.message === "Wave 3 refilled",
 		`${res.message} ${c.dayTime}`,
 	);
 	// a slider dragged: three DIFFERENT sets are three lines (a line keeps what it says: L3 of the review)
 	const clockLines = () => t.audit().filter(e => e.action === "world:clock");
 	const c0 = clockLines().length;
+	// ...at the panel's own cadence (a set every 0.5 s: client/admin/serverWorld.ts CLOCK_SEND_S)
+	hands();
 	t.tool(t.admin, { op: "clock", hour: 10 });
+	hands();
 	t.tool(t.admin, { op: "clock", hour: 10.5 });
+	hands();
 	t.tool(t.admin, { op: "clock", hour: 11 });
 	verify(
 		"three different clock sets in a row: three audit lines, each with its own value",
@@ -2494,6 +2533,7 @@ section(
 		const total = h.population.scales().reduce((s, k) => s + k, 0);
 		const { getDayPopulation } = require(join(SRC, "shared/data/spawns.ts"));
 		t.tool(t.admin, { op: "clock", hour: 20 });
+		t.s.run(WO.ADMIN_WORLD_LIMITS.HANDS_COOLDOWN_S + 0.05);
 		c.waveQueues[1] = 0;
 		c.specialWaveQueues[1] = 0;
 		let res = t.tool(t.admin, { op: "wave" });

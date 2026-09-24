@@ -284,14 +284,18 @@ export const LIT_AMBIENT = 0.4;
  */
 export const FLASH_REVEAL_HOLD_S = INTERP_MAX_S + DESPAWN_FADE_S;
 /**
- * Two flashes on one screen never start closer than this (real seconds): the schedule keeps strikes ≥ 10 s apart, but a
- * clock that snaps back (a resync, an admin) could replay one -- and a strike already shown is never shown again
- * (client/systems/daynight.ts). Keeps the photosensitivity cap (≤ 2 a second) whatever the clock does.
+ * The photosensitivity cap on a screen, whatever its clock does: at most this many FLICKERS -- rising edges of the
+ * lightning it shows -- in any second (WCAG 2.3.1 allows 3). The schedule alone keeps it (one strike, two flickers, then
+ * nothing for ≥ 10 s), but a clock that jumps (an admin's night, a resync) can put a second strike on screen right
+ * after the first: its rises wait until the second has passed (client/systems/daynight.ts `FlickerGate`).
  */
-export const FLASH_MIN_GAP_S = 0.5;
+export const FLICKERS_PER_S = 2;
+/** how long a strike is on a screen: its flash, or its Reduce Motion swell, whichever lasts longer */
+export const STRIKE_SHOWN_S = math.max(FLASH_S, FLASH_GENTLE_RISE_S + FLASH_GENTLE_FALL_S);
 
-/** the slot of the strike the last `stormFlashAt` lit with (-1: none): `flashStrikeSlot` */
-let flashSlot = -1;
+/** the strike the last `stormStrikeAt` / `strikeProgress` found: seconds into it, and how close it fell */
+let foundS = 0;
+let foundPower = 0;
 /** the strike found by `strikeIn`: its hour, how close it fell (1 next door, 0.5 far) and the thunder's delay */
 let strikeHour = 0;
 let strikePower = 0;
@@ -317,12 +321,14 @@ function secondsAfterStrike(dayTime: number): number {
 /** the flash of one strike `s` seconds after it, 0..1: two flickers and a fade (a far strike: dimmer, one flicker) */
 function flashShape(s: number, power: number): number {
 	if (s < 0 || s >= FLASH_S) return 0;
-	// the first flicker, a dip, the second flicker (a close strike's; a far one's is a glow), then the fade
+	// the first flicker, a dip, the second flicker (a close strike's; a far one's is a glow), then the fade -- which
+	// starts no higher than what came before it: two rising edges a strike, never a third (FLICKERS_PER_S)
+	const close = power > 0.7;
 	if (s < 0.06) return power;
 	if (s < 0.14) return 0.25 * power;
-	if (s < 0.24) return (power > 0.7 ? 0.8 : 0.3) * power;
+	if (s < 0.24) return (close ? 0.8 : 0.3) * power;
 	const k = 1 - (s - 0.24) / (FLASH_S - 0.24);
-	return 0.5 * k * k * power;
+	return (close ? 0.5 : 0.3) * k * k * power;
 }
 
 /** the Reduce Motion flash: one smooth swell, never a flicker */
@@ -341,7 +347,6 @@ function gentleShape(s: number, power: number): number {
  * horde lives by the real flash (the server's darkness).
  */
 export function stormFlashAt(kind: number, day: number, dayTime: number, gentle = false): number {
-	flashSlot = -1;
 	if (kind !== Weather.Storm) return 0;
 	const slot = math.floor(dayTime / STRIKE_SLOT_H);
 	let best = 0;
@@ -349,10 +354,7 @@ export function stormFlashAt(kind: number, day: number, dayTime: number, gentle 
 		if (!strikeIn(day, k)) continue;
 		const s = secondsAfterStrike(dayTime);
 		const v = gentle ? gentleShape(s, strikePower) : flashShape(s, strikePower);
-		if (v > best) {
-			best = v;
-			flashSlot = k;
-		}
+		if (v > best) best = v;
 	}
 	// the Reduce Motion swell stays smooth: a ramp, never steps (the night's map rebuilds only as far as it moved)
 	if (gentle) return best;
@@ -360,11 +362,53 @@ export function stormFlashAt(kind: number, day: number, dayTime: number, gentle 
 }
 
 /**
- * The slot (of its day) of the strike the last `stormFlashAt` call found lighting the sky, -1 when it found none: what
- * a screen remembers so it never shows the same strike twice (client/systems/daynight.ts).
+ * The strike that is on screen at `dayTime` of world day `day` (a storm's): the slot of the one whose flash or swell
+ * (STRIKE_SHOWN_S) covers the hour, -1 for none. `strikeSeconds` and `strikeStrength` then describe it. A screen plays
+ * each strike from here on its own (client/systems/daynight.ts): never twice, never backwards.
  */
-export function flashStrikeSlot(): number {
-	return flashSlot;
+export function stormStrikeAt(kind: number, day: number, dayTime: number): number {
+	if (kind !== Weather.Storm) return -1;
+	const slot = math.floor(dayTime / STRIKE_SLOT_H);
+	for (let k = slot; k >= slot - 1; k--) {
+		if (!strikeIn(day, k)) continue;
+		const s = secondsAfterStrike(dayTime);
+		if (s < 0 || s >= STRIKE_SHOWN_S) continue;
+		foundS = s;
+		foundPower = strikePower;
+		return k;
+	}
+	return -1;
+}
+
+/**
+ * How far into strike `slot` of world day `day` the hour `dayTime` is (seconds; negative before it), -math.huge when
+ * that slot has no strike. `strikeStrength` then says how close it fell.
+ */
+export function strikeProgress(day: number, slot: number, dayTime: number): number {
+	if (!strikeIn(day, slot)) return -math.huge;
+	foundPower = strikePower;
+	foundS = secondsAfterStrike(dayTime);
+	return foundS;
+}
+
+/** seconds into the strike the last `stormStrikeAt` found */
+export function strikeSeconds(): number {
+	return foundS;
+}
+
+/** how close the strike the last `stormStrikeAt` / `strikeProgress` found fell: 1 next door, 0.5 far */
+export function strikeStrength(): number {
+	return foundPower;
+}
+
+/** a strike of strength `power`, `s` seconds after it: its flash as `stormFlashAt` gives it (quantised), 0..1 */
+export function strikeFlash(power: number, s: number): number {
+	return math.floor(flashShape(s, power) * FLASH_LEVELS + 0.5) / FLASH_LEVELS;
+}
+
+/** the same strike's Reduce Motion swell (`stormFlashAt(..., true)`) */
+export function strikeSwell(power: number, s: number): number {
+	return gentleShape(s, power);
 }
 
 /**

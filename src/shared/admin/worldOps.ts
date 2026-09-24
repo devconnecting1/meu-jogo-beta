@@ -112,6 +112,12 @@ export const ADMIN_WORLD_LIMITS = {
 	 * through the five weathers is a strobe of darkness and fog on every screen, and a flash replayed.
 	 */
 	WEATHER_COOLDOWN_S: 3,
+	/**
+	 * The hands (clock, night, dawn, a wave) move at most this often, in the server's seconds: the panel's slider sends one
+	 * set every 0.5 s (client/admin/serverWorld.ts `CLOCK_SEND_S`) and passes; a burst of skips through a storm night does
+	 * not (the screens cap the lightning's flickers on their own as well: LUZ-05, FLICKERS_PER_S).
+	 */
+	HANDS_COOLDOWN_S: 0.4,
 } as const;
 
 /**

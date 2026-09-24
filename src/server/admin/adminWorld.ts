@@ -103,6 +103,8 @@ export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 	const mods = new Map<number, Mods>();
 	/** the simulation tick of the last change of the sky (the weather or the rain), for its cooldown */
 	let skyTick = -math.huge;
+	/** the simulation tick the hands last moved (clock, night, dawn, a wave), for theirs */
+	let handsTick = -math.huge;
 	/** UserIds whose free camera is on (only the on/off edges are logged, never the moves) */
 	const cams = new Set<number>();
 	let hooked: ServerSimulation | undefined;
@@ -123,6 +125,13 @@ export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 	}
 
 	function applyMods(sp: ServerPlayer): void {
+		// the admin's sky still eases the night against the day's own roll (LUZ-05, §9.3): whoever is in the world is
+		// helped by it -- a run that came in after the tool was used as well (it was only the runs of that moment)
+		const sim = hooked;
+		if (sim !== undefined && weatherAssists(sim.clock.dayRoll, sim.clock.weather)) {
+			const player = Players.GetPlayerByUserId(sp.userId);
+			if (player !== undefined) deps.markAssisted(player);
+		}
 		const m = mods.get(sp.userId);
 		const cam = cams.has(sp.userId);
 		if (m === undefined && !cam) return;
@@ -414,7 +423,12 @@ export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 				"all",
 				joined(`the day rolled ${weatherName(clock.dayRoll)}`, runsText(runs)),
 			);
-		} else if (op.op === "clock") {
+		}
+		// the hands: at most every HANDS_COOLDOWN_S (the slider's cadence passes; a burst of skips does not)
+		const handsCool = W.ADMIN_WORLD_LIMITS.HANDS_COOLDOWN_S;
+		const handsSince = sim.tick >= handsTick ? (sim.tick - handsTick) / sim.simHz : math.huge;
+		if (handsSince < handsCool) return refuse(op.op, `the clock moves at most every ${handsCool} s: try again`);
+		if (op.op === "clock") {
 			// the hands move and nothing else: the hours skipped are nobody's (§3.6, `setClock` pays and announces none)
 			clock.setClock(op.hour);
 			message = `Clock set to ${hhmm(op.hour)}`;
@@ -454,6 +468,8 @@ export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 				message = "Wave 3 refilled";
 			}
 		}
+		// a move that happened (a refusal above waits for nothing)
+		handsTick = sim.tick;
 		if (!moved) return done(caller, op, message, false, "all");
 		// the dead wait for the 06:00 the clock now shows, not the one it showed when they fell (Dawn: none at all)
 		host.lives.clockMoved();

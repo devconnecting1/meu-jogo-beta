@@ -1193,7 +1193,8 @@ section("6) the weather: the server's, the same on every screen, and what it doe
 			`${reveals} frames of reveal, ${revealWrong} wrong`,
 		);
 
-		// L1: a clock that snaps back into a strike already shown shows nothing; a strike too soon after the last is not shown
+		// L1 (and the final review's MEDIUM): each strike is played once, never backwards, and a screen shows at most
+		// FLICKERS_PER_S rising edges of its lightning in any second -- whatever the clock or the render lag does
 		client.applyClock(at(day, A.hour - 0.2 * speed, K.Storm), 0);
 		const snapped = Math.abs(client.dayTime - (A.hour - 0.2 * speed)) < 1e-9;
 		let replay = 0;
@@ -1201,30 +1202,71 @@ section("6) the weather: the server's, the same on every screen, and what it doe
 			client.update(TICK_DT);
 			if (client.flash > 0 || client.gentleFlash > 0) replay += 1;
 		}
-		const replayed = new DayNight(defaultSave());
-		replayed.applyClock(at(day, A.hour - 0.1 * speed, K.Storm), 0);
-		let first = 0;
-		for (let i = 0; i < 20; i++) {
-			replayed.update(TICK_DT);
-			if (replayed.flash > 0) first += 1;
-		}
-		// 0.25 s after A started on this screen, the clock jumps to just before B: B would start 0.1 s later -- too soon
-		replayed.applyClock(at(day, B.hour - 0.1 * CLOCK.clockSpeed(B.hour), K.Storm), 0);
-		let tooSoon = 0;
-		for (let i = 0; i < 60; i++) {
-			replayed.update(TICK_DT);
-			if (replayed.flash > 0 || replayed.gentleFlash > 0) tooSoon += 1;
-		}
 		check(
-			"L1: a clock that snaps back into a strike this screen showed replays nothing (a strike is shown once, day and slot)",
+			"L1: a clock that snaps back into a strike this screen played replays nothing (a strike is played once, day and slot)",
 			snapped && replay === 0,
 			`${replay} frames of flash on the replay`,
 		);
+		/** the rising edges of a series (a rise after a frame that did not rise), and the most of them in any second */
+		const flickers = series => {
+			const ups = [];
+			for (let i = 1; i < series.length; i++) {
+				const up = series[i] > series[i - 1];
+				const was = i > 1 && series[i - 1] > series[i - 2];
+				if (up && !was) ups.push(i * TICK_DT);
+			}
+			let worst = 0;
+			for (let i = 0; i < ups.length; i++) {
+				let n = 0;
+				for (let k = i; k < ups.length && ups[k] - ups[i] < 1; k++) n += 1;
+				worst = Math.max(worst, n);
+			}
+			return { ups: ups.length, worst };
+		};
+		/** a screen 0.1 s behind the clock through strike A, `event` moving its clock or its lag on the way */
+		const scene = event => {
+			const c = new DayNight(defaultSave());
+			c.applyClock(at(day, A.hour - 0.2 * speed, K.Storm), 0);
+			c.renderLagS = 0.1;
+			const sharp = [];
+			const swell = [];
+			let onset = -1;
+			for (let i = 0; i < 240; i++) {
+				if (onset < 0 && c.flash > 0) onset = i;
+				if (onset >= 0) event(c, i - onset);
+				c.update(TICK_DT);
+				sharp.push(c.flash);
+				swell.push(c.gentleFlash);
+			}
+			return { sharp: flickers(sharp), swell: flickers(swell) };
+		};
+		const plain = scene(() => {});
+		// the admin skips to just before the next strike 0.5 s after A started (the review's probe: 4 flickers in 0.7 s)
+		const toB = scene((c, k) => {
+			if (k === 30) c.applyClock(at(day, B.hour - 0.06 * CLOCK.clockSpeed(B.hour), K.Storm), 0);
+		});
+		// a resync snaps the clock back 1.05 s while A's swell is still up; a snapshot buffer relocks 0.1 -> 0.4 s into A
+		const back = scene((c, k) => {
+			if (k === 63) c.applyClock(at(day, c.dayTime - 1.05 * speed, K.Storm), 0);
+		});
+		const relock = scene((c, k) => {
+			if (k === 18) c.renderLagS = 0.4;
+		});
+		const worst = r => Math.max(r.sharp.worst, r.swell.worst);
 		check(
-			"...and a strike that would start < FLASH_MIN_GAP_S after the last one shown is not shown: ≤ 2 a second whatever " +
-				"the clock does",
-			first > 0 && tooSoon === 0,
-			`first strike ${first} frames, the next one ${tooSoon}`,
+			`photosensitivity: at most ${W.FLICKERS_PER_S} flickers in any second on a screen whatever the clock does -- a ` +
+				"skip into the next strike 0.5 s after one (its rises wait), a resync back into a strike, a render lag that relocks",
+			worst(plain) === 2 && worst(toB) <= W.FLICKERS_PER_S && worst(back) <= 2 && worst(relock) <= 2,
+			`one strike ${plain.sharp.ups} rising edges (${plain.swell.ups} of the swell); the skip ${worst(toB)} in a second, ` +
+				`the resync ${worst(back)}, the relock ${worst(relock)}`,
+		);
+		check(
+			"...and never an earlier point of a strike: the resync and the relock replay no flicker (the same edges as the strike alone)",
+			back.sharp.ups === plain.sharp.ups &&
+				back.swell.ups === plain.swell.ups &&
+				relock.sharp.ups === plain.sharp.ups &&
+				relock.swell.ups === plain.swell.ups,
+			`resync ${back.sharp.ups}/${back.swell.ups}, relock ${relock.sharp.ups}/${relock.swell.ups} edges`,
 		);
 
 		// L1: a new weather eases in on the screen (darkness, fog) over WEATHER_EASE_S; the horde's numbers are instant
@@ -1254,6 +1296,27 @@ section("6) the weather: the server's, the same on every screen, and what it doe
 		const first2 = new DayNight(defaultSave());
 		first2.applyClock(at(12, 12, K.Fog), 0);
 		check("...but a session's first delta is not lived: it shows the fog at once", first2.fogShown === first2.fog);
+		// a change in the middle of another eases on from what is on screen, never from the old sky's full value
+		const twice = new DayNight(defaultSave());
+		twice.applyClock(at(12, 12, K.Clear), 0);
+		twice.update(TICK_DT);
+		twice.applyClock(at(12, twice.dayTime, K.Fog), 0);
+		for (let i = 0; i < Math.round(W.WEATHER_EASE_S / 2 / TICK_DT); i++) twice.update(TICK_DT);
+		const mid = twice.fogShown;
+		twice.applyClock(at(12, twice.dayTime, K.Clear), 0);
+		const after = twice.fogShown;
+		let steepest = 0;
+		let prevShown = after;
+		for (let i = 0; i < Math.round((W.WEATHER_EASE_S + 0.1) / TICK_DT); i++) {
+			twice.update(TICK_DT);
+			steepest = Math.max(steepest, Math.abs(twice.fogShown - prevShown));
+			prevShown = twice.fogShown;
+		}
+		check(
+			"NIT: a new sky in the middle of an ease eases on from what the screen shows (no jump), and gets there",
+			mid > 0.2 && Math.abs(after - mid) < 1e-9 && steepest < 0.02 && twice.fogShown === 0,
+			`fog on screen ${mid.toFixed(3)} when the sky cleared, ${after.toFixed(3)} the frame after, steepest ${steepest.toFixed(4)} a frame`,
+		);
 
 		// M1 (server): a night strike lights the town on the wire from its flash until FLASH_REVEAL_HOLD_S after it
 		const srv = new WorldClock({ day, dayTime: A.hour - 0.5 * speed, rollWeather: () => K.Storm });
