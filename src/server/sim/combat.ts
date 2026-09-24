@@ -525,6 +525,11 @@ export class ServerCombat {
 	 * The same thing for a caller that only holds a `PlayerState` — which is what the shared AI does
 	 * (`shared/sim/ai/*` knows survivors, not sessions). `fromAngle` is optional because the zombie brains set
 	 * `reactionDir` themselves right after, exactly as they did when they called `damageToPlayer`.
+	 *
+	 * The blood: thrown along `fromAngle` (attacker -> target; undefined: all round, never the survivor's last
+	 * `reactionDir`, which is the PREVIOUS hit's until the caller sets the new one). `bleed` false for a caller that
+	 * throws its own, directed: the horde's brains do (`Ctx.fxBlood` right after), and a second one from here was a
+	 * duplicate pointing the way of the hit before -- on a life's first bite, to +x (ART-15).
 	 */
 	damageActor(
 		slot: number,
@@ -533,13 +538,14 @@ export class ServerCombat {
 		raw: number,
 		bypassDef = false,
 		fromAngle?: number,
+		bleed = true,
 	): boolean {
 		const before = p.hp;
 		if (!Ply.applyPlayerDamage(p, save, raw, bypassDef)) return false;
 		if (fromAngle !== undefined) p.reactionDir = fromAngle;
 		const st = this.slotOf(slot);
 		st.stats.damageTaken += math.max(0, before - p.hp);
-		this.emitBlood(p.x, p.y, fromAngle ?? p.reactionDir, 3, Net.BloodKind.Red);
+		if (bleed) this.emitBlood(p.x, p.y, fromAngle, 3, Net.BloodKind.Red);
 		return true;
 	}
 
@@ -556,7 +562,8 @@ export class ServerCombat {
 		return (p, save, raw, bypassDef) => {
 			const slot = slotOf(p);
 			if (slot < 0) return false;
-			return this.damageActor(slot, p, save, raw, bypassDef ?? false);
+			// every brain that hurts through here throws its own blood, with the hit's direction (ART-15)
+			return this.damageActor(slot, p, save, raw, bypassDef ?? false, undefined, false);
 		};
 	}
 
@@ -824,7 +831,7 @@ export class ServerCombat {
 		const to = math.atan2(z.y - sp.state.y, z.x - sp.state.x);
 		if (math.abs(angleDiff(shotAngle, to)) >= 2 * DEG) return 0;
 		if (this.rnd() * 100 >= 10) return 0;
-		this.emitBlood(z.x, z.y, to, 6, Net.BloodKind.Green);
+		this.emitBlood(z.x, z.y, to, 6, Net.BloodKind.Horde);
 		return math.floor(dmg / 2);
 	}
 
@@ -1363,7 +1370,7 @@ export class ServerCombat {
 		this.progress?.noteZombieDamage(z.id, sp.slot, dealt, this.nowS);
 		if (this.hooks.hitZombie !== undefined) this.hooks.hitZombie(z, damage, dir, knock, stun);
 		else this.defaultReaction(z, dir, knock, stun);
-		this.emitBlood(z.x, z.y, dir, 3, Net.BloodKind.Green);
+		this.emitBlood(z.x, z.y, dir, 3, Net.BloodKind.Horde);
 		if (z.hp <= 0) {
 			// the credit says what did it too (CON-04): the zombie's kind, and the kind of the weapon -- the one that
 			// launched the projectile, or the one the server says is in hand
@@ -1385,7 +1392,7 @@ export class ServerCombat {
 		st.stats.damageDealt += dealt;
 		this.progress?.noteBossDamage(b.id, sp.slot, dealt, this.nowS);
 		this.hooks.hitBoss?.(b, damage, x, y);
-		this.emitBlood(x, y, math.atan2(y - sp.state.y, x - sp.state.x), 3, Net.BloodKind.Green);
+		this.emitBlood(x, y, math.atan2(y - sp.state.y, x - sp.state.x), 3, Net.BloodKind.Horde);
 		if (b.hp <= 0) {
 			if (b.unpaid === true) this.progress?.forgetBoss(b.id);
 			else this.progress?.bossKilled(b.id, b.exp, b.hpMax, sp.slot, b.type);
@@ -1445,7 +1452,7 @@ export class ServerCombat {
 		if (creditSlot >= 0) this.progress?.noteZombieDamage(z.id, creditSlot, dealt, this.nowS);
 		if (this.hooks.hitZombie !== undefined) this.hooks.hitZombie(z, damage, dir, knock, stun);
 		else this.defaultReaction(z, dir, knock, stun);
-		this.emitBlood(z.x, z.y, dir, 3, Net.BloodKind.Green);
+		this.emitBlood(z.x, z.y, dir, 3, Net.BloodKind.Horde);
 		if (z.hp <= 0) {
 			if (z.unpaid === true) this.progress?.forgetZombie(z.id);
 			else this.progress?.zombieKilled(z.id, z.exp, creditSlot, this.nowS, z.type, -1, true);
@@ -1470,7 +1477,7 @@ export class ServerCombat {
 		// a machine's damage makes nobody a participant (§3.6, MP-15): a builder anywhere in town is not in the fight.
 		// Only its final blow is credited, and only as XP (`bossKilled` byMachine)
 		this.hooks.hitBoss?.(b, damage, x, y);
-		this.emitBlood(x, y, math.atan2(y - fromY, x - fromX), 3, Net.BloodKind.Green);
+		this.emitBlood(x, y, math.atan2(y - fromY, x - fromX), 3, Net.BloodKind.Horde);
 		if (b.hp <= 0) {
 			if (b.unpaid === true) this.progress?.forgetBoss(b.id);
 			else this.progress?.bossKilled(b.id, b.exp, b.hpMax, creditSlot, b.type, true);
@@ -1489,7 +1496,8 @@ export class ServerCombat {
 		if (stun > 0) z.stunned = math.max(z.stunned, stun);
 	}
 
-	private emitBlood(x: number, y: number, angle: number, amount: number, kind: number): void {
+	/** `angle`: the way it was thrown (attacker -> target); undefined, all round (protocol.ts BLOOD_UNDIRECTED) */
+	private emitBlood(x: number, y: number, angle: number | undefined, amount: number, kind: number): void {
 		this.hooks.fx?.({ t: Net.FxType.Blood, x, y, angle, amount, kind });
 	}
 }

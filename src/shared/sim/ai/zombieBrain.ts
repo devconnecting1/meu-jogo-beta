@@ -390,7 +390,8 @@ function updateExplosions(refs: Ctx.AiRefs, dt: number): void {
 				Ctx.hurtPlayer(refs, p, refs.saveOf(p), T.BLAST_DPS * dt, true);
 				if (!wasHit) {
 					p.reactionDir = math.atan2(p.y - e.y, p.x - e.x);
-					Ctx.fxBlood(refs, p.x, p.y, 4, "player");
+					// thrown away from the blast (ART-15: the spatter runs from the attacker through the target)
+					Ctx.fxBlood(refs, p.x, p.y, 4, "player", p.reactionDir);
 				}
 			}
 		} else {
@@ -1356,7 +1357,8 @@ function bite(refs: Ctx.AiRefs, z: ZombieState, p: PlayerState, pi: number): voi
 	if (Ctx.hurtPlayer(refs, p, refs.saveOf(p), dmg)) {
 		p.reactionDir = math.atan2(p.y - z.y, p.x - z.x);
 		if (rushing) p.reactionSpeed = math.max(p.reactionSpeed, DESIGN.REACTION_MAX + 4);
-		Ctx.fxBlood(refs, p.x, p.y, 4, "player");
+		// from the biter through the bitten (ART-15)
+		Ctx.fxBlood(refs, p.x, p.y, 4, "player", p.reactionDir);
 		Ctx.fxShake(refs, pi, p.buffs.pain > 0 ? 3 : 5, 0.18);
 		// the bite is heard where it landed, by everyone near (P0-4): only a bite that drew blood, never the lean
 		Ctx.fxSound(refs, "bite", p.x, p.y);

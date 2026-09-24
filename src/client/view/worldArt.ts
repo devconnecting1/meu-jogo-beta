@@ -159,6 +159,12 @@ export function preloadWorldArt(): void {
 			lost.add("furniture");
 			warn("[world] the interiors' atlas did not load: the furniture is drawn with Frames");
 		}
+		// the blood's atlas (ART-15): a stain that never arrives is a fight that leaves nothing, so the blood goes back
+		// to its flat drawing
+		if (WORLD_ART.blood.id !== "" && missing.includes(WORLD_ART.blood.id)) {
+			lost.add("blood");
+			warn("[world] the blood's atlas did not load: the blood is drawn flat");
+		}
 		if (lost.size() > 0) changed();
 		warn("[world] some art textures are slow; keeping the art");
 	});

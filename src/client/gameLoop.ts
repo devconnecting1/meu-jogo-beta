@@ -58,6 +58,7 @@ import { MP_PHASE } from "shared/net/mpConfig";
 import { FxEvent as WireFxEvent } from "shared/net/protocol";
 import { ActorDrawOpts, ActorsView } from "./view/actorsView";
 import { explosionFade, FxView, WireFxOpts } from "./view/fxView";
+import { bloodArtLive, BloodView } from "./view/bloodView";
 import { PlayersView } from "./view/playersView";
 import { ChatBubbles } from "./view/chatBubbles";
 import { createLook, createSwingTrail, drawSurvivor } from "./view/survivorView";
@@ -130,11 +131,10 @@ function ease(perFrame: number, dt: number): number {
 
 /*
  * The loop's own option tables, one scratch per call site (M4): a literal per decal and particle was a table per
- * sprite per frame. The keys that never change are written here; each draw writes the rest.
+ * sprite per frame. The keys that never change are written here; each draw writes the rest. (The blood's are
+ * client/view/bloodView.ts's.)
  */
-const DECAL_O: SpriteOpts = { zIndex: Z.decal };
-const PUDDLE_O: SpriteOpts = { color: COLORS.acid, stroke: COLORS.bloodZombie, zIndex: Z.decal + 1 };
-const PARTICLE_O: SpriteOpts = { zIndex: Z.particle };
+const PUDDLE_O: SpriteOpts = { color: COLORS.acid, stroke: COLORS.acidRim, zIndex: Z.decal + 1 };
 
 export class GameLoop {
 	/** empty placeholder; the town is generated once, in init() */
@@ -154,6 +154,8 @@ export class GameLoop {
 	/** cosmetic effects the systems asked for; played (and cleared) by playFx */
 	private fx: Array<FxEvent> = [];
 	private particles = new ParticleSystem();
+	/** the particles' blood and chips on screen: the flat drawing, or the pixel art once its atlas is live (ART-15) */
+	private readonly blood = new BloodView();
 	private daynight: DayNight;
 	private combat = new Combat();
 	private spawner = new Spawner();
@@ -453,6 +455,8 @@ export class GameLoop {
 		this.lastDt = dt;
 		// the quality tier (client/view/quality.ts): the Graphics setting, or in Auto this client's own frame time
 		this.particles.lowDetail = Quality.qualityFrame(dt, ctx.save.settings.graphics);
+		// the blood's pixel art (ART-15): its stains live a game day, join and smear; flat, they are what they were
+		this.particles.pixelArt = bloodArtLive();
 		const acting = !input.held && !p.dead;
 		if (acting) {
 			const handled = this.build.handleInput(refs, input);
@@ -639,13 +643,7 @@ export class GameLoop {
 	}
 
 	private drawDecals(r: Renderer, cam: Camera, v: ViewRect): void {
-		const o = DECAL_O;
-		for (const d of this.particles.decalRecords()) {
-			if (d.life <= 0 || !circleInView(d.x, d.y, d.size, v)) continue;
-			o.color = d.color;
-			o.alpha = 0.7 * math.min(1, d.life / 5);
-			r.drawCircle(cam, d.x, d.y, d.size, o);
-		}
+		this.blood.drawDecals(r, cam, v, this.particles, this.world);
 		const puddles = this.refs.puddles;
 		if (puddles !== undefined) {
 			const p = PUDDLE_O;
@@ -722,13 +720,7 @@ export class GameLoop {
 	}
 
 	private drawParticles(r: Renderer, cam: Camera, v: ViewRect): void {
-		const o = PARTICLE_O;
-		for (const p of this.particles.active()) {
-			if (!circleInView(p.x, p.y, p.size, v)) continue;
-			o.color = p.color;
-			o.alpha = clamp((p.life / p.maxLife) * 1.5, 0, 1);
-			r.drawCircle(cam, p.x, p.y, p.size, o);
-		}
+		this.blood.drawParticles(r, cam, v, this.particles);
 	}
 
 	render(): void {
