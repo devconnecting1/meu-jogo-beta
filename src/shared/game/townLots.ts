@@ -172,6 +172,95 @@ export function placeFireStation(kit: TownKit, lot: Lot, e: LotEdge): boolean {
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------------- the bank (EDI-23)
+
+/** the bank's footprint: along its avenue, and deep (world.ts TOWN_DEFS 22) */
+export const BANK_ALONG = 808;
+export const BANK_DEPTH = 620;
+/** the broad stone steps between the sidewalk and the bank's facade: the one shop that stands back (EDI-02) */
+export const BANK_STEPS = 96;
+/** a column of the portico: its side, and its centre's distances from the main door along the facade */
+export const BANK_COLUMN = 40;
+export const BANK_COLUMN_AT: ReadonlyArray<number> = [104, 232, 360];
+/**
+ * The column row stands this far in front of the facade: a sealed gap (narrower than the slimmest body, EDI-11) --
+ * nobody is cornered behind a column. Between two columns there are 88 u (PATH): two bodies walk through.
+ */
+export const BANK_COLUMN_GAP = 16;
+/** the portico's roof reaches this much past the outer columns and in front of the column row */
+export const BANK_PORTICO_EAVE = 24;
+
+/**
+ * The bank (EDI-23): Main Street's landmark, at the end of an avenue face towards the avenues' crossing (`towardA`:
+ * the edge's `a` end), standing back behind its broad stone steps, a portico of six stone columns before its facade
+ * under a pediment roof (a "canopy" solid, tags "portico": aerial, see-through with a body under it). The portico
+ * carries the alarm bell: while it rings its `powered` is on (server/sim/vault.ts; the LightSet of any light). The
+ * inside -- the banking hall, the offices and the vault -- is shared/game/interiors.ts's; the vault door and its boxes
+ * are world.ts `bankVault`'s. Answers the bank's record, or undefined when it does not fit on this face.
+ */
+export function placeBank(kit: TownKit, lot: Lot, e: LotEdge, towardA: boolean): Solid | undefined {
+	const span = yardSpan(lot, e);
+	if (yardDepth(lot, e) < BANK_STEPS + BANK_DEPTH + TOWN.SIDE_YARD) return undefined;
+	let bank: Solid | undefined;
+	for (const atA of [towardA, !towardA]) {
+		const u = snap8(atA ? span.a + TOWN.SIDE_YARD : span.b - TOWN.SIDE_YARD - BANK_ALONG);
+		bank = kit.build(lot, e, 22, u, BANK_STEPS);
+		if (bank !== undefined) break;
+	}
+	if (bank === undefined) return undefined;
+	const ax = alongX(e.side);
+	const u0 = ax ? bank.x : bank.y;
+	const u1 = u0 + (ax ? bank.w : bank.h);
+	const door = (ax ? bank.doorX : bank.doorY) ?? (u0 + u1) / 2;
+	const top = TOWN.SIDEWALK;
+	const face = TOWN.SIDEWALK + BANK_STEPS;
+	// the steps take the whole forecourt: the footpath the town laid to the door is under them
+	const steps = edgeRect(e, u0, u1, top, face);
+	for (let i = lot.ground.size() - 1; i >= 0; i--) {
+		const q = lot.ground[i];
+		if (q.kind !== "walk") continue;
+		if (q.x < steps.x + steps.w && steps.x < q.x + q.w && q.y < steps.y + steps.h && steps.y < q.y + q.h) {
+			lot.ground.remove(i);
+		}
+	}
+	lot.ground.push({ ...steps, kind: "steps" });
+	kit.reserve(steps);
+	// the columns, symmetrical about the door; one that would stand past the facade's corner is left out
+	const c1 = face - BANK_COLUMN_GAP;
+	const c0 = c1 - BANK_COLUMN;
+	let lo = door;
+	let hi = door;
+	for (const at of BANK_COLUMN_AT) {
+		for (const sgn of [-1, 1]) {
+			const c = door + sgn * at;
+			if (c - BANK_COLUMN / 2 < u0 + 8 || c + BANK_COLUMN / 2 > u1 - 8) continue;
+			prop(kit, "column", edgeRect(e, c - BANK_COLUMN / 2, c + BANK_COLUMN / 2, c0, c1), false, {
+				bankId: bank.id,
+			});
+			lo = math.min(lo, c - BANK_COLUMN / 2);
+			hi = math.max(hi, c + BANK_COLUMN / 2);
+		}
+	}
+	// the portico's roof over the columns and the top step, up to the facade (its pediment faces the street)
+	const roof = edgeRect(e, lo - BANK_PORTICO_EAVE, hi + BANK_PORTICO_EAVE, c0 - BANK_PORTICO_EAVE, face);
+	kit.add({
+		kind: "canopy",
+		x: roof.x,
+		y: roof.y,
+		w: roof.w,
+		h: roof.h,
+		hp: 999999,
+		hpMax: 999999,
+		destructible: false,
+		tags: "portico",
+		passable: true,
+		face: e.side,
+		canopyAlpha: 1,
+		bankId: bank.id,
+	});
+	return bank;
+}
+
 // ---------------------------------------------------------------------------------------------- the church (EDI-18)
 
 /**

@@ -229,8 +229,11 @@ const TYPE_TAG = {
 	25: "police",
 	26: "office",
 };
-/** the buildings that stand at the sidewalk (EDI-02): the shops, and Main Street's offices, bank and police station */
-const SHOPS = [6, 7, 8, 9, 10, 11, 16, 17, 18, 19, 20, 21, 22, 25, 26];
+/**
+ * the buildings that stand at the sidewalk (EDI-02): the shops, and Main Street's offices and police station -- not
+ * the bank, which stands back behind its steps (EDI-23)
+ */
+const SHOPS = [6, 7, 8, 9, 10, 11, 16, 17, 18, 19, 20, 21, 25, 26];
 /** the campus's four buildings (EDI-17): the main hall, the library, the science lab, the dorm */
 const CAMPUS_TYPES = [12, 13, 14, 15];
 const isCampus = t => CAMPUS_TYPES.includes(t);
@@ -416,9 +419,10 @@ const NO_WINDOW = new Set([
 	"galley",
 	"chemstore",
 	"foyer",
-	// the everyday town's back rooms (EDI-18): a workshop or engine bay, a holding cell
+	// the everyday town's back rooms (EDI-18): a workshop or engine bay, a holding cell; the bank's vault (EDI-23)
 	"garage",
 	"cell",
+	"vault",
 ]);
 /** a secondary door's free ground: two bodies deep (shared/game/interiors.ts APPROACH_DEPTH), enough for an alley */
 const APPROACH = 80;
@@ -462,6 +466,8 @@ const DEFINING = {
 	nave: ["bench"],
 	garage: ["rack", "lockers", "counter"],
 	cell: ["bench", "toilet"],
+	// the bank's vault (EDI-23): its deposit boxes are a container of their own, not a piece (checked by bankChecks)
+	vault: [],
 };
 
 /**
@@ -922,6 +928,145 @@ const ESSENTIAL = [
 ];
 
 /**
+ * The body-of-18 floor of one building's box (8 u cells), flooded from just outside its main door with the doors as
+ * they are: which points a survivor walking in could reach. EDI-23 asks it with the vault door shut.
+ */
+function reachInside(w, b) {
+	const C = 8;
+	const pad = 64;
+	const x0 = b.x - pad;
+	const y0 = b.y - pad;
+	const cols = Math.ceil((b.w + pad * 2) / C);
+	const rows = Math.ceil((b.h + pad * 2) / C);
+	const blocked = new Uint8Array(cols * rows);
+	const r = BODY_R;
+	for (const s of W.querySolids(w, x0, y0, x0 + cols * C, y0 + rows * C)) {
+		if (!W.isBlocking(s)) continue;
+		for (let j = 0; j < rows; j++) {
+			const py = y0 + j * C + C / 2;
+			const dy = Math.max(s.y - py, 0, py - s.y - s.h);
+			if (dy >= r) continue;
+			for (let i = 0; i < cols; i++) {
+				const px = x0 + i * C + C / 2;
+				const dx = Math.max(s.x - px, 0, px - s.x - s.w);
+				if (dx * dx + dy * dy < r * r) blocked[j * cols + i] = 1;
+			}
+		}
+	}
+	const n = NORMAL[b.doorSide];
+	const sx = Math.floor((b.doorX + n[0] * 40 - x0) / C);
+	const sy = Math.floor((b.doorY + n[1] * 40 - y0) / C);
+	const seen = new Uint8Array(cols * rows);
+	const queue = [];
+	if (sx >= 0 && sy >= 0 && sx < cols && sy < rows && !blocked[sy * cols + sx]) {
+		seen[sy * cols + sx] = 1;
+		queue.push(sy * cols + sx);
+	}
+	for (let h = 0; h < queue.length; h++) {
+		const k = queue[h];
+		const i = k % cols;
+		const j = (k - i) / cols;
+		for (const m of [i > 0 ? k - 1 : -1, i < cols - 1 ? k + 1 : -1, j > 0 ? k - cols : -1, j < rows - 1 ? k + cols : -1]) {
+			if (m < 0 || seen[m] || blocked[m]) continue;
+			seen[m] = 1;
+			queue.push(m);
+		}
+	}
+	return (x, y) => {
+		const i = Math.floor((x - x0) / C);
+		const j = Math.floor((y - y0) / C);
+		return i >= 0 && j >= 0 && i < cols && j < rows && seen[j * cols + i] === 1;
+	};
+}
+
+/**
+ * EDI-23, the bank: at most BANKS a town; on a downtown block, facing an avenue; its steps across the whole facade;
+ * the portico over at least four columns, two bodies between two columns and a sealed gap behind them; the vault a
+ * leaf behind ONE door -- one opening, the vault door in it, shut as the town is made, no way round it (a body from
+ * the main door does not reach the vault's floor with the door shut) -- its deposit boxes inside it, a container of
+ * their own; and never a gun or a round in the boxes. Run with the vault doors as generated (shut): the walk checks
+ * that follow see them open, the vault reachable once it is cracked (EDI-08, EDI-11, CID-05).
+ */
+function bankChecks(w, buildings, fail) {
+	const S = w.solids;
+	const banks = buildings.filter(b => b.buildingType === 22);
+	const most = W.BANKS ?? 1;
+	if (banks.length > most) fail("EDI-23", `${banks.length} banks in one town (at most ${most})`, cx(banks[0]), cy(banks[0]));
+	for (const e of SPAWNS.VAULT_LOOT ?? []) {
+		if (e.kind === 1 || (e.kind === 4 && e.index >= 44 && e.index <= 47)) {
+			fail("EDI-23", `the vault's boxes hold a gun or rounds (${e.kind}/${e.index})`, 0, 0);
+		}
+	}
+	const PATH = 88;
+	const SEALED = 30;
+	for (const b of banks) {
+		const where = `bank #${b.id}`;
+		const lot = w.lots.find(l => cx(b) >= l.x && cx(b) < l.x + l.w && cy(b) >= l.y && cy(b) < l.y + l.h);
+		if (lot?.zone !== "commercial") fail("EDI-23", `${where}: not on a downtown block (${lot?.zone})`, cx(b), cy(b));
+		// the street in front of the main door is an avenue
+		const n = NORMAL[b.doorSide];
+		let road;
+		for (let d = 0; d <= 600 && road === undefined; d += 8) {
+			const px = b.doorX + n[0] * d;
+			const py = b.doorY + n[1] * d;
+			road = w.roads.find(r => px >= r.x && px < r.x + r.w && py >= r.y && py < r.y + r.h);
+		}
+		if (road === undefined || !road.avenue) fail("EDI-23", `${where}: its door does not face an avenue`, b.doorX, b.doorY);
+		// the steps, the portico and its columns
+		const ax = alongX(b.doorSide);
+		const steps = (lot?.ground ?? []).filter(g => g.kind === "steps" && rectDist(g, b) < 1);
+		if (steps.length !== 1) fail("EDI-23", `${where}: ${steps.length} flights of steps before it`, b.doorX, b.doorY);
+		else if (Math.abs((ax ? steps[0].w : steps[0].h) - (ax ? b.w : b.h)) > 1) {
+			fail("EDI-23", `${where}: the steps do not span the facade`, b.doorX, b.doorY);
+		}
+		const portico = S.find(s => s.kind === "canopy" && s.tags === "portico" && s.bankId === b.id);
+		const cols = S.filter(s => s.kind === "prop" && s.tags === "column" && s.bankId === b.id);
+		if (portico === undefined) fail("EDI-23", `${where}: no portico`, b.doorX, b.doorY);
+		if (cols.length < 4) fail("EDI-23", `${where}: ${cols.length} columns (at least 4)`, b.doorX, b.doorY);
+		cols.sort((p, q) => (ax ? p.x - q.x : p.y - q.y));
+		for (let i = 0; i < cols.length; i++) {
+			const c = cols[i];
+			if (portico !== undefined && !inside(c, portico, 1)) fail("EDI-23", `${where}: a column outside the portico`, cx(c), cy(c));
+			if (rectDist(c, b) >= SEALED) fail("EDI-23", `${where}: a body fits behind a column`, cx(c), cy(c));
+			const next = cols[i + 1];
+			if (next !== undefined && rectDist(c, next) < PATH) {
+				fail("EDI-23", `${where}: ${fmt(rectDist(c, next))} u between two columns (two bodies: ${PATH})`, cx(c), cy(c));
+			}
+		}
+		// the vault: one room, one opening, the door in it, the boxes inside
+		const vault = (b.rooms ?? []).filter(r => r.kind === "vault");
+		if (vault.length === 0) {
+			fail("EDI-23", `${where}: no vault`, cx(b), cy(b));
+			continue;
+		}
+		const grown = o => ({ x: o.x - 4, y: o.y - 4, w: o.w + 8, h: o.h + 8 });
+		const opens = (b.openings ?? []).filter(o => vault.some(r => overlap(grown(o), r)));
+		const doors = S.filter(s => s.kind === "iron_door" && s.tags === "vault" && s.bankId === b.id);
+		if (opens.length !== 1 || opens[0].kind !== "inner") {
+			fail("EDI-23", `${where}: the vault has ${opens.length} openings (one doorway, the vault door's)`, cx(vault[0]), cy(vault[0]));
+		}
+		if (doors.length !== 1) fail("EDI-23", `${where}: ${doors.length} vault doors`, cx(vault[0]), cy(vault[0]));
+		for (const d of doors) {
+			if (d.open === true) fail("EDI-23", `${where}: the vault door stands open in a new town`, cx(d), cy(d));
+			if (d.parentId !== undefined) fail("EDI-23", `${where}: the vault door is a part of the bank (E cannot reach it)`, cx(d), cy(d));
+			if (!opens.some(o => overlap(o, d))) fail("EDI-23", `${where}: the vault door is not in the vault's doorway`, cx(d), cy(d));
+		}
+		const boxes = S.filter(s => s.kind === "prop" && s.tags === "vault" && s.bankId === b.id);
+		if (boxes.length !== 1) fail("EDI-23", `${where}: ${boxes.length} walls of deposit boxes`, cx(vault[0]), cy(vault[0]));
+		for (const x of boxes) {
+			if (!vault.some(r => inside(x, r, 1))) fail("EDI-23", `${where}: the deposit boxes stand outside the vault`, cx(x), cy(x));
+			if (x.lootSlots === undefined || x.lootItems === undefined) fail("EDI-23", `${where}: the boxes are no container`, cx(x), cy(x));
+		}
+		// sealed: with the door shut, nobody walks into the vault
+		const reached = reachInside(w, b);
+		for (const r of vault) {
+			if (reached(cx(r), cy(r))) fail("EDI-23", `${where}: the vault can be walked into with its door shut`, cx(r), cy(r));
+		}
+	}
+	return banks.length;
+}
+
+/**
  * EDI-18: no kind past its quota (world.ts SHOP_QUOTA, SCHOOLS, HOSPITALS, GAS_STATIONS; two churches, one fire
  * station) and none of the essentials missing. EDI-19: two of a kind at least their `apart` blocks apart (Chebyshev,
  * on the grid of lots), never two on one block or facing each other across a street, never more than GAS_PER_AVENUE
@@ -930,8 +1075,8 @@ const ESSENTIAL = [
 function mixChecks(w, buildings, fail) {
 	const quota = W.SHOP_QUOTA;
 	if (quota === undefined) return { shops: 0 };
-	const cap = { 3: W.SCHOOLS ?? 2, 4: W.HOSPITALS ?? 2, 5: W.GAS_STATIONS ?? 4, 23: 2, 24: 1 };
-	const apart = { 3: 3, 4: 3, 5: 2, 23: 3, 24: 1 };
+	const cap = { 3: W.SCHOOLS ?? 2, 4: W.HOSPITALS ?? 2, 5: W.GAS_STATIONS ?? 4, 22: W.BANKS ?? 1, 23: 2, 24: 1 };
+	const apart = { 3: 3, 4: 3, 5: 2, 22: 1, 23: 3, 24: 1 };
 	for (const q of quota) {
 		cap[q.type] = q.cap;
 		apart[q.type] = Math.max(1, q.apart);
@@ -1281,6 +1426,10 @@ function validate(seed) {
 	const forecourtProp = s => s.tags === "pump" || s.tags === "gas_sign" || pumpCars.includes(s);
 	const onCarriageway = r => w.roads.some(road => overlap(r, road)) && !medians.some(m => inside(r, m));
 
+	// EDI-23: the bank, its vault shut as the town is made; every walk below sees the vault door open (cracked)
+	const bank = bankChecks(w, buildings, fail);
+	for (const s of S) if (s.kind === "iron_door" && s.tags === "vault") s.open = true;
+
 	// door approach per building: the corridor from the door to the curb, and the curb in front of it
 	const doors = [];
 	for (const b of buildings) {
@@ -1550,6 +1699,11 @@ function validate(seed) {
 				b.doorX,
 				b.doorY,
 			);
+		}
+		// the bank stands back behind its broad stone steps (EDI-23)
+		const steps = TL?.BANK_STEPS ?? 96;
+		if (t === 22 && Math.abs(front - steps) > 8) {
+			fail("EDI-02", `bank #${b.id}: ${fmt(front)} u behind the sidewalk (its steps are ${steps})`, b.doorX, b.doorY);
 		}
 		// the church keeps a front lawn like the houses beside it (EDI-18)
 		if (t === 23 && (front < TOWN.SETBACK_HOUSE_MIN - 8 || front > TOWN.SETBACK_HOUSE_MAX + 8)) {
@@ -2142,6 +2296,7 @@ function validate(seed) {
 		interior,
 		mix,
 		campus,
+		bank,
 	};
 	return { fails, stats };
 }

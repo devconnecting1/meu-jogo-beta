@@ -2509,6 +2509,261 @@ section(
 	}
 }
 
+section(
+	"zb) o cofre do banco: pe de cabra, E segurado 10 s, barulho, a porta abre para todos, o alarme toca e chama a horda, e o cofre so enche uma vez (EDI-23)",
+);
+{
+	const V = require(join(SRC, "shared/sim/vault.ts"));
+	const IQ = require(join(SRC, "shared/sim/interactQuery.ts"));
+	const { VAULT_LOOT } = require(join(SRC, "shared/data/spawns.ts"));
+	const { gameHours } = require(join(SRC, "shared/sim/clock.ts"));
+	const Mirror = require(join(SRC, "client/net/worldMirror.ts"));
+	const world = W.serverWorld(W.generateTown(7331));
+	const bank = world.solids.find(s => s.kind === "building" && s.buildingType === 22);
+	check(bank !== undefined, "a cidade 7331 tem um banco");
+	const door = world.solids.find(s => V.isVaultDoor(s) && s.bankId === bank?.id);
+	const box = world.solids.find(s => V.isVaultBox(s) && s.bankId === bank?.id);
+	const portico = world.solids.find(s => V.isPortico(s) && s.bankId === bank?.id);
+	check(door !== undefined && box !== undefined && portico !== undefined, "com a porta do cofre, as caixas e o portico");
+	checkEq(door?.open, false, "a porta do cofre nasce fechada");
+	const vault = bank.rooms.find(r => r.kind === "vault");
+	// the hall side of the door: away from the vault's floor
+	const alongXDoor = door.w >= door.h;
+	const hallSign = alongXDoor
+		? Math.sign(door.y + door.h / 2 - (vault.y + vault.h / 2))
+		: Math.sign(door.x + door.w / 2 - (vault.x + vault.w / 2));
+	const at = {
+		x: alongXDoor ? door.x + door.w / 2 : door.x + door.w / 2 + hallSign * (door.w / 2 + 20),
+		y: alongXDoor ? door.y + door.h / 2 + hallSign * (door.h / 2 + 20) : door.y + door.h / 2,
+	};
+	const clock = new WorldClock({ day: 1, dayTime: 12 });
+	const sim = newSim(world, clock);
+	const rings = [];
+	sim.interaction.vaults.noise = (x, y, r, shot) => rings.push({ x, y, r, shot });
+	const fx = [];
+	sim.onFx = e => fx.push(e);
+	const a = addPlayer(sim, 0, at.x, at.y);
+	const b = addPlayer(sim, 1, at.x + 2000, at.y);
+	checkEq(IQ.interactTarget(world, a.state.x, a.state.y)?.solid, door, "o alvo do E ali e a porta do cofre");
+	drain(sim);
+	const HOLD = P.HeldBit.Action;
+	let seq = 1;
+	/** one command a tick: E held (and pressed on the first), for `secs` seconds */
+	const hold = (sp, secs, press = true) => {
+		const n = Math.round(secs * sim.simHz);
+		const seen = [];
+		for (let i = 0; i < n; i++) {
+			const cmd = P.makeCommand(seq, 0, 0, 0, HOLD, press && i === 0 ? PRESS_E : 0);
+			PL.ingestInput(sp, P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [cmd] }), sim.tick / sim.simHz);
+			seq += 1;
+			seen.push(...run(sim, 1));
+		}
+		return seen;
+	};
+
+	// no crowbar: nothing starts
+	const bare = hold(a, 1);
+	check(
+		bare.some(s => s.outcome.kind === "refused" && s.outcome.why === "material"),
+		"sem pe de cabra, o servidor recusa ('material', como um reparo sem madeira)",
+	);
+	check(!sim.interaction.vaults.working(0), "e ninguem esta trabalhando a porta");
+	checkEq(door.open, false, "a porta segue fechada");
+
+	// with one: half the work, then let go -- the bolts seat again
+	addItem(a.save, V.VAULT_TOOL_KIND, V.VAULT_TOOL_INDEX, 1);
+	rings.length = 0;
+	fx.length = 0;
+	hold(a, V.VAULT_CRACK_S / 2);
+	check(sim.interaction.vaults.working(0), "com o pe de cabra e E segurado, o trabalho anda");
+	const half = sim.interaction.vaults.progressOf(door);
+	check(Math.abs(half - V.VAULT_CRACK_S / 2) < 0.2, "o servidor conta o tempo do E segurado", `${half.toFixed(2)} s`);
+	checkEq(door.open, false, "na metade, a porta ainda nao cede");
+	const clanks = rings.filter(r => r.r === V.VAULT_WORK_NOISE && r.shot);
+	check(
+		clanks.length >= V.VAULT_CRACK_S / 2 / V.VAULT_WORK_PERIOD - 1,
+		"cada segundo de trabalho e um barulho que a horda ouve (IA-02)",
+		`${clanks.length} aneis de ${V.VAULT_WORK_NOISE}`,
+	);
+	check(
+		fx.filter(e => e.t === P.FxType.Sound).length >= clanks.length,
+		"e um som de aco para quem esta perto (o Fx de uma porta de ferro)",
+	);
+	// let go for longer than the grace (commands without the held bit)
+	for (let i = 0; i < Math.round((V.VAULT_GRACE_S + 0.3) * sim.simHz); i++) {
+		send(a, seq++, 0, 0, sim.tick / sim.simHz);
+		run(sim, 1);
+	}
+	checkEq(sim.interaction.vaults.progressOf(door), 0, "soltou o E: o trabalho recomeca do zero");
+	check(!sim.interaction.vaults.working(0), "e ninguem trabalha mais a porta");
+
+	// walking off stops it as well
+	hold(a, 1);
+	a.state.x += 400;
+	hold(a, 0.2, false);
+	check(!sim.interaction.vaults.working(0), "quem se afasta da porta para de trabalhar");
+	a.state.x = at.x;
+	a.state.y = at.y;
+	for (let i = 0; i < Math.round((V.VAULT_GRACE_S + 0.3) * sim.simHz); i++) run(sim, 1);
+
+	// the whole crack
+	drain(sim);
+	rings.length = 0;
+	hold(a, V.VAULT_CRACK_S + 0.3);
+	checkEq(door.open, true, `${V.VAULT_CRACK_S} s de E segurado com o pe de cabra: a porta do cofre cede`);
+	const out = drain(sim);
+	const doorSets = out.filter(p => p.ev.t === P.WorldEv.DoorSet && p.ev.id === door.id);
+	checkEq(doorSets.length, 1, "um DoorSet da porta do cofre");
+	checkEq(doorSets[0]?.slot, CFG.SLOT_NONE, "para todo mundo, como qualquer porta (§4.5)");
+	checkEq(doorSets[0]?.ev.state, P.SolidState.Open, "aberta");
+	const bells = out.filter(p => p.ev.t === P.WorldEv.LightSet && p.ev.id === portico.id);
+	checkEq(bells.length, 1, "e o LightSet do portico: o alarme tocando");
+	check(bells[0]?.ev.powered === true && bells[0]?.slot === CFG.SLOT_NONE, "ligado, para todo mundo");
+	checkEq(portico.powered, true, "o sino do portico esta tocando");
+	check(
+		rings.some(r => r.r === V.VAULT_OPEN_NOISE && r.shot),
+		"a porta cedendo e um estrondo (um tiro de pistola)",
+	);
+	const alarmRing = rings.find(r => r.r === V.VAULT_ALARM_RADIUS);
+	check(
+		alarmRing !== undefined &&
+			Math.abs(alarmRing.x - (portico.x + portico.w / 2)) < 1 &&
+			Math.abs(alarmRing.y - (portico.y + portico.h / 2)) < 1,
+		`o alarme chama a horda num raio de ${V.VAULT_ALARM_RADIUS} u, a partir da frente do banco`,
+	);
+	// the client: the DoorSet opens its copy, a WorldInit shuts it again until told
+	{
+		const cw = W.generateTown(7331);
+		const cd = cw.solids.find(s => s.id === door.id);
+		const cpo = cw.solids.find(s => s.id === portico.id);
+		Mirror.forgetMirrorIndex();
+		check(cd !== undefined && V.isVaultDoor(cd) && cd.open === false, "o cliente gera a mesma porta, com o mesmo id, fechada");
+		Mirror.applyMirrorEvent(cw, doorSets[0].ev);
+		Mirror.applyMirrorEvent(cw, bells[0].ev);
+		check(cd?.open === true && cpo?.powered === true, "o DoorSet e o LightSet de sempre abrem a copia dele e tocam o sino");
+		Mirror.resetMirror(cw);
+		check(cd?.open === false && cpo?.powered !== true, "um WorldInit novo fecha a porta e cala o sino ate ser avisado");
+		Mirror.forgetMirrorIndex();
+	}
+	// E at the open door: nothing -- it hangs open for good
+	run(sim, Math.ceil(sim.simHz * 0.3));
+	send(a, seq++, 0, PRESS_E, sim.tick / sim.simHz);
+	run(sim, 1);
+	checkEq(door.open, true, "E na porta aberta nao a fecha (cofre arrombado fica aberto)");
+
+	// a late joiner is told: the door open, the bell ringing
+	{
+		const sent = [];
+		const replicator = new Replicator(
+			sim,
+			{
+				snap: () => {},
+				fx: () => {},
+				world: (slot, packet) => sent.push({ slot, packet }),
+				worldAll: packet => sent.push({ slot: CFG.SLOT_NONE, packet }),
+			},
+			{ tick0Time: 0, mapHash: mapHashOf(world) },
+		);
+		const late = addPlayer(sim, 2, at.x, at.y + 600);
+		replicator.welcome(late);
+		replicator.afterTick(1);
+		const got = [];
+		for (const s of sent.filter(q => q.slot === 2)) for (const e of P.decodeWorld(s.packet).events) got.push(e);
+		check(
+			got.some(e => e.t === P.WorldEv.DoorSet && e.id === door.id && e.state === P.SolidState.Open),
+			"quem entra depois recebe a porta do cofre aberta (o WorldInit das portas do mapa)",
+		);
+		check(
+			got.some(e => e.t === P.WorldEv.LightSet && e.id === portico.id && e.powered === true),
+			"e o sino tocando, enquanto toca",
+		);
+	}
+
+	// the alarm keeps calling, then stops
+	rings.length = 0;
+	drain(sim);
+	for (let i = 0; i < Math.ceil((V.VAULT_ALARM_S + 1) * sim.simHz); i++) run(sim, 1);
+	const pulses = rings.filter(r => r.r === V.VAULT_ALARM_RADIUS).length;
+	check(
+		pulses >= Math.floor(V.VAULT_ALARM_S / V.VAULT_ALARM_PERIOD) - 2,
+		`o alarme chama de novo a cada ${V.VAULT_ALARM_PERIOD} s enquanto toca`,
+		`${pulses} aneis`,
+	);
+	const off = drain(sim).filter(p => p.ev.t === P.WorldEv.LightSet && p.ev.id === portico.id);
+	check(off.length === 1 && off[0].ev.powered === false, `depois de ${V.VAULT_ALARM_S} s o sino cala (LightSet desligado)`);
+	checkEq(portico.powered, false, "e o portico fica em silencio");
+
+	// the boxes: inside the vault, the flag is theirs; E takes everything; once a town
+	const n = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] }[box.face];
+	a.state.x = box.x + box.w / 2 + n[0] * (box.w / 2 + 26);
+	a.state.y = box.y + box.h / 2 + n[1] * (box.h / 2 + 26);
+	check(V.inVault(bank, a.state.x, a.state.y), "dentro do cofre");
+	for (let i = 0; i < Math.ceil(sim.simHz * 0.6); i++) run(sim, 1);
+	check(box.lootItems.length > 0, "as caixas rolaram quando alguem chegou perto");
+	const flags = drain(sim).filter(p => p.ev.t === P.WorldEv.LootFlag && p.slot === 0);
+	check(
+		flags.some(p => p.ev.buildingId === box.id && p.ev.hasLoot),
+		"dentro do cofre, o LootFlag e o das caixas, nao o do banco",
+	);
+	checkEq(IQ.interactTarget(world, a.state.x, a.state.y)?.kind, "pump", "o E ali abre as caixas (um conteiner, como a barraca)");
+	const inBox = box.lootItems.map(d => `${d.kind}/${d.id}`);
+	check(
+		box.lootItems.every(d => VAULT_LOOT.some(e => e.kind === d.kind && e.index === d.id)) &&
+			!box.lootItems.some(d => d.kind === 1 || (d.kind === 4 && d.id >= 44 && d.id <= 47)),
+		"so o que a tabela do cofre tem, e nunca arma ou municao",
+		inBox.join(" "),
+	);
+	check(box.lootItems.some(d => d.kind === 4 && d.id === 27), "ouro sempre (2 a 4 pedacos)");
+	const gold = countItem(a.save, 4, 27);
+	send(a, seq++, 0, PRESS_E, sim.tick / sim.simHz);
+	const took = run(sim, 1);
+	check(took.some(s => s.outcome.kind === "pump"), "o E leva tudo");
+	check(countItem(a.save, 4, 27) > gold, "o ouro foi para a mochila");
+	checkEq(box.lootItems.length, 0, "as caixas ficaram vazias");
+	checkEq(box.lootTimer, Infinity, "e nao enchem de novo nesta cidade (uma vez por mundo)");
+	clock.day = 30;
+	for (let i = 0; i < Math.ceil(sim.simHz * 0.6); i++) run(sim, 1);
+	checkEq(box.lootItems.length, 0, "30 dias depois, continuam vazias");
+	check(gameHours(30, 12) > 0, "(o relogio andou)");
+	void b;
+
+	// the real wiring: the work's clank reaches the horde's ears (zombieBrain's emitSound), not only a test hook
+	{
+		const w2 = W.serverWorld(W.generateTown(7331));
+		const d2 = w2.solids.find(s => V.isVaultDoor(s));
+		const sim2 = new ServerSimulation({ world: w2, clock: new WorldClock({ day: 1, dayTime: 12 }), zombies: true, interactive: true });
+		const c = addPlayer(sim2, 0, at.x, at.y);
+		addItem(c.save, V.VAULT_TOOL_KIND, V.VAULT_TOOL_INDEX, 1);
+		for (let i = 0; i < Math.round(sim2.simHz * 1.2); i++) {
+			const cmd = P.makeCommand(seq, 0, 0, 0, HOLD, i === 0 ? PRESS_E : 0);
+			PL.ingestInput(c, P.encodeInput({ viewTick: 0, viewFrac: 0, cmds: [cmd] }), sim2.tick / sim2.simHz);
+			seq += 1;
+			sim2.step();
+		}
+		const heard = (sim2.horde?.refs.sounds ?? []).some(
+			r => Math.hypot(r.x - (d2.x + d2.w / 2), r.y - (d2.y + d2.h / 2)) < 1 && r.rMax > 0,
+		);
+		check(heard, "o barulho do trabalho chega aos ouvidos da horda (emitSound, IA-02)");
+	}
+	// the pill: what the door needs, what E does
+	{
+		const CInter = require(join(SRC, "client/systems/interaction.ts"));
+		const cw = W.generateTown(7331);
+		const refs = {
+			world: cw,
+			pendingPlace: -1,
+			save: SAVE.defaultSave(),
+			players: [],
+			zombies: [],
+			player: { x: at.x, y: at.y, dead: false },
+			input: { keyE: false },
+		};
+		checkEq(CInter.interactHint(refs, at), "Vault: needs Crowbar", "a pilula diz o que falta: um pe de cabra");
+		addItem(refs.save, V.VAULT_TOOL_KIND, V.VAULT_TOOL_INDEX, 1);
+		checkEq(CInter.interactHint(refs, at), "E: Crack vault (hold)", "com ele: segurar E arromba");
+	}
+}
+
 if (failures > 0) {
 	console.log(`${failures} de ${checks} verificacao(oes) falharam`);
 	process.exit(1);

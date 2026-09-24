@@ -34,6 +34,7 @@ import {
 } from "shared/game/world";
 import { fortifies, openingAt, PLACEABLES, PlaceableDef, placedSolid, PlaceRect } from "shared/sim/placement";
 import { isDoor, isYardContainer } from "shared/sim/interactQuery";
+import { isPortico } from "shared/sim/vault";
 import { itemGone, lootGone } from "../systems/pickups";
 
 /** is this one of the interactive-world deltas the mirror applies? */
@@ -182,6 +183,8 @@ export function resetMirror(world: WorldData): void {
 	for (const s of world.solids) {
 		if (s.id >= DYNAMIC_ID_BASE || s.placeable !== undefined) built.push(s);
 		else if (isDoor(s)) s.open = false;
+		// a bank's alarm bell (EDI-23): silent until the WorldInit says it rings
+		else if (isPortico(s)) s.powered = undefined;
 		else if ((s.kind === "building" || isYardContainer(s)) && s.lootItems !== undefined) s.lootItems = [];
 	}
 	for (const s of built) {

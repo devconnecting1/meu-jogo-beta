@@ -120,8 +120,31 @@ export const YARD_LOOT: Record<string, Array<SpawnEntry>> = {
 		{ building: -1, kind: 1, index: 2, min: 0.04, max: 0.04 },
 	],
 };
-/** the tags of the searchable fixtures (their tables above are the tag, or the tag and the variant) */
-export const YARD_TAGS: ReadonlyArray<string> = ["stall", "foodtruck", "pile", "shed"];
+/**
+ * The bank vault's deposit boxes (docs/DESIGN_RULES.md EDI-23): the best of the bank, and once a town. Every line is
+ * a box and is rolled once (shared/sim/loot.ts `rollVaultLoot`: a chance line comes or not, a range line gives its
+ * amount) -- about 7.5 things, where the bank's own drawers give 2 to 3 a search -- and the boxes are never refilled
+ * (loot.ts `lootRespawnHours`). What a town kept in its bank when it fell: gold, watches, a compass, the medicine
+ * nobody could afford to lose, the batteries and chips of the bank's own systems. Never a gun or a round: the vault is
+ * a reason to take a risk (a crowbar, ten noisy seconds, the alarm: shared/sim/vault.ts), not an armoury.
+ */
+export const VAULT_LOOT: Array<SpawnEntry> = [
+	// piece of gold
+	{ building: -1, kind: 4, index: 27, min: 2, max: 4 },
+	// watch, digital watch, compass
+	{ building: -1, kind: 2, index: 10, min: 0.5, max: 0.5 },
+	{ building: -1, kind: 2, index: 11, min: 0.4, max: 0.4 },
+	{ building: -1, kind: 2, index: 8, min: 0.25, max: 0.25 },
+	// first aid kit, adrenaline
+	{ building: -1, kind: 3, index: 5, min: 0.5, max: 0.5 },
+	{ building: -1, kind: 3, index: 7, min: 0.35, max: 0.35 },
+	// battery, computer chip, voltage circuit
+	{ building: -1, kind: 4, index: 31, min: 1, max: 2 },
+	{ building: -1, kind: 4, index: 35, min: 0.6, max: 0.6 },
+	{ building: -1, kind: 4, index: 36, min: 0.35, max: 0.35 },
+];
+/** the tags of the searchable fixtures (their tables above are the tag, or the tag and the variant; the vault's is VAULT_LOOT) */
+export const YARD_TAGS: ReadonlyArray<string> = ["stall", "foodtruck", "pile", "shed", "vault"];
 /** a searchable fixture's table key: its tag, and for a stall or a pile the variant too */
 export function yardLootKey(tags: string, variant: number | undefined): string {
 	return tags === "stall" || tags === "pile" ? `${tags}${variant ?? 0}` : tags;

@@ -65,7 +65,9 @@ export type RoomKind =
 	// the everyday town (docs/DESIGN_RULES.md EDI-18): a church's nave, a workshop or fire engine bay, a holding cell
 	| "nave"
 	| "garage"
-	| "cell";
+	| "cell"
+	// the bank's vault (EDI-23): its only way in is the vault door
+	| "vault";
 
 export type FloorKind = "wood" | "tile" | "shop" | "carpet" | "kitchen" | "bath" | "concrete";
 
@@ -111,7 +113,9 @@ export type FurnitureKind =
 	| "fumehood"
 	| "chemshelf"
 	| "bunk"
-	| "vending";
+	| "vending"
+	// the bank's vault (EDI-23): the wall of safe deposit boxes -- the vault's own container, never a piece of the bank
+	| "deposit";
 
 export type DecorKind =
 	| "rug"
@@ -1097,6 +1101,7 @@ const TOWN_ROOMS: Record<string, RoomKind> = {
 	N: "nave",
 	C: "cell",
 	B: "bedroom",
+	V: "vault",
 };
 
 /** the bakery (684 × 556): the shop with its pastry case on the street, the bakehouse behind */
@@ -1156,25 +1161,32 @@ const AUTO_REPAIR: Array<Template> = [
 	},
 ];
 
-/** the bank (684 × 556): the banking hall with the tellers' counter, the manager's office and the vault */
+/**
+ * The bank (808 × 620, EDI-23): the banking hall across the front with the tellers' counter, and behind it the
+ * manager's office, the vault and the loan office. The vault is a leaf: its one doorway opens off the hall, and that
+ * doorway is the vault door (world.ts `bankVault`); the staff door is at the back of an office.
+ */
 const BANK: Array<Template> = [
 	{
-		cols: [58, 42],
-		rows: [60, 40],
+		cols: [32, 36, 32],
+		rows: [54, 46],
 		map: [
-			["E", "E"],
-			["O", "X"],
+			["E", "E", "E"],
+			["O", "V", "o"],
 		],
 		rooms: TOWN_ROOMS,
-		main: [0, 0],
+		main: [1, 0],
 		doors: [
 			[0, 1, "K", 0.5],
+			[2, 1, "K", 0.5],
 			[0, 1, "L", 0.5],
+			[2, 1, "R", 0.5],
 		],
 		extra: 1,
 		links: [
 			[0, 0, 0, 1, 0],
-			[0, 1, 1, 1, 0],
+			[1, 0, 1, 1, 0],
+			[2, 0, 2, 1, 0],
 		],
 	},
 ];
@@ -1406,6 +1418,8 @@ const ROOM_INFO: Record<RoomKind, RoomInfo> = {
 	nave: { floor: "wood", win: 1, early: true },
 	garage: { floor: "concrete", win: 0, early: false },
 	cell: { floor: "concrete", win: 0, early: false },
+	// the bank's vault (EDI-23): steel-lined, windowless
+	vault: { floor: "concrete", win: 0, early: false },
 };
 
 // ---------------------------------------------------------------------------------------------- local geometry
@@ -3252,6 +3266,8 @@ const PIECES: Record<FurnitureKind, PieceInfo> = {
 	chemshelf: { low: false, loot: true },
 	bunk: { low: false, loot: false },
 	vending: { low: false, loot: true },
+	// the vault's deposit boxes (EDI-23) are a container of their own (world.ts `bankVault`): no loot spot of the bank
+	deposit: { low: false, loot: false },
 };
 
 /** the pieces that say what a room is: a window takes their place only as a last resort (`forceWindow`) */
@@ -3322,13 +3338,31 @@ function furnishTown(pl: Planner, ctx: RoomCtx, bt: number): boolean {
 		if (!pl.againstWall(ctx, "rack", 96, 40)) pl.island(ctx, "prep", 96, 48, true);
 		return true;
 	}
-	if (k === "secure" && (bt === 20 || bt === 22)) {
-		// the pawn shop's back room and the bank's vault: the safe, and a cabinet of deposit boxes -- no gun rack
+	if (k === "secure" && bt === 20) {
+		// the pawn shop's back room: the safe, and a cabinet -- no gun rack
 		pl.againstWall(ctx, "safe", 56, 56, "K");
 		pl.againstWall(ctx, "cabinet", 88, 36);
 		return true;
 	}
-	if (k === "lobby" && (bt === 22 || bt === 25 || bt === 26)) {
+	if (k === "vault") {
+		// the bank's vault (EDI-23): the wall of deposit boxes facing the door, and nothing else -- no loot spot of the
+		// bank in here: the boxes are the vault's own container, behind the vault door
+		if (!pl.againstWall(ctx, "deposit", 240, 36, "K")) {
+			if (!pl.againstWall(ctx, "deposit", 176, 36, "K")) pl.againstWall(ctx, "deposit", 128, 36);
+		}
+		return true;
+	}
+	if (k === "lobby" && bt === 22) {
+		// the banking hall: the tellers' counter across it (their drawers are the bank's loot), the benches to wait on,
+		// the writing desk for the deposit slips
+		if (!pl.island(ctx, "counter", 320, 44, true, 0, 24)) pl.island(ctx, "counter", 224, 44, true);
+		pl.roomWindow(ctx);
+		pl.againstWall(ctx, "bench", 112, 36);
+		pl.againstWall(ctx, "bench", 112, 36);
+		pl.againstWall(ctx, "cabinet", 56, 36);
+		return true;
+	}
+	if (k === "lobby" && (bt === 25 || bt === 26)) {
 		// the tellers' counter, the police front desk, an office's reception; a bench to wait on
 		pl.island(ctx, "reception", 168, 52, true);
 		pl.roomWindow(ctx);

@@ -76,6 +76,7 @@ import { WEAPONS } from "shared/data/weapons";
 import { blocksShots, raycast } from "shared/game/physics";
 import { Solid, WorldData, buildingAt } from "shared/game/world";
 import { isDoor } from "shared/sim/interactQuery";
+import { isPortico } from "shared/sim/vault";
 import { packRide, rideHeading } from "shared/sim/rideKey";
 import { carriesLight, survivorCone } from "shared/sim/survivorLight";
 import {
@@ -691,6 +692,11 @@ export class Replicator {
 		// a door of the generated map that somebody opened: the mirror generated it closed
 		for (const solid of this.sim.world.solids) {
 			if (solid.placeable !== undefined) continue;
+			// ...and a bank's alarm bell that is ringing right now (EDI-23: the LightSet of its portico)
+			if (isPortico(solid) && solid.powered === true) {
+				this.queueFor(sp.slot, { t: WorldEv.LightSet, id: solid.id, powered: true });
+				continue;
+			}
 			if (!isDoor(solid) || solid.open !== true) continue;
 			this.queueFor(sp.slot, { t: WorldEv.DoorSet, id: solid.id, state: SolidState.Open });
 		}

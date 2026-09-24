@@ -21,6 +21,7 @@ import {
 	PUMP_LOOT_SLOTS,
 	SpawnEntry,
 	spawnRows,
+	VAULT_LOOT,
 	YARD_LOOT,
 	YARD_TAGS,
 	yardLootKey,
@@ -81,17 +82,44 @@ export function rollPumpLoot(): Array<LootDrop> {
  */
 export function yardLootRows(s: Solid): Array<SpawnEntry> | undefined {
 	if (!YARD_TAGS.includes(s.tags)) return undefined;
+	if (s.tags === "vault") return VAULT_LOOT;
 	return YARD_LOOT[yardLootKey(s.tags, s.variant)];
 }
 
 /**
+ * The bank vault's deposit boxes (EDI-23, spawns.ts VAULT_LOOT): every line once -- a chance line comes or not, a
+ * range line gives its amount -- not a slot's random line: the vault is the best of the bank, whatever the dice.
+ */
+export function rollVaultLoot(): Array<LootDrop> {
+	const out = new Array<LootDrop>();
+	for (const e of VAULT_LOOT) {
+		if (e.max < 1) {
+			if (chance(e.max * 100)) out.push({ kind: e.kind, id: e.index, count: 1 });
+		} else {
+			out.push({ kind: e.kind, id: e.index, count: rndInt(e.min, e.max) });
+		}
+	}
+	return out;
+}
+
+/**
  * What a container out in the open holds: a pump island its fuel (`rollPumpLoot`), a market stall, the food truck, a
- * pile of material or a shed its own table, one slot a time (`lootSlots`), rolled like a building's.
+ * pile of material or a shed its own table, one slot a time (`lootSlots`), rolled like a building's; the bank's vault
+ * every box it has (`rollVaultLoot`).
  */
 export function rollYardLoot(s: Solid): Array<LootDrop> {
 	if (s.tags === "pump") return rollPumpLoot();
+	if (s.tags === "vault") return rollVaultLoot();
 	const rows = yardLootRows(s);
 	return rows === undefined ? [] : rollSlots(rows, s.lootSlots ?? 1);
+}
+
+/**
+ * Game hours until an emptied container fills again (MP-05): ITEM_RESPAWN_HOURS for a building, a pump island, a
+ * stall; never for the bank's vault (EDI-23: once a town -- a new town, MP-22, has a new vault).
+ */
+export function lootRespawnHours(s: Solid): number {
+	return s.tags === "vault" && s.kind === "prop" ? math.huge : DESIGN.ITEM_RESPAWN_HOURS;
 }
 
 /**

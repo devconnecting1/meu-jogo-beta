@@ -41,8 +41,10 @@ import { ZombieState } from "shared/game/entities";
 import { FxEvent, FxType, SolidState, WorldEv } from "shared/net/protocol";
 import { wireSoundId } from "shared/net/fxWire";
 import { isMachine } from "shared/data/power";
+import { inVault, isVaultBox, isVaultDoor } from "shared/sim/vault";
 import { ServerItems } from "./items";
 import type { MachineOutcome } from "./power";
+import { ServerVaults } from "./vault";
 import { WorldOut } from "./worldOut";
 
 /** §8.1: the reach checks get the same latency allowance as `pickup` */
@@ -91,6 +93,8 @@ export type InteractOutcome =
 	| { kind: "pump"; solid: Solid; taken: number }
 	/** an electric build did its own job (server/sim/power.ts): charged, refuelled, switched, launched a drone… */
 	| { kind: "machine"; machine: MachineOutcome }
+	/** the bank's vault door is being worked (EDI-23, server/sim/vault.ts): `progress` seconds of the crack so far */
+	| { kind: "vault"; solid: Solid; progress: number }
 	| { kind: "refused"; why: "range" | "blocked" | "material" | "empty" | "cooldown" | "taken" | "full" };
 
 /** what E does on an electric build (server/sim/power.ts `ServerPower.act`); undefined = the ordinary E */
@@ -117,6 +121,13 @@ export interface ServerInteractionOptions {
 	 * run's backpack is theirs, the achievement (Woodpile) is not. Left undefined, every run does -- what a test wants.
 	 */
 	paysRewards?: (slot: number) => boolean;
+	/**
+	 * A ring of noise the horde hears (zombieBrain's emitSound): the bank vault's work, its door giving way and its
+	 * alarm (EDI-23, server/sim/vault.ts). Undefined: nobody listens (a test that does not look).
+	 */
+	noise?: (x: number, y: number, radius: number, shot: boolean) => void;
+	/** a bank vault gave way, cracked by the survivor in `slot` (EDI-23) */
+	onVaultCracked?: (door: Solid, slot: number) => void;
 }
 
 /** the world as the resolver needs to see it for one press */
@@ -151,6 +162,8 @@ export class ServerInteraction {
 	private readonly toggleCd = new Map<Solid, number>();
 	/** the town's pump islands, listed the first time the loot flags need them (static: the world is this one's) */
 	private pumps?: Array<Solid>;
+	/** the bank's vault: the work at its door, the door giving way, the alarm (EDI-23) */
+	readonly vaults: ServerVaults;
 
 	constructor(options: ServerInteractionOptions) {
 		this.world = options.world;
@@ -160,6 +173,23 @@ export class ServerInteraction {
 		this.machines = options.machines;
 		this.onSolidChanged = options.onSolidChanged;
 		this.paysRewards = options.paysRewards;
+		this.vaults = new ServerVaults({
+			world: options.world,
+			out: options.out,
+			fx: options.fx,
+			noise: options.noise,
+			onSolidChanged: options.onSolidChanged,
+			reach: (body, door) => this.inReach(body, door, DOOR_REACH),
+			onCracked: options.onVaultCracked,
+		});
+	}
+
+	/**
+	 * One command of the survivor in `slot` (the simulation's `stepWorldActions`): E HELD down keeps the work at a
+	 * bank's vault door going (EDI-23: the command's `held` Action bit). Nothing else holds E.
+	 */
+	hold(slot: number, body: PlayerState, save: PlayerSaveData, held: boolean): void {
+		this.vaults.hold(slot, body, save, held);
 	}
 
 	/** §9.3: the run of the survivor in `slot` still earns achievements */
@@ -233,6 +263,8 @@ export class ServerInteraction {
 
 	private door(ctx: InteractContext, s: Solid): InteractOutcome {
 		if (!this.inReach(ctx.state, s, DOOR_REACH)) return { kind: "refused", why: "range" };
+		// the bank's vault door does not swing on a press: it is cracked, with a crowbar and time (EDI-23)
+		if (isVaultDoor(s)) return this.vault(ctx, s);
 		if (this.toggling(s)) return { kind: "refused", why: "cooldown" };
 		const willOpen = !(s.open ?? false);
 		// §8.1: closing a door on a body is refused — otherwise a door is a weapon, and a griefing tool
@@ -249,6 +281,17 @@ export class ServerInteraction {
 		const sound = willOpen ? (iron ? "ironDoorOpen" : "doorOpen") : iron ? "ironDoorClose" : "doorClose";
 		this.fx?.({ t: FxType.Sound, sound: wireSoundId(sound), x: s.x + s.w / 2, y: s.y + s.h / 2, volume: 1 });
 		return { kind: "door", solid: s, open: willOpen };
+	}
+
+	/**
+	 * E at the bank's vault door (EDI-23): with a crowbar in the backpack, the work starts or goes on (server/sim/vault.ts
+	 * counts it while E is held or pressed again); without one, nothing ("material", as a repair without its wood). An
+	 * open vault door stays open: E there does nothing.
+	 */
+	private vault(ctx: InteractContext, s: Solid): InteractOutcome {
+		const r = this.vaults.press(ctx.slot, ctx.save, s);
+		if (r.kind === "refused") return r.why === "tool" ? { kind: "refused", why: "material" } : { kind: "none" };
+		return { kind: "vault", solid: s, progress: r.progress };
 	}
 
 	// ---------------------------------------------------------------- lamps and fires
@@ -362,6 +405,7 @@ export class ServerInteraction {
 		this.items.step(dt);
 		decay(this.pressCd, dt);
 		decay(this.toggleCd, dt);
+		this.vaults.step(dt);
 		this.publishLootFlags(players, slots);
 		this.fireTick += dt;
 		if (this.fireTick < FIRE_STEP_S) return;
@@ -410,9 +454,13 @@ export class ServerInteraction {
 			const slot = slots[i] ?? i;
 			const p = players[i];
 			let b = p.dead ? undefined : buildingAt(this.world, p.x, p.y);
-			if (b === undefined && !p.dead) {
+			if (!p.dead && (b === undefined || inVault(b, p.x, p.y))) {
 				if (this.pumps === undefined) this.pumps = pumpsOf(this.world);
-				b = nearestPump(this.pumps, p.x, p.y, PUMP_FLAG_REACH);
+				// outside: the pump island (or the stall, the pile, the shed) in reach; inside the bank's vault: its
+				// deposit boxes (EDI-23), not the bank's own drawers
+				const near = nearestPump(this.pumps, p.x, p.y, PUMP_FLAG_REACH * 2);
+				if (b === undefined) b = near !== undefined && edgeDist(near, p.x, p.y) < PUMP_FLAG_REACH ? near : undefined;
+				else if (near !== undefined && isVaultBox(near) && near.bankId === b.id) b = near;
 			}
 			const has = b !== undefined && this.items.hasLoot(b);
 			const id = b !== undefined && has ? b.id : 0;
@@ -431,6 +479,7 @@ export class ServerInteraction {
 	remove(slot: number): void {
 		this.lootSeen.delete(slot);
 		this.pressCd.delete(slot);
+		this.vaults.remove(slot);
 	}
 
 	// ---------------------------------------------------------------- internals

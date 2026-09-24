@@ -48,7 +48,14 @@
 import { DESIGN } from "shared/engine/constants";
 import { rndRange } from "shared/engine/rng";
 import { addItem } from "shared/sim/inventory";
-import { isContainer, rollBuildingLoot, rollMapItemDrop, rollYardLoot, thiefFind } from "shared/sim/loot";
+import {
+	isContainer,
+	lootRespawnHours,
+	rollBuildingLoot,
+	rollMapItemDrop,
+	rollYardLoot,
+	thiefFind,
+} from "shared/sim/loot";
 import { edgeDist, isMapItem, isYardContainer } from "shared/sim/interactQuery";
 import { GROUND_ITEM_CAP, GROUND_ITEM_LIFE_S, ITEM_INTEREST, ITEM_NEWS_S } from "shared/net/mpConfig";
 import { WorldEv, WItemAdd } from "shared/net/protocol";
@@ -597,7 +604,8 @@ export class ServerItems {
 			taken.push(drop);
 		}
 		c.lootItems = [];
-		c.lootTimer = hours + DESIGN.ITEM_RESPAWN_HOURS;
+		// ITEM_RESPAWN_HOURS; the bank's vault never (EDI-23, `lootRespawnHours`)
+		c.lootTimer = hours + lootRespawnHours(c);
 	}
 
 	/** does this building (or pump island) still hold something? (what the `LootFlag` delta carries, §4.5) */

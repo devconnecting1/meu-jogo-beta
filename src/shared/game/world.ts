@@ -6,7 +6,7 @@ import { DYNAMIC_ID_BASE } from "shared/net/mpConfig";
 import { campusLayout, campusQuad, CampusRng, campusSeed, CAMPUS_SETBACK, CAMPUS_SIDES } from "./campus";
 import type { CampusBuilding } from "./campus";
 import { buildingSeed, planBuilding } from "./interiors";
-import type { Decor, Opening, RoomRect } from "./interiors";
+import type { BuildingPlan, Decor, Opening, RoomRect } from "./interiors";
 import * as TL from "./townLots";
 import { gridInsert, gridOf, gridRemove, newGrid, pointInSolid, querySolids, rectOverlap } from "./solidGrid";
 
@@ -82,6 +82,11 @@ export interface Solid {
 	doorSide?: DoorSide;
 	/** building walls (tags "bwall"), windows and furniture: id of the building record they belong to */
 	parentId?: number;
+	/**
+	 * The bank's own fixtures (EDI-23): its vault door, the vault's deposit boxes, the portico and its columns -- the id
+	 * of the bank's record. Not `parentId`: E reaches the door and the boxes, and they are drawn with the town.
+	 */
+	bankId?: number;
 	/**
 	 * building only (shared/game/interiors.ts): the footprint as non-overlapping rects (the record's own rect is
 	 * their bounding box: a porch or a loading notch lies inside the box and outside every part), the rooms' floors,
@@ -233,7 +238,9 @@ export type GroundKind =
 	/** a construction site's poured slab (EDI-21) */
 	| "pad"
 	/** a backyard vegetable bed */
-	| "garden";
+	| "garden"
+	/** the bank's broad stone steps, from the sidewalk up to its portico (EDI-23) */
+	| "steps";
 
 /**
  * What a whole lot was given to besides its buildings (the everyday town, shared/game/townLots.ts): the street market
@@ -560,7 +567,8 @@ const TOWN_DEFS: Record<number, BuildingDef> = {
 	19: { type: 19, w: 684, h: 556, slots: 2, name: "bakery", weight: 1 },
 	20: { type: 20, w: 684, h: 556, slots: 2, name: "pawn", weight: 1 },
 	21: { type: 21, w: 684, h: 556, slots: 2, name: "postoffice", weight: 1 },
-	22: { type: 22, w: 684, h: 556, slots: 2, name: "bank", weight: 1 },
+	// the bank (EDI-23): not from the stock -- one a town, on the avenue by the crossing (townLots.ts placeBank)
+	22: { type: 22, w: 808, h: 620, slots: 3, name: "bank", weight: 1 },
 	23: { type: 23, w: 808, h: 684, slots: 2, name: "church", weight: 1 },
 	24: { type: 24, w: 808, h: 684, slots: 3, name: "firestation", weight: 1 },
 	25: { type: 25, w: 684, h: 556, slots: 3, name: "police", weight: 1 },
@@ -593,7 +601,6 @@ export const SHOP_QUOTA: ReadonlyArray<ShopQuota> = [
 	{ type: 19, cap: 2, apart: 2 },
 	{ type: 20, cap: 1, apart: 0 },
 	{ type: 21, cap: 1, apart: 0 },
-	{ type: 22, cap: 1, apart: 0 },
 	{ type: 25, cap: 1, apart: 0 },
 	{ type: 26, cap: 3, apart: 2 },
 ];
@@ -629,6 +636,12 @@ export const GAS_PER_AVENUE = 2;
  */
 export const GAS_MIN = 2;
 const GAS_SPARE = 4;
+/**
+ * The bank (EDI-23): at most one a town, the landmark of Main Street -- on a downtown block of an avenue, one of the
+ * BANK_LOTS blocks nearest the avenues' crossing, at the end of its face towards the crossing.
+ */
+export const BANKS = 1;
+const BANK_LOTS = 4;
 
 // ---- the forecourt of a gas station (placeGas), along its street edge e1: `u` from the street corner, `v` from the
 // curb (the sidewalk is v 0..SIDEWALK, the shop's front wall at SIDEWALK + FORECOURT)
@@ -2254,6 +2267,65 @@ function campusCurbParking(g: Gen, lot: Lot, doors: Array<{ e: LotEdge; u: numbe
  * is REALLY free: no tree, bin, pump, parked car or other building in the way, now that all of them are placed.
  * Nothing here draws from the town's `rng`: each building has its own seed (`buildingSeed`), integers only.
  */
+/** the bank's type (buildings.ts BuildingType.Bank) */
+const BANK_TYPE = 22;
+/** the vault door is this much thicker than the wall its doorway is cut in, half on each side (EDI-23) */
+const VAULT_DOOR_THICK = 16;
+
+/**
+ * The bank's vault (EDI-23), once its plan is laid: a steel door in the vault's one doorway -- shut, and opened only by
+ * cracking it (shared/sim/vault.ts) -- and the wall of deposit boxes at its back, a container of its own searched like
+ * a market stall and filled once a town (spawns.ts VAULT_LOOT). Both carry the bank's id (`bankId`), not `parentId`:
+ * E reaches them, and they are drawn with the town, under the bank's roof.
+ */
+function bankVault(w: WorldData, rec: Solid, plan: BuildingPlan): void {
+	const vault = new Array<Rect>();
+	for (const r of plan.rooms) if (r.kind === "vault") vault.push(r);
+	if (vault.size() === 0) return;
+	for (const o of plan.openings) {
+		if (o.kind !== "inner") continue;
+		let touches = false;
+		for (const r of vault) if (rectOverlap(o.x - 4, o.y - 4, o.w + 8, o.h + 8, r.x, r.y, r.w, r.h)) touches = true;
+		if (!touches) continue;
+		// the doorway's rect is the wall's thickness across the gap: the door is a slab a little thicker than the wall
+		const alongX = o.w >= o.h;
+		const d = VAULT_DOOR_THICK / 2;
+		addSolid(w, {
+			kind: "iron_door",
+			x: alongX ? o.x : o.x - d,
+			y: alongX ? o.y - d : o.y,
+			w: alongX ? o.w : o.w + d * 2,
+			h: alongX ? o.h + d * 2 : o.h,
+			hp: 999999,
+			hpMax: 999999,
+			destructible: false,
+			tags: "vault",
+			open: false,
+			bankId: rec.id,
+		});
+	}
+	for (const f of plan.furniture) {
+		if (f.kind !== "deposit") continue;
+		addSolid(w, {
+			kind: "prop",
+			x: f.x,
+			y: f.y,
+			w: f.w,
+			h: f.h,
+			hp: 999999,
+			hpMax: 999999,
+			destructible: false,
+			tags: "vault",
+			low: false,
+			face: f.face,
+			bankId: rec.id,
+			lootSlots: 1,
+			lootItems: [],
+			lootTimer: 0,
+		});
+	}
+}
+
 function planInteriors(g: Gen): void {
 	const w = g.w;
 	const scratch: Array<Solid> = [];
@@ -2297,8 +2369,11 @@ function planInteriors(g: Gen): void {
 				if (o.kind === "window") addPart(w, "window", o, id, "window", { passable: true });
 			}
 			for (const f of plan.furniture) {
+				// the vault's deposit boxes are a container of their own, not a piece of the bank (`bankVault`)
+				if (f.kind === "deposit") continue;
 				addPart(w, "furniture", f, id, f.kind, { low: f.low, face: f.face, variant: f.variant });
 			}
+			if (p.def.type === BANK_TYPE) bankVault(w, rec, plan);
 			// the notches of the footprint: a house's porch in front, a patio / loading bay / courtyard elsewhere
 			const house = p.def.type === 1 || p.def.type === 2;
 			for (const y of plan.yards) {
@@ -2618,6 +2693,26 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 	let gasPending = gasLots.size();
 	/** stations standing on each avenue (by road index): at most GAS_PER_AVENUE (EDI-19) */
 	const gasOnAvenue = new Map<number, number>();
+	// the bank (EDI-23): the downtown blocks on an avenue nearest the avenues' crossing, nearest first (an insertion
+	// sort on a key, stable: Luau's table.sort is not, and would change the town)
+	const crossX = avX >= 0 ? xs[avX].start + xs[avX].size / 2 : w.width / 2;
+	const crossY = avY >= 0 ? ys[avY].start + ys[avY].size / 2 : w.height / 2;
+	const bankLots: Array<Lot> = [];
+	{
+		const keyOf = (l: Lot) => math.abs(l.x + l.w / 2 - crossX) + math.abs(l.y + l.h / 2 - crossY);
+		for (const l of w.lots) {
+			if (l.kind !== "block" || l.zone !== "commercial" || !onAvenue(l) || gasLots.includes(l)) continue;
+			bankLots.push(l);
+			let i = bankLots.size() - 1;
+			while (i > 0 && keyOf(bankLots[i - 1]) > keyOf(l)) {
+				bankLots[i] = bankLots[i - 1];
+				i--;
+			}
+			bankLots[i] = l;
+		}
+		while (bankLots.size() > BANK_LOTS) bankLots.pop();
+	}
+	let banks = 0;
 
 	// --- parks: dirt paths (kept free of trees) ---
 	for (const lot of w.lots) {
@@ -2698,6 +2793,18 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 		if (lot.zone === "commercial") {
 			// Main Street (EDI-18, EDI-19): the stock's next kinds that may stand on this block, a few a block
 			let budget = SHOPS_PER_BLOCK;
+			// the bank first, on its avenue, at the end of the face towards the crossing (EDI-23)
+			if (banks < BANKS && bankLots.includes(lot)) {
+				for (const e of edges) {
+					if (!w.roads[e.road].avenue) continue;
+					const cross = isAlongX(e.side) ? crossX : crossY;
+					if (TL.placeBank(kit, lot, e, math.abs(e.a - cross) <= math.abs(e.b - cross)) !== undefined) {
+						banks += 1;
+						budget -= 1;
+						break;
+					}
+				}
+			}
 			for (const e of edges) {
 				if (budget <= 0) break;
 				budget -= packFace(
