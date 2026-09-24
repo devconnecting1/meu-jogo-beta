@@ -11,6 +11,7 @@ import {
 	ShopActionResult,
 	waitRemotes,
 } from "shared/net/net";
+import { newShopBucket, SHOP_NONCE_MAX, takesShopToken, takeShopToken } from "shared/net/shopGuard";
 
 /*
  * Client side of the save protocol (see shared/net/net.ts).
@@ -303,11 +304,28 @@ const ACTION_REASONS = new Set<string>([
 	"network",
 ]);
 
-/** shop purchase / rebirth. YIELDS until the server answers; call from a click handler or task. */
+/**
+ * The server's ShopAction bucket, kept here too (shared/net/shopGuard.ts): what it would only refuse is refused here
+ * without being sent, so a player clicking Buy as fast as they can never reaches the §8.2 flood line.
+ */
+const shopBucket = newShopBucket(os.clock());
+/** the last purchase nonce handed out (shared/net/shopGuard.ts): the server charges one nonce once */
+let buyNonce = 0;
+
+/**
+ * shop purchase / rebirth. YIELDS until the server answers; call from a click handler or task. A pack purchase is
+ * numbered here (`nonce`): the same request again -- replayed, or sent twice -- is answered as the first, charged once.
+ */
 export function invokeShopAction(request: ShopActionRequest): ShopActionResult {
 	const r = remotes;
 	if (r === undefined) return { ok: false, reason: "network" };
-	const [ok, raw] = pcall(() => r.shopAction.InvokeServer(request));
+	if (takesShopToken(request.kind) && !takeShopToken(shopBucket, os.clock())) return { ok: false, reason: "rate" };
+	let sent = request;
+	if (request.kind === "buyPack" && request.nonce === undefined) {
+		buyNonce = buyNonce >= SHOP_NONCE_MAX ? 1 : buyNonce + 1;
+		sent = { kind: "buyPack", packId: request.packId, nonce: buyNonce };
+	}
+	const [ok, raw] = pcall(() => r.shopAction.InvokeServer(sent));
 	if (!ok || !typeIs(raw, "table")) return { ok: false, reason: "network" };
 	const res = raw as Record<string, unknown>;
 	if (res.wallet !== undefined) applyServerWallet(res.wallet);

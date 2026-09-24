@@ -363,8 +363,10 @@ export class ServerItems {
 	 * is what makes two simultaneous requests resolve to one winner — `removeGroundItem` answers false for
 	 * the loser, who is credited nothing. Doing it the other way round would credit both and then remove
 	 * once, which is the duplication bug written out longhand.
+	 *
+	 * `pays` false: an assisted run (§9.3) -- the item is theirs, the achievement (Woodpile) is not.
 	 */
-	pickup(save: PlayerSaveData, x: number, y: number, item: GroundItem | undefined): PickupResult {
+	pickup(save: PlayerSaveData, x: number, y: number, item: GroundItem | undefined, pays = true): PickupResult {
 		if (item === undefined) return { ok: false, why: "none" };
 		const dx = item.x - x;
 		const dy = item.y - y;
@@ -378,8 +380,8 @@ export class ServerItems {
 		if (!segmentClear(this.world, x, y, item.x, item.y, blocks)) return { ok: false, why: "blocked" };
 		if (!removeGroundItem(this.world, item)) return { ok: false, why: "taken" };
 		addItem(save, item.kind, item.itemId, item.count);
-		// CON-04: what the SERVER put into the backpack (wood is Woods collector's)
-		creditTaken(save, item.kind, item.itemId, item.count);
+		// CON-04: what the SERVER put into the backpack (wood is Woods collector's), in a run that still earns (§9.3)
+		if (pays) creditTaken(save, item.kind, item.itemId, item.count);
 		return { ok: true, kind: item.kind, itemId: item.itemId, count: item.count };
 	}
 
@@ -391,8 +393,10 @@ export class ServerItems {
 	 *
 	 * `hours` is the world clock in game hours (`gameHours(day, dayTime)`): the respawn timer is the
 	 * original's 12 in-game hours, so a town that has been picked clean refills overnight and not before.
+	 *
+	 * `pays` false: an assisted run (§9.3) -- the loot is theirs, the achievement (Woodpile) is not.
 	 */
-	search(save: PlayerSaveData, x: number, y: number, hours: number): SearchResult {
+	search(save: PlayerSaveData, x: number, y: number, hours: number, pays = true): SearchResult {
 		const b = buildingAt(this.world, x, y);
 		const taken = new Array<{ kind: number; id: number; count: number }>();
 		if (b === undefined) return { building: undefined, taken };
@@ -400,7 +404,7 @@ export class ServerItems {
 		if (loot === undefined || loot.size() === 0) return { building: b, taken };
 		for (const drop of loot) {
 			addItem(save, drop.kind, drop.id, drop.count);
-			creditTaken(save, drop.kind, drop.id, drop.count);
+			if (pays) creditTaken(save, drop.kind, drop.id, drop.count);
 			taken.push(drop);
 		}
 		// Thief: one more slot of this building's table, rolled for this searcher alone (shared/sim/loot.ts); the
@@ -408,7 +412,7 @@ export class ServerItems {
 		const extra = thiefFind(save, b.buildingType ?? 0);
 		if (extra !== undefined) {
 			addItem(save, extra.kind, extra.id, extra.count);
-			creditTaken(save, extra.kind, extra.id, extra.count);
+			if (pays) creditTaken(save, extra.kind, extra.id, extra.count);
 			taken.push(extra);
 		}
 		// emptied before anything can yield: a second searcher this tick finds size() === 0 above and is

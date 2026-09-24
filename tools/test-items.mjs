@@ -170,6 +170,9 @@ const { InputState } = require(join(SRC, "shared/engine/input.ts"));
 const CCombat = require(join(SRC, "client/systems/combat.ts"));
 const CCraft = require(join(SRC, "client/systems/craftSystem.ts"));
 const Info = require(join(SRC, "client/ui/itemInfo.ts"));
+/** "Delivered" (client/ui/packNotice.ts) and the toast it goes through, for G7's client half of R6 */
+const PackNotice = require(join(SRC, "client/ui/packNotice.ts"));
+const Popup = require(join(SRC, "client/ui/popup.ts"));
 const VEH = require(join(SRC, "shared/sim/vehicle.ts"));
 
 const TICK_DT = 1 / CFG.SIM_HZ;
@@ -4655,7 +4658,10 @@ function fakeRoblox() {
 const Roblox = fakeRoblox();
 let nextUser = 7000;
 const newUser = () => ++nextUser;
-/** what client/main.client.ts deliverPacks does to the client's copy: every pending pack's items, × how many */
+/**
+ * what a client that opens its own packs does to its copy (client/ui/packNotice.ts `deliverPacks` below
+ * WORLD_SERVER_PHASE, and every client before F3): every pending pack's items, × how many
+ */
 function deliverPacksLikeTheClient(save, addItem) {
 	for (const p of SHOP_PACKS) {
 		const n = Math.max(0, (save.packsBought[p.id] ?? 0) - (save.packsOpened[p.id] ?? 0));
@@ -4705,11 +4711,35 @@ section("G1. every pack: its declared contents, its price charged by the server,
 		}
 		return true;
 	});
-	checkRows("MON-03 / MON-01: a pack is fixed, and sells no weapon or ammunition", SHOP_PACKS, p =>
-		p.items.every(it => it.count > 0) &&
-		!p.items.some(it => it.kind === ItemKind.Etc && it.index >= 44 && it.index <= 48)
-			? true
-			: "sells ammunition",
+	// MON-03 (DESIGN_RULES, "A loja de moedas e a MON-01"): coins are only ever earned by playing, and still a pack gives
+	// no more than a first day does -- no gun and no ammunition (what decides a night at range), and a melee weapon only
+	// when the common workbench already makes it and it does no more damage a second than the starter Dagger. The title
+	// used to promise "no weapon" while the check looked at the ammunition alone, and the First Night Kit sells an Axe:
+	// the Axe is the chopping tool (2-3 wood a hit), 10 wood + 5 steel at the desk, 125 damage a second to the Dagger's 171
+	const starter = WEAPONS[SAVE.defaultSave().equipWeapon];
+	const dps = w => w.dmg / w.cooldown;
+	checkRows(
+		`MON-03 / MON-01: a pack is fixed, sells no gun nor ammunition, and no melee weapon the workbench does not make or that out-hits the starter ${starter.name} (the First Night Kit's Axe is the chopping tool)`,
+		SHOP_PACKS,
+		p => {
+			if (!p.items.every(it => it.count > 0)) return "a line with no count";
+			if (p.items.some(it => it.kind === ItemKind.Etc && it.index >= 44 && it.index <= 48))
+				return "sells ammunition";
+			for (const it of p.items.filter(i => i.kind === ItemKind.Weapon)) {
+				const w = WEAPONS[it.index];
+				if (w === undefined || w.kind !== WeaponKind.Melee) return `sells a gun (${w?.name ?? it.index})`;
+				const recipe = CRAFT_RECIPES.find(r => r.resultKind === ItemKind.Weapon && r.resultIndex === w.id);
+				if (recipe === undefined || recipe.needsPro) return `${w.name}: the common workbench does not make it`;
+				if (dps(w) > dps(starter))
+					return `${w.name}: ${dps(w).toFixed(0)} damage a second, past the ${starter.name}'s ${dps(starter).toFixed(0)}`;
+			}
+			return true;
+		},
+	);
+	check(
+		SHOP_PACKS.some(p => p.items.some(it => it.kind === ItemKind.Weapon && WEAPONS[it.index].name === "Axe")) &&
+			dps(WEAPONS.find(w => w.name === "Axe")) < dps(starter),
+		`(the rule is live: the First Night Kit's Axe is sold, and does ${dps(WEAPONS.find(w => w.name === "Axe")).toFixed(0)} damage a second to the ${starter.name}'s ${dps(starter).toFixed(0)})`,
 	);
 	const s = Roblox.bootServer();
 	const INV2 = require(join(SRC, "shared/sim/inventory.ts"));
@@ -4757,6 +4787,79 @@ section("G1. every pack: its declared contents, its price charged by the server,
 			return save.packsOpened[p.id] === 1 || `opened ${save.packsOpened[p.id]}`;
 		},
 	);
+	{
+		// docs/MULTIPLAYER.md §9.1 "repetir compra" (the verification of 2026-09-24): a replayed request was a second
+		// purchase, stacking packs up to the pending cap. A pack purchase now names itself (`nonce`, shared/net/shopGuard.ts):
+		// the same nonce again is answered as the first and charged once
+		const G = require(join(SRC, "shared/net/shopGuard.ts"));
+		const pl = s.join(newUser(), "replayer");
+		const save = s.save(pl);
+		const pack = SHOP_PACKS[1];
+		const other = SHOP_PACKS[3];
+		save.money = pack.price * 40;
+		const start = save.money;
+		const buy = req => {
+			s.run(0.6);
+			return s.shop(pl, req);
+		};
+		const first = buy({ kind: "buyPack", packId: pack.id, nonce: 7 });
+		const again = buy({ kind: "buyPack", packId: pack.id, nonce: 7 });
+		const thrice = buy({ kind: "buyPack", packId: pack.id, nonce: 7 });
+		check(
+			first.ok &&
+				again.ok &&
+				thrice.ok &&
+				again.price === first.price &&
+				again.wallet?.money === save.money &&
+				save.money === start - pack.price &&
+				save.packsBought[pack.id] === 1,
+			"a purchase replayed twice (the same nonce): answered ok as the first, charged once, one pack",
+			`money ${start} -> ${save.money}, bought ${save.packsBought[pack.id]}`,
+		);
+		const swapped = buy({ kind: "buyPack", packId: other.id, nonce: 7 });
+		check(
+			swapped.ok === false &&
+				swapped.reason === "invalid" &&
+				save.packsBought[other.id] === 0 &&
+				save.money === start - pack.price,
+			"the same nonce for another pack is no replay: refused, nothing charged",
+			swapped.reason,
+		);
+		const bad = [0, -1, 1.5, Number.NaN, Infinity, "7", true, {}, G.SHOP_NONCE_MAX + 1, 1e300];
+		const answers = bad.map(n => buy({ kind: "buyPack", packId: pack.id, nonce: n }).reason);
+		check(
+			answers.every(r => r === "invalid") && save.money === start - pack.price && save.packsBought[pack.id] === 1,
+			`a nonce that is not a whole number in 1..${G.SHOP_NONCE_MAX} is refused as invalid, nothing charged`,
+			answers.join(","),
+		);
+		// the memory is the last SHOP_RECEIPTS purchases: an honest client has one in flight at a time
+		for (let i = 0; i < G.SHOP_RECEIPTS; i++) buy({ kind: "buyPack", packId: pack.id, nonce: 100 + i });
+		const kept = buy({ kind: "buyPack", packId: pack.id, nonce: 100 + G.SHOP_RECEIPTS - 1 });
+		const boughtNow = save.packsBought[pack.id];
+		const forgotten = buy({ kind: "buyPack", packId: pack.id, nonce: 7 });
+		check(
+			boughtNow === 1 + G.SHOP_RECEIPTS &&
+				kept.ok &&
+				forgotten.ok &&
+				save.packsBought[pack.id] === boughtNow + 1 &&
+				save.money === start - pack.price * (boughtNow + 1),
+			`the last ${G.SHOP_RECEIPTS} purchases are remembered; one older than that is a new purchase (the documented limit)`,
+			`bought ${boughtNow} then ${save.packsBought[pack.id]}`,
+		);
+		const plainA = buy({ kind: "buyPack", packId: other.id });
+		const plainB = buy({ kind: "buyPack", packId: other.id });
+		check(
+			plainA.ok && plainB.ok && save.packsBought[other.id] === 2,
+			"a request with no nonce is a purchase of its own each time (the client numbers every one it sends)",
+		);
+		check(
+			/request\.kind === "buyPack" && request\.nonce === undefined\) \{\s*buyNonce = /.test(
+				source("client/systems/saveClient.ts"),
+			),
+			"client/systems/saveClient.ts numbers every pack purchase it sends",
+		);
+		s.quit(pl);
+	}
 	checkRows(
 		"a report cannot open a pack it did not buy, nor take a pack pet twice",
 		SHOP_PACKS.filter(p => p.items.some(it => it.kind === ItemKind.Equip && COSMETIC(EQUIPS[it.index]))),
@@ -5644,6 +5747,133 @@ section(
 				`opened while dead ${whileDead}, pending after New game ${save.packsBought[pack.id] - save.packsOpened[pack.id]}`,
 			);
 			s.quit(pl);
+		}
+		{
+			// the client's half of R6 (client/ui/packNotice.ts; the verification of 2026-09-24): die, buy a pack, then New
+			// game -- or wait for daybreak. The client said "Delivered: First Night Kit" as it built the run and wrote
+			// `packsOpened` into its copy (so the shop hid the pending pack), while the server delivers only into a
+			// LIVING body, at daybreak. Now the entry changes and says nothing, and "Delivered" comes with the server's
+			// wallet that raises `packsOpened` -- once
+			// the client modules as the top of this file loaded them, on the UI shims (the fake server has no GuiService)
+			const PN = PackNotice;
+			const popupMod = Popup;
+			const SAVE_C = SAVE;
+			const { SHOP_PACKS: PACKS } = require(join(SRC, "shared/data/shop.ts"));
+			const pack = PACKS[0];
+			const said = [];
+			const realToast = popupMod.toast;
+			popupMod.toast = (_ctx, text) => said.push(text);
+			// somebody stays standing, so the death is a wait for daybreak and not the end of the world (MP-22)
+			const mate = s.join(newUser(), "standing");
+			s.immortal.add(mate);
+			s.enter(mate);
+			try {
+				for (const how of ["New game", "the wait for daybreak"]) {
+					said.length = 0;
+					const pl = s.join(newUser(), how === "New game" ? "deadNewGame" : "deadWaiter");
+					const save = s.save(pl);
+					save.money = 100000;
+					const ctx = { save: clone(save) };
+					const client = ctx.save;
+					// saveClient.ts: every wallet the server sends is applied to the client's copy, then the listeners look
+					// (startPackNotices: the tracker, then the toast)
+					const tracker = PN.packTracker(() => ctx.save);
+					let seen = 0;
+					const acks = () => s.remote("SaveAck").sent.filter(e => e.to === pl);
+					const listen = () => {
+						const all = acks();
+						for (; seen < all.length; seen++) {
+							const w = all[seen].args[0]?.wallet;
+							if (w === undefined) continue;
+							SAVE_C.applyWallet(client, w);
+							const opened = tracker.newlyOpened();
+							if (opened.length > 0) said.push(PN.deliveredText(opened, 0));
+						}
+					};
+					const shop = req => {
+						const res = s.shop(pl, req);
+						if (res?.wallet !== undefined) SAVE_C.applyWallet(client, res.wallet);
+						listen();
+						return res;
+					};
+					s.enter(pl);
+					// the death is 8 s before daybreak: the wait it starts ends at 06:00 (life.ts `daybreakWaitSeconds`)
+					s.nightLeft(8);
+					s.kill(pl);
+					s.run(0.6);
+					listen();
+					const bought = shop({ kind: "buyPack", packId: pack.id });
+					s.run(0.6);
+					if (how === "New game") shop({ kind: "newRun", runRev: save.runRev });
+					// client/main.client.ts: the dead entry (enterToWait -> newWorld) builds the run, and the packs with it
+					PN.deliverPacks(ctx, true);
+					s.run(3);
+					listen();
+					const quiet =
+						said.length === 0 &&
+						SAVE_C.pendingPacks(client, pack.id) === 1 &&
+						client.packsOpened[pack.id] === 0 &&
+						save.packsOpened[pack.id] === 0;
+					check(
+						bought.ok === true && quiet,
+						`dead entry after ${how}: no "Delivered", and the pack stays pending on both sides`,
+						`said ${JSON.stringify(said)}; client pending ${SAVE_C.pendingPacks(client, pack.id)}, server opened ${save.packsOpened[pack.id]}`,
+					);
+					// daybreak: the server stands the survivor up, opens the pack into the living body, and its wallet says so
+					s.immortal.add(pl);
+					const t = s.runUntil(() => save.packsOpened[pack.id] === 1, 30);
+					s.run(1);
+					listen();
+					const body = s.body(pl);
+					check(
+						t >= 0 &&
+							body !== undefined &&
+							!body.state.dead &&
+							JSON.stringify(said) === JSON.stringify([`Delivered: ${pack.name}`]) &&
+							client.packsOpened[pack.id] === 1 &&
+							SAVE_C.pendingPacks(client, pack.id) === 0,
+						`...daybreak after ${how}: the server opens it into the body it stood up, and the wallet says "Delivered" once`,
+						`${t >= 0 ? `${t.toFixed(1)} s` : "never"}, alive ${body !== undefined && !body.state.dead}, said ${JSON.stringify(said)}`,
+					);
+					s.run(2);
+					listen();
+					PN.deliverPacks(ctx, true);
+					check(said.length === 1, "...and nothing says it again (a later wallet, the next run built)");
+					s.immortal.delete(pl);
+					s.quit(pl);
+				}
+				// with no server owning the backpack (below WORLD_SERVER_PHASE, or offline) the client still opens them itself
+				said.length = 0;
+				const local = SAVE.defaultSave();
+				local.packsBought[pack.id] = 2;
+				const lctx = { save: local };
+				PN.deliverPacks(lctx, false);
+				PN.deliverPacks(lctx, false);
+				check(
+					local.packsOpened[pack.id] === 2 &&
+						pack.items.every(it => INV.countItem(local, it.kind, it.index) >= it.count * 2) &&
+						JSON.stringify(said) === JSON.stringify([`Delivered: ${pack.name} ×2`]),
+					'offline: the client opens both into its own copy and says "Delivered: ... ×2" once',
+					JSON.stringify(said),
+				);
+			} finally {
+				popupMod.toast = realToast;
+				s.immortal.delete(mate);
+				s.quit(mate);
+			}
+			const main = source("client/main.client.ts");
+			const notice = source("client/ui/packNotice.ts");
+			check(
+				!/packsOpened/.test(main) &&
+					(main.match(/PackNotice\.deliverPacks\(ctx, Bag\.owned\(\)\)/g) ?? []).length === 3 &&
+					/PackNotice\.startPackNotices\(ctx\)/.test(main) &&
+					/if \(serverDelivers\) return;/.test(notice) &&
+					/onWalletChanged\(\(\) => \{\s*const opened = tracker\.newlyOpened\(\);\s*if \(opened\.size\(\) > 0\) toast\(ctx, deliveredText\(/.test(
+						notice,
+					) &&
+					/onActivate\(\(\) => tracker\.rebase\(\)\)/.test(notice),
+				"main.client builds every run through packNotice (server-owned: nothing written, nothing said) and the wallet announces",
+			);
 		}
 		{
 			// R5 (security review): the presence verbs of a survivor in the world count toward the flood kick too
