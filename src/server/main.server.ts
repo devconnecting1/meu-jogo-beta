@@ -77,6 +77,8 @@ const AUTOSAVE_INTERVAL = Cadence.AUTOSAVE_INTERVAL;
 /** waits between attempts of a DataStore call (4 attempts in total) */
 const RETRY_DELAYS = [1, 2, 4];
 const SHUTDOWN_RETRY_DELAYS = [0.5, 1];
+/** SAV-01: a write that is not the last one makes a single attempt (the cadence retries it, backing off) */
+const NO_RETRIES: Array<number> = [];
 const SHUTDOWN_BUDGET = 25;
 /** a DataStore value may hold up to 4 MB */
 const MAX_STORED_LENGTH = 3900000;
@@ -262,10 +264,13 @@ function saveSoon(s: Session, reason: Cadence.SaveEvent): void {
 
 /**
  * SAV-01: what happened to a write of this player's save, pushed on SaveAck like the wallet (client/ui/saveIndicator.ts
- * draws it: "Saving..." / "Saved", or "Progress not saved — retrying"). Never to a session on its way out.
+ * draws it: "Saving..." / "Saved", or "Progress not saved — retrying"). Never to a session on its way out, and never
+ * in the way of the write it tells about: a push that throws (a Player being torn down) is dropped, so it can neither
+ * leave `writing` up nor turn a write that landed into a failure.
  */
 function notifyStore(s: Session, state: StoreState): void {
 	if (s.closed) return;
+	s.cadence.failingShown = state === "failing";
 	const push: SaveAckPayload = {
 		ok: true,
 		push: true,
@@ -275,7 +280,19 @@ function notifyStore(s: Session, state: StoreState): void {
 		clamped: false,
 		store: state,
 	};
-	remotes.saveAck.FireClient(s.player, push);
+	pcall(() => remotes.saveAck.FireClient(s.player, push));
+}
+
+/**
+ * SAV-01: a write attempt of `s` failed before, during or after its UpdateAsync (the encode threw, the save is too
+ * large, the DataStore is down): the next one backs off (saveCadence.ts `gapOf`: 15, 30, then 60 s) and is asked for
+ * now, and the player hears it once -- "Progress not saved — retrying" stays up until a write lands. `told`: the attempt
+ * carried progress (a lock refresh of an unchanged save that fails is not news: the DataStore still has it all).
+ */
+function writeFailedFor(s: Session, told: boolean): void {
+	Cadence.writeFailed(s.cadence);
+	if (told && !s.cadence.failingShown) notifyStore(s, "failing");
+	Cadence.scheduleSave(s.cadence, os.clock(), "retry");
 }
 
 function resetCredits(s: Session): void {
@@ -417,6 +434,9 @@ function writeWithLock(s: Session, json: string | undefined, release: boolean, d
 			warn(`[${GAME_NAME}] save ${s.key} failed: ${tostring(err)}`);
 			return "failed";
 		}
+		// SAV-01: a write that is not the last one gives up at once when the player leaves or the server closes, so the
+		// final write (which waits for this one) is not held behind its retries
+		if (!release && (s.closed || shuttingDown)) return "failed";
 		task.wait(delays[attempt]);
 	}
 }
@@ -493,22 +513,26 @@ function flush(s: Session, release: boolean, delays: Array<number> = RETRY_DELAY
 		Cadence.settled(s.cadence);
 		return true;
 	}
+	// SAV-01: only the final write -- which releases the lock and gets no other try -- retries in place. Any other makes
+	// ONE attempt and the cadence tries again, backing off (saveCadence.ts `gapOf`: 15, 30, then 60 s): an outage costs
+	// about one UpdateAsync a minute per player, where the autosave's four attempts a minute used to
+	const tries = release ? delays : NO_RETRIES;
 	s.writing = true;
 	// the window runs protected, so `writing` always comes back down: a throw in it (the encode, say) used to leave it
 	// up for good, and every later flush of the session then waited 30 s and gave up -- never saved again (F5)
-	const [ran, written] = xpcall(() => writeSession(s, release, delays, refreshDue), traceback);
+	const [ran, written] = xpcall(() => writeSession(s, release, tries, refreshDue), traceback);
 	if (!ran) {
 		warn(`[${GAME_NAME}] save ${s.key} failed: ${tostring(written)}`);
 		s.dirty = true;
 		// a session on its way out gets no other try
 		if (release && !s.released) handBackLock(s, delays);
-		// SAV-01: the player is told, and it is tried again a gap later
-		if (!release) {
-			notifyStore(s, "failing");
-			Cadence.scheduleSave(s.cadence, os.clock(), "retry");
-		}
+		// SAV-01: the attempt counts even when it threw before `writeStarted` (the encode): what was pending clears and
+		// the next one backs off, instead of being asked for again at every scan (review L1)
+		if (!release) Cadence.writeStarted(s.cadence, os.clock());
 	}
 	s.writing = false;
+	// told after `writing` came down: nothing about the notice can keep it up (review L3)
+	if (!ran && !release) writeFailedFor(s, true);
 	return ran && written === true;
 }
 
@@ -525,31 +549,44 @@ function writeSession(s: Session, release: boolean, delays: Array<number>, refre
 	// land over a later history (a reset made where the lock went).
 	if (release && recordBeforeRelease()) syncTitleRecord(s, true);
 	const json = HttpService.JSONEncode(s.save);
+	const c = s.cadence;
 	if (json.size() > MAX_STORED_LENGTH) {
 		warn(`[${GAME_NAME}] save ${s.key} too large (${json.size()} chars), not written`);
-		if (release) handBackLock(s, delays);
+		if (release) {
+			handBackLock(s, delays);
+		} else {
+			// SAV-01: the attempt counts: what was pending clears, the next one backs off, the player is told (review L1)
+			Cadence.writeStarted(c, os.clock());
+			writeFailedFor(s, true);
+		}
 		return false;
 	}
 	const wasDirty = s.dirty;
 	s.dirty = false;
 	// SAV-01: what the DataStore already has is not written again -- only the lock's refresh (or the release) rewrites
 	// an unchanged save. `dirty` says something MAY have changed; the JSON says whether it did
-	const changed = json !== s.cadence.lastJson;
+	const changed = json !== c.lastJson;
 	if (!release && !changed && !refreshDue) {
-		Cadence.settled(s.cadence);
+		Cadence.settled(c);
+		// the DataStore holds exactly the live save: a failure still on the player's screen is over (review L2)
+		if (c.failingShown) notifyStore(s, "saved");
 		return true;
 	}
-	Cadence.writeStarted(s.cadence, os.clock());
-	const told = changed && !release;
-	if (told) notifyStore(s, "saving");
+	Cadence.writeStarted(c, os.clock());
+	// only a write that carries progress is announced: never the lock's refresh of an unchanged save -- the first one of
+	// a session included, before anything landed (review L6) -- and while "failing" is up a retry does not flicker back
+	// to "Saving..." (it stays red until a write lands)
+	const told = !release && changed && wasDirty;
+	if (told && !c.failingShown) notifyStore(s, "saving");
 	const outcome = writeWithLock(s, json, release, delays);
 	// every other write: right after the save, which just proved this session still holds the lock
 	if (outcome === "ok" && !release) syncTitleRecord(s, false);
 	if (outcome === "ok") {
 		s.lastWrite = os.clock();
-		s.cadence.lastJson = json;
+		const wasFailing = c.failingShown;
+		Cadence.writeLanded(c, json);
 		if (release) s.released = true;
-		if (told) notifyStore(s, "saved");
+		if (told || wasFailing) notifyStore(s, "saved");
 		return true;
 	}
 	if (outcome === "lost") {
@@ -559,12 +596,9 @@ function writeSession(s: Session, release: boolean, delays: Array<number>, refre
 		return false;
 	}
 	s.dirty = s.dirty || wasDirty;
-	// SAV-01: the DataStore is failing (after the retries above): the player is told the truth, and the write is tried
-	// again one gap later -- not sooner, the service is struggling already
-	if (told) {
-		notifyStore(s, "failing");
-		Cadence.scheduleSave(s.cadence, os.clock(), "retry");
-	}
+	// SAV-01: the DataStore is failing: the player is told the truth (once), and the write is tried again when the
+	// back-off allows -- 15, 30, then 60 s -- not sooner, the service is struggling already
+	if (!release) writeFailedFor(s, told);
 	return false;
 }
 

@@ -69,8 +69,11 @@
  *                           them); ten levels in five seconds are one write in the burst and one a gap (15 s) later; a
  *                           purchase and a death are written within the delay; a leave never waits for the gap; an
  *                           unchanged save is not rewritten (only the lock refresh); an event save waits under the budget
- *                           floor and is not dropped; a failing DataStore is announced ("failing") and retried a gap
- *                           later, not hammered; a lost lock is announced ("stopped") and never written over.
+ *                           floor and is not dropped; an outage costs one UpdateAsync per write, backing off 15, 30, 60 s,
+ *                           is announced once ("failing") and taken back ("saved") when a write lands or the save is back
+ *                           to what landed; the leave still retries in place; a save that cannot be encoded or is too
+ *                           large backs off too; a notice that cannot be sent never costs a write; a refresh is silent;
+ *                           a lost lock is announced ("stopped") and never written over (the review of a454292).
  *
  * Pure Node (>= 18) + the project's TypeScript, through tools/luau-shim.mjs, plus the small fake Roblox below.
  */
@@ -3284,7 +3287,8 @@ section("30) SAV-01: no client-chosen write, coalesced event saves, the budget f
 		}
 	}
 
-	// (e) the DataStore fails: the player is told, and it is tried again a gap later, not sooner
+	// (e) an outage (review M1): every write fails for three minutes while the save keeps changing. A write that is not the
+	// last makes ONE attempt, and the next waits 15, 30, then 60 s; the player is told once; the first to land says so
 	{
 		const srv = bootServer();
 		const u = newUser();
@@ -3294,37 +3298,264 @@ section("30) SAV-01: no client-chosen write, coalesced event saves, the budget f
 		srv.run(Cad.EVENT_SAVE_GAP + 1, 0.25);
 		const [times, undo] = watch(u);
 		try {
-			// every attempt of one write (the first and its three retries) throws
-			store.fail.update = 4;
+			store.fail.update = 1e9;
+			let waited = 0;
+			// a level every 10 s: each one an event, for the whole outage
+			for (let i = 0; i < 18; i++) {
+				levelUp(srv, sp);
+				waited += waitedDuring(() => srv.run(10, 0.25));
+			}
+			const g = gaps(times);
+			const expected = [15, 30, 60, 60];
+			check(
+				times.length === 5 && expected.every((e, i) => g[i] >= e - 0.01 && g[i] <= e + 1.01),
+				"an outage of 3 min, 18 levels: 5 attempts, backing off 15, 30, 60, 60 s (the autosave's retries cost 4 a minute)",
+				`${times.length} attempts, gaps ${g.map(x => x.toFixed(1)).join(", ")} s`,
+			);
+			check(
+				waited === 0,
+				"…each one a single UpdateAsync: no retry sleeps inside the writing window (the cadence retries)",
+				`${waited} s waited`,
+			);
+			check(
+				JSON.stringify(told(srv, p)) === '["saving","failing"]',
+				'…and the player was told ONCE: "Progress not saved — retrying" stays up, no flicker back to "Saving..."',
+				JSON.stringify(told(srv, p)),
+			);
+			store.fail.update = 0;
+			const back = clockNow;
+			srv.run(Cad.AUTOSAVE_INTERVAL + 2, 0.25);
+			const landed = times.filter(t => t > back);
+			check(
+				landed.length === 1 && srv.stored(u)?.level === sp.save.level,
+				"…the DataStore back, the next attempt (at most a minute later) lands with every level of the outage",
+				`${landed.length} write(s), stored level ${srv.stored(u)?.level} of ${sp.save.level}`,
+			);
+			check(
+				JSON.stringify(told(srv, p)) === '["saving","failing","saved"]',
+				'…and the red chip turns into "saved"',
+				JSON.stringify(told(srv, p)),
+			);
+			// the back-off is over: the next event is served at the ordinary gap again
+			srv.run(Cad.EVENT_SAVE_GAP, 0.25);
+			const next = clockNow;
 			levelUp(srv, sp);
-			waitedDuring(() => srv.run(Cad.EVENT_SAVE_DELAY + 1.5, 0.25));
-			const afterFail = told(srv, p);
+			srv.run(Cad.EVENT_SAVE_DELAY + 1.5, 0.25);
 			check(
-				afterFail[afterFail.length - 1] === "failing" && srv.stored(u)?.level !== sp.save.level,
-				'a write that fails after its retries tells the player: "failing" (Progress not saved — retrying)',
-				JSON.stringify(afterFail),
-			);
-			const failedAt = clockNow;
-			waitedDuring(() => srv.run(Cad.EVENT_SAVE_GAP + 2, 0.25));
-			const retries = times.filter(t => t > failedAt);
-			check(
-				retries.length >= 1 && srv.stored(u)?.level === sp.save.level,
-				"…the retry lands once the DataStore is back, with the level that failed",
-				`${retries.length} attempt(s), stored level ${srv.stored(u)?.level}`,
-			);
-			check(
-				retries.length >= 1 && retries[0] - times[0] >= Cad.EVENT_SAVE_GAP - 0.01,
-				`…and a failing DataStore is not hammered: the next write starts ${Cad.EVENT_SAVE_GAP} s after the failed one did`,
-				`attempts at ${times.map(t => (t - times[0]).toFixed(1)).join(", ")} s`,
-			);
-			const last = told(srv, p);
-			check(
-				last[last.length - 1] === "saved",
-				'…and the player is told "saved" when it lands',
-				JSON.stringify(last),
+				times.filter(t => t > next).length === 1,
+				`…and once one lands the back-off is forgotten: the next level is written ${Cad.EVENT_SAVE_DELAY} s later`,
 			);
 		} finally {
 			store.fail.update = 0;
+			undo();
+		}
+	}
+
+	// (e2) the final write keeps its retries (it gets no other try): an outage that ends on the third attempt of a leave
+	{
+		const srv = bootServer();
+		const u = newUser();
+		const p = srv.join(u, "leaver");
+		srv.save(p).money += 77;
+		const [times, undo] = watch(u);
+		let waited = 0;
+		try {
+			store.fail.update = 2;
+			waited = waitedDuring(() => srv.quit(p));
+		} finally {
+			store.fail.update = 0;
+			undo();
+		}
+		check(
+			times.length === 3 && waited >= 3 && srv.stored(u)?.money === srv.save(p).money && lockFree(u),
+			"the leave's write retries in place (1 s, 2 s): the third attempt lands and releases the lock",
+			`${times.length} attempts, ${waited} s of retries`,
+		);
+	}
+
+	// (e3) a save that cannot be encoded (review L1): the attempt counts -- it backs off like a failed write instead of
+	// being asked for again at every scan -- and the player is told once
+	{
+		const srv = bootServer();
+		const u = newUser();
+		const p = srv.join(u, "unencodable");
+		srv.immortal.add(p);
+		const sp = srv.enter(p);
+		srv.run(Cad.EVENT_SAVE_GAP + 1, 0.25);
+		const http = srv.env.services.HttpService;
+		const encode = http.JSONEncode;
+		let broken = true;
+		let tries = 0;
+		http.JSONEncode = v => {
+			if (broken && v === sp.save) {
+				tries += 1;
+				throw new Error("injected: JSONEncode failed");
+			}
+			return encode(v);
+		};
+		try {
+			warnsDuring(() => {
+				levelUp(srv, sp);
+				srv.run(60, 0.25);
+			});
+			check(
+				tries === 3,
+				"a save the engine cannot encode is tried 3 times in a minute (at 0, 15 and 45 s), not once a second",
+				`${tries} attempts`,
+			);
+			check(
+				JSON.stringify(told(srv, p)) === '["failing"]',
+				'…and the player is told once: "Progress not saved — retrying"',
+				JSON.stringify(told(srv, p)),
+			);
+			broken = false;
+			srv.run(Cad.AUTOSAVE_INTERVAL + 2, 0.25);
+			check(
+				srv.stored(u)?.level === sp.save.level && told(srv, p).at(-1) === "saved",
+				"…and when it can be encoded again it lands, and says so",
+				`stored level ${srv.stored(u)?.level}, told ${JSON.stringify(told(srv, p))}`,
+			);
+		} finally {
+			http.JSONEncode = encode;
+		}
+	}
+
+	// (e4) a save too large to store (review L1): no UpdateAsync is spent on it, the attempts back off, the player is told
+	{
+		const srv = bootServer();
+		const u = newUser();
+		const p = srv.join(u, "hoarder");
+		srv.immortal.add(p);
+		const sp = srv.enter(p);
+		srv.run(Cad.EVENT_SAVE_GAP + 1, 0.25);
+		const http = srv.env.services.HttpService;
+		const encode = http.JSONEncode;
+		let huge = true;
+		let tries = 0;
+		const big = "x".repeat(3_900_001);
+		http.JSONEncode = v => {
+			if (huge && v === sp.save) {
+				tries += 1;
+				return big;
+			}
+			return encode(v);
+		};
+		const [times, undo] = watch(u);
+		try {
+			warnsDuring(() => {
+				levelUp(srv, sp);
+				srv.run(60, 0.25);
+			});
+			check(
+				times.length === 0 && tries === 3 && JSON.stringify(told(srv, p)) === '["failing"]',
+				"a save too large to store: no UpdateAsync, 3 attempts in a minute (backing off), and the player told once",
+				`${times.length} writes, ${tries} attempts, told ${JSON.stringify(told(srv, p))}`,
+			);
+		} finally {
+			http.JSONEncode = encode;
+			huge = false;
+			undo();
+		}
+	}
+
+	// (e5) a failed write, then the live save goes back to exactly what landed (review L2): nothing is left to write, and
+	// the chip must not stay red for good -- the player is told "saved"
+	{
+		const srv = bootWithAutosave();
+		const u = newUser();
+		const p = srv.join(u, "undecided");
+		srv.autosave();
+		const bgm0 = srv.save(p).settings.bgm;
+		srv.report(p, { settings: { ...srv.save(p).settings, bgm: 0.77 } });
+		const [times, undo] = watch(u);
+		try {
+			store.fail.update = 1;
+			srv.autosave();
+			store.fail.update = 0;
+			const failed = told(srv, p).at(-1);
+			srv.run(11, 0.25);
+			srv.report(p, { settings: { ...srv.save(p).settings, bgm: bgm0 } });
+			srv.run(Cad.EVENT_SAVE_GAP + 2, 0.25);
+			check(
+				failed === "failing" && times.length === 1 && told(srv, p).at(-1) === "saved",
+				'the settings put back as they were stored: no write, and "Progress not saved" becomes "saved"',
+				`${times.length} attempt(s), told ${JSON.stringify(told(srv, p))}, stored bgm ${srv.stored(u)?.settings?.bgm}`,
+			);
+		} finally {
+			store.fail.update = 0;
+			undo();
+		}
+	}
+
+	// (e6) a notice that cannot be sent (review L3: FireClient throws, a Player being torn down) never costs a write
+	{
+		const srv = bootServer();
+		const u = newUser();
+		const p = srv.join(u, "unreachable");
+		srv.immortal.add(p);
+		const sp = srv.enter(p);
+		srv.run(Cad.EVENT_SAVE_GAP + 1, 0.25);
+		const ack = netOf(srv).FindFirstChild("SaveAck");
+		const fire = ack.FireClient;
+		ack.FireClient = function (player, payload) {
+			if (payload?.store !== undefined) throw new Error("injected: FireClient failed");
+			return fire.call(this, player, payload);
+		};
+		const http = srv.env.services.HttpService;
+		const encode = http.JSONEncode;
+		let breakNext = false;
+		http.JSONEncode = v => {
+			if (breakNext && v === sp.save) {
+				breakNext = false;
+				throw new Error("injected: JSONEncode failed");
+			}
+			return encode(v);
+		};
+		try {
+			const died = asRoblox(() =>
+				warnsDuring(() => {
+					// a write whose notices cannot be sent, then one that throws (its "failing" cannot be sent either)
+					levelUp(srv, sp);
+					srv.run(Cad.EVENT_SAVE_DELAY + 1.5, 0.25);
+					const first = srv.stored(u)?.level === sp.save.level;
+					breakNext = true;
+					levelUp(srv, sp);
+					srv.run(Cad.EVENT_SAVE_GAP + 2, 0.25);
+					levelUp(srv, sp);
+					srv.run(Cad.EVENT_SAVE_GAP * 2 + 2, 0.25);
+					check(
+						first && !breakNext && srv.stored(u)?.level === sp.save.level,
+						"notices that throw: the writes still land, and a throwing one does not keep `writing` up",
+						`stored level ${srv.stored(u)?.level} of ${sp.save.level}`,
+					);
+				}),
+			);
+			check(died.length === 0, "…and no thread died of it", died.join(" | "));
+		} finally {
+			ack.FireClient = fire;
+			http.JSONEncode = encode;
+		}
+	}
+
+	// (e7) the lock's refresh of a session that changed nothing is silent (review L6): a returning player idles
+	{
+		const u = newUser();
+		{
+			const first = bootServer();
+			first.quit(first.join(u, "idler"));
+		}
+		const srv = bootWithAutosave();
+		const p = srv.join(u, "idler");
+		const [times, undo] = watch(u);
+		try {
+			clockNow += 150;
+			srv.autosave();
+			check(
+				times.length === 1 && told(srv, p).length === 0,
+				"a returning player who changed nothing: the lock refresh writes, and the player hears nothing of it",
+				`${times.length} write(s), told ${JSON.stringify(told(srv, p))}`,
+			);
+		} finally {
 			undo();
 		}
 	}

@@ -2417,6 +2417,54 @@ section(
 		"o piso de orcamento dos eventos fica acima do do autosave (que guarda as entradas e saidas)",
 		`${CAD.EVENT_SAVE_MIN_BUDGET}`,
 	);
+	// failures back off (review M1): 15 s after the first, 30 s after the second, then AUTOSAVE_INTERVAL; a landing resets
+	{
+		const c = CAD.newCadence(0);
+		const seq = [];
+		for (let f = 0; f <= 5; f++) {
+			seq.push(CAD.gapOf(c));
+			CAD.writeFailed(c);
+		}
+		checkArrayEq(
+			seq,
+			[15, 15, 30, 60, 60, 60],
+			"o intervalo recua com as falhas: 15 s, 15 s depois da 1a, 30 s depois da 2a, 60 s (AUTOSAVE_INTERVAL) dai em diante",
+		);
+		CAD.writeStarted(c, 100);
+		check(CAD.tooSoon(c, 159) && !CAD.tooSoon(c, 160), "tooSoon respeita o recuo: 60 s depois de varias falhas");
+		CAD.scheduleSave(c, 101, "retry");
+		check(c.due === 160, "...e o pedido de gravacao tambem", `due ${c.due}`);
+		CAD.writeLanded(c, "{}");
+		check(
+			c.failures === 0 && CAD.gapOf(c) === CAD.EVENT_SAVE_GAP && c.lastJson === "{}",
+			"uma gravacao que chega zera o recuo",
+		);
+	}
+	// an outage in the pretend clock: every attempt fails, the save changes every 5 s, the autosave comes every minute
+	{
+		const c = CAD.newCadence(-1000);
+		let attempts = 0;
+		let dirty = false;
+		for (let t = 0; t <= 600; t = Math.round((t + 0.25) * 100) / 100) {
+			if (t % 5 === 0) {
+				dirty = true;
+				if (t % 10 === 0) CAD.scheduleSave(c, t, "level");
+			}
+			const auto = t > 0 && t % CAD.AUTOSAVE_INTERVAL === 0;
+			if (auto && CAD.tooSoon(c, t) && dirty) CAD.scheduleSave(c, t, "auto");
+			const run = (auto && !CAD.tooSoon(c, t) && dirty) || (t % CAD.EVENT_SCAN_S === 0 && CAD.saveDue(c, t));
+			if (!run) continue;
+			attempts++;
+			CAD.writeStarted(c, t);
+			CAD.writeFailed(c);
+			CAD.scheduleSave(c, t, "retry");
+		}
+		check(
+			attempts <= 12,
+			"uma queda de 10 min: no maximo ~1 tentativa por minuto por jogador (o autosave com 3 retentativas fazia 4)",
+			`${attempts} tentativas em 10 min`,
+		);
+	}
 	// the worst case, as the rule states it
 	const eventLoss = CAD.EVENT_SAVE_GAP + CAD.EVENT_SCAN_S;
 	const otherLoss = CAD.AUTOSAVE_INTERVAL + CAD.EVENT_SCAN_S;
@@ -2511,6 +2559,44 @@ section(
 	check(
 		reportPath.length > 500 && !/flush\(|saveSoon\(|scheduleSave\(|UpdateAsync/.test(reportPath),
 		"o relatorio do cliente (SaveRequest) nunca grava nem pede gravacao: so marca a sessao suja",
+	);
+	// the review of a454292, in the code: one attempt for a write that is not the last (M1), an attempt that throws or
+	// is too large counts (L1), a notice never in the way of the write (L3), no retry sleep once the player is leaving (L4)
+	const flushFn = between("function flush(", "function writeSession(");
+	const writeFn = between(
+		"function writeSession(",
+		"// ---------------------------------------------------------------- load",
+	);
+	const lockFn = between("function writeWithLock(", "function handBackLock(");
+	const notifyFn = between("function notifyStore(", "function resetCredits(");
+	check(
+		/const tries = release \? delays : NO_RETRIES;/.test(flushFn) &&
+			/const NO_RETRIES: Array<number> = \[\];/.test(main),
+		"so a gravacao final repete no lugar; as outras fazem UMA tentativa (a cadencia repete, recuando) -- M1",
+	);
+	check(
+		/if \(!release\) Cadence\.writeStarted\(s\.cadence, os\.clock\(\)\);[^]*s\.writing = false;[^]*if \(!ran && !release\) writeFailedFor\(s, true\);/.test(
+			flushFn,
+		) &&
+			/MAX_STORED_LENGTH\)[^]*Cadence\.writeStarted\(c, os\.clock\(\)\);\s*writeFailedFor\(s, true\);/.test(
+				writeFn,
+			),
+		"a tentativa que lanca (encode) ou e grande demais conta: limpa o pedido e recua -- L1; o aviso vem depois de `writing` baixar -- L3",
+	);
+	check(
+		/pcall\(\(\) => remotes\.saveAck\.FireClient\(s\.player, push\)\)/.test(notifyFn),
+		"o aviso ao jogador nunca atrapalha a gravacao: FireClient dentro de pcall -- L3",
+	);
+	check(
+		/if \(!release && \(s\.closed \|\| shuttingDown\)\) return "failed";\s*task\.wait\(delays\[attempt\]\);/.test(
+			lockFn,
+		),
+		"uma gravacao que nao e a ultima desiste antes de dormir se o jogador sai ou o servidor fecha -- L4",
+	);
+	check(
+		/if \(c\.failingShown\) notifyStore\(s, "saved"\);/.test(writeFn) &&
+			/const told = !release && changed && wasDirty;/.test(writeFn),
+		'"Progress not saved" sai quando o save volta ao que o DataStore tem (L2); o refresh da trava nao e anunciado (L6)',
 	);
 	// the events the server names where they happen (the others are found by `noteMilestones`, test:body 30)
 	check(
