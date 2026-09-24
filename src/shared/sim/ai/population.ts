@@ -1,6 +1,6 @@
 import { DESIGN } from "shared/engine/constants";
 import { chance, choose, rndInt } from "shared/engine/rng";
-import { randomRingPoint, spawnGroundItem, WorldData } from "shared/game/world";
+import { randomRingPoint, removeGroundItemAt, spawnGroundItem, WorldData } from "shared/game/world";
 import { circleBlocked } from "shared/game/physics";
 import { createBoss, createZombie, ZombieState, ZombieType } from "shared/game/entities";
 import { BUILDING_SPAWNS, getDayPopulation } from "shared/data/spawns";
@@ -503,9 +503,9 @@ export class Population {
 		}
 		for (let i = refs.world.items.size() - 1; i >= 0; i--) {
 			const it = refs.world.items[i];
-			if (!this.nearAnyPlayer(refs, it.x, it.y, DESIGN.ITEM_SPAWN_MAX)) {
-				refs.world.items.remove(i);
-			}
+			// through the world's own removal: on the server that is the grid and the ItemRemove every client that was
+			// shown the item is owed -- splicing the list left it on their screens for good (a ghost E could not take)
+			if (!this.nearAnyPlayer(refs, it.x, it.y, DESIGN.ITEM_SPAWN_MAX)) removeGroundItemAt(refs.world, i);
 		}
 	}
 

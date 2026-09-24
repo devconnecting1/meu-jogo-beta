@@ -527,6 +527,15 @@ function isLit(refs: Ctx.AiRefs, x: number, y: number): boolean {
 }
 
 /**
+ * The same question for any spot, for the server's interest rules (§4.3; audit L2): an effect, a death or a ground
+ * item there is sent to a viewer in the dark only if the spot is lit -- the very test a zombie standing there would
+ * be sent by. It reads the lights of the horde's last step (`collectLights`), so ask it after that step.
+ */
+export function positionLit(refs: Ctx.AiRefs, x: number, y: number): boolean {
+	return isLit(refs, x, y);
+}
+
+/**
  * obj_zombie image_alpha: fully visible while ambient light ≥ 0.4 (day, dusk) or when inside a
  * light; otherwise it fades out in the dark (3/s), like the original.
  */

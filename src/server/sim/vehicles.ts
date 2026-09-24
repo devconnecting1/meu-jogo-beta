@@ -136,6 +136,8 @@ interface Ridden {
 	hp: number;
 	hpMax: number;
 	owner: number;
+	/** (MP-24) the account that built it: the vehicle goes back into the world still theirs, cap and rot included */
+	builder: number | undefined;
 	/**
 	 * The body that got on. The vehicle is wherever THIS body is: when the life code swaps the survivor's body (a
 	 * stand-up, a resumed body), the vehicle is parked where the old one rode, never teleported to the new one.
@@ -323,6 +325,7 @@ export class ServerVehicles {
 			hp: s.hp,
 			hpMax: s.hpMax > 0 ? s.hpMax : def.hpMax,
 			owner: s.owner ?? SLOT_NONE,
+			builder: s.builder,
 			body: p,
 			noiseT: 0,
 			hornCd: 0,
@@ -370,6 +373,7 @@ export class ServerVehicles {
 				hpMax: rec.hpMax,
 				placeable: rec.placeable,
 				owner: rec.owner,
+				builder: rec.builder,
 			});
 		}
 		// on their own feet beside it -- not for a death (the body lies where it fell) nor a throw (they fly on), and

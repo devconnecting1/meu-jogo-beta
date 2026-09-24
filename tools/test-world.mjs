@@ -32,6 +32,12 @@
  *   h. THE DELTAS REACH THE WIRE: everything the tick produced encodes through `encodeWorld` and decodes
  *      back through `decodeWorld` with the same ids, and a late joiner's WorldInit carries the constructions
  *      and the open doors that were made before they arrived (§4.5).
+ *   w. THE GROUND IS NOT A WAREHOUSE (security review of 5967a18, #3): items rot after GROUND_ITEM_LIFE_S, the town
+ *      holds GROUND_ITEM_CAP (the oldest go first, every client told), the sweep and the E press read the item grid
+ *      and give the scan's answers, and the population's cleanup no longer leaves a ghost on a client.
+ *   x. CONSTRUCTIONS (MP-24): the per-player cap follows the account through a leave and a rejoin; an abandoned
+ *      construction rots after the grace and falls, and whoever repairs it while it rots takes it over; the piece that
+ *      would close a ring around a living survivor (the builder too) is refused, a door in the same gap is not.
  *
  * MP_PHASE is NOT changed (tools/test-net.mjs pins it): the simulation is built with `interactive: true`,
  * the switch `zombies: true` already uses for the horde.
@@ -1795,9 +1801,680 @@ section("v) o objetivo 'Search a house' aponta para onde a busca responde (EDI-0
 	);
 }
 
+// ================================================================ w. the ground is not a warehouse
+
+section("w) itens no chao apodrecem, tem teto e sao achados pela grade (revisao de seguranca de 5967a18, #3)");
+{
+	const IQ = require(join(SRC, "shared/sim/interactQuery.ts"));
+	const LIFE = CFG.GROUND_ITEM_LIFE_S;
+	const CAP = CFG.GROUND_ITEM_CAP;
+
+	// 1. the lifetime, through the simulation's own tick
+	{
+		const world = emptyWorld();
+		const sim = newSim(world);
+		addPlayer(sim, 0, 1000, 1000);
+		const old = W.spawnGroundItem(world, 4, 23, 1, 1100, 1000);
+		const young = W.spawnGroundItem(world, 4, 23, 1, 1120, 1000);
+		drain(sim);
+		// the oldest was dropped a whole lifetime ago; the other a minute ago
+		old.born -= LIFE;
+		young.born -= 60;
+		run(sim, 1);
+		check(!world.items.includes(old), `um item com mais de ${LIFE} s apodrece no tick do servidor`);
+		check(world.items.includes(young), "e um de um minuto continua no chao");
+		const removes = drain(sim).filter(d => d.ev.t === P.WorldEv.ItemRemove);
+		check(
+			removes.length === 1 && removes[0].ev.id === old.id && removes[0].slot === 0,
+			"e quem o via recebe o ItemRemove (nenhum fantasma)",
+			`${removes.length} ItemRemove`,
+		);
+		checkEq(sim.items.expired.rotted, 1, "contado como apodrecido");
+	}
+
+	// 2. the cap, and 10 000 items from a farm: the oldest go first, and every client hears it
+	{
+		const world = emptyWorld();
+		const sim = newSim(world);
+		const farmer = addPlayer(sim, 0, 4000, 4000);
+		drain(sim);
+		const made = [];
+		for (let i = 0; i < 10000; i++) {
+			made.push(W.spawnGroundItem(world, 4, 23, 1, 3900 + (i % 200), 3900 + Math.floor(i / 200) * 4));
+		}
+		checkEq(world.items.size(), CAP, `10 000 itens de uma fazenda: o mundo guarda ${CAP}`);
+		check(
+			world.items[0] === made[10000 - CAP] && world.items[CAP - 1] === made[9999],
+			"os mais antigos sairam primeiro (ficam os ultimos que cairam)",
+		);
+		checkEq(sim.items.expired.capped, 10000 - CAP, "e o teto conta os que tirou");
+		const out = drain(sim);
+		const adds = out.filter(d => d.ev.t === P.WorldEv.ItemAdd && d.slot === farmer.slot).length;
+		const removes = out.filter(d => d.ev.t === P.WorldEv.ItemRemove && d.slot === farmer.slot).length;
+		checkEq(adds - removes, CAP, "o espelho do cliente termina com exatamente os que existem (adds - removes)");
+		// the grid holds what the world holds, and nothing more
+		const g = world.itemGrid;
+		let filed = 0;
+		for (const [, list] of g.cells) filed += list.length;
+		checkEq(filed, CAP, "e a grade tem os mesmos itens, nenhum a mais");
+		checkEq(g.at.size(), CAP, "cada um arquivado uma vez");
+	}
+
+	// 3. the sweep reads what is NEAR: 10 000 items spread over the town, six survivors
+	{
+		const time = (n, reps) => {
+			const world = emptyWorld();
+			const sim = newSim(world);
+			for (let s = 0; s < 6; s++) addPlayer(sim, s, 800 + s * 1300, 800 + ((s * 2900) % 6400));
+			let seed = 7;
+			const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+			for (let i = 0; i < n; i++) W.spawnGroundItem(world, 4, 23, 1, rnd() * 8000, rnd() * 8000);
+			sim.items.sweepInterest(1); // the first sweep tells everybody what is near them
+			drain(sim);
+			const t0 = process.hrtime.bigint();
+			for (let k = 0; k < reps; k++) sim.items.sweepInterest(1);
+			const ms = Number(process.hrtime.bigint() - t0) / 1e6 / reps;
+			return { ms, held: world.items.size() };
+		};
+		time(2000, 50); // warm the JIT
+		const small = time(100, 400);
+		const big = time(10000, 400);
+		console.log(
+			`        uma varredura de interesse (6 sobreviventes): ${small.ms.toFixed(3)} ms com ${small.held} itens, ` +
+				`${big.ms.toFixed(3)} ms depois de 10 000 (o mundo guarda ${big.held})`,
+		);
+		checkEq(big.held, CAP, "10 000 itens espalhados: o teto vale");
+		check(
+			big.ms < small.ms * 30,
+			"e a varredura cresce com o que esta perto, nao com a cidade (<30x a de 100 itens; o laco antigo: ~100x)",
+			`${(big.ms / small.ms).toFixed(1)}x`,
+		);
+	}
+
+	// 4. the grid answers what the scan answered: a moving item is re-filed, every E press finds the same item
+	{
+		const world = emptyWorld();
+		const sim = newSim(world);
+		addPlayer(sim, 0, 2000, 2000);
+		const flying = W.spawnGroundItem(world, 4, 23, 1, 2040, 2000, 900, 0);
+		for (let i = 0; i < 90; i++) W.updateGroundItems(world, 1 / 60);
+		check(
+			flying.x > W.ITEM_GRID_CELL * 8 + 60,
+			"o item deslizou para outra celula da grade",
+			`x ${flying.x.toFixed(0)}`,
+		);
+		checkEq(IQ.nearestGroundItem(world, flying.x + 5, flying.y), flying, "e o E o acha onde ele parou");
+		let seed = 3;
+		const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+		for (let i = 0; i < 400; i++) W.spawnGroundItem(world, 4, 23, 1, 1500 + rnd() * 1000, 1500 + rnd() * 1000);
+		let same = 0;
+		for (let k = 0; k < 500; k++) {
+			const x = 1500 + rnd() * 1000;
+			const y = 1500 + rnd() * 1000;
+			let best;
+			let bestD2 = DESIGN.ITEM_GET_DISTANCE * DESIGN.ITEM_GET_DISTANCE;
+			for (const it of world.items) {
+				const d2 = (it.x - x) ** 2 + (it.y - y) ** 2;
+				if (d2 < bestD2 || (d2 === bestD2 && best !== undefined && it.id < best.id)) {
+					bestD2 = d2;
+					best = it;
+				}
+			}
+			if (IQ.nearestGroundItem(world, x, y) === best) same += 1;
+		}
+		checkEq(same, 500, "500 pressoes de E: a grade escolhe o mesmo item que a lista inteira");
+	}
+
+	// 5. the population's cleanup tells the clients (it used to splice the list: a ghost on every screen)
+	{
+		const world = emptyWorld();
+		const sim = new ServerSimulation({
+			world,
+			clock: new WorldClock({ day: 1, dayTime: 12 }),
+			zombies: true,
+			interactive: true,
+		});
+		const p = addPlayer(sim, 0, 3000, 3000);
+		const item = W.spawnGroundItem(world, 4, 23, 1, 3100, 3000);
+		check(
+			drain(sim).some(d => d.ev.t === P.WorldEv.ItemAdd && d.ev.id === item.id && d.slot === 0),
+			"o cliente foi avisado do item",
+		);
+		// now 1850 u away on one axis: past the population's square (ITEM_SPAWN_MAX, 1800) but inside the item
+		// interest's exit (ITEM_INTEREST_EXIT, 2100): the sweep keeps it on the screen, only the cleanup takes it away
+		p.state.x = 3100 - 1850;
+		run(sim, 2);
+		check(!world.items.includes(item), "a limpeza da populacao tira o item longe de todos (1800 u no eixo)");
+		check(
+			drain(sim).some(d => d.ev.t === P.WorldEv.ItemRemove && d.ev.id === item.id && d.slot === 0),
+			"e o cliente que o via recebe o ItemRemove (antes: fantasma para sempre)",
+		);
+	}
+}
+
+// ================================================================ w2. the cap makes room where the junk is
+
+section("w2) o teto de itens tira o mais velho em volta do item novo, nao o mais velho da cidade (revisao, L4)");
+{
+	/*
+	 * A farm of junk in one corner used to push a fresh drop out of the other: past GROUND_ITEM_CAP the town's oldest
+	 * went, and 900 items of old litter were only a head start. Now the item that makes room is the oldest around the
+	 * new one (its grid cell and the ones next to it); only with nothing there does the town's oldest go.
+	 */
+	const world = emptyWorld();
+	const sim = newSim(world);
+	const items = sim.items;
+	for (let i = 0; i < 900; i++) {
+		W.spawnGroundItem(world, 4, 1, 1, 1000 + (i % 30) * 20, 1000 + Math.floor(i / 30) * 20, 0, 0);
+		items.upkeep(0.1);
+	}
+	const trophy = W.spawnGroundItem(world, 1, 99, 1, 6000, 6000, 0, 0);
+	let t = 0;
+	for (; t < 300 && world.items.includes(trophy); t++) {
+		for (let k = 0; k < 6; k++) W.spawnGroundItem(world, 4, 1, 1, 7000, 1000, 0, 0);
+		items.upkeep(1);
+	}
+	check(
+		world.items.includes(trophy),
+		`uma fazenda de 6 itens/s por ${t} s longe dele nao tira um drop novo`,
+		`t=${t}`,
+	);
+	checkEq(world.items.length, CFG.GROUND_ITEM_CAP, "e a cidade continua no teto");
+	check(
+		world.items.filter(i => i.x < 2000 && i.y < 2000).length === 900,
+		"o lixo velho de outro canto tambem fica (a fazenda come o proprio lixo)",
+	);
+	// (NIT) a position that is not a number files in cell 0 instead of a NaN key (Luau refuses a NaN table key)
+	const bad = W.spawnGroundItem(world, 4, 1, 1, NaN, Infinity, 0, 0);
+	checkEq(world.itemGrid.at.get(bad), 0, "um item em (NaN, inf) vai para a celula 0, nunca uma chave NaN");
+	W.removeGroundItem(world, bad);
+}
+
+// ================================================================ x. whose construction, for how long, and nobody penned in
+
+section("x) construcoes: teto por UserId, obra abandonada apodrece, e nenhuma prende um sobrevivente (MP-24)");
+{
+	const ENC = require(join(SRC, "server/sim/enclosure.ts"));
+	const GRACE = CFG.BUILD_ABANDON_GRACE_S;
+	const DECAY = CFG.BUILD_ABANDON_DECAY_S;
+	/** a survivor with an explicit UserId (addPlayer derives it from the slot) */
+	const join2 = (sim, slot, userId, x, y) => {
+		const sp = PL.createServerPlayer(
+			{ slot, userId, name: `u${userId}` },
+			SAVE.defaultSave(),
+			x,
+			y,
+			sim.tick,
+			sim.simHz,
+		);
+		sim.add(sp);
+		sp.state.x = x;
+		sp.state.y = y;
+		return sp;
+	};
+	const wall = (world, x, y, owner) =>
+		W.addSolid(world, {
+			kind: "barricade",
+			x,
+			y,
+			w: 64,
+			h: 64,
+			hp: 700,
+			hpMax: 700,
+			destructible: true,
+			tags: "barricade",
+			placeable: 10,
+			owner,
+		});
+
+	// 1. the cap belongs to the account: leaving and coming back in another slot does not reset it
+	{
+		const world = emptyWorld();
+		const sim = newSim(world);
+		const a = join2(sim, 0, 7001, 4000, 4000);
+		for (let i = 0; i < CFG.MAX_BUILDS_PER_PLAYER; i++)
+			wall(world, 10 + (i % 50) * 130, 10 + Math.floor(i / 50) * 130, 0);
+		checkEq(sim.build.countOfUser(7001), CFG.MAX_BUILDS_PER_PLAYER, "o jogador 7001 ergueu o teto inteiro");
+		sim.remove(a.slot);
+		checkEq(sim.build.countOf(0), 0, "ele saiu: o slot 0 volta limpo para quem chegar");
+		const back = join2(sim, 2, 7001, 4000, 4000);
+		checkEq(sim.build.countOf(2), CFG.MAX_BUILDS_PER_PLAYER, "e de volta, noutro slot, o teto e o dele de novo");
+		sim.build.hold(2, 10, undefined);
+		const refused = sim.build.place(2, back.state, [back.state], []);
+		checkEq(refused.why, "capPlayer", "sair e voltar nao zera o teto por jogador");
+		const other = join2(sim, 0, 7002, 5000, 5050);
+		sim.build.hold(0, 10, undefined);
+		checkEq(sim.build.place(0, other.state, [other.state], []).kind, "placed", "e outra conta no slot 0 constroi");
+		check(
+			world.solids.filter(s => s.placeable !== undefined && s.builder === 7001 && s.owner === 2).length ===
+				CFG.MAX_BUILDS_PER_PLAYER,
+			"as obras dele voltam a ter o slot dele (a torreta credita quem a fez)",
+		);
+	}
+
+	// 2. an abandoned construction rots: the builder's absence past the grace, then the decay
+	{
+		const world = emptyWorld();
+		const sim = newSim(world);
+		const a = join2(sim, 0, 7101, 3000, 3000);
+		const walls = [];
+		for (let i = 0; i < 4; i++) walls.push(wall(world, 3200 + i * 100, 3000, 0));
+		sim.remove(a.slot);
+		drain(sim);
+		sim.build.step(GRACE - 1);
+		check(
+			walls.every(w => w.hp === w.hpMax && world.solids.includes(w)),
+			`${GRACE - 1} s depois de o construtor sair, a base continua inteira`,
+		);
+		sim.build.step(2);
+		check(
+			walls.every(w => w.hp < w.hpMax),
+			"passado o prazo, ela comeca a apodrecer",
+		);
+		// the builder comes back: the rot stops where it was (the hp lost stays; E: Repair fixes it)
+		const back = join2(sim, 1, 7101, 3000, 3000);
+		const hp = walls[0].hp;
+		sim.build.step(30);
+		checkEq(walls[0].hp, hp, "o construtor voltou: a obra para de apodrecer");
+		sim.remove(back.slot);
+		sim.build.step(GRACE + DECAY + 1);
+		check(
+			walls.every(w => !world.solids.includes(w)),
+			`abandonada ${GRACE} s + ${DECAY} s, cai (e devolve as vagas dos tetos)`,
+		);
+		checkEq(sim.build.count(), 0, "o teto do servidor esta livre de novo");
+		checkEq(sim.build.countOfUser(7101), 0, "e o do construtor tambem");
+		checkEq(countDeltas(drain(sim), P.WorldEv.SolidRemove), 4, "e todo cliente recebe o SolidRemove");
+	}
+
+	// 3. whoever keeps it standing keeps it: a repair of a rotting construction adopts it
+	{
+		const world = emptyWorld();
+		const sim = newSim(world);
+		const gone = join2(sim, 0, 7201, 2000, 2000);
+		const w = wall(world, 2000, 2080, 0);
+		sim.remove(gone.slot);
+		sim.build.step(GRACE + 30);
+		check(w.hp < w.hpMax, "a obra de quem saiu esta apodrecendo");
+		const keeper = join2(sim, 1, 7202, 2032, 2050);
+		addItem(keeper.save, 4, 23, 5); // wood: what a barricade is repaired with
+		send(keeper, 1, Math.PI / 2, PRESS_E);
+		run(sim, 1);
+		checkEq(w.builder, 7202, "quem a conserta passa a ser o dono (MP-24)");
+		checkEq(sim.build.countOfUser(7202), 1, "e ela conta no teto dele");
+		const after = w.hp;
+		sim.build.step(DECAY);
+		checkEq(w.hp, after, "e com o novo dono no mundo ela nao apodrece mais");
+	}
+
+	// 4. nobody is penned in: the piece that would close a ring around a survivor is refused
+	{
+		const ring = world => {
+			// a closed box 1880..2280 x 1780..2088, with one 128 u gap in its top wall at x 2048..2176
+			for (const [x, y, w, h] of [
+				[1880, 1780, 40, 308],
+				[2176, 1780, 104, 308],
+				[1880, 2048, 400, 40],
+				[1880, 1792, 168, 32],
+			]) {
+				W.addSolid(world, { kind: "wall_h", x, y, w, h, hp: 999, hpMax: 999, destructible: false, tags: "" });
+			}
+		};
+		const setup = (victimAt, builderAt) => {
+			const world = emptyWorld();
+			ring(world);
+			const sim = newSim(world);
+			const builder = join2(sim, 0, 7301, builderAt[0], builderAt[1]);
+			builder.state.angle = builderAt[2];
+			const victim = victimAt !== undefined ? join2(sim, 1, 7302, victimAt[0], victimAt[1]) : undefined;
+			return { world, sim, builder, victim, bodies: sim.players().map(sp => sp.state) };
+		};
+		const OUTSIDE = [2112, 1740, Math.PI / 2];
+		const INSIDE_V = [2048, 1936];
+
+		let t = setup(INSIDE_V, OUTSIDE);
+		check(ENC.canEscape(t.world, INSIDE_V[0], INSIDE_V[1]), "com a fresta aberta, quem esta dentro pode sair");
+		t.sim.build.hold(0, 10, undefined);
+		const shut = t.sim.build.place(0, t.builder.state, t.bodies, []);
+		checkEq(shut.why, "sealed", "a barricada que fecharia o anel com alguem dentro e recusada");
+		checkEq(t.sim.build.placing(0), true, "e continua no cursor");
+		checkEq(
+			t.sim.build.place(0, t.builder.state, t.bodies, []).why,
+			"rate",
+			"e a tentativa seguinte espera o ritmo",
+		);
+
+		t = setup(INSIDE_V, OUTSIDE);
+		t.sim.build.hold(0, 11, undefined);
+		checkEq(
+			t.sim.build.place(0, t.builder.state, t.bodies, []).kind,
+			"placed",
+			"uma PORTA no mesmo vao: e base, nao cela",
+		);
+
+		t = setup(undefined, OUTSIDE);
+		t.sim.build.hold(0, 10, undefined);
+		checkEq(
+			t.sim.build.place(0, t.builder.state, t.bodies, []).kind,
+			"placed",
+			"o mesmo anel sem ninguem dentro fecha",
+		);
+
+		t = setup(undefined, [2112, 1900, -Math.PI / 2]);
+		t.sim.build.hold(0, 10, undefined);
+		checkEq(
+			t.sim.build.place(0, t.builder.state, t.bodies, []).why,
+			"sealed",
+			"e o construtor nao se tranca sem porta (nao ha como derrubar a propria parede)",
+		);
+
+		// a survivor penned in already (by the map) does not stop a piece that changes nothing for them: the gap is
+		// walled up, and the builder puts a barricade against the outside of the box
+		t = setup(INSIDE_V, [2368, 1740, Math.PI / 2]);
+		W.addSolid(t.world, {
+			kind: "wall_h",
+			x: 2048,
+			y: 1780,
+			w: 128,
+			h: 44,
+			hp: 9,
+			hpMax: 9,
+			destructible: false,
+			tags: "",
+		});
+		check(!ENC.canEscape(t.world, INSIDE_V[0], INSIDE_V[1]), "(o sobrevivente la dentro ja esta preso pelo mapa)");
+		t.sim.build.hold(0, 10, undefined);
+		checkEq(
+			t.sim.build.place(0, t.builder.state, t.bodies, []).kind,
+			"placed",
+			"quem ja estava preso pelo mapa nao impede uma peca que nao muda nada para ele",
+		);
+
+		// 5. (revisao de seguranca do endurecimento da rede, M1) o corpo guardado de quem esperava no lobby: a regra so
+		// ve os corpos NO mundo, entao o anel fecha em volta do lugar dele -- e na volta ele e posto onde pode sair
+		{
+			const { LifeKeeper } = require(join(SRC, "server/sim/life.ts"));
+			t = setup(undefined, OUTSIDE);
+			const lives = new LifeKeeper(t.sim, { welcome() {}, left() {}, life() {} });
+			const info = { userId: 7303, name: "waiter" };
+			const save = SAVE.defaultSave();
+			const waiter = lives.enter(info, save);
+			waiter.state.x = INSIDE_V[0];
+			waiter.state.y = INSIDE_V[1];
+			lives.leave(info.userId);
+			t.sim.build.hold(0, 10, undefined);
+			const closed = t.sim.build.place(
+				0,
+				t.builder.state,
+				t.sim.players().map(sp => sp.state),
+				[],
+			);
+			checkEq(closed.kind, "placed", "com ele no lobby o anel fecha (o corpo guardado nao esta no mundo)");
+			check(!ENC.canEscape(t.world, INSIDE_V[0], INSIDE_V[1]), "(o lugar onde o corpo dele ficou virou cela)");
+			const back = lives.enter(info, save);
+			check(
+				back !== undefined && ENC.canEscape(t.world, back.state.x, back.state.y),
+				"na volta ele e posto onde consegue sair (placeKept: chao livre E saida), nao dentro da cela",
+				back === undefined ? "nao entrou" : `(${back.state.x.toFixed(0)}, ${back.state.y.toFixed(0)})`,
+			);
+		}
+
+		// 6. (M2) o passeio custa: no maximo SEALED_CHECKS_PER_TICK por tick no servidor inteiro; os outros ouvem "rate"
+		{
+			const BUILD = require(join(SRC, "server/sim/build.ts"));
+			const budget = 1;
+			checkEq(BUILD.SEALED_CHECKS_PER_TICK, budget, "(o orcamento do servidor: um passeio por tick)");
+			t = setup(INSIDE_V, OUTSIDE);
+			const walk = ENC.boxesIn;
+			let walks = 0;
+			ENC.boxesIn = (...a) => {
+				walks += 1;
+				return walk(...a);
+			};
+			try {
+				const answers = [];
+				for (let slot = 0; slot < 12; slot++) {
+					t.sim.build.hold(slot, 10, undefined);
+					answers.push(t.sim.build.place(slot, t.builder.state, t.bodies, []).why);
+				}
+				console.log(`        12 tentativas no mesmo tick: ${walks} passeio(s); respostas ${answers.join(",")}`);
+				check(
+					walks <= budget,
+					`12 tentativas no mesmo tick custam no maximo ${budget} passeio (custaram ${walks})`,
+				);
+				checkEq(answers.filter(a => a === "rate").length, 12 - walks, "e as outras ouvem 'rate'");
+				t.sim.build.step(1 / 60);
+				walks = 0;
+				checkEq(
+					t.sim.build.place(5, t.builder.state, t.bodies, []).why,
+					"sealed",
+					"no tick seguinte, a proxima e checada",
+				);
+				checkEq(walks, 1, "(com um passeio)");
+				t.sim.build.hold(11, 11, undefined);
+				walks = 0;
+				checkEq(
+					t.sim.build.place(11, t.builder.state, t.bodies, []).kind,
+					"placed",
+					"uma porta nao precisa de passeio",
+				);
+				checkEq(walks, 0, "e nao gasta o orcamento");
+			} finally {
+				ENC.boxesIn = walk;
+			}
+		}
+
+		// 7. (L1) uma armadilha nao bloqueia ninguem (world.ts isBlocking): na fresta de 64 u de um anel, com alguem
+		// dentro, ela entra -- a regra dizia que ela fecharia o anel
+		{
+			const trap = Number(Object.keys(PLACEABLES).find(k => PLACEABLES[k].tag === "trap"));
+			const world = emptyWorld();
+			for (const [x, y, w, h] of [
+				[1880, 1780, 40, 308],
+				[2112, 1780, 168, 308],
+				[1880, 2048, 400, 40],
+				[1880, 1792, 168, 32],
+			]) {
+				W.addSolid(world, { kind: "wall_h", x, y, w, h, hp: 999, hpMax: 999, destructible: false, tags: "" });
+			}
+			const sim = newSim(world);
+			const builder = join2(sim, 0, 7311, 2080, 1740);
+			builder.state.angle = Math.PI / 2;
+			join2(sim, 1, 7312, INSIDE_V[0], INSIDE_V[1]);
+			sim.build.hold(0, trap, undefined);
+			const out = sim.build.place(
+				0,
+				builder.state,
+				sim.players().map(sp => sp.state),
+				[],
+			);
+			checkEq(
+				out.kind,
+				"placed",
+				"a armadilha na unica fresta do anel, com um aliado dentro, e posta (nao prende)",
+			);
+			check(
+				out.solid !== undefined && out.solid.x <= 2048 && out.solid.x + out.solid.w >= 2112,
+				"(e ela cobre a fresta inteira: uma parede ali fecharia o anel)",
+				out.solid === undefined ? "" : `${out.solid.x}..${out.solid.x + out.solid.w}`,
+			);
+		}
+
+		// 8. (L2) o corpo do passeio e o do sobrevivente: uma fresta de 35 u, onde um corpo de 36 u nao passa, e fechada
+		{
+			const world = emptyWorld();
+			for (const [x, y, w, h] of [
+				[1880, 1780, 40, 308],
+				[2211, 1780, 69, 308],
+				[1880, 2048, 400, 40],
+				[1880, 1792, 133, 32],
+			]) {
+				W.addSolid(world, { kind: "wall_h", x, y, w, h, hp: 999, hpMax: 999, destructible: false, tags: "" });
+			}
+			const piece = { x: 2048, y: 1792, w: 128, h: 32 };
+			const victim = { x: 2048, y: 1936, dead: false };
+			check(
+				ENC.boxesIn(world, piece, true, [victim]) === victim,
+				`a peca que deixa uma fresta de ${2211 - 2176} u (menos que 2 x ${PH.PLAYER_RADIUS}) conta como fechar o anel`,
+			);
+		}
+
+		// 9. (L3, limite aceito na MP-24) um patio maior que 2 x ESCAPE_RANGE nao e cela para a regra
+		{
+			const world = emptyWorld();
+			const x0 = 3000;
+			const y0 = 3000;
+			const S = 1200;
+			for (const [x, y, w, h] of [
+				[x0, y0, 536, 32],
+				[x0 + 664, y0, S - 664, 32],
+				[x0, y0 + S - 32, S, 32],
+				[x0, y0, 32, S],
+				[x0 + S - 32, y0, 32, S],
+			]) {
+				W.addSolid(world, { kind: "wall_h", x, y, w, h, hp: 999, hpMax: 999, destructible: false, tags: "" });
+			}
+			const piece = { x: x0 + 536, y: y0, w: 128, h: 32 };
+			check(
+				ENC.boxesIn(world, piece, true, [{ x: x0 + S / 2, y: y0 + S / 2, dead: false }]) === undefined,
+				`um patio de ${S} u fecha com alguem no meio: limite aceito (MP-24), a busca fica em ${2 * ENC.ESCAPE_RANGE} u`,
+			);
+		}
+	}
+}
+
 // ---------------------------------------------------------------- verdict
 
 console.log("");
+section(
+	"y) a bomba do posto e um conteiner de oleo: rola perto, avisa pelo LootFlag, o primeiro E leva, volta em 12 h (EDI-16)",
+);
+{
+	const { PUMP_LOOT } = require(join(SRC, "shared/data/spawns.ts"));
+	const { gameHours } = require(join(SRC, "shared/sim/clock.ts"));
+	const IQ = require(join(SRC, "shared/sim/interactQuery.ts"));
+	const Mirror = require(join(SRC, "client/net/worldMirror.ts"));
+	const CInter = require(join(SRC, "client/systems/interaction.ts"));
+	const OIL = 48;
+	const island = extra => ({
+		kind: "wall_h",
+		x: 1000,
+		y: 1000,
+		w: 150,
+		h: 40,
+		hp: 999999,
+		hpMax: 999999,
+		destructible: false,
+		tags: "pump",
+		face: "top",
+		lootSlots: 1,
+		lootItems: [],
+		lootTimer: 0,
+		...extra,
+	});
+	// a static island (its id small, as a generated town's: the LootFlag carries it in a u16), then the server's world
+	const world = W.createWorld(8000, 8000);
+	const pump = W.addSolid(world, island());
+	W.serverWorld(world);
+	const clock = new WorldClock({ day: 1, dayTime: 12 });
+	const sim = newSim(world, clock);
+	const sweep = Math.ceil(sim.simHz * 0.6);
+	// two survivors on its shop side (the street is "top"), both within reach of its edge
+	const a = addPlayer(sim, 0, 1060, 1062);
+	const b = addPlayer(sim, 1, 1100, 1064);
+	check(IQ.interactTarget(world, a.state.x, a.state.y)?.kind === "pump", "o alvo do E ali e a bomba");
+	run(sim, sweep);
+	const oil = pump.lootItems.reduce((n, d) => n + (d.kind === 4 && d.id === OIL ? d.count : 0), 0);
+	check(
+		pump.lootItems.length === 1 && oil >= PUMP_LOOT[0].min && oil <= PUMP_LOOT[0].max,
+		"a bomba rolou o combustivel quando alguem chegou perto: um slot de oleo, na faixa da tabela",
+		`${oil} Oil (${PUMP_LOOT[0].min}-${PUMP_LOOT[0].max})`,
+	);
+	const on = drain(sim).filter(d => d.ev.t === P.WorldEv.LootFlag && d.ev.buildingId === pump.id && d.ev.hasLoot);
+	checkEq(
+		on
+			.map(d => d.slot)
+			.sort()
+			.join(","),
+		"0,1",
+		"o LootFlag da bomba foi para quem esta nela (o conteudo nunca viaja)",
+	);
+	{
+		// the same message, the same u16: the island's id survives the wire
+		const enc = P.encodeWorld({ tick: 3, events: [on[0].ev] });
+		const back = P.decodeWorld(enc.packets[0]);
+		checkEq(back?.events[0]?.buildingId, pump.id, "e o id da bomba atravessa o fio no LootFlag de sempre");
+	}
+	const before = [countItem(a.save, 4, OIL), countItem(b.save, 4, OIL)];
+	send(a, 1, 0, PRESS_E);
+	send(b, 1, 0, PRESS_E);
+	const seen = run(sim, 1);
+	const got = [countItem(a.save, 4, OIL) - before[0], countItem(b.save, 4, OIL) - before[1]];
+	checkEq(got[0] + got[1], oil, "todo o oleo foi para uma mochila");
+	check(got[0] === 0 || got[1] === 0, "e so para uma (o primeiro E leva tudo, MP-05)", `A +${got[0]}, B +${got[1]}`);
+	checkEq(seen.filter(s => s.outcome.kind === "pump").length, 1, "um so dreno na tick");
+	check(
+		seen.some(s => s.outcome.kind === "refused" && s.outcome.why === "empty"),
+		"e o segundo ouve do servidor por que nao levou nada: vazia",
+	);
+	checkEq(pump.lootItems.length, 0, "a bomba ficou seca");
+	check(
+		Math.abs(pump.lootTimer - (gameHours(1, 12) + DESIGN.ITEM_RESPAWN_HOURS)) < 0.05,
+		"e so volta depois de ITEM_RESPAWN_HOURS de jogo",
+		`lootTimer ${pump.lootTimer.toFixed(2)} h`,
+	);
+	run(sim, 1);
+	const off = drain(sim).filter(d => d.ev.t === P.WorldEv.LootFlag && d.ev.buildingId === pump.id && !d.ev.hasLoot);
+	checkEq(off.length, 2, "o aviso cai para os dois, na tick seguinte");
+	const loser = got[0] > 0 ? b : a;
+	const had = countItem(loser.save, 4, OIL);
+	// past the press cooldown (PRESS_COOLDOWN_S), the loser tries again
+	run(sim, Math.ceil(sim.simHz * 0.3));
+	send(loser, 2, 0, PRESS_E);
+	const again = run(sim, 1);
+	checkEq(countItem(loser.save, 4, OIL), had, "E na bomba seca nao rende nada");
+	check(
+		again.some(s => s.outcome.kind === "refused" && s.outcome.why === "empty"),
+		"e o servidor diz por que: vazia",
+	);
+	// the respawn: once the world clock has passed it, the next sweep rolls the island again
+	run(sim, sweep);
+	checkEq(pump.lootItems.length, 0, "antes da hora, nada rola de novo");
+	clock.day = 2;
+	clock.dayTime = 1;
+	run(sim, sweep);
+	checkEq(pump.lootItems.length, 1, "12 h de jogo depois, a bomba tem combustivel de novo");
+	// reach is the server's: from across the forecourt, nothing
+	{
+		const far = W.createWorld(8000, 8000);
+		const p2 = W.addSolid(far, island({ lootItems: [{ kind: 4, id: OIL, count: 7 }] }));
+		W.serverWorld(far);
+		const sim2 = newSim(far);
+		const c = addPlayer(sim2, 0, 1075, 1200);
+		const had2 = countItem(c.save, 4, OIL);
+		send(c, 1, 0, PRESS_E);
+		run(sim2, 1);
+		checkEq(countItem(c.save, 4, OIL), had2, "a 160 u da bomba, o E nao drena nada (a distancia e a do servidor)");
+		checkEq(p2.lootItems.length, 1, "e a bomba continua cheia");
+	}
+	// the client: the flag leaves the placeholder the pill reads, the pill says what E does (LEG-01), a dry one says
+	// nothing, and a reset of the mirror dries every island again (the next flag names the one the survivor is at)
+	{
+		const cw = W.createWorld(8000, 8000);
+		const cp = W.addSolid(cw, island());
+		Mirror.forgetMirrorIndex();
+		const refs = { world: cw, pendingPlace: -1, save: SAVE.defaultSave(), players: [], zombies: [] };
+		const by = { x: 1060, y: 1062 };
+		checkEq(CInter.interactHint(refs, by), undefined, "bomba seca: nenhuma pilula");
+		Mirror.applyMirrorEvent(cw, { t: P.WorldEv.LootFlag, buildingId: cp.id, hasLoot: true });
+		check(IQ.holdsLoot(cp), "o LootFlag da bomba chega ao espelho do cliente");
+		checkEq(CInter.interactHint(refs, by), "E: Siphon Oil", "e a pilula diz o que o E faz");
+		Mirror.resetMirror(cw);
+		check(!IQ.holdsLoot(cp), "um WorldInit novo seca a bomba no espelho ate o proximo aviso");
+		Mirror.forgetMirrorIndex();
+	}
+}
+
 if (failures > 0) {
 	console.log(`${failures} de ${checks} verificacao(oes) falharam`);
 	process.exit(1);
