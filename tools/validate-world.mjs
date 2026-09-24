@@ -138,7 +138,7 @@ Module._extensions[".ts"] = function (m, filename) {
 const W = require(join(SRC, "shared/game/world.ts"));
 const { DESIGN, TOWN } = require(join(SRC, "shared/engine/constants.ts"));
 const physics = require(join(SRC, "shared/game/physics.ts"));
-const { BUILDING_SPAWNS } = require(join(SRC, "shared/data/spawns.ts"));
+const { BUILDING_SPAWNS, PUMP_LOOT } = require(join(SRC, "shared/data/spawns.ts"));
 const { USABLES } = require(join(SRC, "shared/data/usables.ts"));
 const { ETC_ITEMS } = require(join(SRC, "shared/data/etcItems.ts"));
 /** the campus (EDI-17): its planner, when this checkout has one (an older one, through PZ_SRC, has no campus) */
@@ -1092,6 +1092,12 @@ function validate(seed) {
 	const clearOf = e => edgeRect(e, e.a, e.b, VERGE, SW);
 	const parkingLots = w.lots.flatMap(l => (l.ground ?? []).filter(g => g.kind === "parking"));
 	const drives = w.lots.flatMap(l => (l.ground ?? []).filter(g => g.kind === "drive" || g.kind === "apron"));
+	// a gas station's forecourt furniture (EDI-16): the canopy, the price sign's footing, the cars at the pumps
+	const aprons = w.lots.flatMap(l => (l.ground ?? []).filter(g => g.kind === "apron"));
+	const canopies = S.filter(s => s.kind === "canopy");
+	const gasSigns = S.filter(s => s.tags === "gas_sign");
+	const pumpCars = cars.filter(s => s.variant !== undefined && aprons.some(a => inside(s, a)));
+	const forecourtProp = s => s.tags === "pump" || s.tags === "gas_sign" || pumpCars.includes(s);
 	const onCarriageway = r => w.roads.some(road => overlap(r, road)) && !medians.some(m => inside(r, m));
 
 	// door approach per building: the corridor from the door to the curb, and the curb in front of it
@@ -1386,7 +1392,7 @@ function validate(seed) {
 				court.y + 1,
 				court.x + court.w - 1,
 				court.y + court.h - 1,
-			).filter(s => W.isBlocking(s) && s.tags !== "pump" && s.parentId !== b.id);
+			).filter(s => W.isBlocking(s) && !forecourtProp(s) && s.parentId !== b.id);
 			if (stuff.length > 0) {
 				fail(
 					"EDI-02",
@@ -1464,6 +1470,115 @@ function validate(seed) {
 			fail("EDI-03", `types ${other} and ${t} share a roof colour`, 0, 0);
 		}
 		seenRoof.set(key, t);
+	}
+
+	// --- EDI-16: every town has its gas stations, and each forecourt reads as one and pays out as one
+	const gasStations = buildings.filter(b => b.buildingType === 5);
+	const GAS_MIN = W.GAS_MIN ?? 2;
+	if (gasStations.length < GAS_MIN) {
+		fail("EDI-16", `only ${gasStations.length} gas station(s) in town (at least ${GAS_MIN})`, 0, 0);
+	}
+	if (!(PUMP_LOOT ?? []).some(e => CATEGORY.oil.test(itemName(e.kind, e.index)) && e.min >= 1)) {
+		fail("EDI-16", "the pump islands' table (spawns.ts PUMP_LOOT) gives no Oil", 0, 0);
+	}
+	const islandsSeen = new Set();
+	for (const b of gasStations) {
+		const n = NORMAL[b.doorSide];
+		// the forecourt: the apron the station's front wall opens onto (it runs past the shop to the street corner)
+		const apron = aprons.find(a => rectDist(a, b) < 2);
+		if (apron === undefined) {
+			fail("EDI-16", `gas #${b.id}: no forecourt apron in front of the shop`, cx(b), cy(b));
+			continue;
+		}
+		const islands = pumps.filter(p => inside(p, apron));
+		if (islands.length < 2)
+			fail("EDI-16", `gas #${b.id}: ${islands.length} pump island(s) (2)`, cx(apron), cy(apron));
+		for (const p of islands) {
+			islandsSeen.add(p);
+			// a container of oil (MP-05), flagged to a client by its id on the wire's u16 (LootFlag)
+			if (!(p.lootSlots >= 1) || !Array.isArray(p.lootItems)) {
+				fail("EDI-16", `pump #${p.id}: not a container (lootSlots/lootItems)`, cx(p), cy(p));
+			}
+			if (p.id >= 65536) fail("EDI-16", `pump #${p.id}: id past the LootFlag's u16`, cx(p), cy(p));
+			// a survivor gets to it: the ground in front of its shop-side face is walkable from the spawn point
+			const m = NORMAL[p.face] ?? n;
+			const fx = cx(p) - m[0] * (Math.min(p.w, p.h) / 2 + 30);
+			const fy = cy(p) - m[1] * (Math.min(p.w, p.h) / 2 + 30);
+			if (!reach.at(fx, fy).reached) fail("EDI-16", `pump #${p.id}: nobody can walk up to it`, fx, fy);
+		}
+		// one canopy over every island, inside the forecourt, clear of the shop's front (its doors and windows)
+		const cover = canopies.filter(c => overlap(c, apron));
+		if (cover.length !== 1) {
+			fail("EDI-16", `gas #${b.id}: ${cover.length} canopies over the forecourt (1)`, cx(apron), cy(apron));
+		} else {
+			const c = cover[0];
+			if (c.passable !== true || W.isBlocking(c))
+				fail("EDI-16", `canopy #${c.id} collides (COL-02)`, cx(c), cy(c));
+			if (!inside(c, apron)) fail("EDI-16", `canopy #${c.id} reaches out of its forecourt`, cx(c), cy(c));
+			for (const p of islands) {
+				if (!inside(p, c)) fail("EDI-16", `pump #${p.id} not under the canopy #${c.id}`, cx(p), cy(p));
+			}
+			if (rectDist(c, b) < 80) {
+				fail(
+					"EDI-16",
+					`canopy #${c.id} ${fmt(rectDist(c, b))} u from the shop (< 80: its facade)`,
+					cx(c),
+					cy(c),
+				);
+			}
+		}
+		// the price sign on its footing, in the forecourt, at the street corner (within 64 u of the cross street's side)
+		const signs = gasSigns.filter(s => inside(s, apron));
+		if (signs.length !== 1) {
+			fail("EDI-16", `gas #${b.id}: ${signs.length} price signs on the forecourt (1)`, cx(apron), cy(apron));
+		} else {
+			const s = signs[0];
+			const corner = alongX(b.doorSide)
+				? Math.min(s.x - apron.x, apron.x + apron.w - (s.x + s.w))
+				: Math.min(s.y - apron.y, apron.y + apron.h - (s.y + s.h));
+			if (corner > 64)
+				fail("EDI-16", `price sign #${s.id} ${fmt(corner)} u from the corner (> 64)`, cx(s), cy(s));
+		}
+		// a car at a pump: one per island at most, alongside it on its street side, PUMP_CAR_GAP off its curb, square
+		// to it, and never in the door's approach (EDI-01 walks it; this names the culprit)
+		const gap = W.PUMP_CAR_GAP ?? 12;
+		for (const car of pumpCars.filter(c => inside(c, apron))) {
+			const p = islands.find(q => rectDist(q, car) <= gap + 0.5);
+			const m = p !== undefined ? NORMAL[p.face] : undefined;
+			const long = car.w >= car.h;
+			const street =
+				m !== undefined &&
+				(m[0] === 0 ? Math.sign(cy(car) - cy(p)) === m[1] : Math.sign(cx(car) - cx(p)) === m[0]);
+			if (p === undefined || Math.abs(rectDist(p, car) - gap) > 0.5 || !street) {
+				fail(
+					"EDI-16",
+					`car #${car.id} at the forecourt but not alongside an island's street side`,
+					cx(car),
+					cy(car),
+				);
+				continue;
+			}
+			if (long !== p.w >= p.h || Math.abs(long ? cx(car) - cx(p) : cy(car) - cy(p)) > 1) {
+				fail("EDI-16", `car #${car.id} not square to and centred on pump #${p.id}`, cx(car), cy(car));
+			}
+			if (car.variant !== (W.PUMP_CAR_PARKED ?? 1) && car.variant !== (W.PUMP_CAR_FILLING ?? 2)) {
+				fail("EDI-16", `car #${car.id}: unknown pump state ${car.variant}`, cx(car), cy(car));
+			}
+			if (pumpCars.filter(o => o !== car && rectDist(o, p) <= gap + 0.5).length > 0) {
+				fail("EDI-16", `pump #${p.id} has two cars`, cx(p), cy(p));
+			}
+			for (const d of doors) {
+				if (d.corridor && overlap(car, d.corridor)) {
+					fail("EDI-16", `car #${car.id} in front of ${d.b.tags} #${d.b.id}'s door`, cx(car), cy(car));
+				}
+			}
+		}
+	}
+	for (const p of pumps) {
+		if (!islandsSeen.has(p)) fail("EDI-16", `pump #${p.id} is on no gas station's forecourt`, cx(p), cy(p));
+	}
+	for (const c of canopies) {
+		if (!aprons.some(a => inside(c, a))) fail("EDI-16", `canopy #${c.id} over no forecourt`, cx(c), cy(c));
 	}
 
 	// --- EDI-05: buildings off sidewalks and roads, alleys of at least BUILDING_GAP
@@ -1580,7 +1695,8 @@ function validate(seed) {
 	const parked = [];
 	const abandoned = [];
 	for (const s of cars) {
-		if (inParking(s)) continue;
+		// a car at a gas pump has its own rule (EDI-16, below): pulled up alongside an island, not parked on a street
+		if (inParking(s) || pumpCars.includes(s)) continue;
 		const road = w.roads.find(r => inside(s, r));
 		if (!road) {
 			fail("VEI-02", `car #${s.id} off the road (sidewalk/yard)`, cx(s), cy(s));

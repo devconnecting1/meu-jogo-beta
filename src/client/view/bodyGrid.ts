@@ -73,6 +73,30 @@ export class BodyGrid {
 		}
 		return false;
 	}
+
+	/**
+	 * Is any body's centre strictly inside the rect [x0, x1] x [y0, y1]? (A gas station's canopy and price sign turn
+	 * see-through while a body is under them, as a crown does: the caller pads the rect by a body's radius.)
+	 */
+	anyInRect(x0: number, y0: number, x1: number, y1: number): boolean {
+		if (this.count === 0) return false;
+		const cx0 = math.floor(x0 / CELL);
+		const cx1 = math.floor(x1 / CELL);
+		const cy0 = math.floor(y0 / CELL);
+		const cy1 = math.floor(y1 / CELL);
+		for (let cx = cx0; cx <= cx1; cx++) {
+			for (let cy = cy0; cy <= cy1; cy++) {
+				const cell = this.cells.get(keyOf(cx, cy));
+				if (cell === undefined) continue;
+				for (let i = 0; i < cell.size(); i += 2) {
+					const x = cell[i];
+					const y = cell[i + 1];
+					if (x > x0 && x < x1 && y > y0 && y < y1) return true;
+				}
+			}
+		}
+		return false;
+	}
 }
 
 function keyOf(cx: number, cy: number): number {

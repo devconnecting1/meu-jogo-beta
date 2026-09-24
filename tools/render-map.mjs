@@ -11,8 +11,9 @@
  *
  * Options: --seed (town seed, default DESIGN.TOWN_SEED), --x --y --w --h (world rect, units), --scale (px per
  * unit, default 1), --hour (0-24, or day / dusk / night), --out (a .png, or a folder for presets), --preset
- * (street, downtown, park, school, gas, wreck, campus, campus-quad, campus-night, street-night, overview, or all;
- * signs: sign-<type> for every building type, signs-night, signs-overview and downtown), --no-actors, --no-art, --art <dir>
+ * (street, downtown, park, school, gas, gas-night, wreck, campus, campus-quad, campus-night, street-night, overview, or
+ * all; signs: sign-<type> for every building type, signs-night, signs-overview and downtown), --no-actors, --no-art,
+ * --art <dir>
  * (the local PNGs the "after" renders sample, default design/world-art), --src <dir> (same as PZ_SRC), --hand <id>
  * and --gun <id> (EQUIPS ids the survivor holds and wears at night: 13 flashlight, 15 torchlight, 6 night vision --
  * lit by the game's own rule, shared/sim/survivorLight.ts, LUZ-04), --aim <degrees> (where the survivor faces).
@@ -187,11 +188,14 @@ const { Renderer, LightMap } = require(join(SRC, "shared/engine/renderer.ts"));
 const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
 const { generateTown, buildingAt, hash01, pointInSolid, querySolids } = require(join(SRC, "shared/game/world.ts"));
 const { darkAlphaAt } = require(join(SRC, "shared/sim/clock.ts"));
-const { WorldView } = require(join(SRC, "client/view/worldView.ts"));
+const { WorldView, SHELTER_SEE_THROUGH } = require(join(SRC, "client/view/worldView.ts"));
 const HV = require(join(SRC, "client/view/humanoidView.ts"));
 const SV = require(join(SRC, "client/view/survivorView.ts"));
 const ART_MODULE = join(SRC, "client/view/worldArt.ts");
 const worldArt = existsSync(ART_MODULE) ? require(ART_MODULE) : undefined;
+// the signs' module: where a gas station's price pylon is drawn (the rect its fade tests), on a checkout that has it
+const SIGNS_MODULE = join(SRC, "client/view/buildingSigns.ts");
+const BS = existsSync(SIGNS_MODULE) ? require(SIGNS_MODULE) : undefined;
 // the survivor's own light at night (DESIGN_RULES LUZ-04): the rule the game's light map uses, when the checkout has it
 const LIGHT_MODULE = join(SRC, "shared/sim/survivorLight.ts");
 const survivorLight = existsSync(LIGHT_MODULE) ? require(LIGHT_MODULE) : undefined;
@@ -613,6 +617,8 @@ function scenes(world) {
 	if (school) out.push({ name: "school", title: "School yard", rect: school, hour: 10 });
 	const gas = findGas(world);
 	if (gas) out.push({ name: "gas", title: "Gas station", rect: gas, hour: 10 });
+	// the forecourt at night: the canopy and the price sign dark (no power, ART-07), read in the survivor's light
+	if (gas) out.push({ name: "gas-night", title: "Gas station, 22:00", rect: gas, hour: 22 });
 	const wreck = findWreck(world);
 	if (wreck) out.push({ name: "wreck", title: "Abandoned car", rect: wreck, hour: 10 });
 	const campus = findCampus(world);
@@ -904,11 +910,19 @@ function drawScene(world, scene, opts) {
 	const shadow = makeShadow(state);
 	const view = new WorldView(shadow);
 	view.clock = 0;
-	// canopies over a body turn see-through, as GameLoop.updateCanopy eases them (VEG-04)
-	for (const s of world.solids) if (s.kind === "tree") s.canopyAlpha = 1;
+	// canopies over a body turn see-through, as GameLoop.updateCanopy eases them (VEG-04): tree crowns, and a gas
+	// station's canopy and price pylon (EDI-16, rects: the pylon's drawn one, client/view/buildingSigns.ts)
+	const fades = s => s.kind === "tree" || s.kind === "canopy" || s.tags === "gas_sign";
+	for (const s of world.solids) if (fades(s)) s.canopyAlpha = 1;
 	const bodies = [...actors.zombies, ...(actors.survivor ? [actors.survivor] : [])];
 	for (const s of solidsIn(world, scene.rect)) {
-		if (s.kind !== "tree") continue;
+		if (!fades(s)) continue;
+		if (s.kind !== "tree") {
+			const q = s.tags === "gas_sign" && BS !== undefined ? BS.priceSignRect(s, { x: 0, y: 0, w: 0, h: 0 }) : s;
+			const under = b => b.x > q.x - 18 && b.x < q.x + q.w + 18 && b.y > q.y - 18 && b.y < q.y + q.h + 18;
+			if (bodies.some(under)) s.canopyAlpha = SHELTER_SEE_THROUGH ?? CANOPY_SEE_THROUGH;
+			continue;
+		}
 		const r2 = ((s.canopyR ?? 80) + 18) ** 2;
 		const tx = s.x + s.w / 2;
 		const ty = s.y + s.h / 2;

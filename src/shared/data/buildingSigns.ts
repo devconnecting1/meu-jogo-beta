@@ -433,6 +433,49 @@ export const BUILDING_SIGNS: Record<number, BuildingSign> = {
 };
 
 /**
+ * A gas station's price sign (DESIGN_RULES EDI-16): the pylon on its footing at the street corner of the forecourt,
+ * drawn upright like the storefront signs and seen from both streets. The same pixel art (SIGN_TEXEL, SIGN_ART, the
+ * 1-texel outline): the charcoal board of the station's storefront sign with its pump pictogram on top, then three
+ * grades, each a coloured tab and a price panel -- dark: the power went a few days ago (ART-07), and a panel with no
+ * digits carries no text to translate and no brand to imitate (CON-02). Below the board, its steel post; the post's
+ * foot stands on the footing (world.ts `placeGas`, tags "gas_sign"). Texture `signPrice`; flat, its runs.
+ */
+export const PRICE_SIGN: BuildingSign = {
+	texture: "signPrice",
+	shows: "a price pylon: the pump pictogram over three grade tabs and their dark price panels, on a steel post",
+	order: "kzxXdWwrRgseEyQ",
+	rows: [
+		"kkkkkkkkkkkkkkkk",
+		"kzzzzzzzzzzzzzzk",
+		"kxxxxWWWWWxxxxxk",
+		"kxxxxWdddWxWxxxk",
+		"kxxxxWWWWWxWxxxk",
+		"kxxxxrrrrRxWxxxk",
+		"kxxxxWWWWWWWxxxk",
+		"kxxxxWWWWwxxxxxk",
+		"kxxxggggggxxxxxk",
+		"kXXXXXXXXXXXXXXk",
+		"keeEkddddddddddk",
+		"kEEEkddddddddddk",
+		"kXXXXXXXXXXXXXXk",
+		"kyyQkddddddddddk",
+		"kQQQkddddddddddk",
+		"kXXXXXXXXXXXXXXk",
+		"kWWwkddddddddddk",
+		"kwwwkddddddddddk",
+		"kkkkkkkkkkkkkkkk",
+		"......ksgk......",
+		"......ksgk......",
+		"......ksgk......",
+		"......ksgk......",
+		"......ksgk......",
+		"......ksgk......",
+	],
+};
+/** the rows of PRICE_SIGN that are its post, under the board (the rest is the board) */
+export const PRICE_SIGN_POST_ROWS = 6;
+
+/**
  * The hospital's roof marking, in texels: the heliport of a hospital as ICAO draws it -- a red H on a white cross
  * made of five squares -- on the dark deck of the landing area inside its white ring, painted on the roof and worn.
  * The deck is what makes it read on the hospital's white roof. A rooftop helipad is how a real hospital is told

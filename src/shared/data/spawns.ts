@@ -63,6 +63,22 @@ export const BOSS_TROPHIES: Record<number, Array<{ kind: ItemKind; index: number
 	],
 };
 
+/**
+ * What a gas station's pump island holds (DESIGN_RULES EDI-16): the fuel left in its hoses and the line to the tank,
+ * drained by hand -- Oil, the motorcycle's and the oil generator's fuel (VEI-05, ELE-02). ONE slot, rolled like a
+ * building's (shared/sim/loot.ts `rollPumpLoot`, lazily when a survivor comes near), shared by whoever drains it first
+ * and back after ITEM_RESPAWN_HOURS (MP-05). Not in the original: there the pumps were scenery and the oil sat in the
+ * shop's table (still there, `BUILDING_SPAWNS[5]`).
+ *
+ * The amount is the economy's (VEI-05): the motorcycle burns 1 Oil a minute idling and 7 at full throttle, so an island
+ * (5-10, 7.5 on average) is one to eight minutes of riding, a station (two islands) about four minutes at a mixed
+ * pace, every half game day (~5 real minutes); an oil generator's refuel is 5 Oil. A house gives ~3 Oil on average
+ * and the station's shop ~3.6: the pumps are where the fuel is (P3), not a tap that makes the rest pointless.
+ */
+export const PUMP_LOOT: Array<SpawnEntry> = [{ building: 5, kind: 4, index: 48, min: 5, max: 10 }];
+/** slots a pump island rolls (one: the fuel in it) */
+export const PUMP_LOOT_SLOTS = 1;
+
 export interface DayPopulation {
 	ambient: number;
 	ambientSpecial: number;

@@ -235,6 +235,12 @@ function fakeStore(name) {
 }
 
 /**
+ * Every row any recorder of this run saw (the real servers' and the pure cores'), with the player's name beside it:
+ * what section 14 checks the catalogue's limits, the fields' cardinality and the absence of PII against.
+ */
+const EVERY_ROW = [];
+
+/**
  * The recorder standing in for AnalyticsService: every call, decoded into one row with the clock it was made at.
  * `userId` is the Player's; a row never carries a Player further than that.
  */
@@ -242,6 +248,7 @@ function makeAnalyticsService(log) {
 	const row = (player, r) => {
 		const out = { ...r, userId: player?.UserId, t: clockNow };
 		log.push(out);
+		EVERY_ROW.push({ ...out, playerName: player?.Name });
 		if (VERBOSE) console.log(`        [analytics] ${JSON.stringify(out)}`);
 	};
 	return {
@@ -268,8 +275,34 @@ function makeAnalyticsService(log) {
 	};
 }
 
+/**
+ * A ConfigService whose player snapshots read `values` (a key -> value map, or a function of the player), counting
+ * every snapshot asked for and every GetValue -- the call that enrolls a player in an experiment. `throws`: the
+ * snapshot cannot be had (configs.md "Error handling").
+ */
+function makeConfigService({ values = {}, throws = false } = {}) {
+	const calls = { snapshots: 0, reads: [] };
+	return {
+		calls,
+		GetConfigForPlayerAsync(player) {
+			calls.snapshots += 1;
+			if (throws) throw new Error("ConfigService is unavailable");
+			const table = typeof values === "function" ? values(player) : values;
+			return {
+				GetValue(key) {
+					calls.reads.push({ userId: player.UserId, key });
+					return table[key];
+				},
+			};
+		},
+		GetConfigAsync() {
+			throw new Error("the game must never read an experiment through GetConfigAsync");
+		},
+	};
+}
+
 let guid = 0;
-function makeGame({ studio = false, analytics = true } = {}) {
+function makeGame({ studio = false, analytics = true, config } = {}) {
 	const ReplicatedStorage = new Inst("ReplicatedStorage");
 	const Workspace = new Inst("Workspace");
 	Workspace.GetServerTimeNow = () => clockNow;
@@ -288,7 +321,8 @@ function makeGame({ studio = false, analytics = true } = {}) {
 	};
 	const RunService = { Heartbeat: new Signal(), IsStudio: () => studio, IsServer: () => true, IsClient: () => false };
 	const HttpService = {
-		GenerateGUID: () => `guid-${++guid}`,
+		// GUID-shaped and hex, so no decimal UserId can hide in one (section 13's PII check)
+		GenerateGUID: () => `{${(++guid).toString(16).padStart(8, "0")}-feed-beef}`,
 		JSONEncode: v => JSON.stringify(v),
 		JSONDecode: s => JSON.parse(s),
 	};
@@ -308,6 +342,7 @@ function makeGame({ studio = false, analytics = true } = {}) {
 		TextChatService: new Inst("TextChatService"),
 		TextService: {},
 	};
+	if (config !== undefined) services.ConfigService = config;
 	if (analytics) {
 		const svc = makeAnalyticsService(log);
 		// every call, even one the recorder does not decode, is counted: Studio must make none
@@ -440,11 +475,18 @@ function bootServer(opts = {}) {
 			server.beat();
 			return sp;
 		},
-		/** a zombie put down by this survivor, through the server's kill credit (XP `exp`) */
-		killZombie(p, exp = 0) {
+		/**
+		 * A zombie put down by this survivor, through the server's kill credit (XP `exp`), with the WeaponKind the
+		 * credit names (-1: not known) or by one of their machines.
+		 */
+		killZombie(p, exp = 0, weaponKind = -1, byMachine = false) {
 			const sp = server.body(p);
 			server.zombieId = (server.zombieId ?? 900000) + 1;
-			server.sim.progress.zombieKilled(server.zombieId, exp, sp.slot, clockNow);
+			server.sim.progress.zombieKilled(server.zombieId, exp, sp.slot, clockNow, -1, weaponKind, byMachine);
+		},
+		/** the client's `viewShop`: the shop (0) or the wardrobe (1) opened */
+		viewShop(p, screen) {
+			return remote("ShopAction").OnServerInvoke(p, { kind: "viewShop", screen });
 		},
 		/** a boss down with `ps` in the fight (each did a tenth of its hp) */
 		killBoss(ps) {
@@ -597,6 +639,10 @@ section("1) no AnalyticsService: every hook is inert; Studio: every rule runs, n
 	);
 	const attr = studio.env.services.Workspace.GetAttribute("pz_analytics_sent");
 	check(attr === studio.core.stats.sent, "…and the count is on the Workspace for a playtest to read", `${attr}`);
+	check(
+		debug.profileLabels.has("PZ.analytics") && debug.profileOpen === 0 && debug.profileUnbalanced === 0,
+		"the once-a-second read is its own MicroProfiler bar (PZ.analytics), opened and closed in balance",
+	);
 
 	// every AnalyticsService call throws: the game does not notice
 	const broken = bootServer({ analytics: "throw" });
@@ -872,6 +918,28 @@ section("4) every coin the server moved is one economy event, and they add up to
 		JSON.stringify(reb.map(r => [r.amount, r.fields])),
 	);
 	check(reb[0]?.fields?.CustomField01 === "Continue - 1", "…and which continue it was: Continue - 1");
+	const rf = s.of(p.late.UserId, "funnel").filter(r => r.funnel === A.REBIRTH_FUNNEL);
+	check(
+		rf.length === 2 &&
+			rf[0].step === 1 &&
+			rf[1].step === 2 &&
+			rf[1].name === "Rebirth bought" &&
+			rf[0].session === rf[1].session &&
+			rf[1].fields === undefined,
+		"the paid Rebirth closes its death's funnel: step 2 in the same session (only step 1 carries fields)",
+		JSON.stringify(rf.map(r => [r.session, r.step, r.fields])),
+	);
+	const sinks = s.log.filter(r => r.kind === "economy" && r.tx === "Shop");
+	check(
+		sinks.length >= 3 &&
+			sinks.every(
+				r =>
+					r.fields?.CustomField01 ===
+					(COSTUMES.some(c => c.name === r.sku) ? "Category - Costume" : "Category - Pack"),
+			),
+		"every shop sink says what it bought: Category - Pack or Category - Costume, one breakdown for both",
+		JSON.stringify(sinks.map(r => [r.sku, r.fields?.CustomField01])),
+	);
 	s.run(1.2);
 
 	for (const [name, pl] of Object.entries(p)) {
@@ -915,9 +983,22 @@ section("5) Died, LifeEnded (New game, the world's end) and WorldEnded, once eac
 			died[0].value === 1 &&
 			died[0].fields.CustomField01 === "Life day - 1" &&
 			died[0].fields.CustomField02 === "Time - Night" &&
-			died[0].fields.CustomField03 === "Survivors - Group",
-		"Died: the life's day as the value, its bucket, night or day, alone or in a group",
+			died[0].fields.CustomField03 === "Cause - Horde",
+		"Died: the life's day as the value, its bucket, night or day, and the cause (no hunger, no poison, no boss)",
 		JSON.stringify(died.map(r => [r.value, r.fields])),
+	);
+	// the Rebirth funnel of that death: step 1 with what the price is weighed against
+	const reb = s.of(a.UserId, "funnel").filter(r => r.funnel === A.REBIRTH_FUNNEL);
+	check(
+		reb.length === 1 &&
+			reb[0].step === 1 &&
+			reb[0].name === "Died" &&
+			reb[0].session === A.deathKeyOf(s.live(a)) &&
+			reb[0].fields.CustomField01 === "Continue - 1" &&
+			/^Afford - (Yes|No)$/.test(reb[0].fields.CustomField02) &&
+			reb[0].fields.CustomField03 === "Life day - 1",
+		"…and the Rebirth funnel opens on it: Died, keyed by the death, with the continue, the coins and the life's day",
+		JSON.stringify(reb.map(r => [r.session, r.step, r.fields])),
 	);
 	// New game: the life that ends is the one that died (day 1, no Rebirth), and the new one has not stood yet
 	const r = s.shop(a, { kind: "newRun", runRev: s.live(a).runRev });
@@ -930,6 +1011,10 @@ section("5) Died, LifeEnded (New game, the world's end) and WorldEnded, once eac
 			ended[0].fields.CustomField03 === "Rebirths - 0",
 		"New game: LifeEnded, value the day the life reached, End - New game",
 		JSON.stringify(ended.map(x => [x.value, x.fields])),
+	);
+	check(
+		s.of(a.UserId, "funnel").filter(x => x.funnel === A.REBIRTH_FUNNEL && x.step === 2).length === 0,
+		"…and a New game is the Rebirth funnel's drop-off: no Rebirth bought",
 	);
 	// the last one standing falls: 30 s, nobody pays, the world ends
 	s.kill(b);
@@ -1011,9 +1096,16 @@ section("6) 6 survivors x 400 killing blows: no event per kill, one SessionKills
 	}
 	const phase1 = s.log.slice(n0);
 	const n1 = s.log.length;
-	// phase 2: 300 more each over 30 s
+	// phase 2: 300 more each over 30 s -- the first survivor's with a melee weapon, the second's with a pistol, the
+	// credit naming the kind as combat does (server/sim/combat.ts); and the third's turret puts down 5 of its own
+	const { WeaponKind } = require(join(SRC, "shared/data/kinds.ts"));
 	for (let t = 0; t < 30; t++) {
-		for (let k = 0; k < 10; k++) for (const pl of ps) s.killZombie(pl, 0);
+		for (let k = 0; k < 10; k++) {
+			for (let i = 0; i < ps.length; i++) {
+				s.killZombie(ps[i], 0, i === 0 ? WeaponKind.Melee : i === 1 ? WeaponKind.Pistol : -1);
+			}
+		}
+		if (t < 5) s.killZombie(ps[2], 0, -1, true);
 		s.run(1);
 	}
 	const phase2 = s.log.slice(n1);
@@ -1052,6 +1144,32 @@ section("6) 6 survivors x 400 killing blows: no event per kill, one SessionKills
 		`${JSON.stringify(crafted)} ${JSON.stringify(used)}`,
 	);
 	check(customs(s, ps[1].UserId, A.EVENT.Crafted).length === 0, "a session that crafted nothing sends no Crafted");
+	const weapons = pl =>
+		customs(s, pl.UserId, A.EVENT.WeaponKills)
+			.map(r => `${r.fields.CustomField01}=${r.value}`)
+			.join(",");
+	check(
+		weapons(ps[0]) === "Weapon - Other=100,Weapon - Melee=300" &&
+			weapons(ps[1]) === "Weapon - Other=100,Weapon - Pistol=300" &&
+			weapons(ps[2]) === "Weapon - Other=400,Weapon - Machine=5" &&
+			weapons(ps[3]) === "Weapon - Other=400",
+		"…and WeaponKills: one per kind the session used, its killing blows as the value (a turret's too), never one per kill",
+		`${weapons(ps[0])} | ${weapons(ps[1])} | ${weapons(ps[2])} | ${weapons(ps[3])}`,
+	);
+	const ended = s.log.filter(r => r.kind === "custom" && r.name === A.EVENT.SessionEnded);
+	check(
+		ended.length === 6 &&
+			ended.every(
+				r =>
+					r.fields.CustomField01 === "Where - City" &&
+					r.fields.CustomField03 === "Visit - First" &&
+					/^Time - (Night|Day)$/.test(r.fields.CustomField02) &&
+					r.value >= 0.8 &&
+					r.value <= 1.2,
+			),
+		"SessionEnded once per session: quit from the city, on a first visit, at the world's hour, ~1 minute played",
+		JSON.stringify(ended.map(r => [r.value, r.fields])),
+	);
 });
 
 // ================================================================ the module's own class, for 7 and 8
@@ -1067,7 +1185,9 @@ function makeCore() {
 	let now = 0;
 	const sink = {
 		deliver(ev) {
-			rows.push({ ...ev, userId: ev.player.UserId, player: undefined, t: now });
+			const row = { ...ev, userId: ev.player.UserId, player: undefined, t: now };
+			rows.push(row);
+			EVERY_ROW.push({ ...row, playerName: ev.player.Name });
 		},
 	};
 	const core = new AN.ServerAnalytics(sink, { clock: () => now });
@@ -1156,12 +1276,26 @@ section("8) under the cap: an hour of six players, and a purchase flood", () => 
 	}
 	const DAY_S = 605;
 	const MIDNIGHT_AT = 400;
+	// the world clock of that hour (00:00 at MIDNIGHT_AT, a day every DAY_S), every survivor standing in it: the Night
+	// funnel runs for all six, every night
+	let tNow = 0;
+	h.core.bindWorld({
+		dayTime: () => ((((tNow % DAY_S) - MIDNIGHT_AT) / DAY_S) * 24 + 48) % 24,
+		day: () => Math.floor((tNow + DAY_S - MIDNIGHT_AT) / DAY_S) + 1,
+		bodyOf: () => ({ dead: false }),
+		standing: () => 6,
+	});
+	const body = { x: 0, y: 0, hungry: 50, buffs: { poison: 0 } };
 	for (let t = 0; t < 3600; t++) {
+		tNow = t;
 		h.advance(1);
 		const inDay = t % DAY_S;
 		for (const { save } of players) {
 			save.zombieKills += 2;
 			awardExp(save, 20);
+			// the credit names a weapon for each (counted, never sent per kill)
+			h.core.kill(save, 7);
+			h.core.kill(save, t % 3 === 0 ? 2 : 7);
 		}
 		if (inDay === MIDNIGHT_AT) {
 			for (const { save } of players) {
@@ -1177,7 +1311,8 @@ section("8) under the cap: an hour of six players, and a purchase flood", () => 
 			for (const { pl, save } of players) {
 				save.money += 8;
 				h.core.bossCoins(save, 8);
-				h.core.death(save, 1, 6);
+				save.lifeDeaths += 1;
+				h.core.death(save, 1, 6, body);
 				// (the coins for it are not the point here: the count of events is)
 				const price = rebirthPrice(save.deathCount);
 				save.deathCount += 1;
@@ -1187,11 +1322,18 @@ section("8) under the cap: an hour of six players, and a purchase flood", () => 
 		}
 		if (t % 180 === 90) {
 			const id = t % SHOP_PACKS.length;
-			for (const { pl } of players) h.core.shopAction(pl, { kind: "buyPack", packId: id }, SHOP_PACKS[id].price);
+			for (const { pl } of players) {
+				// a visit each: opened, asked, bought (the Shop funnel's three steps)
+				const req = { kind: "buyPack", packId: id };
+				h.core.shopViewed(pl, 0);
+				h.core.shopRequest(pl, req);
+				h.core.shopAction(pl, req, SHOP_PACKS[id].price);
+			}
 		}
 		if (t === 2000) {
 			for (const { save } of players) {
-				h.core.death(save, 23, 6);
+				save.lifeDeaths += 1;
+				h.core.death(save, 23, 6, body);
 				resetRun(save);
 				save.runRev += 1;
 			}
@@ -1213,8 +1355,25 @@ section("8) under the cap: an hour of six players, and a purchase flood", () => 
 		}
 		h.core.poll();
 	}
+	// the hour ends with the server: every session's summaries at once (SessionEnded, SessionKills, WeaponKills)
+	h.core.shutdown();
 	const perMinute = maxPerMinute(h.rows);
 	const cap = h.core.capNow();
+	const hourNames = h.rows.map(r => r.funnel ?? r.name ?? r.sku);
+	const counted = name => hourNames.filter(n => n === name).length;
+	info(
+		`…of which Night ${counted(AN.NIGHT_PHASE_FUNNEL)}, Rebirth ${counted(AN.REBIRTH_FUNNEL)}, Shop ` +
+			`${counted(AN.SHOP_FUNNEL)}, SessionEnded ${counted(AN.EVENT.SessionEnded)}, WeaponKills ` +
+			`${counted(AN.EVENT.WeaponKills)}`,
+	);
+	check(
+		counted(AN.NIGHT_PHASE_FUNNEL) > 0 &&
+			counted(AN.REBIRTH_FUNNEL) > 0 &&
+			counted(AN.SHOP_FUNNEL) > 0 &&
+			counted(AN.EVENT.WeaponKills) > 0 &&
+			counted(AN.EVENT.SessionEnded) === 8,
+		"the hour includes every new event (a SessionEnded per session: 6 + the 2 that left and came back)",
+	);
 	check(
 		perMinute <= h.core.limitNow() && h.core.stats.maxInWindow <= h.core.limitNow(),
 		"an hour of six players never spends more than the module's share of the cap in a minute",
@@ -1275,6 +1434,582 @@ section("8) under the cap: an hour of six players, and a purchase flood", () => 
 	);
 	const batched = f.rows.filter(x => x.kind === "economy" && x.sku === AN.SKU.Batched).length;
 	info(`${f.rows.length} economy events for 900 purchases (${batched} of them batches of different packs)`);
+});
+
+// ================================================================ 9: the Night funnel
+
+section(
+	"9) the Night funnel: one session per night lived in the city, each hour once, in order; a death closes it",
+	() => {
+		const s = bootServer();
+		const A = s.A;
+		s.sim.clock.setClock(18.8);
+		const survivor = s.join(newUser(), "survivor");
+		const mortal = s.join(newUser(), "mortal");
+		const walker = s.join(newUser(), "walker");
+		const late = s.join(newUser(), "late");
+		for (const p of [survivor, mortal, walker, late]) s.immortal.add(p);
+		for (const p of [survivor, mortal, walker]) {
+			s.enter(p);
+			s.active.add(p);
+		}
+		const night = p => s.of(p.UserId, "funnel").filter(r => r.funnel === A.NIGHT_PHASE_FUNNEL);
+		const steps = p => JSON.stringify(night(p).map(r => r.step));
+		check(
+			s.runUntil(() => s.sim.clock.dayTime >= 19.2 && s.sim.clock.dayTime < 21, 200) >= 0,
+			"the world clock reached 19:00",
+		);
+		// a survivor who walks in after nightfall: that night was not theirs from its start
+		s.enter(late);
+		s.active.add(late);
+		check(
+			s.runUntil(() => s.sim.clock.dayTime >= 22.2, 200) >= 0 &&
+				steps(survivor) === "[1,2]" &&
+				steps(mortal) === "[1,2]" &&
+				steps(walker) === "[1,2]",
+			"19:00 and 22:00: step 1 (Wave 1) and step 2 (Wave 2) for whoever stood in the city at nightfall",
+			`${steps(survivor)} ${steps(mortal)} ${steps(walker)}`,
+		);
+		const first = night(survivor)[0];
+		check(
+			first?.name === "Wave 1 (19:00)" &&
+				first.fields?.CustomField01 === "World day - 1" &&
+				first.fields?.CustomField02 === "Life day - 1" &&
+				first.fields?.CustomField03 === "Survivors - Group" &&
+				night(survivor)[1].fields === undefined,
+			"step 1 carries the breakdown (world day, life day, solo or group); the later steps carry none",
+			JSON.stringify(night(survivor).map(r => [r.name, r.fields])),
+		);
+		check(steps(late) === "[]", "the one who walked in at 20:00 is in no session of this night (no skipped steps)");
+		// 22:30: one dies and pays a Rebirth at once; one goes back to the lobby and stays there
+		s.kill(mortal);
+		const reborn = s.shop(mortal, { kind: "rebirth", runRev: s.live(mortal).runRev });
+		s.immortal.add(mortal);
+		s.intent(walker, s.P.IntentKind.LeaveWorld);
+		s.active.delete(walker);
+		check(
+			s.runUntil(() => s.sim.clock.day === 2 && s.sim.clock.dayTime >= 6.1, 400) >= 0,
+			"the world lived through midnight and 06:00",
+		);
+		const all = night(survivor);
+		check(
+			steps(survivor) === "[1,2,3,4,5]" &&
+				all.every(r => r.session === all[0].session) &&
+				JSON.stringify(all.map(r => r.name)) === JSON.stringify(A.NIGHT_PHASE_NAMES),
+			"the survivor who stood all night: Wave 1, Wave 2, Midnight, Wave 3, Dawn -- once each, one session",
+			JSON.stringify(all.map(r => [r.step, r.name])),
+		);
+		check(
+			reborn.ok && s.body(mortal) !== undefined && !s.body(mortal).state.dead && steps(mortal) === "[1,2]",
+			"the one who died at 22:30 stops at Wave 2: a Rebirth before midnight is a new body, not the night lived through",
+			steps(mortal),
+		);
+		check(steps(walker) === "[1,2]", "the one who went to the lobby stops where they left the city");
+		check(steps(late) === "[]", "…and the latecomer never enters this night's funnel, even at dawn");
+		// the next evening: a jump of the clock lives through nothing, the next nightfall is a NEW session
+		s.sim.clock.setClock(18.9);
+		s.run(1.2);
+		check(night(survivor).length === 5, "a clock that jumps (an admin's, a new town) crosses no hour");
+		s.runUntil(() => s.sim.clock.dayTime >= 19.2, 100);
+		const next = night(survivor).slice(5);
+		check(
+			next.length === 1 &&
+				next[0].step === 1 &&
+				next[0].session !== all[0].session &&
+				next[0].fields.CustomField01 === "World day - 2-3" &&
+				next[0].fields.CustomField02 === "Life day - 2-3",
+			"the next nightfall opens a new session (a GUID of its own), world day 2 and life day 2",
+			JSON.stringify(next.map(r => [r.session, r.step, r.fields])),
+		);
+		check(
+			night(late).length === 1 && night(late)[0].step === 1,
+			"…and the latecomer, standing at this nightfall, is in this one",
+		);
+		info(`a whole night of 4 players: ${s.log.filter(r => r.funnel === A.NIGHT_PHASE_FUNNEL).length} Night rows`);
+	},
+);
+
+// ================================================================ 10: the Shop funnel
+
+section("10) the Shop funnel: opened by the client, its buy asked for and bought, each once a visit; the guard", () => {
+	const s = bootServer();
+	const A = s.A;
+	const { SHOP_PACKS, COSTUMES } = require(join(SRC, "shared/data/shop.ts"));
+	const kit = SHOP_PACKS.findIndex(x => x.name === "First Night Kit");
+	const dear = SHOP_PACKS.reduce((best, x, i) => (x.price > SHOP_PACKS[best].price ? i : best), 0);
+	const a = s.join(newUser(), "shopper");
+	s.run(1.2);
+	const shopRows = () => s.of(a.UserId, "funnel").filter(r => r.funnel === A.SHOP_FUNNEL);
+	// a purchase with no visit open starts no funnel (it would count "Opened" as done)
+	const blind = s.shop(a, { kind: "buyPack", packId: kit });
+	check(blind.ok && shopRows().length === 0, "a purchase with no visit open: no Shop row (never a skipped step 1)");
+	// a visit in the lobby with no coins left: opened, a buy asked for and refused
+	const opened = s.viewShop(a, 0);
+	check(
+		opened.ok === true && opened.wallet === undefined && opened.price === undefined,
+		"viewShop is answered at once, with nothing charged and nothing decided",
+	);
+	s.shop(a, { kind: "buyPack", packId: dear });
+	const v1 = shopRows();
+	check(
+		JSON.stringify(v1.map(r => r.step)) === "[1,2]" &&
+			v1[0].name === "Opened" &&
+			v1[1].name === "Tried to buy" &&
+			v1[0].session === v1[1].session &&
+			v1[0].fields.CustomField01 === "Screen - Packs" &&
+			v1[0].fields.CustomField02 === "Coins - 0-9" &&
+			v1[0].fields.CustomField03 === "Where - Lobby",
+		"a visit whose buy was refused for coins: Opened (screen, the server's coins, lobby) then Tried to buy -- no Bought",
+		JSON.stringify(v1.map(r => [r.step, r.name, r.fields])),
+	);
+	// the guard: a second open in the same second, and (later) screens that do not exist
+	s.viewShop(a, 1);
+	s.run(1.2);
+	for (const bad of [2, -1, 0.5, "0", undefined]) s.viewShop(a, bad);
+	check(shopRows().length === 2, "a second open within SHOP_OPEN_MIN_S, and unknown screens: nothing");
+	// the wardrobe from the city, with coins: bought, and a second purchase in the same visit adds nothing
+	s.live(a).money = 5000;
+	s.immortal.add(a);
+	s.enter(a);
+	s.run(1.2);
+	s.viewShop(a, 1);
+	const byPrice = COSTUMES.map((c, i) => [c.price, i]).sort((x, y) => x[0] - y[0]);
+	const [cheap, other] = [byPrice[0][1], byPrice[1][1]];
+	const r1 = s.shop(a, { kind: "buyCostume", costumeId: cheap });
+	const r2 = s.shop(a, { kind: "buyCostume", costumeId: other });
+	const v2 = shopRows().slice(2);
+	check(
+		r1.ok &&
+			r2.ok &&
+			JSON.stringify(v2.map(r => r.step)) === "[1,2,3]" &&
+			v2.every(r => r.session === v2[0].session) &&
+			v2[0].session !== v1[0].session &&
+			v2[0].fields.CustomField01 === "Screen - Wardrobe" &&
+			v2[0].fields.CustomField02 === "Coins - 200+" &&
+			v2[0].fields.CustomField03 === "Where - City" &&
+			v2[2].name === "Bought",
+		"a wardrobe visit from the city: Opened, Tried to buy, Bought -- once each, however many it buys",
+		JSON.stringify(v2.map(r => [r.step, r.name, r.fields])),
+	);
+	// viewShop never takes a purchase token: 5 opens and then the whole burst of 6 purchases, at the same instant
+	for (let i = 0; i < 5; i++) s.viewShop(a, 0);
+	s.run(3.5);
+	const burst = [];
+	for (let i = 0; i < 6; i++) burst.push(s.shop(a, { kind: "buyPack", packId: kit }).reason ?? "ok");
+	check(!burst.includes("rate"), "…and opening the shop never costs a purchase its token", burst.join(","));
+	// a flood of opens, one a second for a minute: at most SHOP_VISITS_MAX visits a session
+	for (let i = 0; i < 60; i++) {
+		s.viewShop(a, 0);
+		s.run(1.05);
+	}
+	const visits = shopRows().filter(r => r.step === 1).length;
+	check(
+		visits === A.SHOP_VISITS_MAX,
+		"a client opening the shop every second for a minute: SHOP_VISITS_MAX visits, then nothing",
+		`${visits} visits`,
+	);
+	// a visit is over SHOP_VISIT_S after it opened: a buy after that is no step of it (the module's own clock)
+	const h = makeCore();
+	const slowPlayer = fakePlayer(611, "slowshopper");
+	const slowSave = blankSave();
+	slowSave.money = 20;
+	h.core.sessionLoaded(slowPlayer, "ok", slowSave);
+	h.core.shopViewed(slowPlayer, 0);
+	h.advance(A.SHOP_VISIT_S + 5);
+	h.core.shopRequest(slowPlayer, { kind: "buyPack", packId: kit });
+	check(
+		JSON.stringify(h.rows.filter(r => r.funnel === A.SHOP_FUNNEL).map(r => r.step)) === "[1]",
+		"a buy 10 minutes after the shop opened is no step of that visit",
+	);
+});
+
+// ================================================================ 11: quit points and causes of death
+
+section("11) SessionEnded: where and when each session quit; Died: the cause, read from the body", () => {
+	const s = bootServer();
+	const A = s.A;
+	s.sim.clock.setClock(12);
+	const lobby = s.join(newUser(), "lobbyist");
+	const dead = s.join(newUser(), "deadquit");
+	const hungry = s.join(newUser(), "hungry");
+	const poisoned = s.join(newUser(), "poisoned");
+	for (const p of [dead, hungry, poisoned]) {
+		s.immortal.add(p);
+		s.enter(p);
+	}
+	s.run(1.2);
+	s.body(hungry).state.hungry = 0;
+	s.kill(hungry);
+	s.body(poisoned).state.buffs.poison = 5;
+	s.kill(poisoned);
+	s.kill(dead);
+	const cause = p => customs(s, p.UserId, A.EVENT.Died)[0]?.fields.CustomField03;
+	check(
+		cause(hungry) === "Cause - Hunger" && cause(poisoned) === "Cause - Poison" && cause(dead) === "Cause - Horde",
+		"a starving death is Hunger, a poisoned one Poison, any other with no boss about the Horde",
+		`${cause(hungry)}, ${cause(poisoned)}, ${cause(dead)}`,
+	);
+	s.run(1.2);
+	s.quit(lobby);
+	s.quit(dead);
+	s.run(1.2);
+	const ended = p => customs(s, p.UserId, A.EVENT.SessionEnded)[0];
+	check(
+		ended(lobby)?.fields.CustomField01 === "Where - Lobby" &&
+			ended(lobby).fields.CustomField02 === "Time - Day" &&
+			ended(lobby).fields.CustomField03 === "Visit - First" &&
+			customs(s, lobby.UserId, A.EVENT.SessionKills).length === 0,
+		"a new player who quits from the lobby: SessionEnded Where - Lobby (and no SessionKills: never entered)",
+		JSON.stringify(ended(lobby)),
+	);
+	check(
+		ended(dead)?.fields.CustomField01 === "Where - Dead",
+		"one who quits while dead: Where - Dead -- the death screen as a quit point",
+		JSON.stringify(ended(dead)),
+	);
+	// a second session of the same player, at night
+	s.sim.clock.setClock(21);
+	const again = s.join(lobby.UserId, "lobbyist");
+	s.run(1.2);
+	s.quit(again);
+	s.run(1.2);
+	const second = customs(s, lobby.UserId, A.EVENT.SessionEnded)[1];
+	check(
+		second?.fields.CustomField03 === "Visit - Returning" && second.fields.CustomField02 === "Time - Night",
+		"the same player back at night: Visit - Returning, Time - Night",
+		JSON.stringify(second),
+	);
+	// the cause's rule on its own: a boss within a needle's reach, a dead one or a far one does not count
+	const body = { x: 0, y: 0, hungry: 50, buffs: { poison: 0 } };
+	check(
+		A.causeOfDeath(body, [{ x: A.BOSS_REACH - 1, y: 0, hp: 10 }]) === "Cause - Boss" &&
+			A.causeOfDeath(body, [{ x: A.BOSS_REACH + 1, y: 0, hp: 10 }]) === "Cause - Horde" &&
+			A.causeOfDeath(body, [{ x: 10, y: 0, hp: 0 }]) === "Cause - Horde" &&
+			A.causeOfDeath(undefined, undefined) === "Cause - Unknown",
+		"causeOfDeath: a living boss within BOSS_REACH is Boss; a far or a dead one is not",
+	);
+});
+
+// ================================================================ 12: experiments (server/config/experiments.ts)
+
+section("12) experiments: the welcome pack is read from the player's snapshot, once per new save, safely", () => {
+	const { SHOP_PACKS } = require(join(SRC, "shared/data/shop.ts"));
+	const kit = SHOP_PACKS.findIndex(x => x.name === "First Night Kit");
+	// the variant: a First Night Kit for every new save
+	const config = makeConfigService({ values: { pz_welcome_pack: kit } });
+	const s = bootServer({ config });
+	const A = s.A;
+	const { defaultSave } = require(join(SRC, "shared/game/save.ts"));
+	const vet = newUser();
+	const old = defaultSave();
+	old.titleEpoch = 0;
+	s.storeSave(vet, old);
+	const fresh = s.join(newUser(), "fresh");
+	const veteran = s.join(vet, "veteran");
+	s.run(1.2);
+	const joined = s.of(fresh.UserId, "onboarding")[0];
+	check(
+		s.live(fresh).packsBought[kit] === 1 &&
+			joined?.fields?.CustomField01 === "Welcome pack - First Night Kit" &&
+			s.live(fresh).money === 20,
+		"a new save in the variant is given the pack (coins untouched), and Joined carries the arm",
+		JSON.stringify({ bought: s.live(fresh).packsBought, joined }),
+	);
+	check(
+		config.calls.snapshots === 1 &&
+			config.calls.reads.length === 1 &&
+			config.calls.reads[0].userId === fresh.UserId &&
+			config.calls.reads[0].key === "pz_welcome_pack",
+		"GetValue -- the call that enrolls -- ran once, for the new save only: the veteran is never enrolled",
+		JSON.stringify(config.calls),
+	);
+	check(s.live(veteran).packsBought[kit] === 0, "…and the veteran is given nothing");
+	s.immortal.add(fresh);
+	s.enter(fresh);
+	s.run(2);
+	check(
+		s.live(fresh).packsOpened[kit] === 1,
+		"the pack is delivered in the city like a bought one (server/sim/backpack.ts)",
+		JSON.stringify(s.live(fresh).packsOpened),
+	);
+	// a second session of that player: the save exists, nothing is read or given again
+	s.quit(fresh);
+	s.run(1.2);
+	const back = s.join(fresh.UserId, "fresh");
+	s.run(1.2);
+	check(
+		config.calls.reads.length === 1 && s.live(back).packsBought[kit] === 1,
+		"the same player's next session: no read, no second pack",
+	);
+
+	// whatever the Creator Hub holds that is not a whole number in range is the game as it was
+	const bad = ["0", 1.5, SHOP_PACKS.length, -2, true, { id: 0 }];
+	let i = 0;
+	const odd = makeConfigService({ values: () => ({ pz_welcome_pack: bad[i++] }) });
+	const t = bootServer({ config: odd });
+	const got = [];
+	for (let k = 0; k < bad.length; k++) {
+		const p = t.join(newUser(), `odd${k}`);
+		got.push(
+			`${t.live(p).packsBought.reduce((x, y) => x + y, 0)}:${t.of(p.UserId, "onboarding")[0]?.fields?.CustomField01}`,
+		);
+	}
+	check(
+		got.every(g => g === "0:Welcome pack - None"),
+		"a string, a fraction, an index past the catalogue, -2, a boolean, a table: the fallback, no pack",
+		got.join(" | "),
+	);
+	// a ConfigService that throws: the join goes on, the fallback holds, the warning is one fixed sentence
+	const before = warnings.length;
+	const u = bootServer({ config: makeConfigService({ throws: true }) });
+	const p = u.join(newUser(), "unlucky");
+	const w = warnings.slice(before).filter(l => l.includes("config:"));
+	check(
+		u.save(p) !== undefined &&
+			u.live(p).packsBought.every(x => x === 0) &&
+			u.of(p.UserId, "onboarding")[0]?.fields?.CustomField01 === "Welcome pack - None",
+		"a snapshot that cannot be had: the save loads, no pack, the arm says None",
+	);
+	check(
+		w.length === 1 && !w[0].includes(String(p.UserId)) && !w[0].includes(p.Name),
+		"…and one warning, with no UserId or name in it",
+		w.join(" | "),
+	);
+	// no ConfigService at all (every other boot of this suite): None
+	const n = bootServer();
+	const q = n.join(newUser(), "plain");
+	check(
+		n.of(q.UserId, "onboarding")[0]?.fields?.CustomField01 === "Welcome pack - None",
+		"no ConfigService: Welcome pack - None",
+	);
+	const X = require(join(SRC, "server/config/experiments.ts"));
+	const knob = { key: "k", fallback: -1, min: -1, max: 3 };
+	check(
+		X.knobValue(knob, 3) === 3 &&
+			X.knobValue(knob, -1) === -1 &&
+			X.knobValue(knob, 4) === -1 &&
+			X.knobValue(knob, 0.5) === -1 &&
+			X.knobValue(knob, Number.NaN) === -1 &&
+			X.knobValue(knob, Infinity) === -1 &&
+			X.knobValue(knob, undefined) === -1 &&
+			X.WELCOME_PACK.fallback === -1 &&
+			X.WELCOME_PACK.max === SHOP_PACKS.length - 1,
+		"knobValue: a whole number inside the range, anything else the fallback (-1 = no pack, the game as it was)",
+	);
+});
+
+// ================================================================ 13: the catalogue within the documented limits
+
+section("13) every row of this run: within the documented limits, low cardinality, no PII", () => {
+	const A = require(join(SRC, "server/analytics/events.ts"));
+	const rows = EVERY_ROW;
+	const distinctOf = arr => arr.filter((v, i) => arr.indexOf(v) === i);
+	const funnels = distinctOf(rows.filter(r => r.kind === "funnel").map(r => r.funnel));
+	// the onboarding funnel is one of the dashboard's ten tabs too
+	check(funnels.length + 1 <= 10, "funnels: at most 10 (event-types.md)", `${funnels.join(", ")} + Onboarding`);
+	let stepsOk = true;
+	const names = new Map();
+	for (const r of rows) {
+		if (r.kind !== "funnel" && r.kind !== "onboarding") continue;
+		if (!(Number.isInteger(r.step) && r.step >= 1 && r.step <= 100)) stepsOk = false;
+		const k = `${r.funnel ?? "Onboarding"}#${r.step}`;
+		if (names.has(k) && names.get(k) !== r.name) stepsOk = false;
+		names.set(k, r.name);
+	}
+	check(stepsOk, "every step a whole number in 1-100, one name per step of a funnel (the dashboard's labels)");
+	check(
+		rows.filter(r => r.kind === "funnel" && r.session === undefined).every(r => r.funnel === A.LEVEL_FUNNEL),
+		"only the one-time Levels funnel goes without a funnelSessionId",
+	);
+	const events = distinctOf(rows.filter(r => r.kind === "custom").map(r => r.name));
+	check(
+		events.length <= 100 && events.every(e => Object.values(A.EVENT).includes(e)),
+		"custom events: the catalogue's",
+		events.join(", "),
+	);
+	const eco = rows.filter(r => r.kind === "economy");
+	const tx = distinctOf(eco.map(r => r.tx));
+	const skus = distinctOf(eco.map(r => r.sku));
+	// (a pure core's rows are the module's own events: the currency is added by the AnalyticsService sink)
+	const currencies = distinctOf(eco.map(r => r.currency ?? A.CURRENCY));
+	check(
+		currencies.length === 1 && tx.length <= 20 && skus.length <= 100,
+		"economy: 1 currency (5 allowed), transaction types ≤ 20, SKUs ≤ 100",
+		`${tx.length} types, ${skus.length} SKUs`,
+	);
+	// every value a field ever held, against the catalogue's closed sets
+	const bucket = "(1|2-3|4-7|8-14|15-29|30\\+)";
+	const allowed = [
+		`Life day - ${bucket}`,
+		`World day - ${bucket}`,
+		"Time - (Night|Day)",
+		"Survivors - (Solo|Group)",
+		"Cause - (Hunger|Poison|Boss|Horde|Unknown)",
+		"Choice - (Accepted|Declined)",
+		"End - (New game|World end)",
+		"Rebirths - (0|1|2|3\\+)",
+		"Continue - (1|2|3|4\\+)",
+		"Afford - (Yes|No)",
+		"Reason - (Timeout|Declined)",
+		"Fallen - (1|2|3\\+)",
+		"Kills - (0|1-9|10-49|50-199|200\\+)",
+		"Kind - (Crafted|Cooked|Smelted)",
+		"Category - (Pack|Costume)",
+		"Screen - (Packs|Wardrobe)",
+		"Coins - (0-9|10-49|50-199|200\\+)",
+		"Where - (Lobby|City|Dead)",
+		"Visit - (First|Returning)",
+		`Weapon - (${A.WEAPON_KIND_NAMES.join("|")}|Machine|Other)`,
+		"Title - .+",
+		"Welcome pack - .+",
+	].map(p => new RegExp(`^${p}$`));
+	const values = [];
+	const combos = [];
+	let keysOk = true;
+	for (const r of rows) {
+		if (r.fields === undefined) continue;
+		for (const [k, v] of Object.entries(r.fields)) {
+			if (!["CustomField01", "CustomField02", "CustomField03"].includes(k) || typeof v !== "string")
+				keysOk = false;
+			values.push(v);
+		}
+		combos.push(`${r.fields.CustomField01}|${r.fields.CustomField02}|${r.fields.CustomField03}`);
+	}
+	const strays = distinctOf(values).filter(v => !allowed.some(re => re.test(v)));
+	check(keysOk, "fields: only CustomField01-03, strings only (custom-fields.md)");
+	check(strays.length === 0, "every field value is one of the catalogue's fixed strings", strays.join(" | "));
+	// the ceiling by construction: each field's closed set multiplied per event, summed (titles: 3, packs: 9 + None)
+	const { TITLES } = require(join(SRC, "shared/data/titles.ts"));
+	const { SHOP_PACKS } = require(join(SRC, "shared/data/shop.ts"));
+	const B = 6;
+	const ceiling =
+		2 + // TutorialChoice
+		B * 2 * 5 + // Died: life day x time x cause
+		2 * B * 4 + // LifeEnded
+		2 * 3 * B + // WorldEnded
+		TITLES.length + // TitleEarned
+		5 + // SessionKills
+		3 + // Crafted
+		3 * 2 * 2 + // SessionEnded (+ its combos without the hour)
+		3 * 2 +
+		(A.WEAPON_KIND_NAMES.length + 2) + // WeaponKills
+		4 + // Rebirth economy: Continue
+		2 + // Shop economy: Category
+		(SHOP_PACKS.length + 1) + // onboarding: Welcome pack
+		B * B * 2 + // Night step 1
+		4 * 2 * B + // Rebirth step 1
+		2 * 4 * 2; // Shop step 1
+	check(
+		ceiling < 8000 && distinctOf(combos).length <= ceiling,
+		"unique combinations of the three fields: bounded by the catalogue far below 8,000 (the experience's limit)",
+		`ceiling ${ceiling}, seen ${distinctOf(combos).length}`,
+	);
+	// no PII: nothing a player could be found by -- no UserId, no name -- in any string that leaves the server
+	let pii = [];
+	for (const r of rows) {
+		const strings = [r.name, r.funnel, r.session, r.sku, r.tx, ...Object.values(r.fields ?? {})].filter(
+			x => typeof x === "string",
+		);
+		for (const x of strings) {
+			// (names of 4+ letters: "a" is in half the catalogue's words)
+			const named = typeof r.playerName === "string" && r.playerName.length >= 4 && x.includes(r.playerName);
+			if ((r.userId !== undefined && x.includes(String(r.userId))) || named) {
+				pii.push(`${r.kind}:${x}`);
+			}
+		}
+	}
+	check(
+		pii.length === 0,
+		`no UserId and no name in any of the ${rows.length} rows' strings`,
+		pii.slice(0, 5).join(" | "),
+	);
+});
+
+// ================================================================ 14: the Error Report
+
+section("14) the Error Report: every warning is a fixed sentence (ids, names and counts go to the log line)", () => {
+	// error-report.md: grouped by MESSAGE, 500 unique a 6 h window -- "Player 12345 failed to load" is a row per player
+	const { readdirSync, readFileSync, statSync } = require("node:fs");
+	const files = [];
+	const walk = d => {
+		for (const n of readdirSync(d)) {
+			const p = join(d, n);
+			if (statSync(p).isDirectory()) walk(p);
+			else if (p.endsWith(".ts")) files.push(p);
+		}
+	};
+	walk(SRC);
+	// interpolations that are the same on every occurrence of a warning: constants, the fixed name of a step or a
+	// hook, a data key of the catalogue, and the error text itself (the engine's or ours, with its traceback)
+	const stable = [
+		/^GAME_NAME$/,
+		/^LOG_PREFIX$/,
+		/^WHISPER_COMMAND$/,
+		/^STORE_RETRY_S$/,
+		/^HANDSHAKE_WARN_S$/,
+		/^tostring\((err|value|result|res|storeValue|lastErr|written|raw)\)$/,
+		/^outcome\.err$/,
+		/^(what|where|hook|message|why|failure|name|kind)$/,
+	];
+	const offenders = [];
+	let calls = 0;
+	for (const f of files) {
+		const src = readFileSync(f, "utf8");
+		let at = 0;
+		while ((at = src.indexOf("warn(", at)) >= 0) {
+			const before = src[at - 1];
+			at += 5;
+			if (before !== undefined && /[\w.]/.test(before)) continue;
+			// the argument, to its closing parenthesis
+			let depth = 1;
+			let end = at;
+			while (end < src.length && depth > 0) {
+				if (src[end] === "(") depth++;
+				else if (src[end] === ")") depth--;
+				end++;
+			}
+			const arg = src.slice(at, end - 1);
+			if (arg.includes("...")) continue; // a shim's own `warn(...a)`, not a message
+			calls += 1;
+			for (const m of arg.matchAll(/\$\{([^}]*)\}/g)) {
+				const expr = m[1].trim();
+				if (!stable.some(re => re.test(expr))) {
+					offenders.push(`${f.slice(SRC.length + 1)}: \${${expr}}`);
+				}
+			}
+		}
+	}
+	check(
+		offenders.length === 0,
+		`the ${calls} warn() calls of src/ interpolate nothing that changes between occurrences`,
+		offenders.join(" | "),
+	);
+	// and at run time: two analytics faults a minute apart are the same row
+	let now = 0;
+	const lines = [];
+	const origWarn = globalThis.warn;
+	globalThis.warn = (...a) => lines.push(a.join(" "));
+	try {
+		const bad = new AN.ServerAnalytics(
+			{
+				deliver() {
+					throw new Error("AnalyticsService is down");
+				},
+			},
+			{ clock: () => now },
+		);
+		const s1 = blankSave();
+		bad.sessionLoaded(fakePlayer(901, "faulty"), "new", s1);
+		now = 61;
+		bad.dayCoins(s1, 3, 0);
+	} finally {
+		globalThis.warn = origWarn;
+	}
+	check(
+		lines.length === 2 && lines[0] === lines[1] && !lines[0].includes("so far"),
+		"two analytics faults a minute apart: the very same message (the count is the log line after it)",
+		lines.join(" | "),
+	);
 });
 
 console.log(`\n${checks - failures}/${checks} checks passed`);

@@ -534,12 +534,12 @@
 			"description": "storm drain"
 		},
 		{
-			"name": "pump",
-			"file": "pump.png",
+			"name": "dispenser",
+			"file": "dispenser.png",
 			"kind": "sprite",
-			"w": 8,
-			"h": 6,
-			"description": "fuel dispenser"
+			"w": 10,
+			"h": 13,
+			"description": "fuel dispenser, upright: the station sign's white cabinet, dark display, red stripe, hose and nozzle"
 		},
 		{
 			"name": "acUnit",
@@ -676,6 +676,46 @@
 			"w": 64,
 			"h": 64,
 			"description": "hospital roof: the heliport's red H on a white cross"
+		},
+		{
+			"name": "gasCanopyN",
+			"file": "gasCanopyN.png",
+			"kind": "sprite",
+			"w": 113,
+			"h": 29,
+			"description": "gas station canopy roof, street to the N: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather"
+		},
+		{
+			"name": "gasCanopyS",
+			"file": "gasCanopyS.png",
+			"kind": "sprite",
+			"w": 113,
+			"h": 29,
+			"description": "gas station canopy roof, street to the S: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather"
+		},
+		{
+			"name": "gasCanopyW",
+			"file": "gasCanopyW.png",
+			"kind": "sprite",
+			"w": 29,
+			"h": 113,
+			"description": "gas station canopy roof, street to the W: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather"
+		},
+		{
+			"name": "gasCanopyE",
+			"file": "gasCanopyE.png",
+			"kind": "sprite",
+			"w": 29,
+			"h": 113,
+			"description": "gas station canopy roof, street to the E: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather"
+		},
+		{
+			"name": "signPrice",
+			"file": "signPrice.png",
+			"kind": "sprite",
+			"w": 16,
+			"h": 25,
+			"description": "gas station price sign: a price pylon: the pump pictogram over three grade tabs and their dark price panels, on a steel post"
 		},
 		{
 			"name": "bicycle",

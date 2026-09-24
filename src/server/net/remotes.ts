@@ -16,12 +16,12 @@
  *
  * Engine limits honoured here (verified against /roblox/creator-docs and @rbxts/types):
  *   - an UnreliableRemoteEvent payload over 1000 bytes is DROPPED silently, so every unreliable send checks
- *     UNRELIABLE_PAYLOAD_LIMIT first and reports the refusal instead of losing the packet;
+ *     UNRELIABLE_MAX_BYTES (our raw ceiling under it) first and reports the refusal instead of losing the packet;
  *   - unreliable events are neither ordered nor guaranteed — every Snap part is self-contained (§4.2);
  *   - remotes are throttled at ~500 requests/s per client, shared by class: we send 60 Input/s upstream.
  */
 import { NET_FOLDER } from "shared/net/net";
-import { UNRELIABLE_PAYLOAD_LIMIT } from "shared/net/mpConfig";
+import { UNRELIABLE_MAX_BYTES } from "shared/net/mpConfig";
 import {
 	MP_REMOTES,
 	REMOTE_FX,
@@ -119,9 +119,13 @@ export function onTimeSync(
 
 // ---------------------------------------------------------------- sending (S→C)
 
-/** false when the payload would be dropped by the engine's 1000 byte limit (the caller counts it) */
+/**
+ * False when the payload is over our own raw ceiling (the caller counts it). UNRELIABLE_MAX_BYTES, not the engine's
+ * 1000 (audit L1): the engine's limit applies to the ENCODED event -- a buffer is compressed, and carries its own
+ * framing -- so a raw buffer just under 1000 B may still be over it, and production drops it without a word.
+ */
 export function sendUnreliable(remote: UnreliableRemoteEvent, player: Player, payload: buffer): boolean {
-	if (buffer.len(payload) > UNRELIABLE_PAYLOAD_LIMIT) return false;
+	if (buffer.len(payload) > UNRELIABLE_MAX_BYTES) return false;
 	remote.FireClient(player, payload);
 	return true;
 }

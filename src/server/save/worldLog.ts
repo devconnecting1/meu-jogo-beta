@@ -89,7 +89,9 @@ export function startWorldLog(): WorldLog {
 		for (let i = batch.size() - 1; i >= 0; i--) unsaved.unshift(batch[i]);
 		while (unsaved.size() > WORLD_LOG_KEEP) unsaved.remove(0);
 		status = `write failed (${tostring(lastErr)})`;
-		warn(`[${GAME_NAME}] world record not saved yet (${unsaved.size()} waiting): ${tostring(lastErr)}`);
+		// one Error Report row however many wait (docs/ANALYTICS.md §10): the count is the log line after it
+		warn(`[${GAME_NAME}] world record not saved yet: ${tostring(lastErr)}`);
+		print(`[${GAME_NAME}] world records waiting: ${unsaved.size()}`);
 	}
 
 	// a write already in flight makes this a no-op (`writing`): its own retries decide those records (L5 above)

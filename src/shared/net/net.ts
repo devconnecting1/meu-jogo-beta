@@ -80,7 +80,12 @@ export type ShopActionRequest =
 	/** MON-05: show an EARNED title under the name (-1 = none); the server checks it (server/save/titles.ts) */
 	| { kind: "equipTitle"; titleId: number }
 	| { kind: "rebirth"; runRev: number }
-	| { kind: "newRun"; runRev: number };
+	| { kind: "newRun"; runRev: number }
+	/**
+	 * The shop (screen 0) or the wardrobe (1) just opened: no decision, nothing charged -- only the first step of the
+	 * Shop funnel (server/analytics/events.ts `shopViewed`, rate-limited there). Fired and forgotten by the client.
+	 */
+	| { kind: "viewShop"; screen: number };
 
 export type ShopActionReason =
 	"funds" | "owned" | "limit" | "invalid" | "rate" | "loading" | "readonly" | "outdated" | "network";

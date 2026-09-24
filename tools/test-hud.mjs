@@ -24,6 +24,8 @@
  *     its arc and the horde's pips, the red pulse of the last 30 s (still with Reduce Motion), and the life's day only
  *     when it differs from the world's (MP-13 / MP-20); no text carries a contour (UI-04); with Reduce Motion
  *     nothing throbs: low HP holds its fill lit, low food holds it red, the low-HP vignette holds one value;
+ *  4c. a hit lights the HP bar's relief and the damage vignette -- in a server session (MP_PHASE 2) too, where the
+ *     bite is the server's: its own self block, over the wire format, read back by the client's prediction;
  *  5. touch: the compact console never covers the move stick or the fire controls, measured on the touch layout's
  *     own numbers (shared/engine/input.ts), at 1120x630 ("phone") and 1360x435 (wide), with the default controls,
  *     left-handed, at the largest sizes and with a fixed stick -- and its tiles stay a thumb wide; the sky's touch
@@ -361,6 +363,41 @@ check(
 );
 hud.update(state());
 
+// DESIGN_RULES ITM-06: the weapon PUT AWAY -- empty hands. The same tiles (the list keys 1-5 pick from does not move),
+// none of them blue, and the weapon column says why nothing fires
+{
+	const weaponType = () => deep(consoleFrame(), "WeaponType")?.Text;
+	const typeBefore = weaponType();
+	const away = phase("guarda a Pistol (ITM-06: maos vazias)", () => {
+		for (let i = 0; i < 30; i++) hud.update(state({ holstered: true }));
+	});
+	check(
+		"arma guardada: NENHUM ladrilho azul, a mesma hotbar (as teclas 1-5 nao mudam)",
+		[0, 1, 2, 3, 4].every(k => !sameColor(face(tile(k)), THEME.tabActive)) && hotbar() === expected(PISTOL),
+		hotbar(),
+	);
+	check(
+		"a Pistol guardada e ferro escuro liso como as outras, com a tecla 3 e so a reserva no chip",
+		sameColor(face(tile(2)), SURFACE.section) &&
+			!raised(tile(2)) &&
+			keyLegend(2) === "3" &&
+			ammo(2)?.Text === String(pistolPool()),
+		`${keyLegend(2)} / ${ammo(2)?.Text}`,
+	);
+	check(
+		'a coluna da arma diz "Put away" no lugar do tipo',
+		weaponType() === "Put away" && deep(consoleFrame(), "WeaponName")?.Text === "Pistol",
+		weaponType(),
+	);
+	check("guardar a arma nao cria nem destroi Instance, em 30 quadros", zero(away), cost(away));
+	const drawn = phase("saca a Pistol de novo", () => hud.update(state()));
+	check(
+		"sacada: o azul volta a Pistol (tecla 3) e a coluna diz o tipo de novo",
+		sameColor(face(tile(2)), THEME.tabActive) && raised(tile(2)) && weaponType() === typeBefore && zero(drawn),
+		`${weaponType()} / ${cost(drawn)}`,
+	);
+}
+
 const TILE_COST = tile(0).GetDescendants().length + 1;
 save.invenWeapon[BAT] = 1;
 const pickup = phase("pega o Baseball bat (a lista ganha um item no meio)", () => {
@@ -508,6 +545,77 @@ const vignette = deep(hudRoot(), "VignetteTop");
 hud.update(state({ hitFlash: 1 }));
 check("a vinheta de dano continua", vignette.BackgroundTransparency < 1, `${vignette.BackgroundTransparency}`);
 hud.update(state());
+
+// ...and in a session on the server (MP_PHASE 2), where the hit is the SERVER's: the bite lands through its own entry
+// point (`applyPlayerDamage`), travels in its own self block (server/net/replication.ts) over the wire format, the
+// client's prediction reads it back (client/net/prediction.ts), the survivor fades it as client/systems/combat.ts does
+// and the HUD state takes it as main.client.ts does. Before, `hitFlash` never rose for the local survivor there: the
+// only writer of it ran on the server
+{
+	const Ply = require(join(SRC, "shared/game/player.ts"));
+	const { defaultSave } = require(join(SRC, "shared/game/save.ts"));
+	const { createWorld } = require(join(SRC, "shared/game/world.ts"));
+	const { MP_PHASE, SIM_HZ, SNAP_NEAR_EVERY_TICKS } = require(join(SRC, "shared/net/mpConfig.ts"));
+	const { encodeSnapshot, decodeSnapshotPart } = require(join(SRC, "shared/net/protocol.ts"));
+	const { createServerPlayer } = require(join(SRC, "server/sim/players.ts"));
+	const REP = require(join(SRC, "server/net/replication.ts"));
+	const { Prediction } = require(join(SRC, "client/net/prediction.ts"));
+	const world = createWorld(4000, 4000);
+	const server = createServerPlayer({ slot: 0, userId: 7, name: "me" }, defaultSave(), 1000, 1000, 0, SIM_HZ);
+	const mySave = defaultSave();
+	const me = Ply.createPlayer(mySave, 1000, 1000);
+	const prediction = new Prediction();
+	prediction.attach(world, me, mySave);
+	const frameS = 1 / 60;
+	let tick = 0;
+	let now = 50;
+	/** one snapshot's self block, the server's own, through the encoder and the decoder, into the reconciliation */
+	const snapshot = () => {
+		tick += SNAP_NEAR_EVERY_TICKS;
+		const self = REP.selfBlockOf({ spawnShielded: () => false }, server);
+		const part = encodeSnapshot({ tick, self, players: [], zombies: [], bosses: [] }).parts[0];
+		prediction.reconcile(decodeSnapshotPart(part).self, [], now);
+	};
+	/** one client frame after the snapshots: combat.ts fades the flash, then the HUD reads the survivor */
+	const frame = () => {
+		now += frameS;
+		me.hitFlash = Math.max(0, (me.hitFlash ?? 0) - frameS);
+		hud.update(state({ hp: me.hp, hpMax: me.hpMax, hitFlash: me.hitFlash ?? 0 }));
+	};
+	const look = () => ({
+		vignette: vignette.BackgroundTransparency,
+		relief: band(barFill("Hp")).BackgroundTransparency,
+	});
+	snapshot();
+	frame();
+	const calm = look();
+	Ply.applyPlayerDamage(server.state, server.save, 10);
+	snapshot();
+	frame();
+	const bitten = look();
+	check(
+		"na sessao do servidor (MP_PHASE 2) a mordida que o servidor aplica acende a vinheta e o relevo do HP no cliente",
+		MP_PHASE >= 2 &&
+			calm.vignette === 1 &&
+			calm.relief === 0.7 &&
+			me.hp === 90 &&
+			bitten.vignette < 1 &&
+			bitten.relief === 0.5,
+		`MP_PHASE ${MP_PHASE}, HP ${me.hp}: vinheta ${calm.vignette} -> ${bitten.vignette}, relevo ${calm.relief} -> ${bitten.relief}`,
+	);
+	// a second later (the i-frames over, the snapshots still coming) both are back at rest, and nothing re-lit them
+	for (let i = 0; i < 60; i++) {
+		if (i % SNAP_NEAR_EVERY_TICKS === 0) snapshot();
+		frame();
+	}
+	const after = look();
+	check(
+		"e um segundo depois a vinheta e o relevo apagam, sem outro golpe",
+		after.vignette === 1 && after.relief === 0.7 && prediction.stats().flashes === 1,
+		`vinheta ${after.vignette}, relevo ${after.relief}, ${prediction.stats().flashes} flash(es)`,
+	);
+	hud.update(state());
+}
 blinkAt(true);
 hud.update(state({ hunger: 10 }));
 check("fome baixa pisca a barra de fome em vermelho", sameColor(face(barFill("Food")), BAR.hp));

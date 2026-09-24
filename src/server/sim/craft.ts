@@ -55,6 +55,8 @@ export type BackpackOutcome =
 	| { kind: "unequipped"; slot: number }
 	| { kind: "learned"; skill: number; level: number }
 	| { kind: "switched"; weapon: number }
+	/** ITM-06: the weapon put away (`away`) or drawn again -- the body's hands, never the save */
+	| { kind: "holstered"; away: boolean }
 	| { kind: "delivered"; packs: number }
 	| {
 			kind: "refused";
