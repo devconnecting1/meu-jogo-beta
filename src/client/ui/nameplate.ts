@@ -16,7 +16,11 @@
  *    "LV 3 · 30 / 120"): a number next to a name, no badge plate;
  *  - the HANDLE ("@username") follows, smaller and greyer (OVER_WORLD.handle), and only when it adds information:
  *    it differs from the display name and the two fit (MAX_BOTH_CHARS);
- *  - the TITLE (MON-05) has its own line under the name, in its colour (client/ui/titleStyle.ts), only when shown.
+ *  - the TITLE (MON-05) has its own line under the name, in its rarity's colour (client/ui/titleStyle.ts), only when
+ *    shown;
+ *  - the SUPPORTER mark (MON-07) is a heart right before the name, in the Supporter rose (OVER_WORLD.supporter), only
+ *    while the server says this survivor's subscription is active. It is on the NAME line on purpose: the title line is
+ *    for what was earned by playing, and a subscription is never one of those.
  *
  * Your own plate shows LESS: no handle. You know who you are; the handle on your plate would only ever be read by you.
  * The level and the title stay: the level pops when you level up, and the title is what everyone else sees under you
@@ -60,6 +64,8 @@ const VOICE_GAP = space(1);
 export const LINE_GAP = space(0.25);
 /** "@Name" only when it adds information and stays short */
 const MAX_BOTH_CHARS = 26;
+/** MON-07: the Supporter mark, a heart before the name (a shape, so it never needs its colour to be read) */
+export const SUPPORTER_MARK = "♥";
 
 /** the text transparency of a plate giving way to another it overlaps */
 export const YIELD_FADE = 0.6;
@@ -140,6 +146,9 @@ export class Nameplate {
 	private readonly levelLabel: TextLabel;
 	/** every label of the plate (they fade together when it gives way; their shadows follow) */
 	private readonly labels: Array<TextLabel>;
+	/** MON-07: the Supporter mark's holder (hidden, it takes no room, unless the server marks this survivor) */
+	private readonly heartBox: Frame;
+	private lastSupporter = false;
 	/** MON-05: the title's holder (hidden, it takes no room) and its label */
 	private readonly titleBox: Frame;
 	private readonly titleLabel: TextLabel;
@@ -198,11 +207,18 @@ export class Nameplate {
 
 		const bold = fontOf("sans", Enum.FontWeight.Bold);
 		const level = voice(row, "LevelLabel", 1, OVER_WORLD.level, bold, zIndex);
-		const nameLabel = voice(row, "NameLabel", 2, OVER_WORLD.name, bold, zIndex);
+		// MON-07: the Supporter mark, right before the name -- a heart, a shape before a colour, in the Supporter rose.
+		// Built once, hidden (its holder takes no room) until the server says this survivor subscribes; it is never on
+		// the title's line, which is for what was earned (MON-05)
+		const heart = voice(row, "SupporterLabel", 2, OVER_WORLD.supporter, bold, zIndex);
+		heart.Text = SUPPORTER_MARK;
+		const heartBox = heart.Parent as Frame;
+		heartBox.Visible = false;
+		const nameLabel = voice(row, "NameLabel", 3, OVER_WORLD.name, bold, zIndex);
 		nameLabel.Text = displayName;
 		let handle: TextLabel | undefined;
 		if (showHandle) {
-			handle = voice(row, "HandleLabel", 3, OVER_WORLD.handle, fontOf("sans", Enum.FontWeight.Medium), zIndex);
+			handle = voice(row, "HandleLabel", 4, OVER_WORLD.handle, fontOf("sans", Enum.FontWeight.Medium), zIndex);
 			handle.Text = `@${userName}`;
 		}
 
@@ -221,6 +237,7 @@ export class Nameplate {
 			voices.Padding = new UDim(0, px(VOICE_GAP));
 			lines.Padding = new UDim(0, px(LINE_GAP));
 			level.TextSize = fixedTextPx(LEVEL_TEXT);
+			heart.TextSize = fixedTextPx(NAME_TEXT);
 			nameLabel.TextSize = fixedTextPx(NAME_TEXT);
 			if (handle !== undefined) handle.TextSize = fixedTextPx(HANDLE_TEXT);
 			title.TextSize = fixedTextPx(TITLE_TEXT);
@@ -229,8 +246,9 @@ export class Nameplate {
 		plate.Parent = parent;
 		this.plate = plate;
 		this.levelLabel = level;
-		this.labels = [level, nameLabel, title];
+		this.labels = [level, heart, nameLabel, title];
 		if (handle !== undefined) this.labels.push(handle);
+		this.heartBox = heartBox;
 		this.titleBox = titleBox;
 		this.titleLabel = title;
 		this.plateScale = scale;
@@ -240,9 +258,10 @@ export class Nameplate {
 	/**
 	 * (x, y) = screen px (relative to the parent) of the plate's top-centre. `title` is the title byte to show under the
 	 * name (`titleToWire`, 0 = none): the SERVER's word for an ally (their roster entry), `titleWireOf(save)` for
-	 * yourself -- never a title nobody checked.
+	 * yourself -- never a title nobody checked. `supporter` (MON-07): the server marked this survivor a Supporter
+	 * (client/systems/supporterClient.ts, the attribute only the server can set for everyone).
 	 */
-	update(x: number, y: number, level: number, visible: boolean, title = 0): void {
+	update(x: number, y: number, level: number, visible: boolean, title = 0, supporter = false): void {
 		if (visible !== this.shown) {
 			this.shown = visible;
 			this.plate.Visible = visible;
@@ -276,6 +295,10 @@ export class Nameplate {
 				this.titleLabel.Text = titleText(id, 0);
 				this.titleLabel.TextColor3 = titleColor(id);
 			}
+		}
+		if (supporter !== this.lastSupporter) {
+			this.lastSupporter = supporter;
+			this.heartBox.Visible = supporter;
 		}
 		if (this.world) this.giveWay();
 	}

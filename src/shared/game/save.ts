@@ -7,7 +7,7 @@ import { ETC_ITEMS } from "shared/data/etcItems";
 import { ItemKind } from "shared/data/kinds";
 import { COSTUMES, ECONOMY, SHOP_PACKS, costumeForEquip } from "shared/data/shop";
 import { OutfitLook, PetLook, cosmeticSlotOf, outfitLookOfEquip, petLookOfEquip } from "shared/data/cosmetics";
-import { TITLES, titleToWire } from "shared/data/titles";
+import { TITLES, TITLE_STAT_COUNT, titleStatIsBits, titleStatMax, titleToWire, unionBits } from "shared/data/titles";
 import { MP_PHASE } from "shared/net/mpConfig";
 
 /**
@@ -51,8 +51,19 @@ import { MP_PHASE } from "shared/net/mpConfig";
  * already died as far as it can tell (`deathCount > 0` -- where the old rule stopped -- or `runOver`), else 0; a v5 death
  * answered by waiting for daybreak left no record. A server rolled back to v5 drops it and takes achievements from
  * reports again; nothing earned is lost.
+ *
+ * v7 (MON-05, the titles that followed the first three): one new server-owned field, same document, additive:
+ * `titleStats`, TITLE_STAT_COUNT lifetime numbers only titles read (whole nights lived, the zombie and boss kinds put
+ * down, firearm and turret kills, constructions placed, items crafted: shared/data/titles.ts `TitleStat`). The flags
+ * of the new titles live in `titles`, whose length follows TITLES. A v6 document has no `titleStats`: every number
+ * starts at 0 -- the truth, since no server counted any of them before v7.
+ *   - a server rolled back to v6 code drops `titleStats` AND the flags of every title past the first three, in the save
+ *     and in the title record (v6 code opens it and rewrites it with the three it knows): a rollback below v7 costs the
+ *     titles earned since, and their counters. The three v5 titles and `zombieKills` survive it as before, and the kill
+ *     titles come back by themselves at the next kill (their goal is a `zombieKills` count). So a v7 build is never
+ *     rolled back: a fault in it is fixed forward (docs/DESIGN_RULES.md MON-05, "Save v7").
  */
-export const SAVE_VERSION = 6;
+export const SAVE_VERSION = 7;
 /** the first version that carries `runHp` / `runHunger`; below it those two fields are absent, not zero */
 export const SAVE_VERSION_RUN_BODY = 3;
 /** the first version with `equipOutfit` / `equipPet`; below it the one cosmetic lives in `equipDeco` */
@@ -61,6 +72,8 @@ export const SAVE_VERSION_COSMETIC_SLOTS = 4;
 export const SAVE_VERSION_TITLES = 5;
 /** the first version whose `achievements` are server-owned and that carries `lifeDeaths` (CON-04) */
 export const SAVE_VERSION_SERVER_ACHIEVEMENTS = 6;
+/** the first version with `titleStats` (MON-05, the titles past the first three) */
+export const SAVE_VERSION_TITLE_STATS = 7;
 
 /** hard sanity limits applied to every save the server reads or accepts */
 export const SAVE_LIMITS = {
@@ -147,7 +160,7 @@ export function defaultSettings(): SettingsData {
  * Field ownership:
  * - server-owned (the client copy is display-only and is ignored when reported):
  *   money, deathCount, bestDay, packsBought, costumes, runRev, version, titles, zombieKills, lifeNights, titleEpoch,
- *   achievements and lifeDeaths (v6)
+ *   achievements and lifeDeaths (v6), titleStats (v7)
  * - client-simulated, validated/clamped by the server: everything else
  *   (day, level, bossKills and packsOpened additionally have time/ordering limits on the server)
  * - from PROGRESS_SERVER_PHASE the progress (level, exp, skillPoint, bossKills, day) is the server's, and from
@@ -238,6 +251,11 @@ export interface PlayerSaveData {
 	 * never merged back. Server-owned: written only by server/main.server.ts.
 	 */
 	titleEpoch: number;
+	/**
+	 * v7 (MON-05): the numbers only titles read, one per shared/data/titles.ts `TitleStat` -- counts that only grow and
+	 * sets of bits that only gain bits. Lifetime (a new life keeps them), written only by server/save/titles.ts.
+	 */
+	titleStats: Array<number>;
 }
 
 /** the server-owned part of the save, pushed to the client after every economy change */
@@ -257,6 +275,8 @@ export interface Wallet {
 	lifeNights?: number;
 	/** v6 (CON-04): the achievement counters, the server's. Optional: a wallet from an older server has none */
 	achievements?: Array<number>;
+	/** v7 (MON-05): the title counters (`TitleStat`), a locked title's progress. Optional: older servers */
+	titleStats?: Array<number>;
 	/**
 	 * The day of this life (MP-13), from PROGRESS_SERVER_PHASE on the SERVER's (its midnight credits it, or refuses
 	 * to: dead, absent, AFK). Optional so a wallet from an older server still parses.
@@ -502,7 +522,8 @@ export function declineTutorial(save: PlayerSaveData): void {
 /**
  * Starts a new run after a game over: back to day 1 with the starter kit and a fresh continue price.
  * Kept: level/exp/skills, achievements, records, coins, packs, costumes (and the outfit / pet a costume unlocked),
- * titles, the kill count and the title shown (MON-05: what was earned is the survivor's, not the run's), and
+ * titles, the kill count, the title counters (`titleStats`, v7) and the title shown (MON-05: what was earned is the
+ * survivor's, not the run's), and
  * settings. The server applies it on the "newRun" action and when a world ends (MP-22, server/sim/life.ts
  * `restartWorld`); the client applies the same to its copy.
  */
@@ -567,6 +588,7 @@ function emptySave(): PlayerSaveData {
 		equipTitle: -1,
 		titleEpoch: 0,
 		lifeDeaths: 0,
+		titleStats: zeros(TITLE_STAT_COUNT),
 	};
 }
 
@@ -720,6 +742,7 @@ export function walletOf(save: PlayerSaveData): Wallet {
 		zombieKills: save.zombieKills,
 		lifeNights: save.lifeNights,
 		achievements: copyArray(save.achievements),
+		titleStats: copyArray(save.titleStats),
 		day: save.day,
 		level: save.level,
 		exp: save.exp,
@@ -760,6 +783,14 @@ function readIntArray(
 		out.push(readInt(src !== undefined ? src[i] : undefined, fb, 0, maxOf(i)));
 	}
 	return out;
+}
+
+/** the widest set of bits a title stat holds (the zombie kinds: 5), with room to spare */
+const TITLE_STAT_BITS = 8;
+
+/** v7 `titleStats`: TITLE_STAT_COUNT whole numbers, each within its stat's own range (a count, or its bits) */
+function readTitleStats(v: unknown, fallback: Array<number> | undefined): Array<number> {
+	return readIntArray(v, TITLE_STAT_COUNT, i => titleStatMax(i, SAVE_LIMITS.COUNTER_MAX), fallback);
 }
 
 function readSettings(v: unknown, fb: SettingsData): SettingsData {
@@ -848,6 +879,8 @@ function readProgress(r: Record<string, unknown>, fb: PlayerSaveData): PlayerSav
 		equipTitle: readInt(r.equipTitle, fb.equipTitle, -1, TITLES.size() - 1),
 		titleEpoch: fb.titleEpoch,
 		lifeDeaths: fb.lifeDeaths,
+		// v7: the SERVER's (copied, never read from `r`), like `titles`
+		titleStats: copyArray(fb.titleStats),
 	};
 }
 
@@ -901,6 +934,7 @@ export function enforceSaveInvariants(s: PlayerSaveData, previous?: PlayerSaveDa
 	s.zombieKills = math.clamp(math.floor(s.zombieKills), 0, L.COUNTER_MAX);
 	s.lifeNights = math.clamp(math.floor(s.lifeNights), 0, L.DAY_MAX);
 	s.lifeDeaths = math.clamp(math.floor(s.lifeDeaths), 0, L.COUNTER_MAX);
+	s.titleStats = readTitleStats(s.titleStats, undefined);
 	// v3 run body: a stored 0 means "not recorded" and the session starts at full, so the only rule here is
 	// that neither number may be negative or absurd. Hunger is capped at its own bar by the player state.
 	s.runHp = math.clamp(math.floor(s.runHp), 0, L.RUN_HP_MAX);
@@ -976,6 +1010,7 @@ export function copySaveInto(dst: PlayerSaveData, src: PlayerSaveData): PlayerSa
 	dst.equipTitle = src.equipTitle;
 	dst.titleEpoch = src.titleEpoch;
 	dst.lifeDeaths = src.lifeDeaths;
+	copyInto(dst.titleStats, src.titleStats);
 	return dst;
 }
 
@@ -1006,6 +1041,8 @@ export function sanitizeStoredSave(raw: unknown): PlayerSaveData {
 	// daybreak left no record at all
 	s.achievements = readIntArray(r.achievements, ACHIEVEMENTS.size(), i => ACHIEVEMENTS[i].max, undefined);
 	s.lifeDeaths = readInt(r.lifeDeaths, s.deathCount > 0 || s.runOver ? 1 : 0, 0, L.COUNTER_MAX);
+	// v7 (MON-05): absent in a v6 document -- nothing counted, which is the truth
+	s.titleStats = readTitleStats(r.titleStats, undefined);
 	const packMax = (): number => L.COUNTER_MAX;
 	if (r.packsBought !== undefined) {
 		s.packsBought = readIntArray(r.packsBought, SHOP_PACKS.size(), packMax, undefined);
@@ -1095,6 +1132,15 @@ export function applyWallet(save: PlayerSaveData, raw: unknown): boolean {
 		const got = readIntArray(w.achievements, ACHIEVEMENTS.size(), i => ACHIEVEMENTS[i].max, save.achievements);
 		for (let i = 0; i < ACHIEVEMENTS.size(); i++) {
 			save.achievements[i] = math.max(save.achievements[i] ?? 0, got[i]);
+		}
+	}
+	// v7 (MON-05): the title counters only grow -- a count keeps the larger, a set of bits the union -- so a wallet
+	// that arrives out of order never takes progress back
+	if (w.titleStats !== undefined) {
+		const got = readTitleStats(w.titleStats, save.titleStats);
+		for (let i = 0; i < TITLE_STAT_COUNT; i++) {
+			const mine = save.titleStats[i] ?? 0;
+			save.titleStats[i] = titleStatIsBits(i) ? unionBits(mine, got[i], TITLE_STAT_BITS) : math.max(mine, got[i]);
 		}
 	}
 	// the nights this life has lived are the server's alone (no client ever counts them): the wardrobe reads them;

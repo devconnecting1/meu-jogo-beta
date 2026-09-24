@@ -2093,6 +2093,8 @@ section("9) the nameplate (UI-04 clarification): every voice with its pixel shad
 		["name", TH.OVER_WORLD.name],
 		["level", TH.OVER_WORLD.level],
 		["handle", TH.OVER_WORLD.handle],
+		// MON-07: the Supporter heart before a subscriber's name
+		["supporter", TH.OVER_WORLD.supporter],
 		...TITLES.map((t, i) => [`[${t.name}]`, titleColor(i)]),
 	].map(([n, c]) => [n, c255(c)]);
 	const shadowRgb = c255(TH.OVER_WORLD.shadow);
@@ -2256,7 +2258,7 @@ section("9) the nameplate (UI-04 clarification): every voice with its pixel shad
 	);
 
 	// the record: the letter against the ground's mean colour (WCAG) and its own shadow (worst pixel), per ground
-	const shown = ["name", "level", "handle", ...TITLES.map(t => `[${t.name}]`)];
+	const shown = ["name", "level", "handle", "supporter", ...TITLES.map(t => `[${t.name}]`)];
 	console.log(
 		`\n    ground x light                          mean     ${shown.map(n => n.slice(0, 9).padStart(10)).join("")}`,
 	);

@@ -3,7 +3,15 @@ import { equippedIn, outfitLookOf, ownsCostume, ownsEquip, ownsTitle, petLookOf,
 import { COSTUMES, CostumeDef } from "shared/data/shop";
 import { EquipSlot } from "shared/data/equips";
 import { cosmeticSlotOf, outfitLookOfEquip, petLookOfEquip } from "shared/data/cosmetics";
-import { TITLES, TitleId, titleFromWire, titleToWire } from "shared/data/titles";
+import {
+	TITLES,
+	bitCount,
+	rarityKeyName,
+	rarityName,
+	titleFromWire,
+	titlesInOrder,
+	titleToWire,
+} from "shared/data/titles";
 import { langGet } from "shared/data/lang";
 import { invokeShopAction, onWalletChanged, requestSave, sessionReady } from "../systems/saveClient";
 import { PreviewSubject, SurvivorPreview } from "../view/cosmeticPreview";
@@ -11,7 +19,9 @@ import { drawingBox } from "./drawingBox";
 import { actionErrorText, fundsErrorText } from "./shop";
 import { popup, toast } from "./popup";
 import { Nameplate, profileOf } from "./nameplate";
-import { titleColor, titleText } from "./titleStyle";
+import { rarityColor, titleColor, titleText } from "./titleStyle";
+import { localIsSupporter, supporterOnOffer } from "../systems/supporterClient";
+import { SupporterPage, mountSupporterPage } from "./supporterPage";
 import { TEXT, THEME, fontOf, space } from "./theme";
 import {
 	Button,
@@ -29,6 +39,7 @@ import {
 	setButtonEnabled,
 	setButtonVariant,
 	setVisible,
+	sizeRow,
 	tabWidth,
 } from "./widgets";
 import * as Kit from "./window";
@@ -58,13 +69,18 @@ import * as Kit from "./window";
  *   the save the server re-checks for ownership on the next report.
  * - Nothing here pauses anything (UI-06): the wardrobe is a menu screen, reached from the lobby and the shop,
  *   never over a running world.
- * - Titles (MON-05), the third tab: ROWS, not tiles -- "[None]" / "Unequip title" first, then each title in brackets,
- *   in its colour, with the one line that says how it is earned. Locked rows are darker with a padlock; the one
- *   selected sits in the blue ring (kit ListRow); the one shown carries an EQUIPPED key. The details panel previews
- *   your nameplate with the selected title under your name (the world's own `Nameplate`, under your survivor), and
- *   the one action is Equip / Unequip -- or, locked, a disabled "Locked" with the requirement and the progress the
+ * - Titles (MON-05), the third tab: ROWS, not tiles, in a scrolling groove -- "[None]" / "Unequip title" first, then
+ *   every title by rarity from Common up (the ladder), each in brackets in its rarity's colour with the rarity's word
+ *   at the right ("Legendary": the colour is never the only cue) and the one line that says how it is earned. Locked
+ *   rows are darker with a padlock; a locked SECRET says "[???]" and only that it is a secret, until the server grants
+ *   it. The one selected sits in the blue ring (kit ListRow); the one shown carries an EQUIPPED key. The details panel
+ *   previews your nameplate with the selected title under your name (the world's own `Nameplate`, under your survivor),
+ *   and the one action is Equip / Unequip -- or, locked, a disabled "Locked" with the requirement and the progress the
  *   server counted ("Zombies put down: 37 / 100"). Equip asks the SERVER (server/save/titles.ts, through ShopAction):
- *   the request is the title id, and a title it never granted is refused. No search box: three titles.
+ *   the request is the title id, and a title it never granted is refused. No search box: the ladder is short.
+ * - Supporter (MON-07), a fourth tab only when the subscription is configured (shared/data/supporter.ts): the whole
+ *   body, apart from the titles -- what it gives, what it never gives, the price the platform states and its prompt
+ *   (client/ui/supporterPage.ts). The Supporter heart is never a title.
  * - Every page, row, tile and preview is built when the window opens; switching tabs and selecting only repaint and
  *   rewrite (tools/test-backpack.mjs parts 9 and 10 count the Instances).
  */
@@ -115,6 +131,7 @@ const HELP_TEXT = [
 	"Everyone sees them, and they change nothing else: no defence, no speed, no loot.",
 	"Locked items show their price in coins. Coins are earned by playing: days survived, record days and bosses.",
 	"Titles are never sold: each one is earned by playing, and shows under your name for everyone.",
+	"A title's colour says how rare it is, from Common to Legendary. A few are secret until you earn them.",
 	"Pick an item to try it on in the preview, then buy or wear it.",
 ].join("#");
 
@@ -123,11 +140,15 @@ const CAPTION = "What you buy is yours for good, and everyone sees it. Coins are
 /** under the titles: what a title is (MON-05) */
 const TITLE_CAPTION = "Titles are earned by playing, never sold. Everyone sees yours under your name.";
 
-/** the titles' rows (MON-05): two lines each -- the title, then how it is earned */
+/** the titles' rows (MON-05): two lines each -- the title and its rarity, then how it is earned */
 const TITLE_ROW_H = 58;
-const TITLE_ROW_W = GROOVE_W - GRID_PAD * 2;
 /** the EQUIPPED key at the right of the row shown under your name */
 const WORN_KEY_H = 22;
+/** the rarity's word at the right of a row's first line ("Legendary") */
+const RARITY_W = 96;
+/** a secret title while it is locked (MON-05): its name and its how-to stay a surprise */
+const SECRET_NAME = "???";
+const SECRET_HOWTO = "A secret title. It shows here once you earn it.";
 
 /** the note of a slot: what the cosmetic does, and what it does not (MON-01) */
 function slotNote(slot: number): string {
@@ -171,22 +192,43 @@ function shownTitle(ctx: GameContext): number {
 /**
  * How far a locked title is, on the counters the SERVER keeps (the wallet and the LoadAck mirror them): the kills its
  * credit gave you, the midnights it credited to this life (`lifeNights` -- not `day`, which may hold days counted
- * before the server counted them, or set by an admin). Never above the title's goal.
+ * before the server counted them, or set by an admin), the nights of a life that has not died, and the title counters
+ * (`titleStats`: nights lived, the kinds of zombie and boss, firearm and turret kills, constructions, crafts). Never
+ * above the title's goal; an earned title is at its goal whatever the counter says (it may have been earned before
+ * the counter existed).
  */
-function titleProgress(ctx: GameContext, titleId: number): number {
+export function titleProgress(ctx: GameContext, titleId: number): number {
 	const save = ctx.save;
 	const def = TITLES[titleId];
 	if (def === undefined) return 0;
-	if (titleId === TitleId.HordeBreaker) return math.clamp(save.zombieKills, 0, def.goal);
-	if (titleId === TitleId.WeekOne) return math.clamp(save.lifeNights, 0, def.goal);
-	return ownsTitle(save, titleId) ? def.goal : 0;
+	if (ownsTitle(save, titleId)) return def.goal;
+	let v = 0;
+	if (def.track === "kills") v = save.zombieKills;
+	else if (def.track === "lifeNights") v = save.lifeNights;
+	else if (def.track === "deathless") v = save.lifeDeaths > 0 ? 0 : save.lifeNights;
+	else if (def.track === "stat" && def.stat !== undefined) v = save.titleStats[def.stat] ?? 0;
+	else if (def.track === "bits" && def.stat !== undefined) v = bitCount(save.titleStats[def.stat] ?? 0, 8);
+	return math.clamp(v, 0, def.goal);
 }
 
-/** one row of the Titles page: the title it offers (-1 = the "[None]" row) and its EQUIPPED key */
+/**
+ * One row of the Titles page: the title it offers (-1 = the "[None]" row), its EQUIPPED key, and the two labels a
+ * secret title rewrites the moment it is earned (its name and its how-to; every other row writes them once).
+ */
 interface TitleRow {
 	id: number;
 	row: Kit.ListRowHandle;
 	worn: Frame;
+	name: TextLabel;
+	howTo: TextLabel;
+	/** the row shows a secret title's real name (it was earned); false for a locked secret and every other row */
+	revealed: boolean;
+}
+
+/** a secret title the save has not earned: the wardrobe keeps its name and how-to to itself (MON-05) */
+function hiddenSecret(ctx: GameContext, titleId: number): boolean {
+	const def = TITLES[titleId];
+	return def !== undefined && def.secret === true && !ownsTitle(ctx.save, titleId);
 }
 
 /** the box a Renderer drawing lives in: client/ui/drawingBox.ts (kept importable from here: lobby, Survivor screen) */
@@ -230,8 +272,11 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 	let refresh = (): void => {};
 	// MON-05: the Titles tab comes after the cosmetic pages; its rows, and which one is selected ("[None]" is row 0)
 	let titlesTab = -1;
+	/** MON-07: the Supporter tab's index and its page, -1 / undefined when there is no subscription to offer */
+	let supporterTab = -1;
+	let supporter: SupporterPage | undefined;
 	const titleRows: Array<TitleRow> = [];
-	let titleSel = shownTitle(ctx) + 1;
+	let titleSel = 0;
 
 	// ---- the details column: the selection's name and slot, the preview, its status, the one action
 	const details = Kit.Section(panel, "Details", { x: DETAIL_X, y: bodyY, w: DETAIL_W, h: bodyH, title: "" });
@@ -301,7 +346,8 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 	/** the title byte the preview plate shows (`titleToWire`) */
 	let previewTitle = 0;
 	const placePlate = (): void => {
-		titlePlate.update(plateHost.AbsoluteSize.X / 2, 0, ctx.save.level, true, previewTitle);
+		// exactly the street's plate: your title (or the one tried on) and, MON-07, your Supporter heart if you wear one
+		titlePlate.update(plateHost.AbsoluteSize.X / 2, 0, ctx.save.level, true, previewTitle, localIsSupporter());
 	};
 	plateHost.GetPropertyChangedSignal("AbsoluteSize").Connect(placePlate);
 	setVisible(titleBox, false);
@@ -500,11 +546,14 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 		for (let i = 0; i < pages.size(); i++) if (pages[i].slot === handlers.slot) tab = i;
 	}
 
-	// ---- MON-05: the Titles page -- ROWS on the groove, "[None]" first, then every title in the data table's order
+	// ---- MON-05: the Titles page -- ROWS in a scrolling groove, "[None]" first, then every title by rarity from common
+	// up (shared/data/titles.ts `titlesInOrder`): the list reads as a ladder, and the colours come in bands
 	titlesTab = pages.size();
-	const rowCount = TITLES.size() + 1;
-	const titleGrooveH = rowCount * TITLE_ROW_H + (rowCount - 1) * TILE_GAP + GRID_PAD * 2;
-	const titleSectionH = Kit.sectionHeight(titleGrooveH);
+	const ordered = titlesInOrder();
+	const rowCount = ordered.size() + 1;
+	// the section fills the column down to the caption; the groove scrolls (the kit's list: a pad scrolls to its focus)
+	const titleSectionH = bodyH - 44 - space(3);
+	const titleGrooveH = titleSectionH - Kit.sectionHeight(0);
 	const titleFrame = makeFrame(panel, `Page${titlesTab}`, PAD, bodyY, GRID_W, bodyH, THEME.background, {
 		transparency: 1,
 	});
@@ -519,7 +568,7 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 		font: BOLD,
 		zIndex: titleSec.frame.ZIndex + 1,
 	});
-	const titleGroove = Kit.Groove(titleSec.frame, "Groove", INSET, Kit.SECTION_CONTENT_Y, GROOVE_W, titleGrooveH);
+	const titleList = Kit.SettingsList(titleSec.frame, "Groove", INSET, Kit.SECTION_CONTENT_Y, GROOVE_W, titleGrooveH);
 	makeLabel(
 		titleFrame,
 		"Caption",
@@ -533,36 +582,68 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 		{ align: "left", valign: "top" },
 	);
 	const textX = Kit.LIST_ROW_TEXT_X;
+	const rowW = titleList.designW;
 	for (let j = 0; j < rowCount; j++) {
-		const id = j - 1;
-		const row = Kit.ListRow(titleGroove, `Row${j}`, {
-			x: GRID_PAD,
-			y: GRID_PAD + j * (TITLE_ROW_H + TILE_GAP),
-			w: TITLE_ROW_W,
+		const id = j === 0 ? -1 : ordered[j - 1].id;
+		const row = Kit.ListRow(titleList.frame, `Row${j}`, {
+			x: 0,
+			y: 0,
+			w: rowW,
 			h: TITLE_ROW_H,
-			zIndex: titleGroove.ZIndex + 1,
+			zIndex: titleList.frame.ZIndex + 1,
 			onClick: (): void => {
 				titleSel = j;
 				refresh();
 			},
 		});
+		// a row of the scrolling list: the kit's layout places it, in the ladder's order, at its design height
+		row.button.LayoutOrder = j;
+		sizeRow(titleList, row.button, TITLE_ROW_H);
 		const z = row.content.ZIndex + 1;
-		// line 1: the title in brackets, in its colour; line 2: how it is earned (built once, never rewritten)
-		const name = id < 0 ? `[${tr("None")}]` : titleText(id, lang);
-		const tone = id < 0 ? THEME.foreground : titleColor(id);
-		makeLabel(row.content, "Name", name, textX, 7, TITLE_ROW_W - textX - 104, 24, TEXT.lg, tone, {
-			font: BOLD,
-			align: "left",
-			zIndex: z,
-		});
-		const howTo = tr(id < 0 ? "Unequip title" : TITLES[id].howTo);
-		makeLabel(
+		const def = id >= 0 ? TITLES[id] : undefined;
+		// line 1: the title in brackets, in its rarity's colour, and the rarity's word at the right (the colour is never
+		// the only cue); line 2: how it is earned. A locked secret shows "[???]" and says only that it is a secret
+		const secret = id >= 0 && hiddenSecret(ctx, id);
+		const tone = def === undefined ? THEME.foreground : titleColor(id);
+		const nameText = def === undefined ? `[${tr("None")}]` : secret ? `[${SECRET_NAME}]` : titleText(id, lang);
+		const name = makeLabel(
+			row.content,
+			"Name",
+			nameText,
+			textX,
+			7,
+			rowW - textX - RARITY_W - space(4),
+			24,
+			TEXT.lg,
+			tone,
+			{
+				font: BOLD,
+				align: "left",
+				zIndex: z,
+			},
+		);
+		if (def !== undefined) {
+			makeLabel(
+				row.content,
+				"Rarity",
+				tr(rarityName(def.rarity)),
+				rowW - space(3) - RARITY_W,
+				7,
+				RARITY_W,
+				24,
+				TEXT.sm,
+				rarityColor(def.rarity),
+				{ font: BOLD, align: "right", zIndex: z },
+			);
+		}
+		const howText = tr(def === undefined ? "Unequip title" : secret ? SECRET_HOWTO : def.howTo);
+		const howTo = makeLabel(
 			row.content,
 			"HowTo",
-			howTo,
+			howText,
 			textX,
 			31,
-			TITLE_ROW_W - textX - space(3),
+			rowW - textX - space(3) - 80,
 			20,
 			TEXT.sm,
 			THEME.mutedForeground,
@@ -571,9 +652,14 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 				zIndex: z,
 			},
 		);
+		// a long how-to ends in "..." on the row; the details panel says it in full
+		for (const l of [name, howTo]) {
+			l.TextWrapped = false;
+			l.TextTruncate = Enum.TextTruncate.AtEnd;
+		}
 		const worn = Keycap(row.content, "Worn", tr("EQUIPPED"), {
-			x: TITLE_ROW_W - space(3),
-			cy: 19,
+			x: rowW - space(3),
+			cy: 41,
 			anchorX: 1,
 			h: WORN_KEY_H,
 			minW: 72,
@@ -581,8 +667,12 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 			font: BOLD,
 			zIndex: z,
 		});
-		titleRows.push({ id, row, worn });
+		titleRows.push({ id, row, worn, name, howTo, revealed: !secret });
 	}
+
+	// the title shown under your name opens selected (its row, in the ladder's order)
+	titleSel = 0;
+	for (let j = 0; j < titleRows.size(); j++) if (titleRows[j].id === shownTitle(ctx)) titleSel = j;
 
 	/** the Titles page and, while it is the tab, the details column: a repaint of what exists, never a rebuild */
 	const refreshTitles = (): void => {
@@ -593,6 +683,12 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 			const r = titleRows[j];
 			const owned = r.id < 0 || ownsTitle(save, r.id);
 			if (r.id >= 0 && owned) earned++;
+			// a secret the server just granted shows its real name and how-to, once (a rewrite, never a rebuild)
+			if (!r.revealed && owned) {
+				r.revealed = true;
+				r.name.Text = titleText(r.id, lang);
+				r.howTo.Text = tr(TITLES[r.id].howTo);
+			}
 			const worn = r.id === shown;
 			r.row.update(owned ? (worn ? "equipped" : "owned") : "locked", j === titleSel);
 			setVisible(r.worn, worn && r.id >= 0);
@@ -604,17 +700,28 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 		const id = sel.id;
 		const owned = id < 0 || ownsTitle(save, id);
 		const worn = id === shown;
-		if (details.title !== undefined) details.title.Text = id < 0 ? tr("None") : tr(TITLES[id].name);
-		Kit.setValueKey(slotKey, tr("TITLE"));
+		const secret = id >= 0 && hiddenSecret(ctx, id);
+		let heading = tr("None");
+		if (id >= 0) heading = secret ? tr("Secret title") : tr(TITLES[id].name);
+		if (details.title !== undefined) details.title.Text = heading;
+		// the key on the title line says how rare it is ("RARE"; the colour is the row's, the word is here too)
+		Kit.setValueKey(slotKey, tr(id < 0 ? "TITLE" : rarityKeyName(TITLES[id].rarity)));
 		statusRow.label.Text = tr("Status");
 		Kit.setValueKey(statusKey, tr(!owned ? "Locked" : worn ? "Equipped" : "Owned"));
 		if (id < 0) {
 			note.Text = tr("No title under your name.");
+		} else if (secret) {
+			note.Text = tr(SECRET_HOWTO);
 		} else if (!owned) {
-			// the requirement and how far the server counted you (MON-05): "Zombies put down: 37 / 100"
+			// the requirement and how far the server counted you (MON-05): "Zombies put down: 37 / 100"; a title earned
+			// in one go ("none": a night, a vault) has only its sentence
 			const def = TITLES[id];
-			const progress = `${tr(def.progressLabel)}: ${fmtInt(titleProgress(ctx, id))} / ${fmtInt(def.goal)}`;
-			note.Text = `${tr(def.howTo)} ${progress}`;
+			if (def.track === "none") {
+				note.Text = tr(def.howTo);
+			} else {
+				const progress = `${tr(def.progressLabel)}: ${fmtInt(titleProgress(ctx, id))} / ${fmtInt(def.goal)}`;
+				note.Text = `${tr(def.howTo)} ${progress}`;
+			}
 		} else {
 			note.Text = tr("Earned by playing, never sold. Everyone sees it under your name.");
 		}
@@ -636,8 +743,9 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 			setButtonVariant(action, "default");
 			setButtonEnabled(action, !busy);
 		}
-		// try it on: your survivor as you look now, with the selected title under your name
-		previewTitle = titleToWire(id);
+		// try it on: your survivor as you look now, with the selected title under your name (a locked secret keeps its
+		// name to itself here too)
+		previewTitle = secret ? 0 : titleToWire(id);
 		titleBody.setOutfit(outfitLookOf(save));
 		titleBody.draw(0);
 		placePlate();
@@ -648,10 +756,21 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 		coins.refresh();
 		const save = ctx.save;
 		const onTitles = tab === titlesTab;
+		// MON-07: the Supporter tab (only with a subscription configured) has the whole body: no details column
+		const onSupporter = supporter !== undefined && tab === supporterTab;
+		if (supporter !== undefined) {
+			setVisible(supporter.frame, onSupporter);
+			if (onSupporter) supporter.refresh();
+		}
+		setVisible(details.frame, !onSupporter);
 		setVisible(titleFrame, onTitles);
 		setVisible(previewBox, !onTitles);
 		setVisible(titleBox, onTitles);
 		refreshTitles();
+		if (onSupporter) {
+			for (const page of pages) setVisible(page.frame, false);
+			return;
+		}
 		for (let i = 0; i < pages.size(); i++) {
 			const page = pages[i];
 			setVisible(page.frame, i === tab);
@@ -721,9 +840,16 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 		preview.setPet(page.slot === EquipSlot.Pet ? petLookOfEquip(c.equipId) : petLookOf(save));
 	};
 
-	// ---- the tab bar: only the pages that exist, and the titles
+	// ---- MON-07: the Supporter tab, after the titles and apart from them -- only when the subscription exists
+	if (supporterOnOffer()) {
+		supporterTab = titlesTab + 1;
+		supporter = mountSupporterPage(ctx, panel, PAD, bodyY, WIN_W - PAD * 2, bodyH);
+	}
+
+	// ---- the tab bar: only the pages that exist, the titles, and the Supporter tab when there is one
 	const names = pages.map(p => tr(p.key));
 	names.push(tr("Titles"));
+	if (supporter !== undefined) names.push(tr("Supporter"));
 	const widths = names.map(n => tabWidth(n));
 	let tabsW = 0;
 	for (const w of widths) tabsW += w + space(3);
@@ -743,6 +869,10 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 				if (r !== undefined) autoFocus(r.row.button);
 				return;
 			}
+			if (supporter !== undefined && i === supporterTab) {
+				autoFocus(supporter.action);
+				return;
+			}
 			const page = pages[i];
 			if (page !== undefined) autoFocus(page.tiles[page.selected].button);
 		},
@@ -756,7 +886,7 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 	// tab it is hidden, and the title preview is still: nothing to draw per frame
 	const t0 = os.clock();
 	const conn = RunService.RenderStepped.Connect(() => {
-		if (tab !== titlesTab) preview.draw(os.clock() - t0);
+		if (tab !== titlesTab && tab !== supporterTab) preview.draw(os.clock() - t0);
 	});
 	const unsubscribe = onWalletChanged(() => {
 		if (!busy) refresh();
@@ -770,6 +900,7 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 		preview.destroy();
 		titleBody.destroy();
 		titlePlate.destroy();
+		supporter?.destroy();
 		root.Destroy();
 	};
 }

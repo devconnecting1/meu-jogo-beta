@@ -1899,6 +1899,13 @@ console.log("\n9b) os titulos (MON-05): linhas, cadeado, o selecionado, a previa
 	const deep = (root, name) => root?.GetDescendants().find(d => d.Name === name);
 	const titlesPage = () => deep(screen(), "Page2");
 	const row = j => deep(titlesPage(), `Row${j}`);
+	// the rows follow the ladder (shared/data/titles.ts `titlesInOrder`: by rarity from common up), "[None]" is row 0
+	const ORDER = TIT.titlesInOrder().map(t => t.id);
+	const rowOf = id => 1 + ORDER.indexOf(id);
+	const S = rowOf(TIT.TitleId.Survivor);
+	const H = rowOf(TIT.TitleId.HordeBreaker);
+	const W = rowOf(TIT.TitleId.WeekOne);
+	const { RARITY } = require(join(SRC, "client/ui/theme.ts"));
 	const rowText = (j, name) => deep(row(j), name)?.Text;
 	const rowColor = (j, name) => deep(row(j), name)?.TextColor3;
 	const face = r => r.FindFirstChild("PlateFace")?.BackgroundColor3;
@@ -1937,8 +1944,35 @@ console.log("\n9b) os titulos (MON-05): linhas, cadeado, o selecionado, a previa
 		.GetDescendants()
 		.filter(d => /^Row\d+$/.test(d.Name));
 	check(
-		"linhas, nao ladrilhos: [None] + 3 titulos",
-		rows.length === 4 && rows.every(x => x.ClassName === "TextButton"),
+		`linhas, nao ladrilhos: [None] + ${TIT.TITLES.length} titulos`,
+		rows.length === TIT.TITLES.length + 1 && rows.every(x => x.ClassName === "TextButton"),
+	);
+	check(
+		"numa lista que rola (a do kit: o direcional rola ate o foco), na ordem da escada",
+		rows.every(x => x.Parent?.ClassName === "ScrollingFrame") &&
+			rows.every(x => x.LayoutOrder === Number(x.Name.slice(3))) &&
+			S === 1 &&
+			ORDER.every(
+				(id, i) =>
+					i === 0 || TIT.rarityRank(TIT.TITLES[ORDER[i - 1]].rarity) <= TIT.rarityRank(TIT.TITLES[id].rarity),
+			),
+	);
+	check(
+		"a raridade escrita em cada linha, na cor dela (a cor nunca e a unica pista)",
+		ORDER.every(
+			id =>
+				rowText(rowOf(id), "Rarity") === TIT.rarityName(TIT.TITLES[id].rarity) &&
+				sameColor(rowColor(rowOf(id), "Rarity"), RARITY[TIT.TITLES[id].rarity]),
+		) && deep(row(0), "Rarity") === undefined,
+	);
+	const G = rowOf(TIT.TitleId.Ghost);
+	check(
+		"um segredo bloqueado: [???] e so que e segredo (nem o nome nem como ganhar)",
+		rowText(G, "Name") === "[???]" &&
+			rowText(G, "HowTo") === "A secret title. It shows here once you earn it." &&
+			rowText(G, "Rarity") === "Rare" &&
+			locked(row(G)),
+		`${rowText(G, "Name")} / ${rowText(G, "HowTo")}`,
 	);
 	check(
 		"sem campo de busca",
@@ -1953,42 +1987,43 @@ console.log("\n9b) os titulos (MON-05): linhas, cadeado, o selecionado, a previa
 	);
 	check(
 		"cada titulo entre colchetes, com a linha de como ganhar",
-		rowText(1, "Name") === "[Survivor]" &&
-			rowText(2, "Name") === "[Horde Breaker]" &&
-			rowText(3, "Name") === "[Week One]" &&
-			rowText(1, "HowTo") === "Survive your first night." &&
-			rowText(2, "HowTo") === "Put down 100 zombies." &&
-			rowText(3, "HowTo") === "Stay alive for 7 days in one life.",
+		rowText(S, "Name") === "[Survivor]" &&
+			rowText(H, "Name") === "[Horde Breaker]" &&
+			rowText(W, "Name") === "[Week One]" &&
+			rowText(S, "HowTo") === "Survive your first night." &&
+			rowText(H, "HowTo") === "Put down 100 zombies." &&
+			rowText(W, "HowTo") === "Stay alive for 7 days in one life.",
 	);
 	check(
-		"na cor de cada um: verde, laranja, amarelo (tokens STAT)",
-		sameColor(rowColor(1, "Name"), STAT.bonus) &&
-			sameColor(rowColor(2, "Name"), STAT.effect) &&
-			sameColor(rowColor(3, "Name"), STAT.value),
+		"na cor da raridade: Survivor comum (o verde de sempre), Horde Breaker e Week One incomuns (tokens RARITY)",
+		sameColor(rowColor(S, "Name"), RARITY.common) &&
+			sameColor(RARITY.common, STAT.bonus) &&
+			sameColor(rowColor(H, "Name"), RARITY.uncommon) &&
+			sameColor(rowColor(W, "Name"), RARITY.uncommon),
 	);
 	check(
 		"bloqueadas: mais escuras e com cadeado; a ganha, grafite e sem cadeado",
-		locked(row(2)) &&
-			locked(row(3)) &&
-			sameColor(face(row(2)), SURFACE.well) &&
-			!locked(row(1)) &&
-			sameColor(face(row(1)), SURFACE.row) &&
+		locked(row(H)) &&
+			locked(row(W)) &&
+			sameColor(face(row(H)), SURFACE.well) &&
+			!locked(row(S)) &&
+			sameColor(face(row(S)), SURFACE.row) &&
 			!locked(row(0)),
 	);
 	check(
 		"o titulo mostrado abre selecionado (o anel azul) e com a tecla EQUIPPED",
-		ringed(row(1)) && worn(1) && !worn(0),
+		ringed(row(S)) && worn(S) && !worn(0),
 	);
-	check("so ele: nenhuma outra linha no anel", !ringed(row(0)) && !ringed(row(2)) && !ringed(row(3)));
+	check("so ele: nenhuma outra linha no anel", !ringed(row(0)) && !ringed(row(H)) && !ringed(row(W)));
 	check(
-		"contagem na secao: 1 / 3",
-		legend(deep(titlesPage(), "Count")) === "1 / 3",
+		`contagem na secao: 1 / ${TIT.TITLES.length} (os segredos contam)`,
+		legend(deep(titlesPage(), "Count")) === `1 / ${TIT.TITLES.length}`,
 		legend(deep(titlesPage(), "Count")),
 	);
 	check(
-		"painel: nome, TITLE, Equipped e Unequip",
+		"painel: nome, a raridade na tecla (COMMON), Equipped e Unequip",
 		title() === "Survivor" &&
-			legend(deep(details(), "Slot")) === "TITLE" &&
+			legend(deep(details(), "Slot")) === "COMMON" &&
 			status() === "Equipped" &&
 			action().Text === "Unequip" &&
 			!disabled(action()),
@@ -1998,7 +2033,7 @@ console.log("\n9b) os titulos (MON-05): linhas, cadeado, o selecionado, a previa
 		"a previa e a placa do mundo, com o titulo SOB o nome, na cor dele",
 		titleShown() &&
 			previewTitle().Text === "[Survivor]" &&
-			sameColor(previewTitle().TextColor3, STAT.bonus) &&
+			sameColor(previewTitle().TextColor3, RARITY.common) &&
 			previewTitle().Parent.Parent === deep(deep(details(), "TitlePreview"), "NameRow")?.Parent &&
 			previewTitle().Parent.LayoutOrder > deep(deep(details(), "TitlePreview"), "NameRow").LayoutOrder,
 	);
@@ -2009,9 +2044,9 @@ console.log("\n9b) os titulos (MON-05): linhas, cadeado, o selecionado, a previa
 	);
 
 	// a locked title: "Locked" disabled, the requirement and the server's count
-	r = phase("titulos: seleciona Horde Breaker (bloqueado)", () => click(row(2), "Horde Breaker"));
+	r = phase("titulos: seleciona Horde Breaker (bloqueado)", () => click(row(H), "Horde Breaker"));
 	check("selecionar uma linha nao cria nem destroi Instance", zero(r), cost(r));
-	check("o anel vai para ela", ringed(row(2)) && !ringed(row(1)) && locked(row(2)));
+	check("o anel vai para ela", ringed(row(H)) && !ringed(row(S)) && locked(row(H)));
 	check(
 		"bloqueado: Locked, desabilitado",
 		status() === "Locked" && action().Text === "Locked" && disabled(action()),
@@ -2023,12 +2058,46 @@ console.log("\n9b) os titulos (MON-05): linhas, cadeado, o selecionado, a previa
 		noteText(),
 	);
 	check(
-		"a previa experimenta o titulo, em laranja",
-		previewTitle().Text === "[Horde Breaker]" && sameColor(previewTitle().TextColor3, STAT.effect),
+		"a previa experimenta o titulo, na cor da raridade dele (incomum)",
+		previewTitle().Text === "[Horde Breaker]" && sameColor(previewTitle().TextColor3, RARITY.uncommon),
 	);
+	// a locked secret: the details keep it too, and the preview does not try it on (its name would be out)
+	r = phase("titulos: seleciona um segredo bloqueado", () => click(row(G), "Ghost"));
+	check("selecionar o segredo nao cria nem destroi Instance", zero(r), cost(r));
+	check(
+		"o segredo bloqueado no painel: 'Secret title', RARE, Locked, so a frase do segredo e a placa sem titulo",
+		title() === "Secret title" &&
+			legend(deep(details(), "Slot")) === "RARE" &&
+			status() === "Locked" &&
+			noteText() === "A secret title. It shows here once you earn it." &&
+			!titleShown(),
+		`${title()} / ${legend(deep(details(), "Slot"))} / ${noteText()}`,
+	);
+	const TK = rowOf(TIT.TitleId.Untouched);
+	click(row(TK), "Untouched");
+	check(
+		"um titulo de uma vez so (uma noite): so a frase, sem contagem",
+		noteText() === "Survive a night without losing health, putting down 10 zombies.",
+		noteText(),
+	);
+	save.titleStats[TIT.TitleStat.ZombieKinds] = 0b01011;
+	click(row(rowOf(TIT.TitleId.Tracker)), "Tracker");
+	check(
+		"Tracker conta os tipos que o servidor marcou (os bits de titleStats): 3 / 5",
+		noteText() === "Put down every kind of zombie. Kinds of zombie put down: 3 / 5",
+		noteText(),
+	);
+	save.lifeDeaths = 1;
+	click(row(rowOf(TIT.TitleId.Unbroken)), "Unbroken");
+	check(
+		"Unbroken numa vida que ja morreu: 0 / 10 (as noites so contam sem morte)",
+		noteText().endsWith("Nights without dying in this life: 0 / 10"),
+		noteText(),
+	);
+	save.lifeDeaths = 0;
 	click(action(), "Locked");
 	check("um botao desabilitado nao pede nada ao servidor", asked.length === 0);
-	click(row(3), "Week One");
+	click(row(W), "Week One");
 	check(
 		"Week One conta as noites que o SERVIDOR creditou a esta vida (nao o dia do save): 2 / 7",
 		noteText() === "Stay alive for 7 days in one life. Nights survived in this life: 2 / 7",
@@ -2045,12 +2114,12 @@ console.log("\n9b) os titulos (MON-05): linhas, cadeado, o selecionado, a previa
 		asked.length === 1 && JSON.stringify(asked[0]) === JSON.stringify({ kind: "equipTitle", titleId: -1 }),
 		JSON.stringify(asked),
 	);
-	check("o servidor tirou, e a copia do cliente tambem", save.equipTitle === -1 && !worn(1));
+	check("o servidor tirou, e a copia do cliente tambem", save.equipTitle === -1 && !worn(S));
 	check("sem titulo mostrado, [None] nao tem o que tirar", status() === "Equipped" && disabled(action()));
 	check("e a placa da previa fica so com o nome", !titleShown());
 
 	// Equip the earned one
-	click(row(1), "Survivor");
+	click(row(S), "Survivor");
 	check(
 		"um titulo ganho e nao mostrado: Equip",
 		status() === "Owned" && action().Text === "Equip" && !disabled(action()),
@@ -2061,17 +2130,30 @@ console.log("\n9b) os titulos (MON-05): linhas, cadeado, o selecionado, a previa
 		"o pedido e so o id, e o servidor aceita um titulo que concedeu",
 		JSON.stringify(asked[1]) === JSON.stringify({ kind: "equipTitle", titleId: TIT.TitleId.Survivor }) &&
 			save.equipTitle === TIT.TitleId.Survivor &&
-			worn(1),
+			worn(S),
 		JSON.stringify(asked),
 	);
 
 	// the server grants one while the window is open (the wallet): the row unlocks in place
 	save.titles[TIT.TitleId.HordeBreaker] = 1;
-	r = phase("titulos: um titulo novo chega", () => click(row(2), "Horde Breaker"));
+	r = phase("titulos: um titulo novo chega", () => click(row(H), "Horde Breaker"));
 	check("desbloquear redesenha no lugar", zero(r), cost(r));
-	check("a linha perde o cadeado e clareia", !locked(row(2)) && sameColor(face(row(2)), SURFACE.row));
-	check("contagem: 2 / 3", legend(deep(titlesPage(), "Count")) === "2 / 3");
+	check("a linha perde o cadeado e clareia", !locked(row(H)) && sameColor(face(row(H)), SURFACE.row));
+	check(`contagem: 2 / ${TIT.TITLES.length}`, legend(deep(titlesPage(), "Count")) === `2 / ${TIT.TITLES.length}`);
 	check("e oferece Equip", action().Text === "Equip" && !disabled(action()));
+	// a secret the server grants: its row tells its name and how it was earned, in place
+	save.titles[TIT.TitleId.Ghost] = 1;
+	r = phase("titulos: um segredo chega", () => click(row(G), "Ghost"));
+	check("revelar o segredo reescreve no lugar (nenhuma Instance)", zero(r), cost(r));
+	check(
+		"o segredo ganho mostra o nome e como foi ganho, na linha e no painel",
+		rowText(G, "Name") === "[Ghost]" &&
+			rowText(G, "HowTo") === TIT.TITLES[TIT.TitleId.Ghost].howTo &&
+			!locked(row(G)) &&
+			title() === "Ghost" &&
+			action().Text === "Equip",
+		`${rowText(G, "Name")} / ${title()}`,
+	);
 
 	r = phase("titulos: 4 trocas de aba", () => {
 		for (const i of [0, 2, 1, 2]) click(deep(screen(), "Tabs").FindFirstChild(`Tab${i}`), `tab ${i}`);
@@ -2175,10 +2257,10 @@ console.log("\n9b) os titulos (MON-05): linhas, cadeado, o selecionado, a previa
 	plate.update(100, 100, 12, true, TIT.titleToWire(TIT.TitleId.WeekOne));
 	const twoLines = oneLine + (pill.FindFirstChildOfClass("UIListLayout")?.Padding.Offset ?? 0) + lineH([titleLabel]);
 	check(
-		"com titulo: a segunda linha, sob o nome, na cor dele, sem contorno (UI-04)",
+		"com titulo: a segunda linha, sob o nome, na cor da raridade dele, sem contorno (UI-04)",
 		titleBox.Visible &&
 			titleLabel.Text === "[Week One]" &&
-			sameColor(titleLabel.TextColor3, STAT.value) &&
+			sameColor(titleLabel.TextColor3, require(join(SRC, "client/ui/theme.ts")).RARITY.uncommon) &&
 			titleBox.LayoutOrder > nameRow.LayoutOrder &&
 			titleLabel.FindFirstChildOfClass("UIStroke") === undefined &&
 			(titleLabel.TextStrokeTransparency ?? 1) >= 1 &&
@@ -2199,6 +2281,29 @@ console.log("\n9b) os titulos (MON-05): linhas, cadeado, o selecionado, a previa
 	);
 	plate.update(100, 100, 12, true, 99);
 	check("um byte que nao e titulo nao desenha nada", titleBox.Visible === false);
+
+	// MON-07: the Supporter heart -- on the NAME line, before the name, only while the server says so
+	const heartBox = nameRow.FindFirstChild("SupporterLabelBox");
+	const heart = heartBox?.FindFirstChild("SupporterLabel");
+	check("sem assinatura, nenhum coracao (escondido: nao ocupa espaco)", heartBox?.Visible === false);
+	const rh = phase("a marca Supporter acende", () => plate.update(100, 100, 12, true, 0, true));
+	check(
+		"Supporter: um coracao na linha do NOME, antes dele, na cor Supporter, com a sombra de pixel (sem contorno)",
+		heartBox.Visible &&
+			heart.Text === "♥" &&
+			sameColor(heart.TextColor3, OVER_WORLD.supporter) &&
+			heartBox.LayoutOrder > levelLabel.Parent.LayoutOrder &&
+			heartBox.LayoutOrder < nameLabel.Parent.LayoutOrder &&
+			heartBox.Parent === nameRow &&
+			shadowOk(heart),
+	);
+	check("acender a marca nao cria nem destroi Instance (montada ao construir)", zero(rh), cost(rh));
+	check(
+		"e nunca na linha do titulo (a do que foi ganho, MON-05)",
+		titleBox.GetDescendants().every(d => d.Name !== "SupporterLabel"),
+	);
+	plate.update(100, 100, 12, true, 0, false);
+	check("a assinatura venceu: o coracao some", heartBox.Visible === false);
 
 	// yours shows less: no "@handle" (only you would read it), the level and the title stay
 	const mine = new Nameplate(host, 5, { displayName: "Zed", name: "zed_survives" }, { self: true, world: true });
@@ -2256,6 +2361,132 @@ console.log("\n9b) os titulos (MON-05): linhas, cadeado, o selecionado, a previa
 	mine.destroy();
 	plate.destroy();
 	host.Destroy();
+}
+
+// ---------------------------------------------------------------- 9c. the Supporter tab (MON-07)
+
+console.log(
+	"\n9c) a aba Supporter (MON-07): so com a assinatura configurada, separada dos titulos, o prompt da plataforma\n",
+);
+{
+	const SUP = require(join(SRC, "shared/data/supporter.ts"));
+	const { showWardrobe } = require(join(SRC, "client/ui/wardrobe.ts"));
+	const { OVER_WORLD } = require(join(SRC, "client/ui/theme.ts"));
+	const screen = () => ctx.uiLayer.FindFirstChild("Wardrobe");
+	const deep = (root, name) => root?.GetDescendants().find(d => d.Name === name);
+	const tabNames = () =>
+		deep(screen(), "Tabs")
+			.GetChildren()
+			.filter(c => c.ClassName === "TextButton")
+			.map(b => b.Text);
+	const handlers = { onBack: () => {}, onEquip: () => {}, onUnequip: () => {} };
+	const sameColorOf = (a, b) =>
+		a !== undefined && b !== undefined && Math.abs(a.R - b.R) + Math.abs(a.G - b.G) + Math.abs(a.B - b.B) < 1e-6;
+
+	// no subscription configured (today): no tab, nothing asked of the platform
+	let close = showWardrobe(ctx, handlers);
+	flush();
+	check(
+		"sem id configurado: nenhuma aba Supporter (so Outfits, Pets, Titles)",
+		JSON.stringify(tabNames()) === '["Outfits","Pets","Titles"]' && deep(screen(), "SupporterPage") === undefined,
+		JSON.stringify(tabNames()),
+	);
+	close();
+
+	// with one: the local player, as the server marks them (the attribute), and the platform's prompt, recorded
+	SUP.SUPPORTER_SUBSCRIPTION_ID = "EXP-6823453917458686";
+	const changed = new Signal();
+	const me = {
+		UserId: 4242,
+		Name: "zed_survives",
+		DisplayName: "Zed",
+		attrs: new Map(),
+		GetAttribute(n) {
+			return this.attrs.get(n);
+		},
+		GetAttributeChangedSignal: () => changed,
+	};
+	const players = service("Players");
+	players.LocalPlayer = me;
+	players.GetPlayers = () => [me];
+	players.PlayerAdded = new Signal();
+	players.PlayerRemoving = new Signal();
+	const prompts = [];
+	const market = service("MarketplaceService");
+	market.PromptSubscriptionPurchase = (p, id) => prompts.push(["buy", p.UserId, id]);
+	market.PromptCancelSubscription = (p, id) => prompts.push(["cancel", p.UserId, id]);
+	close = showWardrobe(ctx, handlers);
+	flush();
+	check(
+		"com id: a aba Supporter depois dos titulos (e fora deles)",
+		JSON.stringify(tabNames()) === '["Outfits","Pets","Titles","Supporter"]',
+		JSON.stringify(tabNames()),
+	);
+	const page = () => deep(screen(), "SupporterPage");
+	const text = name => deep(page(), name)?.Text;
+	const status = () => deep(deep(page(), "Status"), "Legend")?.Text;
+	const action = () => deep(page(), "Action");
+	let r = phase("supporter: abre a aba", () => click(deep(screen(), "Tabs").FindFirstChild("Tab3"), "Supporter"));
+	check("abrir a aba nao cria nem destroi Instance (montada ao abrir)", zero(r), cost(r));
+	check(
+		"a pagina ocupa o corpo: os titulos, as paginas e o painel de detalhes somem",
+		page().Visible &&
+			!deep(screen(), "Page2").Visible &&
+			!deep(screen(), "Page0").Visible &&
+			!deep(screen(), "Details").Visible,
+	);
+	check(
+		"diz o que da, o que NUNCA da, que renova todo mes e que se cancela",
+		text("GetsHeart") === "♥  A heart beside your name, for everyone to see." &&
+			sameColorOf(deep(page(), "GetsHeart").TextColor3, OVER_WORLD.supporter) &&
+			text("GetsTrail") === "Your melee swing trail in the Supporter rose." &&
+			text("Never") === "No coins, XP, items or titles: nothing that changes a night." &&
+			text("Renews") === "Renews every month until you cancel. You can cancel at any time." &&
+			text("Price") === "Roblox shows the price before you confirm.",
+	);
+	check(
+		'nao assinante: NOT SUBSCRIBED e o botao "See price" (BEM-02: nunca "BUY NOW")',
+		status() === "NOT SUBSCRIBED" && action().Text === "See price" && action().GetAttribute("Disabled") !== true,
+		`${status()} / ${action().Text}`,
+	);
+	check(
+		"a previa e a placa da rua COM o coracao (o que todos vao ver)",
+		deep(page(), "SupporterLabelBox")?.Visible === true && deep(page(), "SupporterLabel")?.Text === "♥",
+	);
+	click(action(), "See price");
+	check(
+		"See price pede o prompt da propria plataforma, com o id e nada mais",
+		JSON.stringify(prompts) === JSON.stringify([["buy", 4242, SUP.SUPPORTER_SUBSCRIPTION_ID]]),
+		JSON.stringify(prompts),
+	);
+	// the server marks this player: the page repaints in place
+	me.attrs.set("pz_supporter", true);
+	r = phase("supporter: o servidor marca o jogador", () => changed.Fire());
+	check("a marca chega e a pagina se reescreve sem criar Instance", zero(r), cost(r));
+	check(
+		'assinante: ACTIVE, o obrigado, e "Cancel subscription" (o prompt de cancelar da plataforma, sem confirmshaming)',
+		status() === "ACTIVE" &&
+			text("Note") === "You are a Supporter. Thank you for keeping the town alive!" &&
+			action().Text === "Cancel subscription",
+		`${status()} / ${action().Text}`,
+	);
+	click(action(), "Cancel subscription");
+	check("Cancel pede o prompt de cancelamento da plataforma", prompts.at(-1)?.[0] === "cancel");
+	r = phase("supporter: 4 trocas de aba", () => {
+		for (const i of [2, 3, 0, 3]) click(deep(screen(), "Tabs").FindFirstChild(`Tab${i}`), `tab ${i}`);
+	});
+	check("ir e voltar entre as quatro abas nao cria nem destroi", zero(r), cost(r));
+	check(
+		"a aba Titles continua so com titulos ganhos jogando (nenhuma linha Supporter)",
+		deep(screen(), "Page2")
+			.GetDescendants()
+			.every(d => !(d.ClassName === "TextLabel" && /Supporter/.test(d.Text ?? ""))),
+	);
+	close();
+	check("fechar remove a tela (e a pagina com ela)", screen() === undefined);
+	me.attrs.delete("pz_supporter");
+	changed.Fire();
+	SUP.SUPPORTER_SUBSCRIPTION_ID = "";
 }
 
 // ---------------------------------------------------------------- 10. what a full page costs

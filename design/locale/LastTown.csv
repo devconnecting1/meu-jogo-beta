@@ -638,6 +638,7 @@ Waves come at 19:00, 22:00 and 01:00. Be somewhere you chose."
 Everyone sees them, and they change nothing else: no defence, no speed, no loot.
 Locked items show their price in coins. Coins are earned by playing: days survived, record days and bosses.
 Titles are never sold: each one is earned by playing, and shows under your name for everyone.
+A title's colour says how rare it is, from Common to Legendary. A few are secret until you earn them.
 Pick an item to try it on in the preview, then buy or wear it."
 ,,,Titles
 ,loadout label: the earned title (singular of the Titles tab),,Title
@@ -656,6 +657,85 @@ Pick an item to try it on in the preview, then buy or wear it."
 ,,,"Earned by playing, never sold. Everyone sees it under your name."
 ,,,No title under your name.
 ,,,"Titles are earned by playing, never sold. Everyone sees yours under your name."
+,"title name: put down 1,000 zombies",,Exterminator
+,"title name: put down 10,000 zombies",,Zombie Bane
+,title name: survive 25 days in one life (a veteran),,Seasoned
+,title name: survive 50 days in one life (a veteran),,Old Guard
+,title name: survive 100 days in one life,,Centurion
+,title name: 10 days in one life without dying,,Unbroken
+,title name: survive 25 whole nights,,Nightwatch
+,title name: a whole night without losing health,,Untouched
+,title name: a night of melee-only kills,,Blade Dancer
+,title name: survived a thunderstorm night,,Stormborn
+,title name: survived a foggy night,,Fog Walker
+,title name: survived a night with 3+ other players,,Safety in Numbers
+,title name: put down every kind of zombie (a hunter),,Tracker
+,title name: helped defeat a boss,,Boss Hunter
+,title name: helped defeat all four bosses,,Apex Hunter
+,title name: many kills with firearms,,Sharpshooter
+,title name: many kills by turrets you built (a guard),,Sentry
+,title name: placed many constructions,,Builder
+,title name: crafted many items,,Tinkerer
+,title name: cracked a bank vault,,Safecracker
+,secret title name: a night with no kills and no damage (stealthy),,Ghost
+,secret title name: survived a night after nearly dying,,Close Call
+,,,"Put down 1,000 zombies."
+,,,"Put down 10,000 zombies."
+,,,Stay alive for 25 days in one life.
+,,,Stay alive for 50 days in one life.
+,,,Stay alive for 100 days in one life.
+,,,Live 10 days in one life without dying once.
+,,,Survive 25 whole nights.
+,,,"Survive a night without losing health, putting down 10 zombies."
+,,,"Survive a night putting down 25 zombies, all with melee weapons."
+,,,Survive a whole night in a thunderstorm.
+,,,Survive a whole night that ends in fog.
+,,,Survive a whole night with 3 other survivors who make it too.
+,,,Put down every kind of zombie.
+,,,Help bring down a boss.
+,,,Help bring down all four bosses.
+,,,Put down 500 zombies with firearms.
+,,,Bring down 100 zombies with turrets you built.
+,,,Place 25 constructions.
+,,,Craft 50 items.
+,,,Crack a bank vault.
+,,,Survive a night from world day 10 on without putting down a zombie or losing health.
+,,,Survive a whole night after falling to a tenth of your health.
+,,,Nights without dying in this life
+,,,Kinds of zombie put down
+,,,Kinds of boss brought down
+,,,Zombies put down with firearms
+,,,Zombies your turrets brought down
+,,,Constructions placed
+,,,Items crafted
+,title rarity: the easiest to earn,,Common
+,title rarity: the second step,,Uncommon
+,title rarity: the middle step,,Rare
+,title rarity: the fourth step,,Epic
+,title rarity: the hardest to earn,,Legendary
+,"title rarity key (all caps), as ""Common""",,COMMON
+,"title rarity key (all caps), as ""Uncommon""",,UNCOMMON
+,"title rarity key (all caps), as ""Rare""",,RARE
+,"title rarity key (all caps), as ""Epic""",,EPIC
+,"title rarity key (all caps), as ""Legendary""",,LEGENDARY
+,,,Secret title
+,,,A secret title. It shows here once you earn it.
+,"wardrobe tab: the monthly Supporter subscription (a backer, a patron)",,Supporter
+,name of the game's monthly subscription (Last Town is the game),,Last Town Supporter
+,subscription status (all caps): currently subscribed,,ACTIVE
+,subscription status (all caps): not subscribed,,NOT SUBSCRIBED
+,,,What you get
+,,,"A heart beside your name, for everyone to see."
+,,,Your melee swing trail in the Supporter rose.
+,,,What it never gives
+,,,"No coins, XP, items or titles: nothing that changes a night."
+,,,Renews every month until you cancel. You can cancel at any time.
+,,,Roblox shows the price before you confirm.
+,,,You are a Supporter. Thank you for keeping the town alive!
+,"button: open Roblox's purchase prompt, which shows the price",,See price
+,,,Cancel subscription
+,,,"You can cancel in your Roblox settings, under Subscriptions."
+,,,Subscriptions are not available right now.
 ,HUD bar prefix: current/max health,,HP
 ,HUD bar prefix: current/max hunger,,FOOD
 ,HUD bar prefix: level,,LV

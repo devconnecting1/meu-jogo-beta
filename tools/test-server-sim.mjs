@@ -1719,7 +1719,14 @@ section(
 		"the four who did not live the first night whole (or awake) played this one through, and are Survivors now",
 	);
 	check(!owns(IDLE7, TIT.TitleId.Survivor) && !owns(FILL7, TIT.TitleId.Survivor), "the idle still are not");
-	checkEq(unlocks.length, before + 4, "four new titles in all");
+	// (the titles of THIS section: a second night lived whole by seven survivors together is also each one's Safety in
+	// Numbers, MON-05 -- test:titles owns that one)
+	const firstTitles = ([, t]) => t === TIT.TitleId.Survivor || t === TIT.TitleId.WeekOne;
+	checkEq(
+		unlocks.filter(firstTitles).length,
+		unlocks.slice(0, before).filter(firstTitles).length + 4,
+		"four new Survivor / Week One titles in all",
+	);
 
 	// what a client report claims about any of it is ignored (it is the server's, and so is the day)
 	const idle = saves.get(IDLE7);

@@ -130,6 +130,8 @@ const GROUPS = {
 	GAME: roleBlock("GAME"),
 	STAT: roleBlock("STAT"),
 	BAR: roleBlock("BAR"),
+	RARITY: roleBlock("RARITY"),
+	OVER_WORLD: roleBlock("OVER_WORLD"),
 	// `export const SIDEBAR = SIDEBAR_TOKENS;` -- the rail palette is the token group itself
 	SIDEBAR: SIDEBAR_TOKENS,
 };
@@ -445,12 +447,20 @@ const PAIRS = [
 	// measured against the real grounds by `npm run test:world-art` (section 9), not here. GAME.success, the green the
 	// owner named for Survivor, does not read on the row (4,07:1): client/ui/titleStyle.ts uses the nearest game token
 	// that passes, STAT.bonus (the same green, lighter). The pair that failed is kept below as a record.
-	["STAT.bonus", "SURFACE.row", MIN_TEXT, "linha do guarda-roupa: [Survivor]"],
-	["STAT.effect", "SURFACE.row", MIN_TEXT, "linha do guarda-roupa: [Horde Breaker]"],
-	["STAT.value", "SURFACE.row", MIN_TEXT, "linha do guarda-roupa: [Week One]"],
-	["STAT.bonus", "SURFACE.well", MIN_TEXT, "linha bloqueada (mais escura): [Survivor]"],
-	["STAT.effect", "SURFACE.well", MIN_TEXT, "linha bloqueada: [Horde Breaker]"],
-	["STAT.value", "SURFACE.well", MIN_TEXT, "linha bloqueada: [Week One]"],
+	// the colour of a title is its RARITY (theme.ts RARITY, the `title-*` tokens): the name and the rarity's word, on both
+	// faces of the row
+	["RARITY.common", "SURFACE.row", MIN_TEXT, "linha do guarda-roupa: um titulo comum ([Survivor])"],
+	["RARITY.uncommon", "SURFACE.row", MIN_TEXT, "linha: incomum ([Horde Breaker], [Week One])"],
+	["RARITY.rare", "SURFACE.row", MIN_TEXT, "linha: raro ([Exterminator])"],
+	["RARITY.epic", "SURFACE.row", MIN_TEXT, "linha: epico ([Old Guard])"],
+	["RARITY.legendary", "SURFACE.row", MIN_TEXT, "linha: lendario ([Centurion])"],
+	["RARITY.common", "SURFACE.well", MIN_TEXT, "linha bloqueada (mais escura): comum"],
+	["RARITY.uncommon", "SURFACE.well", MIN_TEXT, "linha bloqueada: incomum"],
+	["RARITY.rare", "SURFACE.well", MIN_TEXT, "linha bloqueada: raro"],
+	["RARITY.epic", "SURFACE.well", MIN_TEXT, "linha bloqueada: epico"],
+	["RARITY.legendary", "SURFACE.well", MIN_TEXT, "linha bloqueada: lendario"],
+	// MON-07: the Supporter rose -- the heart on the Supporter page's section, and (over the world) test:world-art 9
+	["OVER_WORLD.supporter", "SURFACE.section", MIN_TEXT, "a pagina Supporter: o coracao e a linha do que ele da"],
 	["THEME.foreground", "SURFACE.row", MIN_TEXT, "linha [None]"],
 	["THEME.mutedForeground", "SURFACE.row", MIN_TEXT, "como ganhar, na linha (Survive your first night.)"],
 	["THEME.mutedForeground", "SURFACE.well", MIN_TEXT, "como ganhar e o cadeado, na linha bloqueada"],
@@ -648,31 +658,35 @@ for (const [frontPath, backPath, min, why] of PAIRS) {
 	);
 }
 
-// MON-05: every title's tone (shared/data/titles.ts) resolves, in client/ui/titleStyle.ts, to a token whose pairs on
-// both row faces are measured above -- a new title, or a tone moved, cannot skip this table. On the nameplate a title
+// MON-05: every title's RARITY (shared/data/titles.ts) resolves, in client/ui/titleStyle.ts, to a token whose pairs on
+// both row faces are measured above -- a new title, or a rarity moved, cannot skip this table. On the nameplate a title
 // is text over the WORLD: test:world-art (section 9) measures EVERY title of TITLES there, through titleColor, so it
 // cannot skip that table either (checked below, on the sources)
 {
 	const titlesSrc = readFileSync(join(SRC, "shared", "data", "titles.ts"), "utf8");
 	const styleSrc = readFileSync(join(UI, "titleStyle.ts"), "utf8");
-	const tones = [...titlesSrc.matchAll(/^\t\ttone: "(\w+)",$/gm)].map(m => m[1]);
-	const resolve = tone => {
-		const m = styleSrc.match(new RegExp(`tone === "${tone}"\\) return (STAT\\.\\w+);`));
+	const rarities = [...titlesSrc.matchAll(/^\t\trarity: "(\w+)",$/gm)].map(m => m[1]);
+	const resolve = rarity => {
+		const m = styleSrc.match(new RegExp(`rarity === "${rarity}"\\) return (RARITY\\.\\w+);`));
 		if (m !== null) return m[1];
-		// the fall-through at the end of toneColor
-		const last = styleSrc.match(/\n\treturn (STAT\.\w+);\n}/);
+		// the fall-through at the end of rarityColor
+		const last = styleSrc.match(/\n\treturn (RARITY\.\w+);\n}/);
 		return last !== null ? last[1] : undefined;
 	};
 	const measured = (front, back) => PAIRS.some(([f, b, min]) => f === front && b === back && min >= MIN_TEXT);
-	for (const tone of tones) {
-		const token = resolve(tone);
+	for (const rarity of new Set(rarities)) {
+		const token = resolve(rarity);
 		check(
-			`titulo de tom "${tone}" -> ${token}`.padEnd(width),
+			`titulo de raridade "${rarity}" -> ${token}`.padEnd(width),
 			token !== undefined && measured(token, "SURFACE.row") && measured(token, "SURFACE.well"),
 			"medido nas duas faces da linha (na placa: sobre o mundo, test:world-art 9)",
 		);
 	}
-	check("os titulos de hoje sao 3", tones.length === 3, `${tones.length} tons em titles.ts`);
+	check(
+		"cada titulo da tabela tem uma raridade (25 titulos, as 5 raridades)",
+		rarities.length === 25 && new Set(rarities).size === 5,
+		`${rarities.length} titulos, ${new Set(rarities).size} raridades em titles.ts`,
+	);
 	const worldArt = readFileSync(join(ROOT, "tools", "test-world-art.mjs"), "utf8");
 	const plateSrc = readFileSync(join(UI, "nameplate.ts"), "utf8");
 	check(

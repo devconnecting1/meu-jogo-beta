@@ -1,5 +1,5 @@
 /*
- * "Title unlocked: [Survivor]" -- the moment the SERVER grants a title (docs/DESIGN_RULES.md MON-05).
+ * "Title unlocked: [Survivor] · Common" -- the moment the SERVER grants a title (docs/DESIGN_RULES.md MON-05).
  *
  * The server decides every unlock from its own counters and tells only the survivor who earned it, on the reliable
  * channel (`Announce{TitleUnlocked}`, client/net/netClient.ts `netOnTitle`). This is what the client does with it:
@@ -12,7 +12,7 @@ import { TITLES } from "shared/data/titles";
 import { langGet } from "shared/data/lang";
 import { netOnTitle } from "../net/netClient";
 import { toast } from "./popup";
-import { titleText } from "./titleStyle";
+import { titleRarityText, titleText } from "./titleStyle";
 
 /** listens for the server's title notices for the rest of the session (call once, at boot) */
 export function startTitleNotices(ctx: GameContext): void {
@@ -21,6 +21,8 @@ export function startTitleNotices(ctx: GameContext): void {
 		const save = ctx.save;
 		save.titles[titleId] = 1;
 		const lang = save.settings.langType;
-		toast(ctx, `${langGet("Title unlocked", lang)}: ${titleText(titleId, lang)}`, "success");
+		// the rarity's word rides with the name (MON-05): the toast has one colour, so the word is what says it
+		const rarity = titleRarityText(titleId, lang);
+		toast(ctx, `${langGet("Title unlocked", lang)}: ${titleText(titleId, lang)} · ${rarity}`, "success");
 	});
 }

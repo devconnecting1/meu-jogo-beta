@@ -41,6 +41,7 @@
 		"test:chat": "node tools/test-chat.mjs",
 		"test:world": "node tools/test-world.mjs",
 		"test:save": "node tools/test-save.mjs",
+		"test:titles": "node tools/test-titles.mjs",
 		"test:contrast": "node tools/test-contrast.mjs",
 		"test:backpack": "node tools/test-backpack.mjs",
 		"test:hud": "node tools/test-hud.mjs",

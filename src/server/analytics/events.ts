@@ -218,6 +218,12 @@ export const EVENT = {
 	TownOffered: "TownOffered",
 	/** a trip to a town of one's own ended with the player still here */
 	TripFailed: "TripFailed",
+	/**
+	 * MON-07: the SERVER saw a player's Supporter subscription start or end during a session (server/supporter/
+	 * supporter.ts). Revenue and subscriber counts are the platform's (Creator Hub > Monetization > Subscriptions >
+	 * Analytics); this only answers whether the in-game offer is where people subscribe
+	 */
+	Supporter: "Supporter",
 } as const;
 
 /** the economy's transaction types: the built-in names where one fits (typed against the enum), and "Admin" */
@@ -1203,6 +1209,21 @@ export class ServerAnalytics {
 	 * (funnel-events.md "Protect your funnels from exploiters"): a known screen, one visit per SHOP_OPEN_MIN_S, at
 	 * most SHOP_VISITS_MAX a session. A client that lies moves its own funnel and nothing else.
 	 */
+	/**
+	 * MON-07: a Supporter subscription started (`active`) or ended during this session, as the server's own ask found it
+	 * (never a first answer at the join: the platform already counts subscribers). One custom event per flip, no value;
+	 * `Status - Started` / `Status - Ended` and where the player was.
+	 */
+	supporterChanged(player: Player, active: boolean): void {
+		const e = this.entries.get(player);
+		if (e === undefined || e.ephemeral || e.leftAt !== undefined) return;
+		const inCity = this.world !== undefined ? this.world.bodyOf(player) !== undefined : e.inWorld;
+		this.custom(e, EVENT.Supporter, undefined, {
+			CustomField01: active ? "Status - Started" : "Status - Ended",
+			CustomField02: inCity ? "Where - City" : "Where - Lobby",
+		});
+	}
+
 	shopViewed(player: Player, screen: unknown): void {
 		const e = this.entries.get(player);
 		if (e === undefined || e.ephemeral || e.leftAt !== undefined) return;
@@ -1592,6 +1613,11 @@ export function kill(save: PlayerSaveData, weaponKind: number): void {
 /** server/main.server.ts `handleAction`, `viewShop`: the client opened the shop (0) or the wardrobe (1) */
 export function shopViewed(player: Player, screen: unknown): void {
 	guard(c => c.shopViewed(player, screen));
+}
+
+/** server/supporter.server.ts: the server saw a Supporter subscription start or end during the session (MON-07) */
+export function supporterChanged(player: Player, active: boolean): void {
+	guard(c => c.supporterChanged(player, active));
 }
 
 /** server/main.server.ts `handleAction`, before the request is decided */
