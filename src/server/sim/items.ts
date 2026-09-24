@@ -25,24 +25,39 @@
  * "probability of exactly one" branch used raw `math.random()` while everything around it used the shared
  * rng. On a server that has to be replayable in Node (tools/) that is not a style question.
  *
- * Pure module: no Instances, no services, no os.clock. Time comes in as game hours, like the original.
+ * And the ground is not a warehouse (security review of 5967a18, #3): every item here is world litter, it rots
+ * GROUND_ITEM_LIFE_S after it appeared (`upkeep`), and the town never holds more than GROUND_ITEM_CAP -- the oldest
+ * goes the moment one more lands (`announce`). Whatever asks "what is near here" reads the world's item grid
+ * (shared/game/world.ts `queryGroundItems`) instead of every item in town: the interest sweep, a join's WorldInit,
+ * the E press. A chainsaw at one car used to make 73 items a minute that nothing took away, and each of those
+ * three walked all of them.
+ *
+ * And an item that just fell is news (§4.3, audit L2): for ITEM_NEWS_S it is told only to a client that could see
+ * the spot (`sees`) -- a zombie's drop lies where the zombie died, and telling it into the dark handed out the death
+ * the snapshot had withheld. After that it is litter, told in range like any other.
+ *
+ * Pure module: no Instances, no services, no os.clock. Time comes in as game hours, like the original, and the
+ * items' own clock is the simulation's dt.
  */
 import { DESIGN } from "shared/engine/constants";
 import { rndRange } from "shared/engine/rng";
 import { addItem } from "shared/sim/inventory";
 import { rollBuildingLoot, rollMapItemDrop, thiefFind } from "shared/sim/loot";
 import { edgeDist, isMapItem } from "shared/sim/interactQuery";
-import { ITEM_INTEREST } from "shared/net/mpConfig";
+import { GROUND_ITEM_CAP, GROUND_ITEM_LIFE_S, ITEM_INTEREST, ITEM_NEWS_S } from "shared/net/mpConfig";
 import { WorldEv, WItemAdd } from "shared/net/protocol";
 import {
 	GroundItem,
+	queryGroundItems,
 	querySolids,
 	removeGroundItem,
 	Solid,
 	spawnGroundItem,
 	WorldData,
 	buildingAt,
+	enableItemGrid,
 	isBlocking,
+	ITEM_GRID_CELL,
 } from "shared/game/world";
 import { PlayerSaveData } from "shared/game/save";
 import { creditTaken } from "../save/achievements";
@@ -58,6 +73,8 @@ export const LOOT_ROLL_RANGE = 320;
 export const LOOT_SWEEP_S = 0.5;
 /** a map item (tree, car, bin) cannot be harvested again for this long — PER SOLID, for everybody (§8.1) */
 export const MAP_ITEM_COOLDOWN = DESIGN.MAP_ITEM_HIT_TIME;
+/** the square (half-side) around a new item where the cap looks for the item that makes room for it (`capVictim`) */
+const CAP_AREA = ITEM_GRID_CELL;
 /** how often each survivor's item interest is swept for items that came within ITEM_INTEREST (§4.5) */
 export const ITEM_SWEEP_S = 0.5;
 /** an item a survivor was told about leaves their screen past this (hysteresis over ITEM_INTEREST) */
@@ -79,11 +96,19 @@ export type PickupResult =
 export interface ServerItemsOptions {
 	world: WorldData;
 	out: WorldOut;
+	/**
+	 * (§4.3, audit L2) Can the survivor in `slot` see (x, y) -- the roof and the dark rules the horde is sent by? An
+	 * item younger than ITEM_NEWS_S is only told to a client that could see where it lies (`sees`): a zombie's drop
+	 * fell where the zombie died, and telling it into the dark handed out the death the snapshot had withheld. Left
+	 * undefined, every item in range is seen (a test without a replication layer).
+	 */
+	visible?: (slot: number, x: number, y: number) => boolean;
 }
 
 export class ServerItems {
 	readonly world: WorldData;
 	private readonly out: WorldOut;
+	private readonly visible?: (slot: number, x: number, y: number) => boolean;
 	/** seconds of cooldown left per tree/car/bin, keyed by the solid (the original's `hitCooldowns`) */
 	private readonly cooldowns = new Map<Solid, number>();
 	private sweep = 0;
@@ -102,13 +127,46 @@ export class ServerItems {
 	 */
 	private readonly told = new Map<number, Set<number>>();
 	private interestSweep = 0;
+	/** every item in the world by id (the sweep turns a told id back into its item) */
+	private readonly byId = new Map<number, GroundItem>();
+	/** the items' own clock, seconds of simulation (`upkeep`): what `GroundItem.born` is measured on */
+	private clock = 0;
+	/** items the lifetime and the cap took away since boot (the admin panel's, and the tests') */
+	readonly expired = { rotted: 0, capped: 0 };
+	private readonly found = new Array<GroundItem>();
+	private readonly capScratch = new Array<GroundItem>();
+	private readonly leaving = new Array<number>();
 
 	constructor(options: ServerItemsOptions) {
 		this.world = options.world;
 		this.out = options.out;
+		this.visible = options.visible;
+		enableItemGrid(this.world);
+		// whatever lies there already (a world adopted with items in it) starts its lifetime now
+		for (const item of this.world.items) {
+			item.born = this.clock;
+			this.byId.set(item.id, item);
+		}
 		// §4.5: every ground item that appears or disappears, whoever made it, becomes a delta here
 		this.world.onItemAdd = (w, item) => this.announce(item);
 		this.world.onItemRemove = (w, item) => this.retract(item);
+	}
+
+	/**
+	 * The ground's upkeep, every tick (server/sim/simulation.ts, right after `updateGroundItems`, with or without anybody
+	 * in the world): the items older than GROUND_ITEM_LIFE_S rot away, oldest first. `world.items` is in the order the
+	 * items appeared -- appended on spawn, and every removal keeps the others' order -- so the oldest is always the
+	 * first, and a tick that expires nothing costs one comparison.
+	 */
+	upkeep(dt: number): void {
+		if (dt > 0) this.clock += dt;
+		const items = this.world.items;
+		while (items.size() > 0) {
+			const oldest = items[0];
+			if (this.clock - (oldest.born ?? this.clock) <= GROUND_ITEM_LIFE_S) break;
+			this.expired.rotted += 1;
+			removeGroundItem(this.world, oldest);
+		}
 	}
 
 	/** the bodies (and their slots, in the same order) that see items; the simulation hands its own arrays over */
@@ -124,12 +182,30 @@ export class ServerItems {
 	welcomed(slot: number, x: number, y: number): void {
 		const set = new Set<number>();
 		const r2 = ITEM_INTEREST * ITEM_INTEREST;
-		for (const item of this.world.items) {
+		for (const item of this.near(x, y, ITEM_INTEREST)) {
 			const dx = item.x - x;
 			const dy = item.y - y;
-			if (dx * dx + dy * dy <= r2) set.add(item.id);
+			if (dx * dx + dy * dy <= r2 && this.sees(slot, item)) set.add(item.id);
 		}
 		this.told.set(slot, set);
+	}
+
+	/**
+	 * May the client in `slot` be told about this item? Litter (older than ITEM_NEWS_S) always; news only if they could
+	 * see where it lies (§4.3, `ServerItemsOptions.visible`). The age goes first: the light test is asked of the few
+	 * items that just fell, not of every item in range on every sweep.
+	 */
+	private sees(slot: number, item: GroundItem): boolean {
+		if (this.visible === undefined) return true;
+		if (this.clock - (item.born ?? this.clock) >= ITEM_NEWS_S) return true;
+		return this.visible(slot, item.x, item.y);
+	}
+
+	/** the items in the square of half-side `r` around (x, y), from the grid (a scratch array: read it at once) */
+	private near(x: number, y: number, r: number): Array<GroundItem> {
+		const found = this.found;
+		found.clear();
+		return queryGroundItems(this.world, x - r, y - r, x + r, y + r, found);
 	}
 
 	/** the survivor in `slot` left the world: their client's mirror is rebuilt by the next welcome */
@@ -141,6 +217,9 @@ export class ServerItems {
 	 * §4.5 at walking pace: an item that came within ITEM_INTEREST of a survivor since they were last told is sent
 	 * now, and one they were told about that is now past ITEM_INTEREST_EXIT is taken off their screen (they will be
 	 * told again when they come back). Twice a second, like the loot sweep: nobody crosses 300 u in half a second.
+	 *
+	 * What it reads is bounded by what is NEAR, not by the town: the grid's cells around each survivor for the items
+	 * coming in, and the survivor's own told set (at most GROUND_ITEM_CAP) for the ones going out.
 	 */
 	sweepInterest(dt: number): void {
 		this.interestSweep -= dt;
@@ -148,23 +227,37 @@ export class ServerItems {
 		this.interestSweep = ITEM_SWEEP_S;
 		const inR2 = ITEM_INTEREST * ITEM_INTEREST;
 		const outR2 = ITEM_INTEREST_EXIT * ITEM_INTEREST_EXIT;
+		const leaving = this.leaving;
 		for (let i = 0; i < this.viewers.size(); i++) {
 			const v = this.viewers[i];
 			const slot = this.viewerSlots[i] ?? i;
 			const set = this.toldOf(slot);
-			for (const item of this.world.items) {
+			leaving.clear();
+			for (const id of set) {
+				const item = this.byId.get(id);
+				// gone already: `retract` told this client, and only a told id outlives its item for a moment
+				if (item === undefined) {
+					leaving.push(id);
+					continue;
+				}
 				const dx = item.x - v.x;
 				const dy = item.y - v.y;
-				const d2 = dx * dx + dy * dy;
-				if (d2 <= inR2 && !set.has(item.id)) {
-					set.add(item.id);
-					this.out.queueFor(slot, itemAddOf(item));
-				} else if (d2 > outR2 && set.has(item.id)) {
-					set.delete(item.id);
-					this.out.queueFor(slot, { t: WorldEv.ItemRemove, id: item.id });
-				}
+				if (dx * dx + dy * dy <= outR2) continue;
+				leaving.push(id);
+				this.out.queueFor(slot, { t: WorldEv.ItemRemove, id });
+			}
+			for (const id of leaving) set.delete(id);
+			for (const item of this.near(v.x, v.y, ITEM_INTEREST)) {
+				if (set.has(item.id)) continue;
+				const dx = item.x - v.x;
+				const dy = item.y - v.y;
+				// news in range but out of sight (the dark, a building): the next sweep asks again
+				if (dx * dx + dy * dy > inR2 || !this.sees(slot, item)) continue;
+				set.add(item.id);
+				this.out.queueFor(slot, itemAddOf(item));
 			}
 		}
+		leaving.clear();
 	}
 
 	private toldOf(slot: number): Set<number> {
@@ -176,8 +269,20 @@ export class ServerItems {
 		return set;
 	}
 
-	/** a new item: to every survivor within ITEM_INTEREST of it this instant (the sweep catches the rest later) */
+	/**
+	 * A new item: to every survivor within ITEM_INTEREST of it this instant (the sweep catches the rest later) -- and
+	 * past GROUND_ITEM_CAP an older item leaves the world for it (`capVictim`), so the town never holds more than the cap.
+	 */
 	private announce(item: GroundItem): void {
+		item.born = this.clock;
+		this.byId.set(item.id, item);
+		const items = this.world.items;
+		while (items.size() > GROUND_ITEM_CAP) {
+			const victim = this.capVictim(item);
+			if (victim === undefined) break;
+			this.expired.capped += 1;
+			removeGroundItem(this.world, victim);
+		}
 		const r2 = ITEM_INTEREST * ITEM_INTEREST;
 		let ev: WItemAdd | undefined;
 		for (let i = 0; i < this.viewers.size(); i++) {
@@ -186,14 +291,53 @@ export class ServerItems {
 			const dy = item.y - v.y;
 			if (dx * dx + dy * dy > r2) continue;
 			const slot = this.viewerSlots[i] ?? i;
+			// out of sight: the sweep tells them once they can see the spot, or once it is litter (a drop where a zombie
+			// died in the dark)
+			if (!this.sees(slot, item)) continue;
 			ev = ev ?? itemAddOf(item);
 			this.toldOf(slot).add(item.id);
 			this.out.queueFor(slot, ev);
 		}
 	}
 
+	/**
+	 * Which item makes room for `item` past the cap: the oldest AROUND it (its grid cell and the ones next to it,
+	 * CAP_AREA), and only when nothing else lies there the oldest in town. The town's oldest used to go every time, so
+	 * a farm dropping junk in one corner pushed a fresh drop out of the other within a few minutes (the security review
+	 * of the net hardening, L4); now a farm eats its own junk first.
+	 */
+	private capVictim(item: GroundItem): GroundItem | undefined {
+		const around = this.capScratch;
+		around.clear();
+		queryGroundItems(
+			this.world,
+			item.x - CAP_AREA,
+			item.y - CAP_AREA,
+			item.x + CAP_AREA,
+			item.y + CAP_AREA,
+			around,
+		);
+		let victim: GroundItem | undefined;
+		for (const other of around) {
+			if (other === item) continue;
+			if (victim === undefined) {
+				victim = other;
+				continue;
+			}
+			// the oldest; of two born on the same tick, the one that fell first (ids only grow)
+			const a = other.born ?? 0;
+			const b = victim.born ?? 0;
+			if (a < b || (a === b && other.id < victim.id)) victim = other;
+		}
+		around.clear();
+		if (victim !== undefined) return victim;
+		const oldest = this.world.items[0];
+		return oldest !== item ? oldest : undefined;
+	}
+
 	/** an item left the world: EVERY client that was told about it is told it is gone, near or not */
 	private retract(item: GroundItem): void {
+		this.byId.delete(item.id);
 		for (const [slot, set] of this.told) {
 			if (!set.has(item.id)) continue;
 			set.delete(item.id);
@@ -206,6 +350,7 @@ export class ServerItems {
 		this.world.onItemAdd = undefined;
 		this.world.onItemRemove = undefined;
 		this.told.clear();
+		this.byId.clear();
 	}
 
 	// ---------------------------------------------------------------- pickup (§8.1)
@@ -364,13 +509,16 @@ export class ServerItems {
 
 	// ---------------------------------------------------------------- WorldInit (§4.5)
 
-	/** every ground item a joining survivor at (x, y) can see, as ItemAdd deltas */
-	initFor(x: number, y: number, out: Array<WItemAdd>): Array<WItemAdd> {
-		const r2 = ITEM_INTEREST * ITEM_INTEREST;
-		for (const item of this.world.items) {
-			const dx = item.x - x;
-			const dy = item.y - y;
-			if (dx * dx + dy * dy <= r2) out.push(itemAddOf(item));
+	/**
+	 * Every ground item a joining survivor is shown, as ItemAdd deltas: exactly the ones `welcomed` marked told for
+	 * their slot (in range and in sight), so the WorldInit and the sweep can never disagree about what was sent.
+	 */
+	initFor(slot: number, out: Array<WItemAdd>): Array<WItemAdd> {
+		const told = this.told.get(slot);
+		if (told === undefined) return out;
+		for (const id of told) {
+			const item = this.byId.get(id);
+			if (item !== undefined) out.push(itemAddOf(item));
 		}
 		return out;
 	}

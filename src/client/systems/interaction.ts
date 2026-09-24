@@ -1,7 +1,7 @@
 import { DESIGN } from "shared/engine/constants";
 import { rndRange } from "shared/engine/rng";
 import type { PlayerState } from "shared/game/player";
-import { GroundItem, Solid, querySolids, spawnGroundItem } from "shared/game/world";
+import { GroundItem, Solid, querySolids, removeGroundItem, spawnGroundItem } from "shared/game/world";
 import { gameHours } from "shared/sim/clock";
 import { addItem, countItem, removeItem } from "shared/sim/inventory";
 import { mapItemLoot, rollBuildingLoot, rollMapItemDrop, thiefFind } from "shared/sim/loot";
@@ -157,8 +157,7 @@ function burnFires(refs: GameRefs, dt: number): void {
 
 function takeItem(refs: GameRefs, it: GroundItem): void {
 	addItem(refs.save, it.kind, it.itemId, it.count);
-	const idx = refs.world.items.indexOf(it);
-	if (idx >= 0) refs.world.items.remove(idx);
+	removeGroundItem(refs.world, it);
 }
 
 /** the shared roll (shared/sim/loot.ts), the one server/sim/items.ts rollLoot makes */

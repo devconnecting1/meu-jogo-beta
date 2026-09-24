@@ -19,13 +19,29 @@
  *   a3. COMING BACK (the second review of the zombie-motion branch, S3). A body not sent for longer than its ring's
  *      client timeout (the dark, a building, the snapshot cap) is a new track when it is sent again, drawn at its
  *      ring's delay at once, and judged there; a shorter gap keeps easing on both sides.
+ *  a5. A STALLED SERVER (the review of the zombie-motion branch, S3 NIT 1, 2). The client retires a track by real
+ *      time; the server's idea of it now does too, so a body the client dropped during a 0.9 s stall is a new track on
+ *      both sides, and a body shown for one snapshot is retired within a frame of each other on both sides.
+ *  a6. A PART OVER THE LIMIT (S3 NIT 4). It never goes out, what it carried counts as dropped entity by entity, and the
+ *      bodies of the parts after it are still the ones taken as drawn.
  *   b. INTEREST AND THE DARK (§4.3). A zombie past the hysteresis band is not sent; at night one outside
  *      every light is not sent either, unless it is within DARK_SENSE_RANGE — which is what stops the wire
  *      being a wallhack, and is measured here rather than asserted in a comment.
  *   c. DEATH IS RELIABLE (§4.4). A killed zombie leaves through `ZombieDied` with its position, and the
- *      client's interpolation drops it at once instead of letting it walk on for another 300 ms.
+ *      client's interpolation drops it when the drawing reaches the death (audit M3) instead of letting it walk on
+ *      for another 300 ms -- or taking it away while it is still walking to the spot it fell on.
+ *  c3. DEATH IS FINAL (audit M1). With the Snap parts late and reordered by jitter and the deaths overtaking them,
+ *      no part from before a death stands the body up again on the client.
+ *  c4. THE EFFECTS WAIT FOR THE DRAWING (audit M3). An ally's shots, the blood and the deaths are played when the
+ *      render time reaches their tick, not the moment they land ~130-160 ms ahead of the bodies; the shooter's own
+ *      shot at once. World and Fx go out on the snapshot's cadence, not every tick.
+ *  c5. ONE BATCH (the security review of the net hardening). A death and its blood carry the same tick even when an
+ *      urgent World event flushes off the cadence: one frame, one pool.
+ *  l2. WHAT THE DARK HIDES STAYS HIDDEN (audit L2). A zombie's blood, the hits on it, its death and a drop that just
+ *      fell reach only the viewers who could see the spot; a projectile's end only those who saw it fly.
  *   d. BANDWIDTH (§4.7, §12.2). Six survivors, night, the horde at its ceiling, everybody shooting: the
- *      per-second downstream of each client is measured and its p95 compared with the 23 kB/s budget.
+ *      per-second downstream of each client is measured and its p95 compared with the 23 kB/s budget -- and the
+ *      largest Snap part and Fx packet against the unreliable ceiling, with the headroom printed (audit L1).
  *   e. XP COMES FROM THE SERVER (§3.6, §11.3 F2). The kill pays the killer and the assist, into the live
  *      save, and a client report can no longer move any of those fields.
  *   f. TICK COST (§3.2). 150 zombies and 6 survivors, measured per tick. In Node this is a comparison and a
@@ -338,7 +354,7 @@ const { createPlayer } = require(join(SRC, "shared/game/player.ts"));
 const { stepPlayer } = require(join(SRC, "shared/sim/playerMove.ts"));
 const CFG = require(join(SRC, "shared/net/mpConfig.ts"));
 const P = require(join(SRC, "shared/net/protocol.ts"));
-const { seqDiff } = require(join(SRC, "shared/net/codec.ts"));
+const { seqDiff, unwrapTick } = require(join(SRC, "shared/net/codec.ts"));
 const PL = require(join(SRC, "server/sim/players.ts"));
 const { ServerSimulation } = require(join(SRC, "server/sim/simulation.ts"));
 const { Replicator, mapHashOf, wirePosition, PROFILE_EVERY_TICKS, TALLY_EVERY_TICKS, TALLY_AFTER_JOIN_TICKS } = require(
@@ -380,6 +396,15 @@ const world = generateTown(DESIGN.TOWN_SEED);
 const { createZombie, resetEntityIds } = require(join(SRC, "shared/game/entities.ts"));
 const PROG = require(join(SRC, "server/sim/progress.ts"));
 const { SnapshotBuffer } = require(join(SRC, "client/net/snapshotBuffer.ts"));
+/**
+ * The client's effect timeline (client/net/fxTimeline.ts, audit M3). A tree from before it played every effect the
+ * frame it landed and dropped a dead body the moment its ZombieDied did: that is what the harness does without it, so
+ * the same checks run against the old code and fail there.
+ */
+const FXT_PATH = join(SRC, "client/net/fxTimeline.ts");
+const FXT = existsSync(FXT_PATH) ? require(FXT_PATH) : undefined;
+/** every effect a client received -> { tick: its batch's (full), arrived: the server tick it landed at } */
+const FX_META = new WeakMap();
 
 const SECONDS = argValue("--seconds", 20);
 
@@ -427,13 +452,29 @@ function newWorldServer() {
 	resetEntityIds();
 	const sim = new ServerSimulation({ world, zombies: true });
 	const transport = recordingTransport();
-	const replicator = new Replicator(sim, transport, { tick0Time: 0, mapHash: mapHashOf(world) });
-	sim.onTick = tick => replicator.afterTick(tick);
-	sim.onFx = event => replicator.queueFx(event);
 	const clients = new Map();
 	/** where every zombie was at each recent tick (netId -> {x, y}), to judge a screen against its own render tick */
 	const hist = new Map();
-	return { sim, transport, replicator, clients, hist, now: 0 };
+	/** (audit L1) the largest packet of each unreliable kind, and how many snapshots needed more than one part */
+	const wire = { snapMax: 0, fxMax: 0, snapshots: 0, split: 0 };
+	const server = { sim, transport, replicator: undefined, clients, hist, wire, now: 0 };
+	// the host's os.clock: the harness's real time, which a stall (a5) moves without a tick
+	server.replicator = new Replicator(sim, transport, {
+		tick0Time: 0,
+		mapHash: mapHashOf(world),
+		now: () => server.now,
+	});
+	sim.onTick = tick => server.replicator.afterTick(tick);
+	sim.onFx = event => server.replicator.queueFx(event);
+	return server;
+}
+
+/** does the server take `slot`'s client as holding a track for `netId`? (an older src asks in ticks) */
+function serverHasTrack(server, slot, netId) {
+	const rings = server.replicator.hordeRings;
+	return rings.hasTrack.length === 3
+		? rings.hasTrack(slot, netId, server.now)
+		: rings.hasTrack(slot, netId, server.sim.tick, server.sim.simHz);
 }
 
 /** the server's position of `netId` at a fractional tick, from the recent history, or undefined */
@@ -478,6 +519,8 @@ function addSurvivor(server, slot, x, y, save = defaultSave()) {
 		/** packets still in flight towards this client: [releaseTick, part] */
 		inbox: [],
 		lag: CLIENT_LAG_TICKS[slot % CLIENT_LAG_TICKS.length],
+		/** extra random delay per Snap part, 0..jitter ticks: parts overtake one another (0 = in order) */
+		jitter: 0,
 		loss: CLIENT_LOSS[slot % CLIENT_LOSS.length],
 		parts: 0,
 		fxEvents: 0,
@@ -488,6 +531,24 @@ function addSurvivor(server, slot, x, y, save = defaultSave()) {
 		snapshots: 0,
 		/** slots named by every `Shake` this client received: all of them must be this client's own */
 		shakeSlots: new Set(),
+		/** remote events received, and the ticks any arrived at (audit M3: on the snapshot's cadence, not every tick) */
+		fxPackets: 0,
+		worldPackets: 0,
+		fxTicks: 0,
+		worldTicks: 0,
+		/** (audit M3) the effects waiting for the drawing, exactly as client/net/netClient.ts keeps them */
+		fx: FXT !== undefined ? new FXT.FxTimeline() : undefined,
+		/** a tree without the timeline: the effects that landed, played by the next frame (its old `fxQueue`) */
+		fxQueue: [],
+		/** every effect the view played: { e, tick, arrived, render (the frame's render tick), frame (server tick) } */
+		played: [],
+		/** ZombieDied waiting for the buffer to let the body go, and those it let go ({ ...death, render, frame }) */
+		pendingDeaths: new Map(),
+		released: [],
+		/** ids of the ItemAdd deltas received (§4.5) */
+		itemAdds: [],
+		/** set to an array to keep every Fx event received, in order */
+		fxLog: undefined,
 		/** the reliable roster, kept exactly as client/net/netClient.ts keeps it (§4.4, MON-04) */
 		roster: new Map(),
 		/** PlayerProfile deltas received */
@@ -536,14 +597,27 @@ function applyRoster(client, e) {
 	}
 }
 
-/** one command per tick for every survivor, so the input queue never runs dry (§2.2) */
-function feedInput(server, edges = 0) {
+/**
+ * one command per tick for every survivor, so the input queue never runs dry (§2.2); `shooters`: who gets `edges`
+ * (everybody when undefined), and they hold `held` too
+ */
+function feedInput(server, edges = 0, shooters = undefined, held = 0) {
 	for (const sp of server.sim.players()) {
+		const shooting = shooters === undefined || shooters.includes(sp.slot);
 		const seq = (sp.lastSeq ?? 0) + 1;
 		const packet = {
 			viewTick: Math.max(0, server.sim.tick - 6),
 			viewFrac: 0,
-			cmds: [{ seq: seq % 65536, moveAng: 0, moveMag: 0, aim: 0, held: 0, edges }],
+			cmds: [
+				{
+					seq: seq % 65536,
+					moveAng: 0,
+					moveMag: 0,
+					aim: 0,
+					held: shooting ? held : 0,
+					edges: shooting ? edges : 0,
+				},
+			],
 		};
 		const payload = P.encodeInput(packet);
 		PL.ingestInput(sp, payload, server.now);
@@ -556,7 +630,7 @@ function feedInput(server, edges = 0) {
  */
 function tickServer(server, opts = {}) {
 	server.now += TICK_DT;
-	feedInput(server, opts.edges ?? 0);
+	feedInput(server, opts.edges ?? 0, opts.shooters, opts.held ?? 0);
 	const started = process.hrtime.bigint();
 	server.sim.step();
 	const ms = Number(process.hrtime.bigint() - started) / 1e6;
@@ -576,17 +650,27 @@ function tickServer(server, opts = {}) {
 				fail(`a Snap part did not decode for slot ${slot}`);
 				continue;
 			}
+			server.wire.snapMax = Math.max(server.wire.snapMax, buffer.len(raw));
+			if (part.part === 0) {
+				server.wire.snapshots += 1;
+				if (part.parts > 1) server.wire.split += 1;
+			}
 			// an unreliable packet that is lost is simply never handed over (§4.1: the next one supersedes it)
 			if (client.loss > 0 && nextRandom() < client.loss) continue;
-			client.inbox.push([server.sim.tick + client.lag, part]);
+			const late = client.jitter > 0 ? Math.floor(nextRandom() * (client.jitter + 1)) : 0;
+			client.inbox.push([server.sim.tick + client.lag + late, part]);
 		}
 		list.length = 0;
 	}
 	// everything whose flight time is up is handed to the real client-side buffer, with the clock estimate
-	// that client would have: the server's tick minus its own latency (§4.6 gives it the same anchor)
+	// that client would have: the server's tick minus its own latency (§4.6 gives it the same anchor). With jitter
+	// the inbox is out of order, and so is the delivery: exactly the unordered channel §1.1 describes
 	for (const [, client] of server.clients) {
-		while (client.inbox.length > 0 && client.inbox[0][0] <= server.sim.tick) {
-			const part = client.inbox.shift()[1];
+		const due = [];
+		const kept = [];
+		for (const entry of client.inbox) (entry[0] <= server.sim.tick ? due : kept).push(entry);
+		client.inbox = kept;
+		for (const [, part] of due) {
 			client.buffer.receive(part, server.sim.tick, server.now);
 			client.parts += 1;
 			if (part.part === 0) client.snapshots += 1;
@@ -601,19 +685,36 @@ function tickServer(server, opts = {}) {
 				fail(`an Fx batch did not decode for slot ${slot}`);
 				continue;
 			}
+			server.wire.fxMax = Math.max(server.wire.fxMax, buffer.len(raw));
+			if (client.fxPackets === 0 || client.fxAt !== server.sim.tick) client.fxTicks += 1;
+			client.fxAt = server.sim.tick;
+			client.fxPackets += 1;
 			client.fxEvents += batch.events.length;
+			// what client/net/netClient.ts `onFx` does: each effect keeps its batch's tick, unwrapped on the client's clock
+			const tick = unwrapTick(batch.tick, server.sim.tick);
 			for (const e of batch.events) {
 				client.fxByType.set(e.t, (client.fxByType.get(e.t) ?? 0) + 1);
 				if (e.t === P.FxType.Shake) client.shakeSlots.add(e.slot);
+				FX_META.set(e, { tick, arrived: server.sim.tick });
+				if (client.fxLog !== undefined) client.fxLog.push(e);
+				if (client.fx !== undefined) client.fx.push(e, tick, server.now);
+				else client.fxQueue.push(e);
 			}
 		}
 		list.length = 0;
 	}
 	const reliable = [];
-	for (const packet of t.broadcasts) reliable.push([undefined, packet]);
+	for (const packet of t.broadcasts) {
+		reliable.push([undefined, packet]);
+		for (const [, c] of server.clients) noteWorld(server, c);
+	}
 	t.broadcasts.length = 0;
 	for (const [slot, list] of t.worlds) {
-		for (const packet of list) reliable.push([slot, packet]);
+		for (const packet of list) {
+			reliable.push([slot, packet]);
+			const c = server.clients.get(slot);
+			if (c !== undefined) noteWorld(server, c);
+		}
 		list.length = 0;
 	}
 	for (const [slot, packet] of reliable) {
@@ -638,6 +739,11 @@ function tickServer(server, opts = {}) {
 				else server.clients.get(slot)?.announces.push(e);
 				continue;
 			}
+			if (e.t === P.WorldEv.ItemAdd) {
+				if (slot === undefined) for (const [, c] of server.clients) c.itemAdds.push(e.id);
+				else server.clients.get(slot)?.itemAdds.push(e.id);
+				continue;
+			}
 			if (e.t === P.WorldEv.SolidAdd || e.t === P.WorldEv.PowerSet) {
 				if (slot === undefined) for (const [, c] of server.clients) c.machines.push(e);
 				else server.clients.get(slot)?.machines.push(e);
@@ -646,19 +752,53 @@ function tickServer(server, opts = {}) {
 			if (e.t !== P.WorldEv.ZombieDied) continue;
 			const client = server.clients.get(slot);
 			if (client === undefined) continue;
-			client.deaths.push(e);
-			// exactly what client/net/netClient.ts does with it: the body leaves the interpolation NOW
-			client.buffer.forgetZombie(e.netId);
+			const death = { ...e, at: server.sim.tick, tick: unwrapTick(batch.tick, server.sim.tick) };
+			client.deaths.push(death);
+			// exactly what client/net/netClient.ts does with it: the batch's tick buries the netId against older parts
+			// still in flight (audit M1), and the body leaves when the drawing reaches that tick (audit M3). A tree
+			// from before M3 took it away at once
+			if (client.buffer.zombieDied !== undefined) client.buffer.zombieDied(e.netId, batch.tick, server.now);
+			else client.buffer.forgetZombie(e.netId, batch.tick);
+			client.pendingDeaths.set(e.netId, death);
 		}
 	}
 	return ms;
 }
 
-/** advances every client's interpolation the way a frame would, and returns their drawn hordes */
+/** one World packet reached `client` (and, if it is the first this tick, one more tick with a World batch) */
+function noteWorld(server, client) {
+	if (client.worldPackets === 0 || client.worldAt !== server.sim.tick) client.worldTicks += 1;
+	client.worldAt = server.sim.tick;
+	client.worldPackets += 1;
+}
+
+/**
+ * advances every client's interpolation the way a frame would, and returns their drawn hordes; the deaths the buffer
+ * let go and the effects due are handed to the "view" exactly as client/net/netClient.ts `netUpdate` and
+ * `takeNetFx` hand them (audit M3), and recorded with the frame's render tick
+ */
 function drawClients(server, dt = TICK_DT) {
 	const out = new Map();
 	for (const [slot, client] of server.clients) {
 		client.buffer.advance(dt, server.sim.tick, server.now, world);
+		const render = client.buffer.renderNow();
+		const frame = server.sim.tick;
+		if (client.buffer.takeDied !== undefined) {
+			for (const netId of client.buffer.takeDied([])) {
+				const d = client.pendingDeaths.get(netId);
+				if (d === undefined) continue;
+				client.pendingDeaths.delete(netId);
+				client.released.push({ ...d, render, frame });
+			}
+		} else {
+			for (const [, d] of client.pendingDeaths) client.released.push({ ...d, render, frame });
+			client.pendingDeaths.clear();
+		}
+		const due = client.fx !== undefined ? client.fx.take([], render, server.now, slot) : client.fxQueue.splice(0);
+		for (const e of due) {
+			const meta = FX_META.get(e);
+			client.played.push({ e, tick: meta.tick, arrived: meta.arrived, render, frame });
+		}
 		const byId = new Map();
 		for (const z of client.buffer.zombieStates()) byId.set(z.netId, z);
 		out.set(slot, byId);
@@ -1091,6 +1231,209 @@ section("(a4) the server takes a body as drawn only if a part that went out carr
 	}
 }
 
+// ================================================================ (a5) a stalled server, and a body shown once
+
+section("(a5) a stalled server knows its client retired a body, by the client's clock: real time (S3 NIT 1, 2)");
+{
+	/*
+	 * The client retires a zombie track 0.3/0.6 s after the last part that carried it (then a 0.15 s fade), by its REAL
+	 * clock. The server counted that in ticks, and ticks are not real time on a server that stalls: past the
+	 * Heartbeat's debt ceiling the surplus is dropped (§3.1). Here the server stops for 0.9 s while its client keeps
+	 * drawing: the client retires the mid-ring body; the server, with no tick run, eased it on as the same track, and
+	 * a shot at the body running in the near ring after the stall was judged its old ring's 3 ticks off it.
+	 */
+	const server = newWorldServer();
+	const cx = world.width / 2;
+	const cy = world.height / 2;
+	addSurvivor(server, 0, cx, cy);
+	const client = server.clients.get(0);
+	client.lag = 0;
+	client.loss = 0;
+	server.sim.clock.setClock(12);
+	const horde = server.sim.horde;
+	const SPEED = 200 / CFG.SIM_HZ;
+	let r = 1000;
+	let ang = 0;
+	const z = createZombie(1, cx + r, cy, 5, false);
+	z.alpha = 1;
+	horde.zombies.push(z);
+	const place = () => {
+		z.x = cx + Math.cos(ang) * r;
+		z.y = cy + Math.sin(ang) * r;
+		z.alpha = 1;
+	};
+	for (let i = 0; i < 90; i++) {
+		ang += SPEED / r;
+		place();
+		tickServer(server);
+		drawClients(server);
+	}
+	const netId = horde.netIdOf(z);
+	const drawnBefore = client.buffer.zombies.has(netId);
+	// the stall: 0.9 s of the client's frames, and not one tick on the server
+	r = 700;
+	for (let i = 0; i < 54; i++) {
+		server.now += TICK_DT;
+		drawClients(server);
+	}
+	check(
+		drawnBefore && !client.buffer.zombies.has(netId),
+		"the client drew the mid-ring body, and retired it in the stall",
+	);
+	check(
+		!serverHasTrack(server, 0, netId),
+		"the server knows: no track, by the 0.9 s that passed, not the 0 ticks that ran",
+	);
+	let worst = 0;
+	let frames = 0;
+	for (let i = 0; i < 90; i++) {
+		ang += SPEED / r;
+		place();
+		tickServer(server);
+		const b = drawClients(server).get(0).get(netId);
+		if (b === undefined) continue;
+		const view = client.buffer.renderNow();
+		const truth = serverAt(server, netId, b.tick);
+		const judged = serverAt(server, netId, view - server.replicator.viewLagOf(0, z, view));
+		if (truth === undefined || judged === undefined) continue;
+		frames += 1;
+		worst = Math.max(worst, Math.hypot(truth.x - judged.x, truth.y - judged.y));
+	}
+	info(
+		`after the stall, running in the near ring: ${frames} body-frames, judged vs drawn worst ${worst.toFixed(2)} u`,
+	);
+	check(frames >= 60, `the client draws it again after the stall (${frames} body-frames)`);
+	check(worst <= 1, `a shot at it is judged within 1 u of where it is drawn (worst ${worst.toFixed(2)} u)`);
+}
+{
+	/*
+	 * S3 NIT 2: a track's fade out starts from the alpha its fade-in reached, and a body sent once never reached 1. The
+	 * server took the longest fade for every track. The fade-in keeps running through the ring's timeout, though, so a
+	 * near body sent once is at 0.95 when it starts to fade and the gap was 15 ms, under a frame at 60 Hz: the server's
+	 * model is now the client's own (`retiredAfterS`), and this pins it. Lag 0, so the client's `lastSeen` is the
+	 * server's send: a near body lit for one snapshot, then dark, and one lit for a second, leave the client and the
+	 * server's idea of it within a frame of each other (the frame they land on is a question of rounding at 1/60 s).
+	 */
+	for (const shown of [1, CFG.SNAP_NEAR_HZ]) {
+		const server = newWorldServer();
+		const cx = world.width / 2;
+		const cy = world.height / 2;
+		addSurvivor(server, 0, cx, cy);
+		const client = server.clients.get(0);
+		client.lag = 0;
+		client.loss = 0;
+		server.sim.clock.setClock(23);
+		const horde = server.sim.horde;
+		const z = createZombie(1, cx + 500, cy, 5, false);
+		horde.zombies.push(z);
+		let netId = -1;
+		let lit = 0;
+		let clientGone = -1;
+		let serverGone = -1;
+		for (let i = 0; i < shown * CFG.SNAP_NEAR_EVERY_TICKS + 120 && (clientGone < 0 || serverGone < 0); i++) {
+			z.x = cx + 500;
+			z.y = cy;
+			// lit until `shown` snapshots carried it, then outside every light (§4.3 rule 2) past DARK_SENSE_RANGE
+			z.alpha = lit < shown ? 1 : 0;
+			tickServer(server);
+			drawClients(server);
+			netId = horde.netIdOf(z);
+			const has = client.buffer.zombies.has(netId);
+			if (lit < shown) {
+				lit = client.counts.get(netId) ?? 0;
+				continue;
+			}
+			if (clientGone < 0 && !has) clientGone = i;
+			if (serverGone < 0 && !serverHasTrack(server, 0, netId)) serverGone = i;
+		}
+		info(
+			`shown in ${shown} snapshot(s): the client retired it on frame ${clientGone}, the server on ${serverGone}`,
+		);
+		check(
+			clientGone > 0 && serverGone > 0 && Math.abs(clientGone - serverGone) <= 1,
+			`shown in ${shown} snapshot(s), the track goes within a frame on both sides`,
+		);
+	}
+}
+
+// ================================================================ (a6) a part over the unreliable limit
+
+section("(a6) a Snap part over the limit never goes out, and what it carried is counted, entity by entity (S3 NIT 4)");
+{
+	/*
+	 * The encoder keeps every part under SNAP_MAX_BYTES, so the replicator's own guard never fired and no test reached
+	 * it; it also counted a dropped part as ONE dropped entity. Here the encoder's output is tampered with: part 0 of
+	 * every other snapshot and part 1 of the rest go over the limit. The a4 horde (600 zombies, the cap lifted) fills
+	 * four parts.
+	 */
+	const cap = CFG.SNAP_ZOMBIE_CAP;
+	const encode = P.encodeSnapshot;
+	CFG.SNAP_ZOMBIE_CAP = 1000;
+	let tampered = 0;
+	let expected = 0;
+	try {
+		const server = newWorldServer();
+		const cx = world.width / 2;
+		const cy = world.height / 2;
+		addSurvivor(server, 0, cx, cy);
+		server.sim.clock.setClock(12);
+		seedHorde(server, 600, cx, cy, 780);
+		for (let i = 0; i < 6; i++) tickServer(server);
+		const client = server.clients.get(0);
+		client.counts.clear();
+		server.replicator.hordeRings.clear();
+		const stats = server.replicator.stats;
+		const dropped0 = stats.droppedEntities;
+		P.encodeSnapshot = snap => {
+			const res = encode(snap);
+			const k = tampered % 2 === 0 ? 0 : 1;
+			if (res.parts.length > 2) {
+				expected += res.dropped + res.partZombies[k];
+				if (k === 0)
+					expected +=
+						Math.min(snap.players.length, CFG.MAX_PLAYERS) + Math.min(snap.bosses.length, CFG.MAX_BOSSES);
+				res.parts[k] = buffer.create(CFG.SNAP_MAX_BYTES + 1);
+				tampered += 1;
+			} else {
+				expected += res.dropped;
+			}
+			return res;
+		};
+		for (let i = 0; i < 12; i++) tickServer(server);
+		P.encodeSnapshot = encode;
+		const horde = server.sim.horde;
+		let notedNotCarried = 0;
+		let carriedNotNoted = 0;
+		let carried = 0;
+		for (const z of horde.zombies) {
+			const netId = horde.netIdOf(z);
+			const pair = server.replicator.hordeRings.rings.get(netId);
+			const got = client.counts.has(netId);
+			if (got) carried += 1;
+			if (pair?.sent === true && !got) notedNotCarried += 1;
+			if (pair?.sent !== true && got) carriedNotNoted += 1;
+		}
+		info(
+			`${tampered} snapshots with a part over the limit; ${server.wire.snapMax} B the largest part the client got; ` +
+				`${stats.droppedEntities - dropped0} entities counted dropped (expected ${expected})`,
+		);
+		check(tampered >= 3, `the guard was reached (${tampered} parts over the limit)`);
+		check(server.wire.snapMax <= CFG.SNAP_MAX_BYTES, "no part over SNAP_MAX_BYTES reached the client");
+		checkEq(stats.droppedParts ?? 0, tampered, "each is counted as a dropped part");
+		checkEq(
+			stats.droppedEntities - dropped0,
+			expected,
+			"and everything it carried as dropped entities, one by one",
+		);
+		check(carried > 0, `the parts around it still went out (${carried} bodies)`);
+		checkEq(notedNotCarried, 0, "no body of a dropped part is taken as drawn");
+		checkEq(carriedNotNoted, 0, "and every body of the parts after it is (the offset skips the dropped part)");
+	} finally {
+		P.encodeSnapshot = encode;
+		CFG.SNAP_ZOMBIE_CAP = cap;
+	}
+}
+
 // ================================================================ (b) interest, walls and the dark
 
 section("(b) interest rings and the anti-wallhack rules of §4.3");
@@ -1134,7 +1477,9 @@ section("(b) interest rings and the anti-wallhack rules of §4.3");
 
 // ================================================================ (c) a death is reliable
 
-section("(c) a killed zombie leaves through the reliable channel (§4.4)");
+section(
+	"(c) a killed zombie leaves through the reliable channel (§4.4), when the drawing reaches its death (audit M3)",
+);
 {
 	const server = newWorldServer();
 	const cx = world.width / 2;
@@ -1148,14 +1493,504 @@ section("(c) a killed zombie leaves through the reliable channel (§4.4)");
 	const netId = horde.netIdOf(victim);
 	check(drawClients(server).get(0).has(netId), "the client is drawing it");
 	victim.hp = 0;
-	for (let i = 0; i < 6; i++) tickServer(server);
 	const client = server.clients.get(0);
+	let left;
+	for (let i = 0; i < 2 * CFG.SIM_HZ && left === undefined; i++) {
+		tickServer(server);
+		if (!drawClients(server).get(0).has(netId)) left = { tick: server.sim.tick, render: client.buffer.renderNow() };
+	}
 	const died = client.deaths.filter(d => d.netId === netId);
 	checkEq(died.length, 1, "exactly one ZombieDied reached the client");
 	if (died.length > 0) {
 		checkNear(died[0].x, victim.x, 1, "and it carries the place the body fell");
 	}
-	check(!drawClients(server).get(0).has(netId), "the body left the client's horde at once");
+	check(left !== undefined, "the body left the client's horde");
+	if (left !== undefined && died.length > 0) {
+		const d = died[0];
+		info(
+			`ZombieDied of tick ${d.tick} landed at tick ${d.at}; the body left at tick ${left.tick}, ` +
+				`drawing tick ${left.render.toFixed(2)}`,
+		);
+		check(
+			left.render >= d.tick,
+			`it stays drawn until the drawing reaches its death (render ${left.render.toFixed(2)} ≥ ${d.tick}): ` +
+				"not taken away while still walking to the spot it fell on",
+		);
+		check(left.render < d.tick + 1.5, "and it leaves on the frame the drawing gets there, not later");
+		const rel = client.released.filter(r => r.netId === netId);
+		checkEq(rel.length, 1, "the corpse, the blood and the drop go to the view once");
+		check(rel.length === 1 && rel[0].frame === left.tick, "on the very frame the body leaves");
+	}
+}
+
+// ================================================================ (c3) a death overtaken by nothing (audit M1)
+
+section("(c3) under jitter and reordering, a late Snap part never stands a dead zombie up again (§4.4, audit M1)");
+{
+	/*
+	 * `ZombieDied` is reliable and `Snap` is not, and the two are not ordered against each other (§1.1): a part that
+	 * carried the zombie alive, from a tick before the death, can land after the death did. It used to build a new
+	 * track, and the body stood up for its ring's despawn timeout (300/600 ms). Here the deaths land at once and every
+	 * part is 50 ms late plus 0-133 ms of jitter, which reorders them: exactly the Network Simulator case of §12.1.
+	 * While the body is still drawn (its death waits for the drawing, audit M3) a late part only smooths it; once it
+	 * went, no part from before the death brings it back.
+	 */
+	const server = newWorldServer();
+	const cx = world.width / 2;
+	const cy = world.height / 2;
+	addSurvivor(server, 0, cx, cy);
+	const client = server.clients.get(0);
+	client.lag = 3;
+	client.jitter = 8;
+	client.loss = 0;
+	const horde = server.sim.horde;
+	server.sim.clock.setClock(12);
+	const bodies = [];
+	for (let i = 0; i < 24; i++) {
+		const a = (i / 24) * Math.PI * 2;
+		const z = createZombie(1, cx + Math.cos(a) * 260, cy + Math.sin(a) * 260, 5, false);
+		z.alpha = 1;
+		horde.zombies.push(z);
+		bodies.push(z);
+	}
+	for (let i = 0; i < 40; i++) {
+		tickServer(server);
+		drawClients(server);
+	}
+	const drawnBefore = drawClients(server).get(0).size();
+	let ghostFrames = 0;
+	const ghostIds = new Set();
+	let killed = 0;
+	// every part the client takes in, how many carried a body its ZombieDied had already buried, and how many were
+	// played again right after their body went
+	const log = [];
+	let replayed = 0;
+	let lateAfterDeath = 0;
+	const receive = client.buffer.receive.bind(client.buffer);
+	client.buffer.receive = (part, tick, now) => {
+		log.push(part);
+		for (const z of part.zombies) {
+			const d = client.deaths.find(x => x.netId === z.netId);
+			if (d !== undefined && unwrapTick(part.tick, server.sim.tick) <= d.tick) lateAfterDeath += 1;
+		}
+		return receive(part, tick, now);
+	};
+	for (let i = 0; i < 24 * 9 + 60; i++) {
+		// one kill every 9 ticks: always something in flight around a death
+		if (i % 9 === 0 && killed < bodies.length) bodies[killed++].hp = 0;
+		tickServer(server);
+		const gone = client.released.length;
+		let drawn = drawClients(server).get(0);
+		// the worst late part of all: the newest one from before a death, landing just after its body went
+		for (const d of client.released.slice(gone)) {
+			let stale;
+			for (let k = log.length - 1; k >= 0 && stale === undefined; k--) {
+				const p = log[k];
+				if (unwrapTick(p.tick, server.sim.tick) <= d.tick && p.zombies.some(z => z.netId === d.netId))
+					stale = p;
+			}
+			if (stale === undefined) continue;
+			replayed += 1;
+			receive(stale, server.sim.tick, server.now);
+		}
+		if (client.released.length > gone) drawn = drawClients(server, 0).get(0);
+		// once the body went (when the drawing reached its death, audit M3) nothing brings it back
+		for (const d of client.released) {
+			// the netId is only handed out again NET_ID_REUSE_DELAY_S later: until then it is the dead body
+			if (server.sim.tick - d.at > CFG.NET_ID_REUSE_DELAY_S * CFG.SIM_HZ) continue;
+			if (drawn.has(d.netId)) {
+				ghostFrames += 1;
+				ghostIds.add(d.netId);
+			}
+		}
+	}
+	info(
+		`${drawnBefore} drawn, ${killed} killed, ${client.deaths.length} ZombieDied received; ` +
+			`${lateAfterDeath} samples of a body landed after its death did; ${replayed} parts from before a death ` +
+			`replayed once its body went: ${client.buffer.stats().ghosts} samples refused`,
+	);
+	checkEq(client.deaths.length, killed, "every kill reached the client as one ZombieDied");
+	checkEq(client.released.length, killed, "and every body left the drawing");
+	checkEq(ghostFrames, 0, `no frame draws a zombie after it left (${ghostIds.size()} ghost netIds)`);
+	check(lateAfterDeath > 0, "and the late parts were really there: samples from before a death landed after it");
+	check(
+		replayed > 0 && client.buffer.stats().ghosts >= replayed,
+		"and a part from before each death, replayed the frame its body went, was refused (the tomb of audit M1)",
+	);
+	client.buffer.receive = receive;
+}
+
+// ================================================================ (c4) the effects wait for the drawing (audit M3)
+
+section(
+	"(c4) an ally's shots, blood and kills play when the drawing reaches them; the shooter's own shot at once (M3)",
+);
+{
+	/*
+	 * Everybody else is drawn `delay` behind the clock (§5.1, ~130-160 ms). An effect played the moment it landed was
+	 * that far ahead of the bodies it belongs to: blood on a spot the zombie had not reached yet, a body gone while it
+	 * was still walking. Slot 0 fires east into a crowd; slot 1 stands beside them and watches. Both links are 50 ms.
+	 */
+	const server = newWorldServer();
+	const cx = world.width / 2;
+	const cy = world.height / 2;
+	const RIFLE = 13; // the semi-auto rifle of tools/test-server-sim.mjs: every shot is a ShotResult the server resolves
+	const armed = defaultSave();
+	armed.invenWeapon[RIFLE] = 1;
+	armed.equipWeapon = RIFLE;
+	armed.ammoNormal = 5000;
+	const gunner = addSurvivor(server, 0, cx, cy, armed);
+	const buddy = addSurvivor(server, 1, cx, cy + 60);
+	for (const sp of [gunner, buddy]) sp.state.godMode = true;
+	for (const [, c] of server.clients) {
+		c.lag = 3;
+		c.loss = 0;
+	}
+	server.sim.clock.setClock(12);
+	const horde = server.sim.horde;
+	for (let i = 0; i < 24; i++) {
+		const z = createZombie(1, cx + 160 + (i % 8) * 30, cy - 40 + Math.floor(i / 8) * 40, 5, false);
+		z.alpha = 1;
+		z.hp = 1;
+		horde.zombies.push(z);
+	}
+	for (let i = 0; i < 40; i++) {
+		tickServer(server);
+		drawClients(server);
+	}
+	const shooter = server.clients.get(0);
+	const watcher = server.clients.get(1);
+	// what is measured is the fight
+	for (const [, c] of server.clients) {
+		c.played.length = 0;
+		c.released.length = 0;
+		c.fxPackets = 0;
+		c.worldPackets = 0;
+		c.fxTicks = 0;
+		c.worldTicks = 0;
+	}
+	const seconds = 4;
+	/** where the watcher drew each body the frame before, and how far that was from where its ZombieDied says it fell */
+	const lastDrawn = new Map();
+	const fell = [];
+	for (let i = 0; i < seconds * CFG.SIM_HZ; i++) {
+		gunner.state.weapon.ammoCount = 20;
+		// and a heavier fight's worth of news on both channels, every tick: the batches still leave at 20 Hz
+		server.replicator.queueFx({
+			t: P.FxType.Blood,
+			x: cx + 30,
+			y: cy + 60,
+			angle: 0,
+			amount: 1,
+			kind: P.BloodKind.Red,
+		});
+		server.replicator.queue(server.sim.clock.clockEventNow(server.sim.tick));
+		tickServer(server, { edges: P.packEdges(1, 0, 0, 0), held: P.HeldBit.Attack, shooters: [0] });
+		const before = watcher.released.length;
+		const drawn = drawClients(server).get(1);
+		for (const d of watcher.released.slice(before)) {
+			const at = lastDrawn.get(d.netId);
+			if (at !== undefined) fell.push(Math.hypot(at.x - d.x, at.y - d.y));
+		}
+		lastDrawn.clear();
+		for (const [netId, z] of drawn) lastDrawn.set(netId, { x: z.x, y: z.y });
+	}
+	const kinds = new Map();
+	for (const p of watcher.played) kinds.set(p.e.t, (kinds.get(p.e.t) ?? 0) + 1);
+	const names = Object.fromEntries(Object.entries(P.FxType).map(([k, v]) => [v, k]));
+	info(
+		`the watcher played ${watcher.played.length} effects (` +
+			[...kinds].map(([t, n]) => `${names[t]} ${n}`).join(", ") +
+			`) and saw ${watcher.released.length} bodies fall`,
+	);
+	const remote = watcher.played.filter(p => p.e.t !== P.FxType.Shake);
+	check(
+		remote.some(p => p.e.t === P.FxType.Shot) && remote.some(p => p.e.t === P.FxType.Blood),
+		"the watcher was sent the ally's shots and the blood",
+	);
+	const ahead = remote.map(p => p.tick - p.render);
+	const worstAhead = Math.max(...ahead);
+	checkEq(
+		ahead.filter(a => a > 1e-6).length,
+		0,
+		`no effect of the fight plays before the drawing reaches its tick (worst ${worstAhead.toFixed(2)} ticks ahead)`,
+	);
+	const behind = Math.max(...remote.map(p => p.render - p.tick));
+	check(behind < 1.5, `and none waits past the frame it gets there (worst ${behind.toFixed(2)} ticks behind)`);
+	// the shooter: the confirmation of their own shot at once (their client drew the line when they pulled the trigger)
+	const own = shooter.played.filter(p => p.e.t === P.FxType.Shot && p.e.slot === 0);
+	check(own.length > 0, `the shooter got their own ShotResults (${own.length})`);
+	checkEq(own.filter(p => p.frame !== p.arrived).length, 0, "each played the frame it landed, not held");
+	const theirBlood = shooter.played.filter(p => p.e.t === P.FxType.Blood);
+	checkEq(
+		theirBlood.filter(p => p.tick > p.render + 1e-6).length,
+		0,
+		"the blood of their hits waits for the zombie it belongs to, like everybody's",
+	);
+	// the deaths
+	check(watcher.released.length > 0, `bodies fell in front of the watcher (${watcher.released.length})`);
+	checkEq(
+		watcher.released.filter(d => d.render < d.tick).length,
+		0,
+		"every body stayed drawn until the drawing reached its death",
+	);
+	const kills = watcher.played.filter(p => p.e.t === P.FxType.Blood && p.e.amount >= 10);
+	let paired = 0;
+	for (const d of watcher.released) {
+		if (kills.some(p => p.frame === d.frame && Math.hypot(p.e.x - d.x, p.e.y - d.y) < 24)) paired += 1;
+	}
+	info(
+		`the kill's blood played on the frame its body left for ${paired} of ${watcher.released.length} deaths; ` +
+			`last drawn spot to where it fell: median ${percentile(fell, 0.5).toFixed(1)} u, ` +
+			`p95 ${percentile(fell, 0.95).toFixed(1)} u`,
+	);
+	check(
+		paired === watcher.released.length,
+		"the kill's blood and the body leaving land on the same frame (client/view/fxView.ts pours one pool for both)",
+	);
+	// the cadence: both channels on the snapshot's, 20 batches a second at most (a World flush can be two remote
+	// events: the broadcast and the directed half)
+	const cadence = CFG.SIM_HZ / CFG.SNAP_NEAR_EVERY_TICKS;
+	const fxRate = watcher.fxTicks / seconds;
+	const worldRate = watcher.worldTicks / seconds;
+	info(
+		`to the watcher, per second: Fx ${fxRate.toFixed(1)} batches (${(watcher.fxPackets / seconds).toFixed(1)} ` +
+			`remote events), World ${worldRate.toFixed(1)} batches (${(watcher.worldPackets / seconds).toFixed(1)})`,
+	);
+	check(fxRate <= cadence, `Fx goes out on the snapshot's cadence (${fxRate.toFixed(1)}/s ≤ ${cadence}/s)`);
+	check(worldRate <= cadence, `and so does World (${worldRate.toFixed(1)}/s ≤ ${cadence}/s)`);
+}
+
+// ================================================================ (c5) a death and its blood, one batch
+
+section(
+	"(c5) a zombie's death and its blood travel in the same batch, even when an urgent event flushes the World (NIT)",
+);
+{
+	/*
+	 * The client lets a body go and plays its blood on the frame the drawing reaches their batch's tick, and
+	 * client/view/fxView.ts pours one pool when the two land together. World flushes at once for a PlayerLife (an
+	 * urgent event), off the snapshot's cadence; the effects waited for the cadence, so a death that tick went a batch
+	 * ahead of its own blood, and the floor poured a second pool (the security review of the net hardening).
+	 */
+	const server = newWorldServer();
+	const cx = world.width / 2;
+	const cy = world.height / 2;
+	addSurvivor(server, 0, cx, cy);
+	const client = server.clients.get(0);
+	client.lag = 0;
+	client.loss = 0;
+	client.fxLog = [];
+	server.sim.clock.setClock(12);
+	const horde = server.sim.horde;
+	const victim = createZombie(1, cx + 200, cy, 5, false);
+	victim.alpha = 1;
+	horde.zombies.push(victim);
+	for (let i = 0; i < 30; i++) tickServer(server);
+	// the next tick is off the cadence: the death happens there, with an urgent event in the same tick
+	while ((server.sim.tick + 1) % CFG.SNAP_NEAR_EVERY_TICKS === 0) tickServer(server);
+	const netId = horde.netIdOf(victim);
+	victim.hp = 0;
+	server.replicator.queue({ t: P.WorldEv.PlayerLife, slot: 0, state: P.LifeState.Up });
+	for (let i = 0; i < 2 * CFG.SNAP_NEAR_EVERY_TICKS; i++) tickServer(server);
+	const death = client.deaths.find(d => d.netId === netId);
+	const blood = client.fxLog.find(
+		e =>
+			e.t === P.FxType.Blood &&
+			e.amount >= 10 &&
+			death !== undefined &&
+			Math.hypot(e.x - death.x, e.y - death.y) < 2,
+	);
+	info(
+		`death at tick ${death?.tick} (off the cadence: ${death !== undefined && death.tick % CFG.SNAP_NEAR_EVERY_TICKS !== 0}), ` +
+			`its blood at ${blood !== undefined ? FX_META.get(blood).tick : "none"}`,
+	);
+	check(death !== undefined && blood !== undefined, "the death and the kill's blood both reached the client");
+	check(
+		death !== undefined && blood !== undefined && FX_META.get(blood).tick === death.tick,
+		"in batches of the same tick: the client plays them on one frame, and pours one pool",
+	);
+}
+
+// ================================================================ (l2) what the dark hides stays hidden (audit L2)
+
+section(
+	"(l2) at night a zombie's blood, the hits on it, its death and its fresh drop reach only who could see it (L2)",
+);
+{
+	/*
+	 * The snapshot withholds a zombie in the dark past DARK_SENSE_RANGE (§4.3, section b). Its blood, a shot's hit on
+	 * it, its death and the drop it left did not: each carried its position to every client in range. Slot 0 watches
+	 * from the middle of town at 23:00; slot 1 shoots from 200 u west (and 100 u south). `hidden` stands 400 u east of
+	 * the watcher, outside every light; `heard` 100 u east, close enough to be heard.
+	 */
+	const W = require(join(SRC, "shared/game/world.ts"));
+	// the town is shared by every section: the drops of the fights before would share ids with this server's
+	W.clearGroundItems(world);
+	const server = newWorldServer();
+	const cx = world.width / 2;
+	const cy = world.height / 2;
+	addSurvivor(server, 0, cx, cy);
+	const gunner = addSurvivor(server, 1, cx - 200, cy + 100);
+	for (const [, c] of server.clients) {
+		c.lag = 0;
+		c.loss = 0;
+		c.fxLog = [];
+	}
+	server.sim.clock.setClock(23);
+	const horde = server.sim.horde;
+	const hidden = createZombie(1, cx + 400, cy, 5, false);
+	const heard = createZombie(1, cx + 100, cy, 5, false);
+	for (const z of [hidden, heard]) horde.zombies.push(z);
+	const hold = () => {
+		for (const [z, dx] of [
+			[hidden, 400],
+			[heard, 100],
+		]) {
+			z.x = cx + dx;
+			z.y = cy;
+			z.alpha = 0;
+		}
+	};
+	const run = n => {
+		for (let i = 0; i < n; i++) {
+			hold();
+			tickServer(server);
+			drawClients(server);
+		}
+	};
+	run(40);
+	const watcher = server.clients.get(0);
+	const shooter = server.clients.get(1);
+	const hiddenId = horde.netIdOf(hidden);
+	const heardId = horde.netIdOf(heard);
+	const drawn = drawClients(server).get(0);
+	check(!drawn.has(hiddenId) && drawn.has(heardId), "the snapshot withholds `hidden` and sends `heard` (section b)");
+	for (const [, c] of server.clients) c.fxLog.length = 0;
+	const R = server.replicator;
+	const G = P.BloodKind.Green;
+	R.queueFx({ t: P.FxType.Blood, x: hidden.x, y: hidden.y, angle: 0, amount: 3, kind: G });
+	R.queueFx({ t: P.FxType.Blood, x: heard.x, y: heard.y, angle: 0, amount: 3, kind: G });
+	// a survivor's blood: a survivor is sent in range whatever the light, and so is theirs
+	R.queueFx({ t: P.FxType.Blood, x: cx + 380, y: cy, angle: 0, amount: 3, kind: P.BloodKind.Red });
+	const hits = [
+		{ x: hidden.x, y: hidden.y, hit: P.HitKind.Zombie },
+		{ x: heard.x, y: heard.y, hit: P.HitKind.Zombie },
+		{ x: cx + 450, y: cy + 30, hit: P.HitKind.Solid },
+	];
+	// the semi-auto rifle (700 u): the hidden zombie is 610 u from the gunner, in its reach
+	R.queueFx({ t: P.FxType.Shot, slot: 1, weapon: 13, hits });
+	// ...and a shot whose ONLY hit is the hidden zombie (L7: dropped, it said as much as drawn)
+	R.queueFx({ t: P.FxType.Shot, slot: 1, weapon: 13, hits: [{ x: hidden.x, y: hidden.y, hit: P.HitKind.Zombie }] });
+	// the machines' lines (L7): a turret at the watcher's side firing at each, a zap chained from the hidden one to the
+	// heard one, and a boss's beam (sent in range, as a boss is)
+	const muzzle = { x: cx + 60, y: cy - 60 };
+	const tracer = (from, to, kind, machine) =>
+		R.queueFx({ t: P.FxType.Tracer, x1: from.x, y1: from.y, x2: to.x, y2: to.y, kind, life: 0.1, machine });
+	tracer(muzzle, hidden, 1, true);
+	tracer(muzzle, heard, 1, true);
+	tracer(hidden, heard, 2, false);
+	tracer(hidden, heard, 3, false);
+	R.queueFx({
+		t: P.FxType.ProjSpawn,
+		projId: 900,
+		kind: P.ProjKind.Spit,
+		owner: CFG.SLOT_NONE,
+		x: hidden.x,
+		y: hidden.y,
+		angle: Math.PI,
+		speed: 200,
+	});
+	R.queueFx({
+		t: P.FxType.ProjSpawn,
+		projId: 901,
+		kind: P.ProjKind.Arrow,
+		owner: 1,
+		x: cx - 480,
+		y: cy,
+		angle: 0,
+		speed: 600,
+	});
+	run(CFG.SNAP_NEAR_EVERY_TICKS);
+	R.queueFx({ t: P.FxType.ProjEnd, projId: 900, x: cx + 150, y: cy, how: P.ProjEndHow.Fell });
+	R.queueFx({ t: P.FxType.ProjEnd, projId: 901, x: cx + 300, y: cy, how: P.ProjEndHow.Fell });
+	run(CFG.SNAP_NEAR_EVERY_TICKS);
+	const near = (e, z) => Math.hypot(e.x - z.x, e.y - z.y) < 1;
+	const wl = watcher.fxLog;
+	const greenAt = (log, z) => log.some(e => e.t === P.FxType.Blood && e.kind === G && near(e, z));
+	check(!greenAt(wl, hidden), "the watcher is not sent the blood of the zombie it cannot see");
+	check(greenAt(wl, heard), "but is sent the blood of the one it hears");
+	check(
+		wl.some(e => e.t === P.FxType.Blood && e.kind === P.BloodKind.Red),
+		"and a survivor's blood in range",
+	);
+	const shots = wl.filter(e => e.t === P.FxType.Shot);
+	checkEq(shots.length, 2, "both of the ally's shots reach the watcher, the one that only hit the hidden zombie too");
+	const from = { x: gunner.state.x, y: gunner.state.y };
+	const dHidden = Math.hypot(hidden.x - from.x, hidden.y - from.y);
+	/** the hit that went on past the hidden zombie, as a miss would have */
+	const pastHidden = sh =>
+		sh.hits.find(
+			h =>
+				h.hit !== P.HitKind.Zombie &&
+				Math.hypot(h.x - from.x, h.y - from.y) > dHidden + 1 &&
+				Math.abs(Math.atan2(h.y - from.y, h.x - from.x) - Math.atan2(hidden.y - from.y, hidden.x - from.x)) <
+					0.02,
+		);
+	if (shots.length === 2) {
+		checkEq(shots[0].hits.length, 3, "every pellet is still drawn: a hit the watcher cannot see is not dropped");
+		check(!shots.some(sh => sh.hits.some(h => near(h, hidden))), "no hit names the hidden zombie's spot");
+		check(
+			pastHidden(shots[0]) !== undefined && shots[0].hits.some(h => near(h, heard)),
+			"the hidden one is drawn as the miss it would have been -- on past the zombie, to the range or a wall",
+		);
+		check(
+			shots[1].hits.length === 1 && pastHidden(shots[1]) !== undefined,
+			"and the shot that only hit it is a miss, not a gun that fired and drew nothing",
+		);
+	}
+	const theirs = shooter.fxLog.filter(e => e.t === P.FxType.Shot);
+	check(theirs.length === 2 && theirs[0].hits.length === 3, "the shooter gets their own shots whole");
+	check(
+		theirs.length === 2 && theirs[1].hits.some(h => near(h, hidden)),
+		"(their own hit on the hidden zombie included: their client drew it already)",
+	);
+	const lines = wl.filter(e => e.t === P.FxType.Tracer);
+	const lineTo = (to, kind) => lines.some(e => e.kind === kind && Math.hypot(e.x2 - to.x, e.y2 - to.y) < 1);
+	check(!lineTo(hidden, 1), "a turret's line to the hidden zombie is not sent to the watcher (L7)");
+	check(lineTo(heard, 1), "its line to the heard one is");
+	check(!lineTo(heard, 2), "a zap chained FROM the hidden zombie is not (its start is a zombie too)");
+	check(lineTo(heard, 3), "a boss's beam is sent in range, as the boss is");
+	const spawned = id => wl.some(e => e.t === P.FxType.ProjSpawn && e.projId === id);
+	const ended = id => wl.some(e => e.t === P.FxType.ProjEnd && e.projId === id);
+	check(!spawned(900) && !ended(900), "a spit in the dark: neither its flight nor its end reach the watcher");
+	check(spawned(901) && ended(901), "an arrow it saw fly: both do");
+	check(
+		shooter.fxLog.some(e => e.t === P.FxType.ProjEnd && e.projId === 901),
+		"and to the archer, who saw it too",
+	);
+	// the deaths, and what they drop
+	const items = server.sim.items;
+	check(items !== undefined, "the server keeps the ground items (phase ≥ 2)");
+	const dropHidden = W.spawnGroundItem(server.sim.world, 4, 23, 1, hidden.x, hidden.y);
+	const dropHeard = W.spawnGroundItem(server.sim.world, 4, 23, 1, heard.x, heard.y);
+	hidden.hp = 0;
+	heard.hp = 0;
+	run(2 * CFG.SNAP_NEAR_EVERY_TICKS);
+	const diedFor = (c, id) => c.deaths.some(d => d.netId === id);
+	check(!diedFor(watcher, hiddenId), "no ZombieDied for a zombie the watcher was never sent");
+	check(diedFor(watcher, heardId), "one for the zombie it was drawing");
+	check(!watcher.itemAdds.includes(dropHidden.id), "a drop that just fell in the dark is not told to the watcher");
+	check(watcher.itemAdds.includes(dropHeard.id), "one that fell within earshot is");
+	// news goes stale: past ITEM_NEWS_S the drop is litter, told in range like any other
+	const staleTicks = Math.ceil(((CFG.ITEM_NEWS_S ?? 0) + 1) * CFG.SIM_HZ);
+	for (let i = 0; i < staleTicks; i++) {
+		tickServer(server);
+		if (watcher.itemAdds.includes(dropHidden.id)) break;
+	}
+	check(watcher.itemAdds.includes(dropHidden.id), `past ITEM_NEWS_S (${CFG.ITEM_NEWS_S} s) it is litter, and told`);
+	W.removeGroundItem(server.sim.world, dropHidden);
+	W.removeGroundItem(server.sim.world, dropHeard);
 }
 
 // ================================================================ (c2) the mid ring costs half as much
@@ -1267,6 +2102,38 @@ section(`(d) bandwidth per client: 6 survivors, night, the horde at its ceiling,
 		if (client.parts === 0) oversize += 1;
 	}
 	checkEq(oversize, 0, "every client actually received snapshots");
+	// audit L1: the engine drops an unreliable payload over 1000 B after ITS encoding, so ours stay under a raw ceiling
+	const w = server.wire;
+	const limit = CFG.UNRELIABLE_PAYLOAD_LIMIT;
+	info(
+		`largest Snap part ${w.snapMax} B, largest Fx packet ${w.fxMax} B: headroom to the engine's ${limit} B ` +
+			`${limit - Math.max(w.snapMax, w.fxMax)} B; ${w.split} of ${w.snapshots} snapshots went out in two parts`,
+	);
+	check(
+		w.snapMax <= CFG.UNRELIABLE_MAX_BYTES,
+		`every Snap part is ≤ UNRELIABLE_MAX_BYTES (${CFG.UNRELIABLE_MAX_BYTES} B)`,
+	);
+	check(
+		w.fxMax <= CFG.UNRELIABLE_MAX_BYTES,
+		`every Fx packet is ≤ UNRELIABLE_MAX_BYTES (${CFG.UNRELIABLE_MAX_BYTES} B)`,
+	);
+	// and the last guard before the engine checks that ceiling, not the engine's own 1000
+	const saved = globalThis.game;
+	globalThis.game = { GetService: () => ({}) };
+	const remotes = require(join(SRC, "server/net/remotes.ts"));
+	globalThis.game = saved;
+	let fired = 0;
+	const remote = {
+		FireClient() {
+			fired += 1;
+		},
+	};
+	const fits = remotes.sendUnreliable(remote, {}, buffer.create(CFG.UNRELIABLE_MAX_BYTES));
+	const over = remotes.sendUnreliable(remote, {}, buffer.create(CFG.UNRELIABLE_MAX_BYTES + 1));
+	check(
+		fits && !over && fired === 1,
+		`sendUnreliable refuses ${CFG.UNRELIABLE_MAX_BYTES + 1} B (over our ceiling, under the engine's ${limit})`,
+	);
 }
 
 // ================================================================ (e) XP comes from the server
@@ -1518,7 +2385,8 @@ section(
 	const b = addSurvivor(server, 1, cx + 40, cy);
 	const ca = server.clients.get(0);
 	const cb = server.clients.get(1);
-	for (let i = 0; i < TALLY_AFTER_JOIN_TICKS + 1; i++) tickServer(server);
+	// the round goes out with the World batch after it (on the snapshot's cadence, audit M3)
+	for (let i = 0; i < TALLY_AFTER_JOIN_TICKS + CFG.WORLD_FLUSH_EVERY_TICKS; i++) tickServer(server);
 	checkEq(cb.roster.get(0)?.lifeDay, 9, "an ally's scoreboard has the veteran's day of life (the server's save)");
 	checkEq(cb.roster.get(0)?.kills, 137, "and the zombies it put down");
 	checkEq(ca.roster.get(0)?.kills, 137, "its own client is told the same numbers (one source for every row)");
@@ -1581,7 +2449,8 @@ section(
 	a.save.zombieKills += 1;
 	addSurvivor(server, 2, cx - 40, cy);
 	const cc = server.clients.get(2);
-	for (let i = 0; i < TALLY_AFTER_JOIN_TICKS + 1; i++) tickServer(server);
+	// the round goes out with the World batch after it (on the snapshot's cadence, audit M3)
+	for (let i = 0; i < TALLY_AFTER_JOIN_TICKS + CFG.WORLD_FLUSH_EVERY_TICKS; i++) tickServer(server);
 	checkEq(cc.roster.get(0)?.kills, 138, "a newcomer's scoreboard has the kills of NOW");
 	checkEq(cc.roster.get(1)?.lifeDay, 1, "and every other survivor's day");
 	checkEq(cc.roster.get(2)?.lifeDay, 1, "and its own");
@@ -1604,7 +2473,15 @@ section(
 	const replicator = new Replicator(sim, transport, { tick0Time: 0, mapHash: mapHashOf(pworld) });
 	sim.onTick = tick => replicator.afterTick(tick);
 	sim.onFx = event => replicator.queueFx(event);
-	const server = { sim, transport, replicator, clients: new Map(), hist: new Map(), now: 0 };
+	const server = {
+		sim,
+		transport,
+		replicator,
+		clients: new Map(),
+		hist: new Map(),
+		wire: { snapMax: 0, fxMax: 0, snapshots: 0, split: 0 },
+		now: 0,
+	};
 	const place = (id, x, y) => {
 		const d = PLACEABLES[id];
 		return W.addSolid(pworld, { ...placedSolid(d, { x, y, w: d.w, h: d.h }, 0), placeable: id, owner: 0 });
@@ -1638,7 +2515,8 @@ section(
 	// the survivor at the base switches the lamp on: everyone hears it, the far ones included
 	const before = far.machines.length;
 	tickServer(server, { edges: P.packEdges(0, 0, 1, 0) });
-	tickServer(server);
+	// the World batch goes out on the snapshot's cadence (audit M3)
+	for (let i = 0; i < CFG.WORLD_FLUSH_EVERY_TICKS; i++) tickServer(server);
 	const lampSet = far.machines.slice(before).find(e => e.t === P.WorldEv.PowerSet && e.id === lamp.id);
 	check(
 		lampSet !== undefined && POW.powerWorking(lampSet.state),

@@ -7,7 +7,7 @@ import { DESIGN } from "shared/engine/constants";
 import type { ZombieState } from "shared/game/entities";
 import { PLAYER_RADIUS, ZOMBIE_RADIUS } from "shared/game/physics";
 import type { PlayerState } from "shared/game/player";
-import { buildingAt, GroundItem, querySolids, Solid, WorldData } from "shared/game/world";
+import { buildingAt, GroundItem, queryGroundItems, querySolids, Solid, WorldData } from "shared/game/world";
 import { rectCircleOverlap } from "./placement";
 import { vehicleBroken } from "./vehicle";
 
@@ -98,26 +98,34 @@ export function canRepair(s: Solid): boolean {
 	return s.hp < s.hpMax && REPAIRABLE.includes(s.tags);
 }
 
+/** reused by every `nearestGroundItem`: the E hint asks every frame, and a table per answer would be garbage */
+const ITEM_SCRATCH = new Array<GroundItem>();
+
 /**
  * Nearest ground item within reach (DESIGN.ITEM_GET_DISTANCE).
  *
- * This runs every frame, for the "E: pick up" hint, over every item in the world — and the world's item
- * count only grows as a run explores. It used to take a square root for each one. Two things fix that
- * without a new index: reject on the bounding box first (two subtractions and two compares kill everything
- * that is not within 40 u), and then compare SQUARED distances, since `a < b` and `a² < b²` agree for
- * non-negative numbers. The answer is identical; the arithmetic is not.
+ * This runs every frame, for the "E: pick up" hint, and on the server for every E press. It used to take a
+ * square root for each item in the world. Now: only the items in the reach's box (on the server the item grid
+ * reads one to four cells of it, shared/game/world.ts `queryGroundItems`; a client scans its own short list), then
+ * SQUARED distances, since `a < b` and `a² < b²` agree for non-negative numbers. The answer is identical; the
+ * arithmetic is not.
  */
 export function nearestGroundItem(world: WorldData, x: number, y: number): GroundItem | undefined {
 	const reach = DESIGN.ITEM_GET_DISTANCE;
 	let best: GroundItem | undefined;
 	let bestD2 = reach * reach;
-	for (const it of world.items) {
+	const found = ITEM_SCRATCH;
+	found.clear();
+	queryGroundItems(world, x - reach, y - reach, x + reach, y + reach, found);
+	for (const it of found) {
 		const dx = it.x - x;
 		if (dx > reach || dx < -reach) continue;
 		const dy = it.y - y;
 		if (dy > reach || dy < -reach) continue;
 		const d2 = dx * dx + dy * dy;
-		if (d2 < bestD2) {
+		// a tie (a boss's trophies land on one spot) goes to the oldest id: the grid's cells and a client's list are
+		// in different orders, and the item the hint names must be the one the server hands over
+		if (d2 < bestD2 || (d2 === bestD2 && best !== undefined && it.id < best.id)) {
 			bestD2 = d2;
 			best = it;
 		}
