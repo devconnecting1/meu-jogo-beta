@@ -149,6 +149,12 @@ interface Session {
 	lastAck: number;
 	/** os.clock() of the last rejection answered (REJECT_ACK_INTERVAL) */
 	lastRejectAck: number;
+	/**
+	 * The newest rejection that came inside the window, answered when it ends (`rejectReport`): the client's last
+	 * report always gets its answer, only later. Undefined when nothing is held.
+	 */
+	heldReject: SaveRejectReason | undefined;
+	heldRejectWallet: boolean;
 	lastReport: number;
 	pending: string | undefined;
 	pendingToken: string | undefined;
@@ -703,6 +709,8 @@ function newSession(player: Player): Session {
 		ackRequested: false,
 		lastAck: -math.huge,
 		lastRejectAck: -math.huge,
+		heldReject: undefined,
+		heldRejectWallet: false,
 		lastReport: -math.huge,
 		pending: undefined,
 		pendingToken: undefined,
@@ -857,10 +865,32 @@ function sendSaveAck(s: Session, ack: SaveAckPayload): void {
 }
 
 function rejectReport(s: Session, reason: SaveRejectReason, withWallet = false): void {
-	// at most one answer per REJECT_ACK_INTERVAL: a rejection must not be a reflector (audit M2)
+	// at most one answer per REJECT_ACK_INTERVAL: a rejection must not be a reflector (audit M2). One inside the window
+	// is not dropped: the newest waits for the window to end (the security review of the net hardening, L5) -- an
+	// honest client whose report was refused a second time in a second must still hear why, or it waits for nothing
 	const now = os.clock();
-	if (now - s.lastRejectAck < REJECT_ACK_INTERVAL && now >= s.lastRejectAck) return;
-	s.lastRejectAck = now;
+	const wait = s.lastRejectAck + REJECT_ACK_INTERVAL - now;
+	if (wait > 0 && now >= s.lastRejectAck) {
+		const queued = s.heldReject !== undefined;
+		s.heldReject = reason;
+		s.heldRejectWallet = s.heldRejectWallet || withWallet;
+		if (!queued) task.delay(wait, () => answerHeldReject(s));
+		return;
+	}
+	answerReject(s, reason, withWallet || s.heldRejectWallet);
+}
+
+/** the rejection held inside the window, at its end (`rejectReport`) */
+function answerHeldReject(s: Session): void {
+	const reason = s.heldReject;
+	if (reason === undefined || s.closed) return;
+	answerReject(s, reason, s.heldRejectWallet);
+}
+
+function answerReject(s: Session, reason: SaveRejectReason, withWallet: boolean): void {
+	s.heldReject = undefined;
+	s.heldRejectWallet = false;
+	s.lastRejectAck = os.clock();
 	sendSaveAck(s, {
 		ok: false,
 		reason,
@@ -935,6 +965,9 @@ function processReport(s: Session, json: string): void {
 	// between the swap and mpHost's next `adoptSave` pass.
 	copySaveInto(s.save, upd);
 	s.dirty = true;
+	// the answer to a newer report: a rejection still held for an older one (`rejectReport`) is moot now
+	s.heldReject = undefined;
+	s.heldRejectWallet = false;
 	sendSaveAck(s, {
 		ok: true,
 		earned: reward.coins,

@@ -1136,6 +1136,12 @@ export interface FxTracer {
 	kind: number;
 	/** 0..2.55 s in FX_TIME_STEP */
 	life: number;
+	/**
+	 * SERVER ONLY, never on the wire: the line starts at a construction (a turret's muzzle), whose place is no news. A
+	 * chained zap starts at the zombie before it, and its start is news like its end (§4.3; the security review of the
+	 * net hardening, L7).
+	 */
+	machine?: boolean;
 }
 
 export type FxEvent =

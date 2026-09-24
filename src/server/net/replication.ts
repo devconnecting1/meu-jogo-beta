@@ -67,10 +67,12 @@ import {
 	encodeSnapshot,
 	encodeWorld,
 } from "shared/net/protocol";
-import { debrisMaterialId, toWireFx } from "shared/net/fxWire";
+import { debrisMaterialId, toWireFx, tracerKindId } from "shared/net/fxWire";
 import { positionLit } from "shared/sim/ai/zombieBrain";
 import { FxEvent as SimFxEvent } from "shared/sim/types";
 import { BossState, ZombieState } from "shared/game/entities";
+import { WEAPONS } from "shared/data/weapons";
+import { blocksShots, raycast } from "shared/game/physics";
 import { Solid, WorldData, buildingAt } from "shared/game/world";
 import { isDoor } from "shared/sim/interactQuery";
 import { packRide, rideHeading } from "shared/sim/rideKey";
@@ -401,10 +403,22 @@ interface FxEntry {
 	/** the building (x, y) is inside, 0 outdoors, and whether it is lit (true by day): read only when `sight` */
 	building: number;
 	lit: boolean;
-	/** a Shot: per hit, the same three -- only a hit ON A ZOMBIE shows something the dark hides */
-	hitSight: Array<boolean> | undefined;
-	hitBuilding: Array<number> | undefined;
-	hitLit: Array<boolean> | undefined;
+	/** a machine's Tracer that does not start at the machine (a chained zap): its start point too (L7) */
+	fromSight: boolean;
+	fromX: number;
+	fromY: number;
+	fromBuilding: number;
+	fromLit: boolean;
+	/** a Shot placed at its shooter's body (a miss can be drawn from there, `missFor`) */
+	atShooter: boolean;
+	/** a Shot with a hit on a zombie, and per hit the same three -- only a hit ON A ZOMBIE shows what the dark hides */
+	zombieHits: boolean;
+	hitSight: Array<boolean>;
+	hitBuilding: Array<number>;
+	hitLit: Array<boolean>;
+	/** per hit: the miss a hidden zombie hit is shown as, made at most once a flush (`missMade`); pooled objects */
+	missMade: Array<boolean>;
+	misses: Array<ShotHit>;
 }
 
 /** the World events that cannot wait for the cadence: a join's anchor, a new town, a death or a stand-up (§7.3) */
@@ -424,6 +438,8 @@ function partZeroActors(snap: Snapshot): number {
 
 /** the debris a boss throws: a boss is sent in range whatever the light, so is its debris */
 const BOSS_DEBRIS = debrisMaterialId("boss");
+/** a boss's beam: sent in range, as the boss is */
+const BOSS_TRACER = tracerKindId("boss");
 /** projectiles whose spawn is still waiting for its end, at most (the map is a safety net, not a store) */
 const PROJ_SEEN_MAX = 1024;
 
@@ -491,6 +507,10 @@ export class Replicator {
 	private readonly projSeen = new Map<number, number>();
 	/** a World event that cannot wait for the cadence was queued (`urgentEvent`) */
 	private urgent = false;
+	/** the viewer's copies of the shots it may only see part of (`shotFor`), reused flush after flush */
+	private readonly shotPool = new Array<FxShot>();
+	private shotsUsed = 0;
+	private readonly shownScratch = new Array<boolean>();
 	/** the server's clock, s (`ReplicatorOptions.now`) */
 	private readonly now: () => number;
 	/** the town every InitBegin names: it changes when a world ends (MP-22, `openTown`) */
@@ -770,9 +790,13 @@ export class Replicator {
 		}
 		prof?.end();
 		prof?.begin("PZ.repl.flush");
-		// on the snapshot's cadence (audit M3), or at once for what cannot wait (`urgentEvent`)
-		if (this.urgent || tick % WORLD_FLUSH_EVERY_TICKS === 0) this.flushWorld(tick);
-		if (tick % FX_FLUSH_EVERY_TICKS === 0) this.flushFx(tick);
+		// on the snapshot's cadence (audit M3), or at once for what cannot wait (`urgentEvent`) -- and the effects go
+		// with the World batch whenever it goes: a zombie's death and its blood then always carry the same tick, and
+		// the client plays them on one frame, one pool (client/view/fxView.ts; the security review of the net
+		// hardening: an urgent flush used to send the death a batch ahead of its blood, and the floor poured a second)
+		const world = this.urgent || tick % WORLD_FLUSH_EVERY_TICKS === 0;
+		if (world) this.flushWorld(tick);
+		if (world || tick % FX_FLUSH_EVERY_TICKS === 0) this.flushFx(tick);
 		prof?.end();
 		if (tick % SNAP_NEAR_EVERY_TICKS === 0) {
 			prof?.begin("PZ.repl.snap");
@@ -954,6 +978,8 @@ export class Replicator {
 			const vx = viewer.state.x;
 			const vy = viewer.state.y;
 			const vb = this.buildingIdAt(vx, vy);
+			// this viewer's copies of the shots (`shotFor`) are encoded below, before the next viewer's are made
+			this.shotsUsed = 0;
 			for (const en of this.fxEntries) {
 				const e = en.e;
 				if (e.t === FxType.Shake) {
@@ -981,6 +1007,11 @@ export class Replicator {
 					continue;
 				}
 				if (en.sight && !this.seesAt(vb, en.building, en.lit, d2)) continue;
+				if (en.fromSight) {
+					const fx = en.fromX - vx;
+					const fy = en.fromY - vy;
+					if (!this.seesAt(vb, en.fromBuilding, en.fromLit, fx * fx + fy * fy)) continue;
+				}
 				list.push(e);
 				if (e.t === FxType.ProjSpawn) this.noteProj(e.projId, viewer.slot);
 			}
@@ -1022,9 +1053,18 @@ export class Replicator {
 					sight: false,
 					building: 0,
 					lit: true,
-					hitSight: undefined,
-					hitBuilding: undefined,
-					hitLit: undefined,
+					fromSight: false,
+					fromX: 0,
+					fromY: 0,
+					fromBuilding: 0,
+					fromLit: true,
+					atShooter: false,
+					zombieHits: false,
+					hitSight: [],
+					hitBuilding: [],
+					hitLit: [],
+					missMade: [],
+					misses: [],
 				};
 				this.fxEntryPool.push(en);
 			}
@@ -1033,9 +1073,9 @@ export class Replicator {
 			en.sight = false;
 			en.building = 0;
 			en.lit = true;
-			en.hitSight = undefined;
-			en.hitBuilding = undefined;
-			en.hitLit = undefined;
+			en.fromSight = false;
+			en.atShooter = false;
+			en.zombieHits = false;
 			entries.push(en);
 			if (e.t === FxType.Shake) continue;
 			if (e.t === FxType.Shot) {
@@ -1043,7 +1083,21 @@ export class Replicator {
 				continue;
 			}
 			if (e.t === FxType.Tracer) {
-				this.place(en, e.x1, e.y1);
+				if (e.kind === BOSS_TRACER) {
+					// a boss's beam, from the boss: sent in range, as the boss is
+					this.place(en, e.x1, e.y1);
+				} else {
+					// a machine's: its end is a zombie, and a zap chained from one starts at a zombie too (L7)
+					this.place(en, e.x2, e.y2);
+					en.sight = true;
+					if (e.machine !== true) {
+						en.fromSight = true;
+						en.fromX = e.x1;
+						en.fromY = e.y1;
+						en.fromBuilding = this.buildingIdAt(e.x1, e.y1);
+						en.fromLit = !dark || this.litAt(e.x1, e.y1);
+					}
+				}
 			} else if (e.t === FxType.SolidShake) {
 				if (e.x !== undefined && e.y !== undefined) this.place(en, e.x, e.y);
 			} else {
@@ -1078,23 +1132,30 @@ export class Replicator {
 	/** a shot is placed at its shooter (or its first hit); each hit on a zombie carries its own sight */
 	private prepareShot(en: FxEntry, e: FxShot, dark: boolean): void {
 		const shooter = e.slot !== SLOT_NONE ? this.sim.get(e.slot) : undefined;
-		if (shooter !== undefined) this.place(en, shooter.state.x, shooter.state.y);
-		else if (e.hits.size() > 0) this.place(en, e.hits[0].x, e.hits[0].y);
+		if (shooter !== undefined) {
+			this.place(en, shooter.state.x, shooter.state.y);
+			en.atShooter = true;
+		} else if (e.hits.size() > 0) {
+			this.place(en, e.hits[0].x, e.hits[0].y);
+		}
 		let any = false;
 		for (const h of e.hits) if (h.hit === HitKind.Zombie) any = true;
+		en.zombieHits = any;
 		if (!any) return;
-		const sight = new Array<boolean>();
-		const building = new Array<number>();
-		const lit = new Array<boolean>();
+		const sight = en.hitSight;
+		const building = en.hitBuilding;
+		const lit = en.hitLit;
+		sight.clear();
+		building.clear();
+		lit.clear();
+		en.missMade.clear();
 		for (const h of e.hits) {
 			const zombie = h.hit === HitKind.Zombie;
 			sight.push(zombie);
 			building.push(zombie ? this.buildingIdAt(h.x, h.y) : 0);
 			lit.push(!zombie || !dark || this.litAt(h.x, h.y));
+			en.missMade.push(false);
 		}
-		en.hitSight = sight;
-		en.hitBuilding = building;
-		en.hitLit = lit;
 	}
 
 	/** §4.3 at a point the caller already placed: not behind a roof the viewer is not under, and seen in the dark */
@@ -1103,30 +1164,81 @@ export class Replicator {
 	}
 
 	/**
-	 * The shot as `slot` may see it: whole for its shooter and for a shot that hit no zombie; otherwise without the
-	 * hits on zombies the viewer could not see (a copy, only then), and not at all when none is left.
+	 * The shot as `slot` may see it: whole for its shooter and for a shot that hit no zombie; otherwise each hit on a
+	 * zombie the viewer could not see is shown as the MISS it would have been (`missFor`): the pellet going on to the
+	 * weapon's range or the first wall. Dropped, it told them just as much -- an ally's gun that fires and draws no line
+	 * hit something in the dark (the security review of the net hardening, L7). A copy only then, from this viewer's
+	 * pool (`scratchShot`); undefined when nothing is left to draw (no shooter to draw a miss from).
 	 */
 	private shotFor(en: FxEntry, e: FxShot, slot: number, vb: number, vx: number, vy: number): FxShot | undefined {
+		if (e.slot === slot || !en.zombieHits) return e;
 		const sight = en.hitSight;
 		const building = en.hitBuilding;
 		const lit = en.hitLit;
-		if (e.slot === slot || sight === undefined || building === undefined || lit === undefined) return e;
-		let kept = 0;
+		const shown = this.shownScratch;
+		shown.clear();
+		let hidden = 0;
 		const n = e.hits.size();
-		const shown = new Array<boolean>();
 		for (let i = 0; i < n; i++) {
 			const h = e.hits[i];
 			const dx = h.x - vx;
 			const dy = h.y - vy;
 			const ok = !sight[i] || this.seesAt(vb, building[i], lit[i], dx * dx + dy * dy);
 			shown.push(ok);
-			if (ok) kept += 1;
+			if (!ok) hidden += 1;
 		}
-		if (kept === n) return e;
-		if (kept === 0) return undefined;
-		const hits = new Array<ShotHit>();
-		for (let i = 0; i < n; i++) if (shown[i]) hits.push(e.hits[i]);
-		return { t: FxType.Shot, slot: e.slot, weapon: e.weapon, hits };
+		if (hidden === 0) return e;
+		const out = this.scratchShot(e);
+		for (let i = 0; i < n; i++) {
+			if (shown[i]) {
+				out.hits.push(e.hits[i]);
+				continue;
+			}
+			const miss = this.missFor(en, e, i);
+			if (miss !== undefined) out.hits.push(miss);
+		}
+		shown.clear();
+		return out.hits.size() > 0 ? out : undefined;
+	}
+
+	/**
+	 * Hit `i` of `e` as a miss: from the shooter, through where it hit, on to the weapon's range or the first solid the
+	 * shot stops at (combat.ts `trace`'s wall, without the zombie). Made once per flush for every viewer. Undefined
+	 * with no shooter's body to draw it from.
+	 */
+	private missFor(en: FxEntry, e: FxShot, i: number): ShotHit | undefined {
+		if (!en.atShooter) return undefined;
+		let miss = en.misses[i];
+		if (miss === undefined) {
+			miss = { x: 0, y: 0, hit: HitKind.None };
+			en.misses[i] = miss;
+		}
+		if (en.missMade[i]) return miss;
+		en.missMade[i] = true;
+		const h = e.hits[i];
+		const ang = math.atan2(h.y - en.y, h.x - en.x);
+		const range = WEAPONS[e.weapon]?.range ?? INTEREST_EXIT;
+		const ray = raycast(this.sim.world, en.x, en.y, ang, range, blocksShots);
+		miss.x = en.x + math.cos(ang) * ray.dist;
+		miss.y = en.y + math.sin(ang) * ray.dist;
+		const s = ray.solid;
+		miss.hit =
+			s === undefined ? HitKind.None : s.kind === "car" || s.kind === "tree" ? HitKind.MapItem : HitKind.Solid;
+		return miss;
+	}
+
+	/** a Shot of this viewer's pool (reset per viewer in `flushFx`): `e` with its hits still to be filled */
+	private scratchShot(e: FxShot): FxShot {
+		let out = this.shotPool[this.shotsUsed];
+		if (out === undefined) {
+			out = { t: FxType.Shot, slot: e.slot, weapon: e.weapon, hits: [] };
+			this.shotPool.push(out);
+		}
+		this.shotsUsed += 1;
+		out.slot = e.slot;
+		out.weapon = e.weapon;
+		out.hits.clear();
+		return out;
 	}
 
 	/**

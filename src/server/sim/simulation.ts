@@ -535,6 +535,8 @@ export class ServerSimulation {
 				// MP-24: the caps and the rot of abandoned constructions go by the account, read live off the roster
 				userOf: slot => this.bySlot.get(slot)?.userId,
 				present: userId => this.roster.some(sp => sp.userId === userId),
+				// the MP-24 walk is a bar of its own in the MicroProfiler ("PZ.build.sealed")
+				profile: () => this.profile,
 			});
 			out.build = build;
 			out.interaction = new ServerInteraction({

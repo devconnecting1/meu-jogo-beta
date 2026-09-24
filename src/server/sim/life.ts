@@ -49,6 +49,7 @@ import { LifeState } from "shared/net/protocol";
 import { daybreakWaitSeconds } from "shared/sim/clock";
 import { isFuelWeapon } from "./combat";
 import { SPAWN_SHIELD_S, ServerPlayer, SpawnQuery, adoptSave, createServerPlayer, findSpawnPoint } from "./players";
+import { canEscape } from "./enclosure";
 import type { ServerSimulation } from "./simulation";
 import * as Analytics from "../analytics/events";
 
@@ -63,6 +64,8 @@ import * as Analytics from "../analytics/events";
  * save still says dead). Closing it needs a world epoch in the save; nothing is persisted for it yet.
  */
 export const KEEP_AFTER_LEAVE_S = 300;
+/** spots `placeKept` asks for before it takes one as it comes: half near where the body was, half anywhere */
+const KEPT_SPOT_TRIES = 8;
 /**
  * The owner's rule (23 Sep 2026): once the last living survivor falls, how long the world waits for somebody to
  * pay a Rebirth before it counts as lost (seconds).
@@ -854,14 +857,31 @@ export class LifeKeeper {
 		return { allies, zombies: this.sim.horde?.zombies ?? [] };
 	}
 
-	/** rule 3: back where it left; only a spot that has turned solid moves it, to the nearest safe ring around it */
+	/**
+	 * rule 3: back where it left; only a spot that has turned solid, or been walled in (MP-24), moves it -- to a safe
+	 * ring around it, or a newcomer's spot, that the body can walk away from
+	 */
 	private placeKept(state: PlayerState): void {
 		const world = this.sim.world;
-		if (circleBlocked(world, state.x, state.y, PLAYER_RADIUS - 1) === undefined) return;
-		const spot = findSpawnPoint(world, {
-			allies: [{ x: state.x, y: state.y }],
-			zombies: this.sim.horde?.zombies ?? [],
-		});
+		// MP-24: the spot is free ground AND a body there can walk away. The rule that refuses the piece closing a ring
+		// around a survivor sees the bodies IN the world; a kept one in the lobby is not there to see, so a ring closed
+		// while its survivor waited was a cell they came back into (the security review of the net hardening, M1)
+		if (
+			circleBlocked(world, state.x, state.y, PLAYER_RADIUS - 1) === undefined &&
+			canEscape(world, state.x, state.y)
+		) {
+			return;
+		}
+		const zombies = this.sim.horde?.zombies ?? [];
+		// near where they left first, as before; then anywhere a newcomer would be put -- and only a spot they can
+		// leave (the last resort of findSpawnPoint is taken as it is: it never fails to return a point)
+		let spot = findSpawnPoint(world, { allies: [{ x: state.x, y: state.y }], zombies });
+		for (let i = 0; i < KEPT_SPOT_TRIES && !canEscape(world, spot.x, spot.y); i++) {
+			spot = findSpawnPoint(
+				world,
+				i < KEPT_SPOT_TRIES / 2 ? { allies: [{ x: state.x, y: state.y }], zombies } : { zombies },
+			);
+		}
 		state.x = spot.x;
 		state.y = spot.y;
 	}

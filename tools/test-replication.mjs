@@ -35,6 +35,8 @@
  *  c4. THE EFFECTS WAIT FOR THE DRAWING (audit M3). An ally's shots, the blood and the deaths are played when the
  *      render time reaches their tick, not the moment they land ~130-160 ms ahead of the bodies; the shooter's own
  *      shot at once. World and Fx go out on the snapshot's cadence, not every tick.
+ *  c5. ONE BATCH (the security review of the net hardening). A death and its blood carry the same tick even when an
+ *      urgent World event flushes off the cadence: one frame, one pool.
  *  l2. WHAT THE DARK HIDES STAYS HIDDEN (audit L2). A zombie's blood, the hits on it, its death and a drop that just
  *      fell reach only the viewers who could see the spot; a projectile's end only those who saw it fly.
  *   d. BANDWIDTH (§4.7, §12.2). Six survivors, night, the horde at its ceiling, everybody shooting: the
@@ -1757,6 +1759,57 @@ section(
 	check(worldRate <= cadence, `and so does World (${worldRate.toFixed(1)}/s ≤ ${cadence}/s)`);
 }
 
+// ================================================================ (c5) a death and its blood, one batch
+
+section(
+	"(c5) a zombie's death and its blood travel in the same batch, even when an urgent event flushes the World (NIT)",
+);
+{
+	/*
+	 * The client lets a body go and plays its blood on the frame the drawing reaches their batch's tick, and
+	 * client/view/fxView.ts pours one pool when the two land together. World flushes at once for a PlayerLife (an
+	 * urgent event), off the snapshot's cadence; the effects waited for the cadence, so a death that tick went a batch
+	 * ahead of its own blood, and the floor poured a second pool (the security review of the net hardening).
+	 */
+	const server = newWorldServer();
+	const cx = world.width / 2;
+	const cy = world.height / 2;
+	addSurvivor(server, 0, cx, cy);
+	const client = server.clients.get(0);
+	client.lag = 0;
+	client.loss = 0;
+	client.fxLog = [];
+	server.sim.clock.setClock(12);
+	const horde = server.sim.horde;
+	const victim = createZombie(1, cx + 200, cy, 5, false);
+	victim.alpha = 1;
+	horde.zombies.push(victim);
+	for (let i = 0; i < 30; i++) tickServer(server);
+	// the next tick is off the cadence: the death happens there, with an urgent event in the same tick
+	while ((server.sim.tick + 1) % CFG.SNAP_NEAR_EVERY_TICKS === 0) tickServer(server);
+	const netId = horde.netIdOf(victim);
+	victim.hp = 0;
+	server.replicator.queue({ t: P.WorldEv.PlayerLife, slot: 0, state: P.LifeState.Up });
+	for (let i = 0; i < 2 * CFG.SNAP_NEAR_EVERY_TICKS; i++) tickServer(server);
+	const death = client.deaths.find(d => d.netId === netId);
+	const blood = client.fxLog.find(
+		e =>
+			e.t === P.FxType.Blood &&
+			e.amount >= 10 &&
+			death !== undefined &&
+			Math.hypot(e.x - death.x, e.y - death.y) < 2,
+	);
+	info(
+		`death at tick ${death?.tick} (off the cadence: ${death !== undefined && death.tick % CFG.SNAP_NEAR_EVERY_TICKS !== 0}), ` +
+			`its blood at ${blood !== undefined ? FX_META.get(blood).tick : "none"}`,
+	);
+	check(death !== undefined && blood !== undefined, "the death and the kill's blood both reached the client");
+	check(
+		death !== undefined && blood !== undefined && FX_META.get(blood).tick === death.tick,
+		"in batches of the same tick: the client plays them on one frame, and pours one pool",
+	);
+}
+
 // ================================================================ (l2) what the dark hides stays hidden (audit L2)
 
 section(
@@ -1766,8 +1819,8 @@ section(
 	/*
 	 * The snapshot withholds a zombie in the dark past DARK_SENSE_RANGE (§4.3, section b). Its blood, a shot's hit on
 	 * it, its death and the drop it left did not: each carried its position to every client in range. Slot 0 watches
-	 * from the middle of town at 23:00; slot 1 shoots from 500 u west. `hidden` stands 400 u east of the watcher,
-	 * outside every light; `heard` 100 u east, close enough to be heard.
+	 * from the middle of town at 23:00; slot 1 shoots from 200 u west (and 100 u south). `hidden` stands 400 u east of
+	 * the watcher, outside every light; `heard` 100 u east, close enough to be heard.
 	 */
 	const W = require(join(SRC, "shared/game/world.ts"));
 	// the town is shared by every section: the drops of the fights before would share ids with this server's
@@ -1776,7 +1829,7 @@ section(
 	const cx = world.width / 2;
 	const cy = world.height / 2;
 	addSurvivor(server, 0, cx, cy);
-	addSurvivor(server, 1, cx - 500, cy);
+	const gunner = addSurvivor(server, 1, cx - 200, cy + 100);
 	for (const [, c] of server.clients) {
 		c.lag = 0;
 		c.loss = 0;
@@ -1823,7 +1876,19 @@ section(
 		{ x: heard.x, y: heard.y, hit: P.HitKind.Zombie },
 		{ x: cx + 450, y: cy + 30, hit: P.HitKind.Solid },
 	];
-	R.queueFx({ t: P.FxType.Shot, slot: 1, weapon: 1, hits });
+	// the semi-auto rifle (700 u): the hidden zombie is 610 u from the gunner, in its reach
+	R.queueFx({ t: P.FxType.Shot, slot: 1, weapon: 13, hits });
+	// ...and a shot whose ONLY hit is the hidden zombie (L7: dropped, it said as much as drawn)
+	R.queueFx({ t: P.FxType.Shot, slot: 1, weapon: 13, hits: [{ x: hidden.x, y: hidden.y, hit: P.HitKind.Zombie }] });
+	// the machines' lines (L7): a turret at the watcher's side firing at each, a zap chained from the hidden one to the
+	// heard one, and a boss's beam (sent in range, as a boss is)
+	const muzzle = { x: cx + 60, y: cy - 60 };
+	const tracer = (from, to, kind, machine) =>
+		R.queueFx({ t: P.FxType.Tracer, x1: from.x, y1: from.y, x2: to.x, y2: to.y, kind, life: 0.1, machine });
+	tracer(muzzle, hidden, 1, true);
+	tracer(muzzle, heard, 1, true);
+	tracer(hidden, heard, 2, false);
+	tracer(hidden, heard, 3, false);
 	R.queueFx({
 		t: P.FxType.ProjSpawn,
 		projId: 900,
@@ -1858,13 +1923,42 @@ section(
 		"and a survivor's blood in range",
 	);
 	const shots = wl.filter(e => e.t === P.FxType.Shot);
-	checkEq(shots.length, 1, "the ally's shot reaches the watcher");
-	if (shots.length === 1) {
-		checkEq(shots[0].hits.length, 2, "without its hit on the hidden zombie (the wall and the heard one stay)");
-		check(!shots[0].hits.some(h => near(h, hidden)), "no hit names the hidden zombie's spot");
+	checkEq(shots.length, 2, "both of the ally's shots reach the watcher, the one that only hit the hidden zombie too");
+	const from = { x: gunner.state.x, y: gunner.state.y };
+	const dHidden = Math.hypot(hidden.x - from.x, hidden.y - from.y);
+	/** the hit that went on past the hidden zombie, as a miss would have */
+	const pastHidden = sh =>
+		sh.hits.find(
+			h =>
+				h.hit !== P.HitKind.Zombie &&
+				Math.hypot(h.x - from.x, h.y - from.y) > dHidden + 1 &&
+				Math.abs(Math.atan2(h.y - from.y, h.x - from.x) - Math.atan2(hidden.y - from.y, hidden.x - from.x)) <
+					0.02,
+		);
+	if (shots.length === 2) {
+		checkEq(shots[0].hits.length, 3, "every pellet is still drawn: a hit the watcher cannot see is not dropped");
+		check(!shots.some(sh => sh.hits.some(h => near(h, hidden))), "no hit names the hidden zombie's spot");
+		check(
+			pastHidden(shots[0]) !== undefined && shots[0].hits.some(h => near(h, heard)),
+			"the hidden one is drawn as the miss it would have been -- on past the zombie, to the range or a wall",
+		);
+		check(
+			shots[1].hits.length === 1 && pastHidden(shots[1]) !== undefined,
+			"and the shot that only hit it is a miss, not a gun that fired and drew nothing",
+		);
 	}
 	const theirs = shooter.fxLog.filter(e => e.t === P.FxType.Shot);
-	check(theirs.length === 1 && theirs[0].hits.length === 3, "the shooter gets their own shot whole");
+	check(theirs.length === 2 && theirs[0].hits.length === 3, "the shooter gets their own shots whole");
+	check(
+		theirs.length === 2 && theirs[1].hits.some(h => near(h, hidden)),
+		"(their own hit on the hidden zombie included: their client drew it already)",
+	);
+	const lines = wl.filter(e => e.t === P.FxType.Tracer);
+	const lineTo = (to, kind) => lines.some(e => e.kind === kind && Math.hypot(e.x2 - to.x, e.y2 - to.y) < 1);
+	check(!lineTo(hidden, 1), "a turret's line to the hidden zombie is not sent to the watcher (L7)");
+	check(lineTo(heard, 1), "its line to the heard one is");
+	check(!lineTo(heard, 2), "a zap chained FROM the hidden zombie is not (its start is a zombie too)");
+	check(lineTo(heard, 3), "a boss's beam is sent in range, as the boss is");
 	const spawned = id => wl.some(e => e.t === P.FxType.ProjSpawn && e.projId === id);
 	const ended = id => wl.some(e => e.t === P.FxType.ProjEnd && e.projId === id);
 	check(!spawned(900) && !ended(900), "a spit in the dark: neither its flight nor its end reach the watcher");

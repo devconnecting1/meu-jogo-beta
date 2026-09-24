@@ -43,7 +43,7 @@ import {
 	placementValid,
 	snapToOpening,
 } from "shared/sim/placement";
-import { addSolid, removeSolid, Solid, WorldData } from "shared/game/world";
+import { addSolid, isBlocking, removeSolid, Solid, WorldData } from "shared/game/world";
 import { PlayerSaveData } from "shared/game/save";
 import { PlayerState } from "shared/game/player";
 import { ZombieState } from "shared/game/entities";
@@ -58,10 +58,19 @@ import {
 import { quantFrac8 } from "shared/net/codec";
 import { SOLID_HP_MAX_ENTRIES, SolidHpEntry, SolidState, WorldEv, WSolidAdd } from "shared/net/protocol";
 import { WorldOut } from "./worldOut";
-import { boxesIn } from "./enclosure";
+import { boxesIn, needsFlood } from "./enclosure";
+import { SimProfiler } from "./metrics";
 
 /** §8.1: at most 2 placements per second per survivor */
 export const PLACE_RATE = 2;
+/**
+ * (MP-24) Placements whose "would this pen somebody in?" walk runs, per tick, for the whole server (the security review
+ * of the net hardening, M2). The walk is a flood of up to 33 × 33 body tests per survivor in reach, twice: six
+ * builders clicking every tick used to buy six of those a tick. Past the budget a placement that needs the walk
+ * answers "rate", the same as a click inside the §8.1 rate, and the next click tries again; one that needs none (a
+ * door, a trap, a piece nobody is near) never waits for it. The walk is the MicroProfiler's "PZ.build.sealed".
+ */
+export const SEALED_CHECKS_PER_TICK = 1;
 /** quarter turns */
 const ROT_STEPS = 4;
 
@@ -116,6 +125,8 @@ export interface ServerBuildOptions {
 	userOf?: (slot: number) => number | undefined;
 	/** (MP-24) is this account's survivor in the world right now? (absent too long, their constructions rot) */
 	present?: (userId: number) => boolean;
+	/** the tick's MicroProfiler (server/sim/metrics.ts), read when a walk runs; none in the pure tests */
+	profile?: () => SimProfiler | undefined;
 }
 
 export class ServerBuild {
@@ -125,6 +136,11 @@ export class ServerBuild {
 	private readonly onSolid?: (s: Solid, added: boolean) => void;
 	private readonly userOf?: (slot: number) => number | undefined;
 	private readonly present?: (userId: number) => boolean;
+	private readonly profile?: () => SimProfiler | undefined;
+	/** walks left this tick (SEALED_CHECKS_PER_TICK), refilled by `step` */
+	private checksLeft = SEALED_CHECKS_PER_TICK;
+	/** placements the budget sent back as "rate" since boot (the tests', and a playtest's) */
+	readonly deferred = { checks: 0 };
 	private readonly pending = new Map<number, Pending>();
 	/** live constructions per builder account (§8.1's per-player cap, MP-24), and in total (the server's) */
 	private readonly owned = new Map<number, Set<Solid>>();
@@ -149,6 +165,7 @@ export class ServerBuild {
 		this.onSolid = options.onSolid;
 		this.userOf = options.userOf;
 		this.present = options.present;
+		this.profile = options.profile;
 		// §4.5: a construction is GLOBAL — everybody collides with it, so everybody is told about it, in
 		// sight or not. The hooks also catch what the horde chews through, which is a `SolidRemove` nobody
 		// would otherwise remember to send.
@@ -240,20 +257,34 @@ export class ServerBuild {
 			ghostRectSticky(def, state.x, state.y, state.angle, p.rot, p.prevX, p.prevY),
 		);
 		if (!placementValid(this.world, r, players, zombies)) return this.refuse(p, "invalid");
-		// MP-24: never the piece that closes a ring around a living survivor. The check walks the ground around them,
-		// so a refused one waits the placement rate like a placed one: a click every tick must not buy a walk a tick
-		const blocks = def.passable !== true && def.kind !== "door" && def.kind !== "iron_door";
-		if (boxesIn(this.world, r, blocks, players) !== undefined) {
-			p.cooldown = 1 / PLACE_RATE;
-			return this.refuse(p, "sealed");
-		}
 		const rot = p.rot;
+		const shape = placedSolid(def, r, rot);
+		// MP-24: never the piece that closes a ring around a living survivor. What cannot close a ring is what the
+		// bodies walk through (world.ts isBlocking: a trap, anything passable) and a door, which is a way out. The check
+		// walks the ground around them, so a refused one waits the placement rate like a placed one (a click every tick
+		// must not buy a walk a tick), and the server runs SEALED_CHECKS_PER_TICK of them a tick at most
+		const blocks = isBlocking(shape as Solid) && def.kind !== "door" && def.kind !== "iron_door";
+		if (needsFlood(this.world, r, blocks, players)) {
+			if (this.checksLeft <= 0) {
+				this.deferred.checks += 1;
+				return this.refuse(p, "rate");
+			}
+			this.checksLeft -= 1;
+			const prof = this.profile?.();
+			prof?.begin("PZ.build.sealed");
+			const penned = boxesIn(this.world, r, blocks, players);
+			prof?.end();
+			if (penned !== undefined) {
+				p.cooldown = 1 / PLACE_RATE;
+				return this.refuse(p, "sealed");
+			}
+		}
 		const placeable = p.placeable;
 		this.clear(p);
 		p.cooldown = 1 / PLACE_RATE;
 		// `addSolid` fires `onSolidAdd`, which is what queues the delta and bumps the caps
 		const solid = addSolid(this.world, {
-			...placedSolid(def, r, rot),
+			...shape,
 			placeable,
 			owner: slot,
 			builder: this.userOf?.(slot),
@@ -346,6 +377,8 @@ export class ServerBuild {
 
 	/** decays the per-survivor placement cooldowns, and tells everybody the hp that moved (SOLID_HP_HZ) */
 	step(dt: number): void {
+		// once a tick (server/sim/simulation.ts `stepInteractiveWorld`, after every survivor's command)
+		this.checksLeft = SEALED_CHECKS_PER_TICK;
 		for (const [, p] of this.pending) {
 			if (p.cooldown > 0) p.cooldown = math.max(0, p.cooldown - dt);
 		}

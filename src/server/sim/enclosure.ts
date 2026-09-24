@@ -11,7 +11,10 @@
  * differences that both make a ring legal: a door -- built, or of a building -- is a way out whether it is open
  * or not (anybody opens a door; MP-11's lock is not built), and a window is passable as it always is (EDI-10). A
  * base with a door in it is a base, not a cell. A yard wider than twice ESCAPE_RANGE is not a box either: its
- * survivors can walk, and the horde gets in the way it always does.
+ * survivors can walk, and the horde gets in the way it always does. That is an ACCEPTED limit (MP-24, the security
+ * review of the net hardening, L3): a 1200 u yard closed around somebody is still a pen, but a big one -- ground
+ * others walk into and out of, that the rot of MP-24 opens -- and a flood wide enough to see it would cost several
+ * times this one on every checked placement.
  *
  * The walk is a flood over the body positions of a lattice of LATTICE u around the survivor. Two neighbouring
  * lattice points that both have room for a body can never have a wall between them (LATTICE < 2 × radius), so the
@@ -19,6 +22,9 @@
  * placement rather than allowing a cell (every window of the map is 80 u and every doorway wider). Only survivors
  * whose flood square the new piece reaches are walked, and only when the piece touches something else that blocks:
  * a piece standing alone closes nothing.
+ *
+ * The check costs a flood per survivor in reach, so the server runs at most a few a tick (server/sim/build.ts
+ * SEALED_CHECKS_PER_TICK, `needsFlood` tells which placements need one); the others answer "rate".
  *
  * Pure module: no Instances, no services.
  */
@@ -32,8 +38,11 @@ import { PlaceRect, rectCircleOverlap } from "shared/sim/placement";
 export const ESCAPE_RANGE = 512;
 /** the flood's lattice step: under a body's diameter, so two free neighbours never have a wall between them */
 export const LATTICE = 32;
-/** the body the flood walks: the survivors' own, one unit narrower (a body that touches a wall still fits) */
-const BODY = PLAYER_RADIUS - 1;
+/**
+ * The body the flood walks: exactly the survivors' own. One unit narrower (as it was) let a 35 u sliver read as a way
+ * out that no body of 36 u fits through (the security review of the net hardening, L2).
+ */
+const BODY = PLAYER_RADIUS;
 const SPAN = math.ceil(ESCAPE_RANGE / LATTICE);
 /** lattice points per side of the flood square */
 const SIDE = SPAN * 2 + 1;
@@ -102,9 +111,12 @@ export function canEscape(world: WorldData, x0: number, y0: number, extra?: Plac
 	return false;
 }
 
-/** does the rect touch (within a body's width) anything else a survivor cannot walk through? */
+/**
+ * Does the rect come near enough anything else a survivor cannot walk through to close a gap with it: nearer than a
+ * body's width, plus one (a gap of exactly 2 × PLAYER_RADIUS is the narrowest a body still passes)?
+ */
 function touchesAnything(world: WorldData, r: PlaceRect): boolean {
-	const pad = BODY * 2;
+	const pad = PLAYER_RADIUS * 2 + 1;
 	scratch.clear();
 	querySolids(world, r.x - pad, r.y - pad, r.x + r.w + pad, r.y + r.h + pad, scratch);
 	for (const s of scratch) {
@@ -128,14 +140,39 @@ export function boxesIn(
 	blocks: boolean,
 	bodies: ReadonlyArray<PlayerState>,
 ): PlayerState | undefined {
-	if (!blocks || !touchesAnything(world, r)) return undefined;
-	const reach = SPAN * LATTICE + BODY;
+	if (!needsFlood(world, r, blocks, bodies)) return undefined;
 	for (const p of bodies) {
-		if (p.dead) continue;
-		// the piece has to reach into this survivor's flood square to change what the flood finds
-		if (r.x > p.x + reach || r.x + r.w < p.x - reach || r.y > p.y + reach || r.y + r.h < p.y - reach) continue;
+		if (!inReach(r, p)) continue;
 		if (canEscape(world, p.x, p.y, r)) continue;
 		if (canEscape(world, p.x, p.y)) return p;
 	}
 	return undefined;
+}
+
+/** the piece reaches into this living survivor's flood square: only then can it change what the flood finds */
+function inReach(r: PlaceRect, p: PlayerState): boolean {
+	if (p.dead) return false;
+	const reach = SPAN * LATTICE + BODY;
+	return !(r.x > p.x + reach || r.x + r.w < p.x - reach || r.y > p.y + reach || r.y + r.h < p.y - reach);
+}
+
+/**
+ * Would `boxesIn` walk anybody's flood for this piece? False for what cannot close anything (a door, a trap, a piece
+ * standing alone) and for a piece nobody is near: those are free, and never count against the server's budget.
+ */
+export function needsFlood(
+	world: WorldData,
+	r: PlaceRect,
+	blocks: boolean,
+	bodies: ReadonlyArray<PlayerState>,
+): boolean {
+	if (!blocks) return false;
+	let near = false;
+	for (const p of bodies) {
+		if (inReach(r, p)) {
+			near = true;
+			break;
+		}
+	}
+	return near && touchesAnything(world, r);
 }

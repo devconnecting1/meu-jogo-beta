@@ -179,11 +179,14 @@ export class ServerTurrets {
 		if (this.searched > this.stats.maxSearchesInTick) this.stats.maxSearchesInTick = this.searched;
 	}
 
-	/** a machine tracer, while the tick's TRACER_BUDGET lasts */
-	private tracer(x1: number, y1: number, x2: number, y2: number, kind: number, life: number): void {
+	/**
+	 * A machine tracer, while the tick's TRACER_BUDGET lasts. `machine`: it starts at the turret itself (a chained zap
+	 * starts at the zombie before it), which the replication's sight rules need to know (§4.3).
+	 */
+	private tracer(x1: number, y1: number, x2: number, y2: number, kind: number, life: number, machine: boolean): void {
 		if (this.fx === undefined || this.traced >= TRACER_BUDGET) return;
 		this.traced += 1;
-		this.fx({ t: FxType.Tracer, x1, y1, x2, y2, kind, life });
+		this.fx({ t: FxType.Tracer, x1, y1, x2, y2, kind, life, machine });
 	}
 
 	/** the nearest live zombie within `range` of (x, y) with a clear line of fire, or undefined */
@@ -276,7 +279,7 @@ export class ServerTurrets {
 			this.stats.hits += 1;
 			this.damage.machineHitBoss(credit, fx, fy, hitB, dmg, hx, hy);
 		}
-		this.tracer(mx, my, hx, hy, TRACER_BULLET, TRACER_LIFE);
+		this.tracer(mx, my, hx, hy, TRACER_BULLET, TRACER_LIFE, true);
 		this.noise?.(fx, fy, TURRET_NOISE);
 		return true;
 	}
@@ -316,7 +319,7 @@ export class ServerTurrets {
 			done.push(z);
 			this.stats.hits += 1;
 			this.damage.machineHitZombie(credit, fromX, fromY, z, this.damage.rollDamage(base), 0, SHOCK_STUN);
-			this.tracer(fromX, fromY, z.x, z.y, TRACER_ELECTRIC, ARC_LIFE);
+			this.tracer(fromX, fromY, z.x, z.y, TRACER_ELECTRIC, ARC_LIFE, jump === 0);
 			fromX = z.x;
 			fromY = z.y;
 			// each jump is a search of its own, inside the server's SEARCH_BUDGET for the tick

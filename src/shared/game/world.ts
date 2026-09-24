@@ -2096,8 +2096,12 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 
 /** the cell of (x, y) in the item grid, clamped to it (an item in flight may be a little outside the map) */
 function itemCellOf(g: ItemGrid, x: number, y: number): number {
-	const c = math.clamp(math.floor(x / g.cell), 0, g.cols - 1);
-	const r = math.clamp(math.floor(y / g.cell), 0, g.rows - 1);
+	// a NaN or an infinity (a velocity gone wrong) files in cell 0 rather than make a NaN key, which Luau refuses (a
+	// NaN fails both comparisons)
+	const fx = x > -math.huge && x < math.huge ? x : 0;
+	const fy = y > -math.huge && y < math.huge ? y : 0;
+	const c = math.clamp(math.floor(fx / g.cell), 0, g.cols - 1);
+	const r = math.clamp(math.floor(fy / g.cell), 0, g.rows - 1);
 	return r * g.cols + c;
 }
 

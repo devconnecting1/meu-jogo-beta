@@ -3112,18 +3112,21 @@ section(
 			admin.FindFirstChild("AdminPatchAck").OnServerEvent.Fire(acker, "x");
 		check(acker.kicked, "and malformed AdminPatchAcks too");
 
-		// a rejected report is answered at most once a second: a stale-token storm is not reflected one for one
+		// a rejected report is answered at most once a second: a stale-token storm is not reflected one for one. The
+		// newest one inside the second is not dropped either: it is answered when the second ends (the security review of
+		// the net hardening, L5), so a client whose last report was refused always hears why
 		const stale = s.join(newUser(), "staleSaver");
 		const before = saveAcks(stale);
 		for (let i = 0; i < 100; i++) fire("SaveRequest", stale, "not-the-token", "{}");
 		const within = saveAcks(stale) - before;
 		s.run(1.1);
-		fire("SaveRequest", stale, "not-the-token", "{}");
-		const after = saveAcks(stale) - before;
+		const held = saveAcks(stale) - before;
+		s.run(3);
+		const later = saveAcks(stale) - before;
 		check(
-			within === 1 && after === 2,
-			"100 rejected reports in an instant: one SaveAck, and one more a second later",
-			`${within}, then ${after}`,
+			within === 1 && held === 2 && later === 2,
+			"100 rejected reports in an instant: one SaveAck at once, and the newest when the second ends (once)",
+			`${within}, then ${held}, then ${later}`,
 		);
 		check(!stale.kicked, "(100 messages is under the flood line: no kick)");
 
@@ -3161,6 +3164,34 @@ section(
 			!/junkSaver|loadStorm|shopStorm|notAnAdmin|ackStorm/.test(json),
 			"with UserIds only: no name is stored",
 			json,
+		);
+
+		// L6 (the security review of the net hardening): an automatic entry is cheap to cause, so it trims like a tool
+		// entry and repeats collapse per UserId -- a flood of kicks never pushes an admin's action out of the key
+		const entry = (action, targetId, t) => ({
+			t,
+			adminId: action.startsWith("auto:") ? 0 : 42,
+			action,
+			targetId,
+			target: "",
+			details: "",
+			ok: true,
+		});
+		const actions = [];
+		for (let i = 0; i < LOG.AUDIT_PER_KEY; i++) actions.push(entry("kick", 9000 + i, i));
+		const storm = [];
+		for (let i = 0; i < 400; i++) storm.push(entry("auto:flood", 1 + (i % 3), 1000 + i));
+		const after = LOG.appendAudit(actions, storm);
+		check(
+			after.filter(e => e.action === "kick").length === LOG.AUDIT_PER_KEY,
+			`${storm.length} automatic kicks on a full key push out no admin's kick`,
+			`${after.filter(e => e.action === "kick").length} kicks left`,
+		);
+		const repeats = LOG.appendAudit([], storm);
+		check(
+			repeats.length === 3 && repeats.every(e => e.t >= 1000 + 400 - 3),
+			"and the same UserId kicked again and again is one line: the newest",
+			`${repeats.length} lines`,
 		);
 	},
 );

@@ -57,6 +57,7 @@ import {
 	buildingAt,
 	enableItemGrid,
 	isBlocking,
+	ITEM_GRID_CELL,
 } from "shared/game/world";
 import { PlayerSaveData } from "shared/game/save";
 import { creditTaken } from "../save/achievements";
@@ -72,6 +73,8 @@ export const LOOT_ROLL_RANGE = 320;
 export const LOOT_SWEEP_S = 0.5;
 /** a map item (tree, car, bin) cannot be harvested again for this long — PER SOLID, for everybody (§8.1) */
 export const MAP_ITEM_COOLDOWN = DESIGN.MAP_ITEM_HIT_TIME;
+/** the square (half-side) around a new item where the cap looks for the item that makes room for it (`capVictim`) */
+const CAP_AREA = ITEM_GRID_CELL;
 /** how often each survivor's item interest is swept for items that came within ITEM_INTEREST (§4.5) */
 export const ITEM_SWEEP_S = 0.5;
 /** an item a survivor was told about leaves their screen past this (hysteresis over ITEM_INTEREST) */
@@ -131,6 +134,7 @@ export class ServerItems {
 	/** items the lifetime and the cap took away since boot (the admin panel's, and the tests') */
 	readonly expired = { rotted: 0, capped: 0 };
 	private readonly found = new Array<GroundItem>();
+	private readonly capScratch = new Array<GroundItem>();
 	private readonly leaving = new Array<number>();
 
 	constructor(options: ServerItemsOptions) {
@@ -267,17 +271,17 @@ export class ServerItems {
 
 	/**
 	 * A new item: to every survivor within ITEM_INTEREST of it this instant (the sweep catches the rest later) -- and
-	 * past GROUND_ITEM_CAP the OLDEST item leaves the world for it, so the town never holds more than the cap.
+	 * past GROUND_ITEM_CAP an older item leaves the world for it (`capVictim`), so the town never holds more than the cap.
 	 */
 	private announce(item: GroundItem): void {
 		item.born = this.clock;
 		this.byId.set(item.id, item);
 		const items = this.world.items;
 		while (items.size() > GROUND_ITEM_CAP) {
-			const oldest = items[0];
-			if (oldest === item) break;
+			const victim = this.capVictim(item);
+			if (victim === undefined) break;
 			this.expired.capped += 1;
-			removeGroundItem(this.world, oldest);
+			removeGroundItem(this.world, victim);
 		}
 		const r2 = ITEM_INTEREST * ITEM_INTEREST;
 		let ev: WItemAdd | undefined;
@@ -294,6 +298,41 @@ export class ServerItems {
 			this.toldOf(slot).add(item.id);
 			this.out.queueFor(slot, ev);
 		}
+	}
+
+	/**
+	 * Which item makes room for `item` past the cap: the oldest AROUND it (its grid cell and the ones next to it,
+	 * CAP_AREA), and only when nothing else lies there the oldest in town. The town's oldest used to go every time, so
+	 * a farm dropping junk in one corner pushed a fresh drop out of the other within a few minutes (the security review
+	 * of the net hardening, L4); now a farm eats its own junk first.
+	 */
+	private capVictim(item: GroundItem): GroundItem | undefined {
+		const around = this.capScratch;
+		around.clear();
+		queryGroundItems(
+			this.world,
+			item.x - CAP_AREA,
+			item.y - CAP_AREA,
+			item.x + CAP_AREA,
+			item.y + CAP_AREA,
+			around,
+		);
+		let victim: GroundItem | undefined;
+		for (const other of around) {
+			if (other === item) continue;
+			if (victim === undefined) {
+				victim = other;
+				continue;
+			}
+			// the oldest; of two born on the same tick, the one that fell first (ids only grow)
+			const a = other.born ?? 0;
+			const b = victim.born ?? 0;
+			if (a < b || (a === b && other.id < victim.id)) victim = other;
+		}
+		around.clear();
+		if (victim !== undefined) return victim;
+		const oldest = this.world.items[0];
+		return oldest !== item ? oldest : undefined;
 	}
 
 	/** an item left the world: EVERY client that was told about it is told it is gone, near or not */

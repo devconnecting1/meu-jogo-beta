@@ -1952,6 +1952,44 @@ section("w) itens no chao apodrecem, tem teto e sao achados pela grade (revisao 
 	}
 }
 
+// ================================================================ w2. the cap makes room where the junk is
+
+section("w2) o teto de itens tira o mais velho em volta do item novo, nao o mais velho da cidade (revisao, L4)");
+{
+	/*
+	 * A farm of junk in one corner used to push a fresh drop out of the other: past GROUND_ITEM_CAP the town's oldest
+	 * went, and 900 items of old litter were only a head start. Now the item that makes room is the oldest around the
+	 * new one (its grid cell and the ones next to it); only with nothing there does the town's oldest go.
+	 */
+	const world = emptyWorld();
+	const sim = newSim(world);
+	const items = sim.items;
+	for (let i = 0; i < 900; i++) {
+		W.spawnGroundItem(world, 4, 1, 1, 1000 + (i % 30) * 20, 1000 + Math.floor(i / 30) * 20, 0, 0);
+		items.upkeep(0.1);
+	}
+	const trophy = W.spawnGroundItem(world, 1, 99, 1, 6000, 6000, 0, 0);
+	let t = 0;
+	for (; t < 300 && world.items.includes(trophy); t++) {
+		for (let k = 0; k < 6; k++) W.spawnGroundItem(world, 4, 1, 1, 7000, 1000, 0, 0);
+		items.upkeep(1);
+	}
+	check(
+		world.items.includes(trophy),
+		`uma fazenda de 6 itens/s por ${t} s longe dele nao tira um drop novo`,
+		`t=${t}`,
+	);
+	checkEq(world.items.length, CFG.GROUND_ITEM_CAP, "e a cidade continua no teto");
+	check(
+		world.items.filter(i => i.x < 2000 && i.y < 2000).length === 900,
+		"o lixo velho de outro canto tambem fica (a fazenda come o proprio lixo)",
+	);
+	// (NIT) a position that is not a number files in cell 0 instead of a NaN key (Luau refuses a NaN table key)
+	const bad = W.spawnGroundItem(world, 4, 1, 1, NaN, Infinity, 0, 0);
+	checkEq(world.itemGrid.at.get(bad), 0, "um item em (NaN, inf) vai para a celula 0, nunca uma chave NaN");
+	W.removeGroundItem(world, bad);
+}
+
 // ================================================================ x. whose construction, for how long, and nobody penned in
 
 section("x) construcoes: teto por UserId, obra abandonada apodrece, e nenhuma prende um sobrevivente (MP-24)");
@@ -2151,6 +2189,157 @@ section("x) construcoes: teto por UserId, obra abandonada apodrece, e nenhuma pr
 			"placed",
 			"quem ja estava preso pelo mapa nao impede uma peca que nao muda nada para ele",
 		);
+
+		// 5. (revisao de seguranca do endurecimento da rede, M1) o corpo guardado de quem esperava no lobby: a regra so
+		// ve os corpos NO mundo, entao o anel fecha em volta do lugar dele -- e na volta ele e posto onde pode sair
+		{
+			const { LifeKeeper } = require(join(SRC, "server/sim/life.ts"));
+			t = setup(undefined, OUTSIDE);
+			const lives = new LifeKeeper(t.sim, { welcome() {}, left() {}, life() {} });
+			const info = { userId: 7303, name: "waiter" };
+			const save = SAVE.defaultSave();
+			const waiter = lives.enter(info, save);
+			waiter.state.x = INSIDE_V[0];
+			waiter.state.y = INSIDE_V[1];
+			lives.leave(info.userId);
+			t.sim.build.hold(0, 10, undefined);
+			const closed = t.sim.build.place(
+				0,
+				t.builder.state,
+				t.sim.players().map(sp => sp.state),
+				[],
+			);
+			checkEq(closed.kind, "placed", "com ele no lobby o anel fecha (o corpo guardado nao esta no mundo)");
+			check(!ENC.canEscape(t.world, INSIDE_V[0], INSIDE_V[1]), "(o lugar onde o corpo dele ficou virou cela)");
+			const back = lives.enter(info, save);
+			check(
+				back !== undefined && ENC.canEscape(t.world, back.state.x, back.state.y),
+				"na volta ele e posto onde consegue sair (placeKept: chao livre E saida), nao dentro da cela",
+				back === undefined ? "nao entrou" : `(${back.state.x.toFixed(0)}, ${back.state.y.toFixed(0)})`,
+			);
+		}
+
+		// 6. (M2) o passeio custa: no maximo SEALED_CHECKS_PER_TICK por tick no servidor inteiro; os outros ouvem "rate"
+		{
+			const BUILD = require(join(SRC, "server/sim/build.ts"));
+			const budget = 1;
+			checkEq(BUILD.SEALED_CHECKS_PER_TICK, budget, "(o orcamento do servidor: um passeio por tick)");
+			t = setup(INSIDE_V, OUTSIDE);
+			const walk = ENC.boxesIn;
+			let walks = 0;
+			ENC.boxesIn = (...a) => {
+				walks += 1;
+				return walk(...a);
+			};
+			try {
+				const answers = [];
+				for (let slot = 0; slot < 12; slot++) {
+					t.sim.build.hold(slot, 10, undefined);
+					answers.push(t.sim.build.place(slot, t.builder.state, t.bodies, []).why);
+				}
+				console.log(`        12 tentativas no mesmo tick: ${walks} passeio(s); respostas ${answers.join(",")}`);
+				check(
+					walks <= budget,
+					`12 tentativas no mesmo tick custam no maximo ${budget} passeio (custaram ${walks})`,
+				);
+				checkEq(answers.filter(a => a === "rate").length, 12 - walks, "e as outras ouvem 'rate'");
+				t.sim.build.step(1 / 60);
+				walks = 0;
+				checkEq(
+					t.sim.build.place(5, t.builder.state, t.bodies, []).why,
+					"sealed",
+					"no tick seguinte, a proxima e checada",
+				);
+				checkEq(walks, 1, "(com um passeio)");
+				t.sim.build.hold(11, 11, undefined);
+				walks = 0;
+				checkEq(
+					t.sim.build.place(11, t.builder.state, t.bodies, []).kind,
+					"placed",
+					"uma porta nao precisa de passeio",
+				);
+				checkEq(walks, 0, "e nao gasta o orcamento");
+			} finally {
+				ENC.boxesIn = walk;
+			}
+		}
+
+		// 7. (L1) uma armadilha nao bloqueia ninguem (world.ts isBlocking): na fresta de 64 u de um anel, com alguem
+		// dentro, ela entra -- a regra dizia que ela fecharia o anel
+		{
+			const trap = Number(Object.keys(PLACEABLES).find(k => PLACEABLES[k].tag === "trap"));
+			const world = emptyWorld();
+			for (const [x, y, w, h] of [
+				[1880, 1780, 40, 308],
+				[2112, 1780, 168, 308],
+				[1880, 2048, 400, 40],
+				[1880, 1792, 168, 32],
+			]) {
+				W.addSolid(world, { kind: "wall_h", x, y, w, h, hp: 999, hpMax: 999, destructible: false, tags: "" });
+			}
+			const sim = newSim(world);
+			const builder = join2(sim, 0, 7311, 2080, 1740);
+			builder.state.angle = Math.PI / 2;
+			join2(sim, 1, 7312, INSIDE_V[0], INSIDE_V[1]);
+			sim.build.hold(0, trap, undefined);
+			const out = sim.build.place(
+				0,
+				builder.state,
+				sim.players().map(sp => sp.state),
+				[],
+			);
+			checkEq(
+				out.kind,
+				"placed",
+				"a armadilha na unica fresta do anel, com um aliado dentro, e posta (nao prende)",
+			);
+			check(
+				out.solid !== undefined && out.solid.x <= 2048 && out.solid.x + out.solid.w >= 2112,
+				"(e ela cobre a fresta inteira: uma parede ali fecharia o anel)",
+				out.solid === undefined ? "" : `${out.solid.x}..${out.solid.x + out.solid.w}`,
+			);
+		}
+
+		// 8. (L2) o corpo do passeio e o do sobrevivente: uma fresta de 35 u, onde um corpo de 36 u nao passa, e fechada
+		{
+			const world = emptyWorld();
+			for (const [x, y, w, h] of [
+				[1880, 1780, 40, 308],
+				[2211, 1780, 69, 308],
+				[1880, 2048, 400, 40],
+				[1880, 1792, 133, 32],
+			]) {
+				W.addSolid(world, { kind: "wall_h", x, y, w, h, hp: 999, hpMax: 999, destructible: false, tags: "" });
+			}
+			const piece = { x: 2048, y: 1792, w: 128, h: 32 };
+			const victim = { x: 2048, y: 1936, dead: false };
+			check(
+				ENC.boxesIn(world, piece, true, [victim]) === victim,
+				`a peca que deixa uma fresta de ${2211 - 2176} u (menos que 2 x ${PH.PLAYER_RADIUS}) conta como fechar o anel`,
+			);
+		}
+
+		// 9. (L3, limite aceito na MP-24) um patio maior que 2 x ESCAPE_RANGE nao e cela para a regra
+		{
+			const world = emptyWorld();
+			const x0 = 3000;
+			const y0 = 3000;
+			const S = 1200;
+			for (const [x, y, w, h] of [
+				[x0, y0, 536, 32],
+				[x0 + 664, y0, S - 664, 32],
+				[x0, y0 + S - 32, S, 32],
+				[x0, y0, 32, S],
+				[x0 + S - 32, y0, 32, S],
+			]) {
+				W.addSolid(world, { kind: "wall_h", x, y, w, h, hp: 999, hpMax: 999, destructible: false, tags: "" });
+			}
+			const piece = { x: x0 + 536, y: y0, w: 128, h: 32 };
+			check(
+				ENC.boxesIn(world, piece, true, [{ x: x0 + S / 2, y: y0 + S / 2, dead: false }]) === undefined,
+				`um patio de ${S} u fecha com alguem no meio: limite aceito (MP-24), a busca fica em ${2 * ENC.ESCAPE_RANGE} u`,
+			);
+		}
 	}
 }
 
