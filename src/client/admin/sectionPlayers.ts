@@ -250,7 +250,7 @@ function statusColor(status: PlayerStatus): Color3 {
 
 /** the players table's columns: the name, then numbers right-aligned in the numeric voice, then the status */
 export const PLAYER_COLUMNS: Array<TableColumn> = [
-	{ key: "name", header: "Name", flex: 1, sortable: true },
+	{ key: "name", header: "Name", flex: 1, sortable: true, raw: true },
 	{ key: "level", header: "Lv", width: 36, numeric: true, sortable: true, descendingFirst: true },
 	{ key: "day", header: "Day", width: 48, numeric: true, sortable: true, descendingFirst: true },
 	{ key: "hp", header: "HP", width: 64, numeric: true, sortable: true },

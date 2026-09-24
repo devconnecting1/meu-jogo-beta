@@ -823,9 +823,9 @@ section("4) every coin the server moved is one economy event, and they add up to
 
 	// a pack from the street and one from the lobby
 	const n0 = s.log.length;
-	const craftKit = packId("Basic craft kit");
+	const craftKit = packId("Builder's Basics");
 	const r1 = s.shop(p.decliner, { kind: "buyPack", packId: craftKit });
-	const r2 = s.shop(p.lobby, { kind: "buyPack", packId: packId("Pigeon the bird") });
+	const r2 = s.shop(p.lobby, { kind: "buyPack", packId: packId("Pet Pigeon") });
 	const buys = s.log.slice(n0).filter(r => r.kind === "economy");
 	check(
 		r1.ok && r2.ok && buys.length === 2 && buys.every(r => r.flow === "Sink" && r.tx === "Shop"),
@@ -833,7 +833,7 @@ section("4) every coin the server moved is one economy event, and they add up to
 		JSON.stringify(buys.map(r => [r.sku, r.amount, r.balance])),
 	);
 	check(
-		buys[0]?.sku === "Basic craft kit" && buys[0].amount === SHOP_PACKS[craftKit].price,
+		buys[0]?.sku === SHOP_PACKS[craftKit].name && buys[0].amount === SHOP_PACKS[craftKit].price,
 		"…the SKU is the pack's catalogue name and the amount its catalogue price",
 	);
 	// a costume: bought, refused for funds, refused as owned

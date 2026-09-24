@@ -1,5 +1,7 @@
 import { GameContext } from "shared/game/context";
 import { langGet } from "shared/data/lang";
+import { RULES_TEXT } from "shared/data/rules";
+import { popup } from "./popup";
 import { registerBack } from "./backStack";
 import { TEXT, THEME, space } from "./theme";
 import {
@@ -24,6 +26,11 @@ import {
  * good for: a reference you can open from the lobby whenever you forget which key does what.
  *
  * It lists all three schemes side by side, because the same account plays on a phone, on a PC and on a pad.
+ *
+ * And it is where the game rules are (compliance F3: Roblox's ban guidelines ask for rules every player can read, and
+ * a way to appeal): the Rules button over "Got it" opens them (shared/data/rules.ts). This card is the one screen
+ * every player is offered before the first match and can reopen from the lobby at any time; the same text is on the
+ * experience page (docs/CREATOR_HUB.md) for whoever cannot get in.
  */
 
 const UserInputService = game.GetService("UserInputService");
@@ -41,9 +48,12 @@ const KEY_MIN_W = KEY_H;
 const KEY_GAP = space(2);
 const COL_TITLE_H = 26;
 const NOTE_H = 40;
-/** five one-line tips at TEXT.xs */
-const TIPS_H = 84;
 const FOOTER_W = 170;
+/** the Rules button, stacked over "Got it" in the footer's right column */
+const RULES_H = BUTTON_SIZE.sm.h;
+const FOOTER_GAP = space(2);
+/** five one-line tips at TEXT.xs, beside the Rules and "Got it" buttons stacked */
+const TIPS_H = math.max(84, RULES_H + FOOTER_GAP + BUTTON_SIZE.lg.h);
 
 export interface Scheme {
 	title: string;
@@ -246,6 +256,20 @@ export function showTutorial(ctx: GameContext, onDone: () => void): () => void {
 	const cleanup = (): void => {
 		dialog.root.Destroy();
 	};
+	const footerTop = TIPS_Y + (TIPS_H - (RULES_H + FOOTER_GAP + FOOTER_H)) / 2;
+	const rules: TextButton = Button(panel, "Rules", tr("Rules"), {
+		x: PANEL_W - PAD - FOOTER_W,
+		y: footerTop,
+		w: FOOTER_W,
+		size: "sm",
+		variant: "secondary",
+		onClick: (): void => {
+			// the kit's popup over this card; closing it hands the pad back to the button that opened it
+			popup(ctx, tr("Rules"), nl(tr(RULES_TEXT)), [
+				{ text: tr("Close"), variant: "secondary", onClick: (): void => autoFocus(rules) },
+			]);
+		},
+	});
 	const finish = (): void => {
 		// the lobby asks for this card once, before the first match; answering it is answering the question
 		ctx.save.tutorialDone = true;
@@ -254,7 +278,7 @@ export function showTutorial(ctx: GameContext, onDone: () => void): () => void {
 	};
 	const done = Button(panel, "Done", tr("Got it"), {
 		x: PANEL_W - PAD - FOOTER_W,
-		y: TIPS_Y + (TIPS_H - FOOTER_H) / 2,
+		y: footerTop + RULES_H + FOOTER_GAP,
 		w: FOOTER_W,
 		size: "lg",
 		variant: "default",

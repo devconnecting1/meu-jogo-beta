@@ -187,6 +187,13 @@ jobs:
       - name: Rojo build
         run: $HOME/.local/bin/rojo build -o ProjectZ-ci.rbxl
 
+      # place properties a script cannot set (Players.BanningEnabled for the admin's Ban API): a fresh build must carry
+      # them, or every publish silently resets them to the engine default
+      - name: Place properties survive a fresh build (bans enabled, TextChatService)
+        run: |
+          $HOME/.local/bin/rojo build -o ProjectZ-ci.rbxlx
+          node tools/check-place.mjs ProjectZ-ci.rbxlx
+
       - name: Upload place file
         uses: actions/upload-artifact@v6
         with:

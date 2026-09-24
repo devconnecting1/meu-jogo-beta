@@ -1787,6 +1787,522 @@ section("29) o maior relatorio honesto cabe com folga em MAX_SAVE_PAYLOAD (revis
 	check(MAX_SAVE_PAYLOAD <= 8192, "e o teto nao passa de 8 KB (antes 100 KB de lixo eram lidos inteiros)");
 }
 
+section("30) o log de auditoria do admin: UserIds e texto filtrado, uma chave por servidor por dia (F5, chave quente)");
+{
+	globalThis.tostring ??= v => String(v);
+	globalThis.tonumber ??= v => (v === "" || !Number.isFinite(Number(v)) ? undefined : Number(v));
+	const LOG = require(join(SRC, "server/admin/auditLog.ts"));
+	// the day of a key is the UTC calendar day, without os.date: checked against JS's own calendar
+	let wrong = 0;
+	let t = 0;
+	for (let i = 0; i < 3000; i++) {
+		t = Math.floor(i * 1_451_234.5 + (i % 7) * 86399);
+		const d = new Date(t * 1000);
+		const want = `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}${String(d.getUTCDate()).padStart(2, "0")}`;
+		if (LOG.utcDay(t) !== want) wrong += 1;
+	}
+	check(wrong === 0, "utcDay = o dia UTC do calendario, em 3000 instantes de 1970 a 2107", `${wrong} errados`);
+	checkArrayEq(
+		[LOG.utcDay(951_782_400), LOG.utcDay(1_700_000_000), LOG.utcDay(4_102_444_799)],
+		["20000229", "20231114", "20991231"],
+		"bissexto, hoje, fim de seculo",
+	);
+	const job = "8f14e45f-ceea-467a-9b1c-3c8e6b0a1f2d";
+	const key = LOG.auditKey(1_700_000_000, job);
+	checkEq(key, "log_20231114_8f14e45fceea467a9b1c3c8e6b0a1f2d", "a chave: dia UTC + o JobId so com letras e digitos");
+	const worst = LOG.auditKey(1_700_000_000, "x".repeat(400));
+	check(worst.length <= 50, "nenhuma chave passa de 50 caracteres (o limite do DataStore)", `${worst.length}`);
+	checkEq(LOG.jobTag(""), "studio", "sem JobId (Studio): 'studio'");
+	check(
+		key.startsWith(LOG.auditDayPrefix(1_700_000_000)),
+		"a chave comeca pelo prefixo do dia (o que o painel lista)",
+	);
+	check(
+		LOG.auditKey(1_700_000_000, "other-server") !== key && LOG.auditKey(1_700_000_000 + 86400, job) !== key,
+		"outro servidor ou outro dia: outra chave (cada chave tem UM escritor)",
+	);
+
+	// what the single old key "recent" held, in the old shape: names, labels and raw text
+	const legacy = [
+		{
+			t: 1,
+			adminId: 7,
+			admin: "Owner",
+			action: "ban",
+			target: "Griefer (123)",
+			details: '7 days, universe=true, excludeAlts=false, reason="raw insult", private="raw note"',
+			ok: true,
+		},
+		{
+			t: 2,
+			adminId: 7,
+			admin: "Owner",
+			action: "kick",
+			target: "Other (456)",
+			details: "raw kick words",
+			ok: true,
+		},
+		{
+			t: 3,
+			adminId: 7,
+			admin: "Owner",
+			action: "announce",
+			target: "all",
+			details: 'FAILED text filter: "raw"',
+			ok: false,
+		},
+		{ t: 4, adminId: 7, admin: "Owner", action: "edit", target: "Other (456)", details: "level=5", ok: true },
+		{ t: 5, adminId: 7, admin: "Owner", action: "ban", target: "#789", details: "refused: self", ok: false },
+		{
+			t: 6,
+			adminId: 7,
+			admin: "Owner",
+			action: "local:spawn",
+			target: "own world",
+			details: "spawn walker",
+			ok: true,
+		},
+		"not an entry",
+	];
+	check(LOG.auditNeedsScrub(legacy), "o documento antigo precisa de limpeza");
+	const clean = LOG.readAuditList(legacy);
+	const json = JSON.stringify(clean);
+	check(
+		!/Owner|Griefer|Other|raw/.test(json) && !json.includes('"admin"'),
+		"lido pelo sanitizador: nenhum nome e nenhum texto cru sobra",
+		json,
+	);
+	checkArrayEq(
+		clean.map(e => e.targetId),
+		[123, 456, 0, 456, 789, 0],
+		"o UserId de cada alvo sai do rotulo antigo ('Nome (id)', '#id')",
+	);
+	checkArrayEq(
+		clean.map(e => e.details),
+		["7 days, universe=true, excludeAlts=false", "", "", "level=5", "refused: self", "spawn walker"],
+		"ficam as opcoes do ban, a edicao e as ferramentas; somem o motivo digitado e o anuncio",
+	);
+	check(!LOG.auditNeedsScrub(clean), "e o limpo nao precisa de outra limpeza (nenhuma escrita a toa)");
+	checkEq(JSON.stringify(LOG.readAuditList(clean)), json, "ler o limpo de novo nao muda nada");
+
+	const [kept, removed] = LOG.eraseAuditUser(legacy, 456);
+	check(
+		removed === 2 && kept.every(e => e.targetId !== 456 && e.adminId !== 456),
+		"apagar o 456: somem as entradas em que ele e o alvo",
+		`${removed} removidas`,
+	);
+	const [keptAdmin, removedAdmin] = LOG.eraseAuditUser(clean, 7);
+	check(removedAdmin === 6 && keptAdmin.length === 0, "...e as em que ele e o admin");
+	const [nobody, none] = LOG.eraseAuditUser(legacy, 0);
+	check(none === 0 && !LOG.auditNeedsScrub(nobody), "UserId 0 so limpa, nao apaga ninguem");
+
+	const many = [];
+	for (let i = 0; i < LOG.AUDIT_PER_KEY + 25; i++)
+		many.push({ t: i, adminId: 7, action: "edit", targetId: 1, target: "", details: "", ok: true });
+	// an afternoon of world tools never pushes a ban out: tool entries (local:*, assist) are evicted first
+	const mixed = [];
+	for (let i = 0; i < 40; i++)
+		mixed.push({
+			t: i,
+			adminId: 7,
+			action: i % 2 === 0 ? "ban" : "kick",
+			targetId: 100 + i,
+			target: "",
+			details: "",
+			ok: true,
+		});
+	for (let i = 0; i < LOG.AUDIT_PER_KEY; i++)
+		mixed.push({
+			t: 100 + i,
+			adminId: 7,
+			action: "local:spawn",
+			targetId: 0,
+			target: "own world",
+			details: "",
+			ok: true,
+		});
+	const trimmed = LOG.appendAudit(undefined, mixed);
+	const moderations = trimmed.filter(e => e.action === "ban" || e.action === "kick").length;
+	check(
+		trimmed.length === LOG.AUDIT_PER_KEY && moderations === 40 && trimmed.at(-1).t === 100 + LOG.AUDIT_PER_KEY - 1,
+		"cheia de ferramentas, a chave corta as ferramentas mais velhas e guarda todo kick e ban",
+		`${moderations} de 40 moderacoes`,
+	);
+	checkArrayEq(
+		[
+			...LOG.splitBanNote("cheating again | by admin 8013052784"),
+			...LOG.splitBanNote("typed | by admin notanid"),
+			...LOG.splitBanNote("made in the Creator Hub"),
+		],
+		["cheating again", " | by admin 8013052784", "typed | by admin notanid", "", "made in the Creator Hub", ""],
+		"a nota privada separa o que o admin digitou do sufixo que o jogo escreveu",
+	);
+	const adminSrc = readFileSync(join(SRC, "server/admin/adminServer.ts"), "utf8");
+	const patchEv = adminSrc.slice(
+		adminSrc.indexOf("function sendPatch("),
+		adminSrc.indexOf("remotes.event.FireClient(target, ev)"),
+	);
+	check(
+		!/\bby\b/.test(patchEv) && !/\.Name\b/.test(patchEv),
+		"a edicao que chega ao jogador nao leva o nome do admin",
+	);
+	const capped = LOG.appendAudit(undefined, many);
+	check(
+		capped.length === LOG.AUDIT_PER_KEY && capped[0].t === 25,
+		"uma chave guarda as ultimas AUDIT_PER_KEY entradas",
+		`${capped.length}`,
+	);
+
+	// `npm run cloud -- erase` scrubs the same keys with the same filter (tools/rtbf.mjs is plain JS: checked here)
+	const RTBF = await import("./rtbf.mjs");
+	const agree = [456, 7, 123, 789, 999].every(uid => {
+		const [a, na] = LOG.eraseAuditUser(legacy, uid);
+		const [b, nb] = RTBF.eraseAuditEntries(legacy, uid);
+		return na === nb && JSON.stringify(a) === JSON.stringify(b);
+	});
+	check(agree, "cloud.mjs erase e o servidor apagam as mesmas entradas e guardam o mesmo resto");
+	const plan = RTBF.erasePlan(4242);
+	const stores = plan.map(s => s.store);
+	check(
+		["ProjectZ_Save_v2", "ProjectZ_Save_v1", "ProjectZ_Titles"].every(
+			s => stores.includes(s) && stores.includes(`${s}_studio`),
+		) &&
+			plan.filter(s => s.kind === "delete").every(s => s.key === "4242") &&
+			stores.includes("ProjectZ_AdminLog") &&
+			stores.includes("ProjectZ_AdminLog_studio"),
+		"o erase cobre save v2, save v1, titulos e o log de admin, cada um tambem com _studio",
+		stores.join(", "),
+	);
+	const storesTs = readFileSync(join(SRC, "server/save/stores.ts"), "utf8");
+	const perPlayer = [...storesTs.matchAll(/storeName\("([^"]+)"\)/g)].map(m => m[1]);
+	check(
+		perPlayer.every(s => s === "ProjectZ_Worlds" || RTBF.PLAYER_STORES.includes(s) || s === RTBF.ADMIN_LOG_STORE),
+		"todo store de stores.ts esta no erase (o ProjectZ_Worlds nao guarda dado de jogador)",
+		perPlayer.join(", "),
+	);
+
+	// a destructive command never guesses: one numeric UserId, only the known flags, and --yes for the real run
+	const parse = RTBF.parseEraseArgs;
+	const ok1 = parse(["4242"]);
+	check(
+		ok1.userId === 4242 &&
+			!ok1.dryRun &&
+			!ok1.yes &&
+			parse(["4242", "--dry-run"]).dryRun &&
+			parse(["--yes", "4242"]).yes,
+		"erase 4242 [--dry-run | --yes] e lido",
+	);
+	const refused = [
+		["4242", "--dryrun"],
+		["12", "34"],
+		[],
+		["someName"],
+		["0"],
+		["-5"],
+		["4242", "--yes", "--dry-run"],
+		["4242", "--yes", "--yes"],
+		["4242", "--force"],
+		["1234567890123456"],
+	];
+	const accepted = refused.filter(a => parse(a).error === undefined);
+	check(
+		accepted.length === 0,
+		"recusa: opcao com erro de digitacao, dois UserIds, nenhum, um nome, 0, negativo, --dry-run com --yes, repetida, desconhecida, 16 digitos",
+		accepted.map(a => a.join(" ")).join(" | ") || `${refused.length} casos`,
+	);
+	checkArrayEq(
+		[
+			RTBF.listedKey({ id: "global/log_x" }),
+			RTBF.listedKey({ path: "universes/1/data-stores/S/scopes/global/entries/log_y", id: "log_y" }),
+			RTBF.listedKey({ id: "log_z" }),
+		],
+		["log_x", "log_y", "log_z"],
+		"a chave de uma linha da listagem, com ou sem o escopo na frente",
+	);
+
+	// the command itself, spawned: EVERY run points PZ_CLOUD_ENV at a throwaway (or missing) file and preloads the fake
+	// Open Cloud -- the repo's .env on the owner's PC holds a real key, and nothing here may ever reach it or Roblox
+	{
+		const { spawnSync } = await import("node:child_process");
+		const { createHash } = await import("node:crypto");
+		const { mkdtempSync, rmSync, symlinkSync, writeFileSync } = await import("node:fs");
+		const { tmpdir } = await import("node:os");
+		const TOOLS = join(SRC, "..", "tools");
+		const cloud = join(TOOLS, "cloud.mjs");
+		const FAKE = join(TOOLS, "fake-open-cloud.mjs");
+		const tmp = mkdtempSync(join(tmpdir(), "pz-erase-"));
+		const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("ROBLOX_")));
+		try {
+			const general = "sk-test-GENERAL-never-print";
+			const eraseKey = "sk-test-ERASE-never-print";
+			const hash = k => createHash("sha256").update(k).digest("hex").slice(0, 12);
+			const envFile = join(tmp, "fake.env");
+			writeFileSync(
+				envFile,
+				`ROBLOX_API_KEY=${general}\nROBLOX_ERASE_API_KEY=${eraseKey}\nROBLOX_UNIVERSE_ID=99\nROBLOX_PLACE_ID=1\n`,
+			);
+			const missingEnv = join(tmp, "missing.env");
+			const statePath = join(tmp, "state.json");
+			const someoneElse = {
+				t: 9,
+				adminId: 7,
+				action: "edit",
+				targetId: 555,
+				target: "",
+				details: "level=2",
+				ok: true,
+			};
+			const aboutHim = {
+				t: 8,
+				adminId: 7,
+				action: "kick",
+				targetId: 4242,
+				target: "",
+				details: "#####",
+				ok: true,
+			};
+			const seed = (withHim = true) =>
+				writeFileSync(
+					statePath,
+					JSON.stringify({
+						ProjectZ_Save_v2: withHim
+							? { 4242: { data: "{}", lock: null }, 555: { data: "{}", lock: null } }
+							: { 555: { data: "{}", lock: null } },
+						ProjectZ_Titles: withHim ? { 4242: { titles: [1, 0, 0], zombieKills: 3, epoch: 1 } } : {},
+						ProjectZ_Titles_studio: withHim
+							? { 4242: { titles: [0, 0, 0], zombieKills: 0, epoch: 1 } }
+							: {},
+						ProjectZ_AdminLog: {
+							recent: [
+								{
+									t: 1,
+									adminId: 7,
+									admin: "Owner",
+									action: "ban",
+									target: "Him (4242)",
+									details: "x",
+									ok: true,
+								},
+							],
+							log_20231114_jobA: [aboutHim, someoneElse],
+							log_20231114_jobB: [someoneElse, aboutHim],
+						},
+					}),
+				);
+			const run = (args, { envPath = missingEnv, fake = true, extra = {} } = {}) => {
+				const r = spawnSync(process.execPath, [...(fake ? ["--import", FAKE] : []), cloud, ...args], {
+					encoding: "utf8",
+					env: { ...baseEnv, PZ_CLOUD_ENV: envPath, PZ_FAKE_CLOUD_STATE: statePath, ...extra },
+				});
+				const after = fake ? JSON.parse(readFileSync(statePath, "utf8")) : { state: undefined, requests: [] };
+				return { status: r.status, out: `${r.stdout}\n${r.stderr}`, ...after };
+			};
+
+			seed();
+			const dry = run(["erase", "4242", "--dry-run"]);
+			check(
+				dry.status === 0 &&
+					/nenhuma chave foi lida/.test(dry.out) &&
+					(dry.out.match(/apagar a chave 4242/g) ?? []).length === 6 &&
+					/FORA do jogo/.test(dry.out) &&
+					dry.requests.length === 0,
+				"`erase <userId> --dry-run`: o plano (com o aviso de tirar o jogador do jogo antes), sem ler chave nem chamar nada",
+				dry.status === 0 ? `${dry.requests.length} chamadas` : dry.out.trim(),
+			);
+			// a refused command does nothing -- even with a real-looking .env right there to use
+			const refusals = [
+				["erase", "4242", "--dryrun"],
+				["erase", "12", "34"],
+				["erase", "someName"],
+				["erase", "4242"],
+			].map(args => {
+				seed();
+				const r = run(args, { envPath: envFile });
+				return { args, ok: r.status === 1 && r.requests.length === 0 && "4242" in r.state.ProjectZ_Save_v2, r };
+			});
+			check(
+				refusals.every(x => x.ok) &&
+					/--yes/.test(refusals[3].r.out) &&
+					/Nada foi feito/i.test(refusals[3].r.out),
+				"`--dryrun` (erro de digitacao), `12 34`, um nome e a falta de --yes: sai com erro e nada e feito",
+				refusals
+					.filter(x => !x.ok)
+					.map(x => x.args.join(" "))
+					.join(" | ") || "4 casos",
+			);
+			// the guard: under test, without the fake preloaded, the command stops before any request
+			const bare = run(["erase", "4242", "--yes"], { envPath: envFile, fake: false });
+			check(
+				bare.status === 1 && /sem o Open Cloud falso/.test(bare.out),
+				"sob teste e sem o Open Cloud falso, o comando para antes de qualquer chamada (nunca o apis.roblox.com)",
+			);
+
+			seed();
+			const real = run(["erase", "4242", "--yes"], { envPath: envFile, extra: { PZ_FAKE_CLOUD_CONFLICTS: "1" } });
+			check(
+				real.status === 0,
+				"`erase 4242 --yes` contra o Open Cloud falso termina bem",
+				real.status === 0 ? undefined : real.out,
+			);
+			check(
+				!("4242" in real.state.ProjectZ_Save_v2) &&
+					"555" in real.state.ProjectZ_Save_v2 &&
+					!("4242" in real.state.ProjectZ_Titles) &&
+					!("4242" in real.state.ProjectZ_Titles_studio),
+				"apaga a chave dele no save e nos titulos (e _studio), e so a dele",
+			);
+			const log = real.state.ProjectZ_AdminLog;
+			check(
+				log.recent.length === 0 &&
+					JSON.stringify(log.log_20231114_jobA) === JSON.stringify([someoneElse]) &&
+					JSON.stringify(log.log_20231114_jobB) === JSON.stringify([someoneElse]),
+				"tira do log de admin so as entradas sobre ele (a chave antiga e as do dia), mesmo com uma corrida de escrita",
+				JSON.stringify(log),
+			);
+			const patches = real.requests.filter(r => r.method === "PATCH").length;
+			check(
+				patches === 4,
+				"regrava as chaves que mudaram, e de novo a que outro servidor escreveu no meio",
+				`${patches} PATCH`,
+			);
+			const entryCalls = real.requests.filter(r => !r.path.endsWith("/entries"));
+			check(
+				entryCalls.length > 0 && entryCalls.every(r => r.path.includes("/scopes/global/entries/")),
+				"toda leitura, gravacao e exclusao usa o caminho com escopo (o falso recusa o sem escopo)",
+			);
+			check(
+				real.requests.every(r => r.keyed && r.keyHash === hash(eraseKey)) &&
+					!real.out.includes(general) &&
+					!real.out.includes(eraseKey),
+				"usa a chave propria do erase (ROBLOX_ERASE_API_KEY), no cabecalho, e nenhuma chave aparece na saida",
+			);
+
+			seed(false);
+			const none = run(["erase", "4242", "--yes"], { envPath: envFile });
+			check(
+				none.status === 1 &&
+					/nenhuma das seis chaves/.test(none.out) &&
+					none.state.ProjectZ_AdminLog.recent.length === 0,
+				"nenhuma das seis chaves existia: sai com erro (confira o UserId), e o log de admin e limpo mesmo assim",
+			);
+
+			seed();
+			const broken = run(["erase", "4242", "--yes"], {
+				envPath: envFile,
+				extra: { PZ_FAKE_CLOUD_FAIL: "ProjectZ_AdminLog/log_20231114_jobA" },
+			});
+			check(
+				broken.status === 1 &&
+					/FALHOU/.test(broken.out) &&
+					JSON.stringify(broken.state.ProjectZ_AdminLog.log_20231114_jobB) ===
+						JSON.stringify([someoneElse]) &&
+					broken.state.ProjectZ_AdminLog.recent.length === 0,
+				"uma chave do log que falha nao para as outras: cada uma e limpa, a falha e dita e o comando sai com erro",
+			);
+
+			seed();
+			const saved = run(["save", "4242"], { envPath: envFile });
+			check(
+				saved.status === 0 &&
+					/save de 4242/.test(saved.out) &&
+					saved.requests.every(r => r.path.includes("/scopes/global/entries/")),
+				"`save <userId>` tambem le pelo caminho com escopo",
+				saved.status === 0 ? undefined : saved.out.trim(),
+			);
+
+			// through a symlink (or a Windows junction) the command still runs: no "am I the main module?" check left
+			const link = join(tmp, "cloud-link.mjs");
+			symlinkSync(cloud, link);
+			const viaLink = spawnSync(process.execPath, ["--import", FAKE, link], {
+				encoding: "utf8",
+				env: { ...baseEnv, PZ_CLOUD_ENV: missingEnv },
+			});
+			check(
+				viaLink.status === 0 && /uso: npm run cloud/.test(viaLink.stdout),
+				"chamado por um link simbolico, o cloud.mjs responde (antes ficava mudo)",
+				viaLink.stdout.trim().slice(0, 60),
+			);
+		} finally {
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	}
+
+	// the server writes each entry to ITS day key, never to the old one, and stores no name
+	const admin = readFileSync(join(SRC, "server/admin/adminServer.ts"), "utf8");
+	const flush = admin.slice(admin.indexOf("function flushAudit("), admin.indexOf("function readKey("));
+	check(
+		/auditKey\(e\.t, host\.jobId\)/.test(flush) && !flush.includes("LEGACY_AUDIT_KEY"),
+		"adminServer flushAudit: cada entrada na chave do seu dia DESTE servidor; a antiga so e lida e limpa",
+	);
+	const records = [...admin.matchAll(/\brecord\(([\s\S]*?)\);/g)].map(m => m[1]);
+	const rawText = records.filter(r =>
+		/\b(reason|display|privateReason|text)\b(?![^"`]*["`]\s*[,)])|\.Name\b|DisplayName/.test(
+			r.replace(/"[^"]*"/g, '""'),
+		),
+	);
+	check(
+		records.length >= 15 && rawText.length === 0,
+		"nenhum record() recebe texto digitado sem filtro nem nome de jogador",
+		rawText.join(" | ") || `${records.length} chamadas`,
+	);
+	check(
+		!/\$\{(display|privateReason|reason|text)\}/.test(admin),
+		"e nenhum texto de detalhe e montado com o texto digitado (motivo, nota privada, anuncio)",
+	);
+}
+
+section("31) regras e mensagens de moderacao: pela lang.ts, e o ban aponta para as regras (F3, F10)");
+{
+	const RULES = require(join(SRC, "shared/data/rules.ts"));
+	const { LANG_TABLE } = require(join(SRC, "shared/data/lang.ts"));
+	const LANG = new Set(LANG_TABLE);
+	check(LANG.has(RULES.RULES_TEXT) && LANG.has("Rules"), "as regras estao na lang.ts (vao para o CSV do locale)");
+	check(
+		RULES.RULES_TEXT.split("#").some(l => l.startsWith("Appeals:")),
+		"e dizem como recorrer (as diretrizes de ban do Roblox pedem)",
+	);
+	const kick = RULES.kickMessage(0, undefined);
+	const kickWhy = RULES.kickMessage(0, "####### spam");
+	const flood = RULES.floodKickMessage(0);
+	const cut = (s, n) => (s.length <= n ? s : `${s.slice(0, n - 1)}…`);
+	const ban = RULES.banMessage(0, "", 400, cut);
+	const banWhy = RULES.banMessage(0, "Exploiting.", 400, cut);
+	const banLong = RULES.banMessage(0, "x".repeat(400), 400, cut);
+	checkEq(kick, "You were kicked by an administrator.", "kick sem motivo");
+	checkEq(kickWhy, "You were kicked by an administrator: ####### spam", "kick com o motivo como o filtro devolveu");
+	check(
+		ban.endsWith("The rules and how to appeal are on this experience's page.") &&
+			banWhy.startsWith("Exploiting. The rules"),
+		"o ban aponta para as regras e o recurso na pagina da experiencia",
+		banWhy,
+	);
+	check(
+		banLong.length <= 400 && banLong.endsWith("experience's page."),
+		"um motivo de 400 caracteres e cortado, o ponteiro nunca",
+		`${banLong.length}`,
+	);
+	for (const k of [
+		"You were kicked by an administrator",
+		"You are banned from this experience for breaking its rules",
+		"The rules and how to appeal are on this experience's page",
+		"Disconnected for sending too many network messages",
+	])
+		check(LANG.has(k), `lang.ts: "${k}"`);
+	check(flood.startsWith("Disconnected for sending"), "o kick automatico por flood tambem sai da lang.ts", flood);
+	checkArrayEq(
+		["en-us", "ko-kr", "zh-cn", "ja-jp", "pt-br", undefined].map(RULES.langTypeOfLocale),
+		[0, 1, 2, 3, 0, 0],
+		"a lingua do jogador sai do LocaleId da conta",
+	);
+	const sources = ["server/admin/adminServer.ts", "server/net/mpHost.ts"].map(f =>
+		readFileSync(join(SRC, f), "utf8"),
+	);
+	check(
+		sources.every(s => !/\.Kick\(\s*"/.test(s) && !/You were kicked|You are banned|Network flood"/.test(s)),
+		"nenhum Kick com texto em ingles fixo no servidor",
+	);
+}
+
 // ---------------------------------------------------------------- verdict
 
 console.log("");
