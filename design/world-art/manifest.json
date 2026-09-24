@@ -646,6 +646,30 @@
 			"description": "hospital roof: the heliport's red H on a white cross"
 		},
 		{
+			"name": "floorCarpet",
+			"file": "floorCarpet.png",
+			"kind": "tile",
+			"w": 16,
+			"h": 16,
+			"description": "bedroom / office carpet: a low loop pile"
+		},
+		{
+			"name": "floorKitchen",
+			"file": "floorKitchen.png",
+			"kind": "tile",
+			"w": 16,
+			"h": 16,
+			"description": "kitchen floor: checker tiles"
+		},
+		{
+			"name": "floorBath",
+			"file": "floorBath.png",
+			"kind": "tile",
+			"w": 16,
+			"h": 16,
+			"description": "bathroom / cold room: small tiles"
+		},
+		{
 			"name": "survivorsA",
 			"file": "survivorsA.png",
 			"kind": "sheet",

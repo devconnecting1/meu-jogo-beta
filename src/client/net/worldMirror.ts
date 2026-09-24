@@ -30,7 +30,7 @@ import {
 	spawnGroundItem,
 	WorldData,
 } from "shared/game/world";
-import { PLACEABLES, PlaceableDef, placedSolid } from "shared/sim/placement";
+import { fortifies, openingAt, PLACEABLES, PlaceableDef, placedSolid, PlaceRect } from "shared/sim/placement";
 import { isDoor } from "shared/sim/interactQuery";
 
 /** is this one of the interactive-world deltas the mirror applies? */
@@ -68,6 +68,20 @@ function footprint(def: PlaceableDef, rot: number): [number, number] {
 	return [def.w, def.h];
 }
 
+/**
+ * Where a construction stands: a barricade or a door the server snapped into a doorway or a window fills THAT gap
+ * (EDI-13, shared/sim/placement.ts `snapToOpening`), and the SolidAdd carries only its corner -- the gap is found
+ * again in this client's own copy of the town (`openingAt`); anything else is its row's footprint
+ */
+function standRect(world: WorldData, def: PlaceableDef, x: number, y: number, rot: number): PlaceRect {
+	if (fortifies(def)) {
+		const gap = openingAt(world, x, y);
+		if (gap !== undefined) return gap;
+	}
+	const [w, h] = footprint(def, rot);
+	return { x, y, w, h };
+}
+
 /** one delta of the interactive world, onto this client's town */
 export function applyMirrorEvent(world: WorldData, e: WorldEvent): void {
 	const ix = indexOf(world);
@@ -76,9 +90,8 @@ export function applyMirrorEvent(world: WorldData, e: WorldEvent): void {
 		if (s === undefined) {
 			const def = PLACEABLES[e.placeable] as PlaceableDef | undefined;
 			if (def === undefined) return;
-			const [w, h] = footprint(def, e.rot);
 			s = addSolid(world, {
-				...placedSolid(def, { x: e.x, y: e.y, w, h }, e.rot),
+				...placedSolid(def, standRect(world, def, e.x, e.y, e.rot), e.rot),
 				placeable: e.placeable,
 				owner: e.owner,
 			});

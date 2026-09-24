@@ -3,6 +3,8 @@ import { DESIGN, TOWN } from "shared/engine/constants";
 import { chance, rnd, rndInt, rndRange } from "shared/engine/rng";
 import { Vec2, v2 } from "shared/engine/vec2";
 import { DYNAMIC_ID_BASE } from "shared/net/mpConfig";
+import { buildingSeed, planBuilding } from "./interiors";
+import type { Decor, Opening, RoomRect } from "./interiors";
 
 export type SolidKind =
 	| "wall_h"
@@ -14,7 +16,11 @@ export type SolidKind =
 	| "iron_barricade"
 	| "door"
 	| "iron_door"
-	| "structure";
+	| "structure"
+	/** a building's furniture (tags: the piece, shared/game/interiors.ts): blocks bodies; `low` ones let bullets by */
+	| "furniture"
+	/** a window's gap (passable, tags "window"): bodies climb through slowly, the horde's field prices it (EDI-10) */
+	| "window";
 
 export type DoorSide = "top" | "bottom" | "left" | "right";
 
@@ -44,12 +50,40 @@ export interface Solid {
 	hitShake?: number;
 	/** true → ignored by collision (e.g. the building record whose walls are separate solids) */
 	passable?: boolean;
-	/** building only: centre of the doorway (on the wall's mid-line) and which wall it is in */
+	/**
+	 * building only: its MAIN entrance -- the doorway facing the street (EDI-01) -- by the centre of its gap (on
+	 * the wall's mid-line) and the side of the box that wall faces. It may be set back from the box's edge into a
+	 * porch or an entrance court (the facade that holds it is the street edge of `mainWing`). Every entrance,
+	 * this one first: `entrancesOf`.
+	 */
 	doorX?: number;
 	doorY?: number;
 	doorSide?: DoorSide;
-	/** building walls (tags "bwall"): id of the building record they belong to */
+	/** building walls (tags "bwall"), windows and furniture: id of the building record they belong to */
 	parentId?: number;
+	/**
+	 * building only (shared/game/interiors.ts): the footprint as non-overlapping rects (the record's own rect is
+	 * their bounding box: a porch or a loading notch lies inside the box and outside every part), the rooms' floors,
+	 * every doorway / window / interior opening, the flat decoration, and where the loot can be searched (EDI-03).
+	 */
+	parts?: Array<Rect>;
+	/**
+	 * building: the main wing -- the block behind the stretch of facade that holds the main entrance, as deep as
+	 * the footprint stays full behind all of it (inside the footprint; its street edge is that facade). The
+	 * storefront sign stands on its edge by the door (client/view/buildingSigns.ts), the roof units on its back.
+	 */
+	mainWing?: Rect;
+	rooms?: Array<RoomRect>;
+	openings?: Array<Opening>;
+	decor?: Array<Decor>;
+	lootSpots?: Array<{ x: number; y: number }>;
+	/** building wall: a partition inside the building (not an outside wall) */
+	inner?: boolean;
+	/** furniture: bullets fly over it (a table, a bed); a tall piece stops them (a shelf, a wardrobe) */
+	low?: boolean;
+	/** furniture: the side facing into the room, and a small number the drawing uses */
+	face?: DoorSide;
+	variant?: number;
 	/** tree only: visual canopy radius and the renderer-eased canopy opacity */
 	canopyR?: number;
 	canopyAlpha?: number;
@@ -129,7 +163,11 @@ export type GroundKind =
 	/** school yard */
 	| "playground"
 	/** tactile curb ramp where a crosswalk lands */
-	| "ramp";
+	| "ramp"
+	/** a house's porch: the wooden deck in the front notch its door opens into */
+	| "porch"
+	/** a paved notch of a building's footprint: back patio, loading bay, courtyard */
+	| "patio";
 
 export interface GroundRect extends Rect {
 	kind: GroundKind;
@@ -193,8 +231,11 @@ export interface SolidGrid {
 	cell: number;
 	cols: number;
 	rows: number;
+	/** a cell that never held a solid is the shared EMPTY_CELL (a fine grid is ~22,000 cells, most of them empty) */
 	cells: Array<Array<Solid>>;
 	stamp: number;
+	/** solids held: a grid that holds none is skipped by every query (the fine grid, while the town is being laid) */
+	count: number;
 }
 
 export interface WorldData {
@@ -210,6 +251,12 @@ export interface WorldData {
 	bossAnchors: Array<{ day: number; x: number; y: number; type: number; nextDay: number }>;
 	nextId: number;
 	grid: SolidGrid;
+	/**
+	 * The walls, windows and furniture of the buildings (`Solid.parentId` set, shared/game/interiors.ts) live in
+	 * this finer grid instead of `grid`: a 512 u cell of a built-up block holds a hundred of them, and every
+	 * collision query of every body would walk them all. Both grids answer every query; a solid is in one.
+	 */
+	fine: SolidGrid;
 	/**
 	 * Server only (docs/MULTIPLAYER.md §4.5). 0 = off, which is the map generator and every client.
 	 *
@@ -268,14 +315,24 @@ function rectOverlap(
 	return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
 }
 
-export function createWorld(width: number, height: number): WorldData {
-	const cell = TOWN.GRID_CELL;
+/** an empty spatial grid of `cell`-sized cells over width × height */
+/** the one cell every grid starts with everywhere: never written (gridInsert gives a cell its own list first) */
+const EMPTY_CELL: Array<Solid> = [];
+
+function newGrid(width: number, height: number, cell: number): SolidGrid {
 	const cols = math.max(1, math.ceil(width / cell));
 	const rows = math.max(1, math.ceil(height / cell));
 	const cells: Array<Array<Solid>> = [];
 	for (let i = 0; i < cols * rows; i++) {
-		cells.push([]);
+		cells.push(EMPTY_CELL);
 	}
+	return { cell, cols, rows, cells, stamp: 0, count: 0 };
+}
+
+/** the cell of the grid of building parts (walls, windows, furniture): a room, not a block */
+const FINE_CELL = 128;
+
+export function createWorld(width: number, height: number): WorldData {
 	return {
 		solids: [],
 		items: [],
@@ -293,7 +350,8 @@ export function createWorld(width: number, height: number): WorldData {
 		],
 		nextId: 1,
 		nextDynamicId: 0,
-		grid: { cell, cols, rows, cells, stamp: 0 },
+		grid: newGrid(width, height, TOWN.GRID_CELL),
+		fine: newGrid(width, height, FINE_CELL),
 	};
 }
 
@@ -315,9 +373,16 @@ function gridInsert(g: SolidGrid, s: Solid): void {
 	const r1 = cellRow(g, s.y + s.h);
 	for (let r = r0; r <= r1; r++) {
 		for (let c = c0; c <= c1; c++) {
-			g.cells[r * g.cols + c].push(s);
+			const k = r * g.cols + c;
+			let bucket = g.cells[k];
+			if (bucket === EMPTY_CELL) {
+				bucket = [];
+				g.cells[k] = bucket;
+			}
+			bucket.push(s);
 		}
 	}
+	g.count++;
 }
 
 function gridRemove(g: SolidGrid, s: Solid): void {
@@ -332,13 +397,19 @@ function gridRemove(g: SolidGrid, s: Solid): void {
 			if (i >= 0) bucket.unorderedRemove(i);
 		}
 	}
+	g.count = math.max(0, g.count - 1);
+}
+
+/** the grid a solid lives in: a building's own parts in the fine one, everything else in the coarse one */
+function gridOf(w: WorldData, s: Solid): SolidGrid {
+	return s.parentId !== undefined ? w.fine : w.grid;
 }
 
 /** The ONLY way to add a solid (keeps the spatial grid in sync). Solids must not move afterwards. */
 export function addSolid(w: WorldData, s: Omit<Solid, "id">): Solid {
 	const solid: Solid = { ...s, id: takeId(w) };
 	w.solids.push(solid);
-	gridInsert(w.grid, solid);
+	gridInsert(gridOf(w, solid), solid);
 	if (w.onSolidAdd !== undefined) w.onSolidAdd(w, solid);
 	return solid;
 }
@@ -347,7 +418,7 @@ export function addSolid(w: WorldData, s: Omit<Solid, "id">): Solid {
 export function removeSolid(w: WorldData, s: Solid): void {
 	const i = w.solids.indexOf(s);
 	if (i >= 0) w.solids.remove(i);
-	gridRemove(w.grid, s);
+	gridRemove(gridOf(w, s), s);
 	s.removed = true;
 	if (w.onSolidRemove !== undefined) w.onSolidRemove(w, s);
 }
@@ -364,9 +435,48 @@ export function querySolids(
 	y1: number,
 	out: Array<Solid> = [],
 ): Array<Solid> {
-	const g = w.grid;
-	g.stamp++;
-	const stamp = g.stamp;
+	// one stamp for both grids (a solid is in one of them): each solid once per query
+	w.grid.stamp++;
+	const stamp = w.grid.stamp;
+	queryGrid(w.grid, stamp, x0, y0, x1, y1, out);
+	queryGrid(w.fine, stamp, x0, y0, x1, y1, out);
+	return out;
+}
+
+/**
+ * `querySolids` without the buildings' own walls, windows and furniture (the coarse grid alone): the town as seen
+ * from above with every roof on -- the building records, trees, cars, constructions. Same order as the first part
+ * of a `querySolids` answer.
+ */
+export function queryTown(
+	w: WorldData,
+	x0: number,
+	y0: number,
+	x1: number,
+	y1: number,
+	out: Array<Solid> = [],
+): Array<Solid> {
+	w.grid.stamp++;
+	queryGrid(w.grid, w.grid.stamp, x0, y0, x1, y1, out);
+	return out;
+}
+
+/** the buildings' own walls, windows and furniture alone (the fine grid): the rest of a `querySolids` answer */
+export function queryParts(
+	w: WorldData,
+	x0: number,
+	y0: number,
+	x1: number,
+	y1: number,
+	out: Array<Solid> = [],
+): Array<Solid> {
+	w.grid.stamp++;
+	queryGrid(w.fine, w.grid.stamp, x0, y0, x1, y1, out);
+	return out;
+}
+
+function queryGrid(g: SolidGrid, stamp: number, x0: number, y0: number, x1: number, y1: number, out: Array<Solid>) {
+	if (g.count === 0) return;
 	const c0 = cellCol(g, x0);
 	const c1 = cellCol(g, x1);
 	const r0 = cellRow(g, y0);
@@ -382,7 +492,6 @@ export function querySolids(
 			}
 		}
 	}
-	return out;
 }
 
 /**
@@ -397,9 +506,65 @@ export function isBlocking(s: Solid): boolean {
 	return true;
 }
 
+/**
+ * Every solid whose rect may meet the segment (x0, y0)–(x1, y1), each once: the coarse grid over the segment's box
+ * (as `querySolids`), and of the building parts' fine grid only the cells the segment (± 1 u) crosses -- a long
+ * line of sight across a built-up block no longer walks every room it passes by. Rays: physics.ts `raycast`.
+ */
+export function querySegment(
+	w: WorldData,
+	x0: number,
+	y0: number,
+	x1: number,
+	y1: number,
+	out: Array<Solid> = [],
+): Array<Solid> {
+	w.grid.stamp++;
+	const stamp = w.grid.stamp;
+	const lx = math.min(x0, x1) - 1;
+	const hx = math.max(x0, x1) + 1;
+	const ly = math.min(y0, y1) - 1;
+	const hy = math.max(y0, y1) + 1;
+	queryGrid(w.grid, stamp, lx, ly, hx, hy, out);
+	const g = w.fine;
+	if (g.count === 0) return out;
+	const c0 = cellCol(g, lx);
+	const c1 = cellCol(g, hx);
+	const dx = x1 - x0;
+	for (let c = c0; c <= c1; c++) {
+		// the stretch of the segment inside this column (± 1 u), and so the rows it crosses
+		let ya = ly;
+		let yb = hy;
+		if (math.abs(dx) > 1e-9) {
+			const xa = math.max(lx, c * g.cell);
+			const xb = math.min(hx, (c + 1) * g.cell);
+			const ta = math.clamp((xa - x0) / dx, 0, 1);
+			const tb = math.clamp((xb - x0) / dx, 0, 1);
+			const ya0 = y0 + (y1 - y0) * ta;
+			const yb0 = y0 + (y1 - y0) * tb;
+			ya = math.min(ya0, yb0) - 1;
+			yb = math.max(ya0, yb0) + 1;
+		}
+		const r0 = cellRow(g, ya);
+		const r1 = cellRow(g, yb);
+		for (let r = r0; r <= r1; r++) {
+			for (const s of g.cells[r * g.cols + c]) {
+				if (s.gridStamp === stamp) continue;
+				s.gridStamp = stamp;
+				if (s.x < hx && s.x + s.w > lx && s.y < hy && s.y + s.h > ly) out.push(s);
+			}
+		}
+	}
+	return out;
+}
+
 /** First blocking solid containing the point (± pad). Bullets, line of sight, spawn checks. */
 export function pointInSolid(w: WorldData, x: number, y: number, pad = 0): Solid | undefined {
-	const g = w.grid;
+	return pointInGrid(w.grid, x, y, pad) ?? pointInGrid(w.fine, x, y, pad);
+}
+
+function pointInGrid(g: SolidGrid, x: number, y: number, pad: number): Solid | undefined {
+	if (g.count === 0) return undefined;
 	const c0 = cellCol(g, x - pad);
 	const c1 = cellCol(g, x + pad);
 	const r0 = cellRow(g, y - pad);
@@ -421,7 +586,11 @@ export function pointInSolid(w: WorldData, x: number, y: number, pad = 0): Solid
 export function rectHitsSolid(w: WorldData, x: number, y: number, rw: number, rh: number): Solid | undefined {
 	const left = x - rw / 2;
 	const top = y - rh / 2;
-	const g = w.grid;
+	return rectInGrid(w.grid, left, top, rw, rh) ?? rectInGrid(w.fine, left, top, rw, rh);
+}
+
+function rectInGrid(g: SolidGrid, left: number, top: number, rw: number, rh: number): Solid | undefined {
+	if (g.count === 0) return undefined;
 	const c0 = cellCol(g, left);
 	const c1 = cellCol(g, left + rw);
 	const r0 = cellRow(g, top);
@@ -439,10 +608,38 @@ export function rectHitsSolid(w: WorldData, x: number, y: number, rw: number, rh
 	return undefined;
 }
 
+/**
+ * Is the point inside this building's footprint (walls included)? The union of its parts: a porch, a patio or a
+ * loading notch inside the bounding box is OUTSIDE (EDI-04: the roof fades only with the survivor really inside).
+ */
+export function insideBuilding(s: Solid, x: number, y: number): boolean {
+	if (x < s.x || x > s.x + s.w || y < s.y || y > s.y + s.h) return false;
+	const parts = s.parts;
+	if (parts === undefined) return true;
+	for (const p of parts) {
+		if (x >= p.x && x <= p.x + p.w && y >= p.y && y <= p.y + p.h) return true;
+	}
+	return false;
+}
+
+/**
+ * Every entrance of a building (EDI-09), the MAIN one first: the doorways of its plan, each with its gap (the
+ * wall-thick rect) and the side it looks out of. Windows are not entrances here (`Solid.openings` has them).
+ * `out` is filled and returned (no allocation per call); a building without a plan has none.
+ */
+export function entrancesOf(s: Solid, out: Array<Opening>): Array<Opening> {
+	out.clear();
+	const list = s.openings;
+	if (list === undefined) return out;
+	for (const o of list) if (o.kind === "door" && o.main) out.push(o);
+	for (const o of list) if (o.kind === "door" && !o.main) out.push(o);
+	return out;
+}
+
 /** Building record whose footprint contains the point (walls included), if any. */
 export function buildingAt(w: WorldData, x: number, y: number): Solid | undefined {
 	for (const s of querySolids(w, x - 1, y - 1, x + 1, y + 1)) {
-		if (s.kind === "building" && x >= s.x && x <= s.x + s.w && y >= s.y && y <= s.y + s.h) {
+		if (s.kind === "building" && insideBuilding(s, x, y)) {
 			return s;
 		}
 	}
@@ -785,6 +982,10 @@ interface Gen {
 	pitch: Array<number>;
 	phase: Array<number>;
 	shopDeck: Array<number>;
+	/** the town's seed: mixed into every building's own seed (interiors never draw from `rng`) */
+	townSeed: number;
+	/** called between two buildings' interiors (generateTown's `pace`): may yield, never changes the town */
+	pace?: () => void;
 }
 
 function cutsOf(g: Gen, e: LotEdge): Array<Cut> {
@@ -808,58 +1009,51 @@ function noParking(g: Gen, e: LotEdge, u0: number, u1: number): void {
 	g.placer.reserve(edgeRect(e, u0, u1, -(TOWN.CURB_GAP + TOWN.CAR_W + 24), 0));
 }
 
-function addWall(w: WorldData, kind: SolidKind, x: number, y: number, ww: number, wh: number, parentId: number): void {
-	if (ww < 2 || wh < 2) return;
+/** a static piece of a building (wall, window, furniture): indestructible, belongs to the record `parentId` */
+function addPart(w: WorldData, kind: SolidKind, q: Rect, parentId: number, tags: string, extra?: Partial<Solid>): void {
+	if (q.w < 2 || q.h < 2) return;
 	addSolid(w, {
 		kind,
-		x,
-		y,
-		w: ww,
-		h: wh,
+		x: q.x,
+		y: q.y,
+		w: q.w,
+		h: q.h,
 		hp: 999999,
 		hpMax: 999999,
 		destructible: false,
-		tags: "bwall",
+		tags,
 		parentId,
+		...extra,
 	});
 }
 
 /**
- * A real building: a passable footprint record (loot, roof, door info) + 4 solid walls with one
- * doorway in the wall facing edge `e`'s street, at `doorU` along it. `front` = curb → front wall.
+ * A real building: a passable footprint record (loot, roof, the main door) whose street face looks onto edge `e`,
+ * with its main door at `doorU` along it (EDI-01); `front` = curb → the footprint's street face. The walls, the
+ * rooms, the other entrances, the windows and the furniture come later, from shared/game/interiors.ts, once the
+ * whole town stands (`planInteriors`): until then the record's box keeps everything else out, exactly as the four
+ * walls of the old box did, so the town around the buildings is the one it always was.
  */
 function addBuilding(g: Gen, lot: Lot, b: BuildingDef, r: Rect, e: LotEdge, doorU: number, front: number): Solid {
 	const w = g.w;
 	const T = TOWN.WALL_T;
 	const D = TOWN.DOOR_W;
 	const side = e.side;
-	const x = r.x;
-	const y = r.y;
-	const bw = r.w;
-	const bh = r.h;
-	const along = isAlongX(side) ? doorU - x : doorU - y;
-	let doorX: number;
-	let doorY: number;
-	if (side === "top") {
-		doorX = x + along;
-		doorY = y + T / 2;
-	} else if (side === "bottom") {
-		doorX = x + along;
-		doorY = y + bh - T / 2;
-	} else if (side === "left") {
-		doorX = x + T / 2;
-		doorY = y + along;
-	} else {
-		doorX = x + bw - T / 2;
-		doorY = y + along;
-	}
-	const roof = SHOP_ROOF[b.type] ?? deadTownHsv(x, y, b.type);
+	const along = isAlongX(side) ? doorU - r.x : doorU - r.y;
+	// the door on the street face (the plan may set it back into a porch)
+	let doorX = r.x + along;
+	let doorY = r.y + along;
+	if (side === "top") doorY = r.y + T / 2;
+	else if (side === "bottom") doorY = r.y + r.h - T / 2;
+	else if (side === "left") doorX = r.x + T / 2;
+	else doorX = r.x + r.w - T / 2;
+	const roof = SHOP_ROOF[b.type] ?? deadTownHsv(r.x, r.y, b.type);
 	const rec = addSolid(w, {
 		kind: "building",
-		x,
-		y,
-		w: bw,
-		h: bh,
+		x: r.x,
+		y: r.y,
+		w: r.w,
+		h: r.h,
 		hp: 99999,
 		hpMax: 99999,
 		destructible: false,
@@ -875,34 +1069,6 @@ function addBuilding(g: Gen, lot: Lot, b: BuildingDef, r: Rect, e: LotEdge, door
 		doorY,
 		doorSide: side,
 	});
-	const id = rec.id;
-	const d0 = along - D / 2;
-	const d1 = along + D / 2;
-	// top / bottom walls span the full width; left / right fit between them
-	if (side === "top") {
-		addWall(w, "wall_h", x, y, d0, T, id);
-		addWall(w, "wall_h", x + d1, y, bw - d1, T, id);
-	} else {
-		addWall(w, "wall_h", x, y, bw, T, id);
-	}
-	if (side === "bottom") {
-		addWall(w, "wall_h", x, y + bh - T, d0, T, id);
-		addWall(w, "wall_h", x + d1, y + bh - T, bw - d1, T, id);
-	} else {
-		addWall(w, "wall_h", x, y + bh - T, bw, T, id);
-	}
-	if (side === "left") {
-		addWall(w, "wall_v", x, y + T, T, d0 - T, id);
-		addWall(w, "wall_v", x, y + d1, T, bh - T - d1, id);
-	} else {
-		addWall(w, "wall_v", x, y + T, T, bh - T * 2, id);
-	}
-	if (side === "right") {
-		addWall(w, "wall_v", x + bw - T, y + T, T, d0 - T, id);
-		addWall(w, "wall_v", x + bw - T, y + d1, T, bh - T - d1, id);
-	} else {
-		addWall(w, "wall_v", x + bw - T, y + T, T, bh - T * 2, id);
-	}
 	// keep the approach free from the curb to 110 inside, and nobody parks in front of it
 	const half = D / 2 + 24;
 	g.placer.reserve(edgeRect(e, doorU - half, doorU + half, 0, front + 110));
@@ -1627,11 +1793,93 @@ function parkCars(g: Gen): void {
 }
 
 // ---------------------------------------------------------------------------
+// interiors
 
-/** Procedural town: avenues and streets, sidewalks, zoned lots with enterable buildings, trees, cars, bins. */
-export function generateTown(seed = 0): WorldData {
+/**
+ * The inside of every building (shared/game/interiors.ts, docs/DESIGN_RULES.md EDI-08..EDI-15), planned once the
+ * whole town stands: walls with their doorways and windows, the rooms, the furniture, the loot spots, and the
+ * notches that make the footprint an L, a T or a U (a house's porch, a patio, a loading bay).
+ *
+ * Why at the very end: a building's box already kept everything else out while the town was laid (its record is a
+ * solid for every placement query), so planning now changes nothing around it -- the town is the one it always
+ * was -- and a secondary door (back door, service door, emergency exit) can be kept only where the ground outside it
+ * is REALLY free: no tree, bin, pump, parked car or other building in the way, now that all of them are placed.
+ * Nothing here draws from the town's `rng`: each building has its own seed (`buildingSeed`), integers only.
+ */
+function planInteriors(g: Gen): void {
+	const w = g.w;
+	const scratch: Array<Solid> = [];
+	for (const lot of w.lots) {
+		const list = g.placed.get(lot);
+		if (list === undefined) continue;
+		for (const p of list) {
+			const rec = p.solid;
+			const plan = planBuilding({
+				type: p.def.type,
+				rect: { x: rec.x, y: rec.y, w: rec.w, h: rec.h },
+				side: p.edge.side,
+				doorU: p.doorU,
+				seed: buildingSeed(rec.x, rec.y, p.def.type, g.townSeed),
+				canOpen: a => {
+					const B = TOWN.BORDER;
+					if (a.x < B || a.y < B || a.x + a.w > w.width - B || a.y + a.h > w.height - B) return false;
+					scratch.clear();
+					for (const s of querySolids(w, a.x, a.y, a.x + a.w, a.y + a.h, scratch)) {
+						if (s !== rec) return false;
+					}
+					for (const road of w.roads) {
+						if (rectOverlap(a.x, a.y, a.w, a.h, road.x, road.y, road.w, road.h)) return false;
+					}
+					return true;
+				},
+			});
+			rec.doorX = plan.doorX;
+			rec.doorY = plan.doorY;
+			rec.parts = plan.parts;
+			rec.mainWing = plan.mainWing;
+			rec.rooms = plan.rooms;
+			rec.openings = plan.openings;
+			rec.decor = plan.decor;
+			rec.lootSpots = plan.loot;
+			const id = rec.id;
+			for (const q of plan.walls) {
+				addPart(w, q.w >= q.h ? "wall_h" : "wall_v", q, id, "bwall", q.inner ? { inner: true } : undefined);
+			}
+			for (const o of plan.openings) {
+				if (o.kind === "window") addPart(w, "window", o, id, "window", { passable: true });
+			}
+			for (const f of plan.furniture) {
+				addPart(w, "furniture", f, id, f.kind, { low: f.low, face: f.face, variant: f.variant });
+			}
+			// the notches of the footprint: a house's porch in front, a patio / loading bay / courtyard elsewhere
+			const house = p.def.type === 1 || p.def.type === 2;
+			for (const y of plan.yards) {
+				lot.ground.push({ ...y, kind: house && y.front ? "porch" : "patio" });
+				// the grass tufts were laid before the notch existed: none on a porch or a patio
+				for (let i = lot.patches.size() - 1; i >= 0; i--) {
+					const q = lot.patches[i];
+					if (rectOverlap(q.x, q.y, q.w, q.h, y.x, y.y, y.w, y.h)) lot.patches.remove(i);
+				}
+			}
+			// between two buildings, and only there: nothing is half-planned while the caller yields
+			if (g.pace !== undefined) g.pace();
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Procedural town: avenues and streets, sidewalks, zoned lots with enterable buildings, trees, cars, bins.
+ *
+ * A pure function of `seed` (0: a random one). `pace`, when given, is called between two buildings' interiors -- the
+ * bulk of the work -- so a server rebuilding the world can yield there (server/net/mpHost.ts, at a world reset); it
+ * cannot change the town, and nothing is half-built when it runs.
+ */
+export function generateTown(seed = 0, pace?: () => void): WorldData {
 	const w = createWorld(DESIGN.WORLD_W, DESIGN.WORLD_H);
-	const rng = new TownRng(seed !== 0 ? seed : rndInt(1, 2147483646));
+	const townSeed = seed !== 0 ? seed : rndInt(1, 2147483646);
+	const rng = new TownRng(townSeed);
 	const placer = new Placer(w);
 	const g: Gen = {
 		w,
@@ -1642,6 +1890,8 @@ export function generateTown(seed = 0): WorldData {
 		pitch: [],
 		phase: [],
 		shopDeck: [],
+		townSeed,
+		pace,
 	};
 	const SW = TOWN.SIDEWALK;
 	for (const a of w.bossAnchors) {
@@ -2060,6 +2310,9 @@ export function generateTown(seed = 0): WorldData {
 	border(0, w.height - t, w.width, t, "wall_h");
 	border(0, t, t, w.height - t * 2, "wall_v");
 	border(w.width - t, t, t, w.height - t * 2, "wall_v");
+
+	// --- the inside of every building, now that nothing else will be placed ---
+	planInteriors(g);
 
 	return w;
 }

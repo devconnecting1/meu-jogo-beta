@@ -94,6 +94,9 @@ export type WorldArtName =
 	| "signClothes"
 	| "signDiner"
 	| "helipad"
+	| "floorCarpet"
+	| "floorKitchen"
+	| "floorBath"
 	| "survivorsA"
 	| "survivorsAFill"
 	| "survivorsARim"
@@ -265,6 +268,12 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	signDiner: { id: "rbxassetid://135810788333250", w: 32, h: 20 },
 	/** sprite: hospital roof: the heliport's red H on a white cross */
 	helipad: { id: "rbxassetid://103885604953798", w: 64, h: 64 },
+	/** tile: bedroom / office carpet: a low loop pile */
+	floorCarpet: { id: "", w: 16, h: 16 },
+	/** tile: kitchen floor: checker tiles */
+	floorKitchen: { id: "", w: 16, h: 16 },
+	/** tile: bathroom / cold room: small tiles */
+	floorBath: { id: "", w: 16, h: 16 },
 	/** sheet: survivors, plain and Santa: 4 grips x 3 strides, 5 swings, 3 crawls, whole body and arms in one cell (ART-09) */
 	survivorsA: { id: "", w: 640, h: 800 },
 	/** mask: survivorsA: white silhouettes of the same cells (tint: hit flash, poison) */
@@ -373,6 +382,9 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"signClothes",
 	"signDiner",
 	"helipad",
+	"floorCarpet",
+	"floorKitchen",
+	"floorBath",
 	"survivorsA",
 	"survivorsAFill",
 	"survivorsARim",

@@ -16,8 +16,10 @@ import type { GameContext } from "shared/game/context";
 import {
 	buildingAt,
 	createWorld,
+	insideBuilding,
 	isOnRoad,
 	querySolids,
+	queryTown,
 	randomOpenPoint,
 	rectHitsSolid,
 	updateGroundItems,
@@ -683,7 +685,8 @@ export class GameLoop {
 		const v = cam.viewRect(400);
 		const list = this.queryBuf;
 		list.clear();
-		querySolids(this.world, v.minX, v.minY, v.maxX, v.maxY, list);
+		// the building records and the trees: never a building's own walls or furniture (queryTown)
+		queryTown(this.world, v.minX, v.minY, v.maxX, v.maxY, list);
 		for (const s of list) {
 			if (s.kind === "building") {
 				this.fadingRoofs.add(s);
@@ -693,7 +696,8 @@ export class GameLoop {
 		}
 		const p = this.player;
 		for (const s of this.fadingRoofs) {
-			const inside = p.x >= s.x && p.x <= s.x + s.w && p.y >= s.y && p.y <= s.y + s.h;
+			// the footprint's parts, not its box: standing on the porch or in a loading notch is outside (EDI-04)
+			const inside = insideBuilding(s, p.x, p.y);
 			const target = clamp(roofTargetAlpha(inside), 0, 1);
 			const a = lerp(s.roofAlpha ?? 1, target, ease(ROOF_LERP, dt));
 			if (target >= 1 && a > 0.995) {
