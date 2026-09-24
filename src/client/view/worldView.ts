@@ -1,6 +1,7 @@
 /*
  * The town on screen: ground, roads, crosswalks, buildings (floor, roof, signage), walls, the map border,
- * trees, cars, pump islands, bins and the structures players build -- everything that stands still in the world.
+ * trees, cars, a gas station's pump islands, canopy and price sign, bins and the structures players build --
+ * everything that stands still in the world.
  *
  * This is the drawing half of what `gameLoop.ts` drew until now, moved here verbatim (docs/MULTIPLAYER.md §11.3:
  * "desenho em gameLoop.ts -> client/view/{worldView,actorsView,fxView}.ts"), with the loop's private helpers
@@ -28,11 +29,17 @@ import { TOWN } from "shared/engine/constants";
 import { Renderer, SpriteOpts } from "shared/engine/renderer";
 import { clamp } from "shared/engine/vec2";
 import type { FloorKind } from "shared/game/interiors";
+import { SIGN_ART } from "shared/data/buildingSigns";
 import {
 	DoorSide,
 	GroundRect,
 	hash01,
 	Lot,
+	PUMP_CAR_FILLING,
+	PUMP_CAR_GAP,
+	PUMP_DISPENSER_AT,
+	PUMP_ISLAND_D,
+	PUMP_ISLAND_L,
 	queryParts,
 	queryTown,
 	Rect,
@@ -40,7 +47,7 @@ import {
 	Solid,
 	WorldData,
 } from "shared/game/world";
-import { drawBuildingSign } from "./buildingSigns";
+import { drawBuildingSign, drawPriceSign } from "./buildingSigns";
 import { drawParkedVehicle } from "./vehicleView";
 import { circleInView, overlaps, part, SIDES } from "./drawKit";
 import { FLOOR_FLAT, InteriorView } from "./interiorView";
@@ -66,7 +73,37 @@ const GROUND = {
 	zebra: WHITE.Lerp(COLORS.road, 0.12),
 	lane: WHITE.Lerp(COLORS.road, 0.3),
 	island: COLORS.sidewalk.Lerp(WHITE, 0.2),
+	/** a pump island's noses: the safety paint where a bumper hits first */
+	nose: COLORS.uiYellow.Lerp(COLORS.curb, 0.3),
 };
+
+// ------------------------------------------------------------------ a gas station's forecourt (EDI-16)
+
+/** a dispenser: the white body, the red stripe and the dark (unlit) display of the station's own sign (EDI-03) */
+const PUMP_BODY = SIGN_ART.W;
+const PUMP_STRIPE = SIGN_ART.r;
+const PUMP_INK = SIGN_ART.k;
+const PUMP_DISPLAY = SIGN_ART.d;
+/**
+ * A dispenser stands upright on its island, like a sign on its parapet (ART-07): its foot this far below its spot on
+ * the island (in the island's near half), its cabinet rising above it on screen. Flat: 28 x 40; art: its texture.
+ */
+const PUMP_FOOT = 16;
+const PUMP_FLAT_W = 28;
+const PUMP_FLAT_H = 40;
+/** the canopy's steel column, standing between the two dispensers of each island (off-centre on an island along y,
+ * where the upright cabinets leave the gap) */
+const COLUMN = COLORS.metal;
+const COLUMN_EDGE = COLUMN.Lerp(BLACK, 0.55);
+const COLUMN_SIZE = 14;
+const COLUMN_OFF_V = -12;
+/** the canopy: a pale deck, and round it a fascia in the station's roof colour (`Solid.roofColor`, EDI-03) */
+const CANOPY_DECK = COLORS.wallShop.Lerp(WHITE, 0.45);
+const CANOPY_FASCIA = 16;
+/** how high the canopy stands, as the length of its shadow (a building's is 20-30, a tree's 18-34) */
+const CANOPY_LIFT = 44;
+/** the pump's hose and nozzle, left in the tank of a car abandoned mid-fill */
+const HOSE = Color3.fromRGB(30, 30, 34);
 
 /** road markings: dash period/length, crosswalk stripe width/period */
 const DASH_PERIOD = 160;
@@ -133,6 +170,19 @@ const SEAM_RIM_ART = 16;
 const SEAM_RIM_FLAT = 4;
 /** a back room's concrete floor: the sidewalk's concrete texture, darkened to COLORS.floorConcrete (test:world-art §6) */
 export const CONCRETE_FLOOR_TINT = Color3.fromRGB(214, 214, 212);
+/**
+ * A tree's crown -- and a gas station's canopy and price pylon (EDI-16) -- while a body stands under it: the opacity
+ * the loop eases it to (gameLoop `updateCanopy`, VEG-04; the original obj_tree1 fades near the player).
+ */
+export const CANOPY_SEE_THROUGH = 0.35;
+/**
+ * The same fade for a gas station's canopy and price pylon (EDI-16), opened further: a crown is small and full of
+ * gaps and a body crosses it, a canopy is one sheet over exactly where the survivor stands to drain a pump and the
+ * horde closes in. At the crown's 0.35 the characters' art lost a fifth of its outline contrast under it (LEG-03,
+ * test:world-art §5: walker 49 -> 38, survivor 40 -> 32 ΔE); at this it keeps the open-ground bars, and the fascia
+ * still outlines the canopy.
+ */
+export const SHELTER_SEE_THROUGH = 0.15;
 
 /**
  * The one SpriteOpts every art draw fills (the hot path allocates no table per sprite). `artOpts` resets every
@@ -543,11 +593,18 @@ export class WorldView {
 				if (!this.drawBorderArt(r, cam, s, v)) this.drawBorder(r, cam, s, v);
 			} else if (s.kind === "tree") {
 				if (!this.drawTreeArt(r, cam, s, v)) this.drawTree(r, cam, s, v);
+			} else if (s.kind === "canopy") {
+				// a gas station's canopy (EDI-16): culled on its own (its shadow reaches further than its rect)
+				if (!this.drawCanopyArt(r, cam, s, v)) this.drawCanopy(r, cam, s, v);
+			} else if (s.tags === "gas_sign") {
+				// its footing, and the price pylon standing on it (upright: it reaches past the footing's rect)
+				this.drawGasSign(r, cam, s, v);
+			} else if (s.tags === "pump") {
+				// the oil stains lie in the lanes beside the island: it culls on its own
+				this.drawPump(r, cam, s, v);
 			} else if (overlaps(s.x - 16, s.y - 16, s.w + 32, s.h + 32, v)) {
 				if (s.tags === "bwall") {
 					if (!this.drawWallArt(r, cam, s)) this.drawWall(r, cam, s);
-				} else if (s.tags === "pump") {
-					if (!this.drawPumpArt(r, cam, s)) this.drawPump(r, cam, s);
 				} else if (s.kind === "car" && s.tags === "trash") {
 					if (!this.drawTrashArt(r, cam, s)) this.drawTrash(r, cam, s);
 				} else if (s.kind === "car") {
@@ -933,20 +990,51 @@ export class WorldView {
 		}
 	}
 
-	/** gas-station pump island: a raised concrete curb carrying two dispensers */
-	private drawPump(r: Renderer, cam: Camera, s: Solid): void {
+	/**
+	 * Gas-station pump island (EDI-16): a raised concrete curb with its safety-painted noses, two dispensers standing
+	 * upright in the colours of the station's sign -- white, the dark display, the red stripe (EDI-03: the pumps look
+	 * like the sign says) -- and the canopy's column between them. Each part falls back on its own (ART-01): the soft
+	 * shadow and the oil the forecourt collected in both lanes (a hash of the island) with their textures, the
+	 * dispensers as the `dispenser` sprite once it has an id and as Frames until then; the curb, its noses and the
+	 * column are Frames either way. With no id at all, the very calls of the flat drawing.
+	 */
+	private drawPump(r: Renderer, cam: Camera, s: Solid, v: ViewRect): void {
+		// the stains lie in the lanes beside the island, further out than the island's own margin
+		if (!overlaps(s.x - 96, s.y - 96, s.w + 192, s.h + 192, v)) return;
 		const cx = s.x + s.w / 2;
 		const cy = s.y + s.h / 2;
 		const horizontal = s.w >= s.h;
-		const so = this.shadow(cx, cy, 8);
-		r.drawRect(cam, cx + so.x, cy + so.y, {
-			w: s.w,
-			h: s.h,
-			color: BLACK,
-			alpha: 0.3,
-			cornerRadius: 8,
-			zIndex: Z.shadow,
-		});
+		const along = horizontal ? s.w : s.h;
+		for (const k of SIDES) {
+			// a stain in each lane most of the time, somewhere along the island, where a car stood and dripped
+			const salt = k < 0 ? 81 : 82;
+			if (hash01(s.x, s.y, salt) >= 0.8) continue;
+			const oil = artId(OIL[math.floor(hash01(s.x, s.y, salt + 10) * 2) % 2]);
+			if (oil === undefined) continue;
+			const u = (hash01(s.x, s.y, salt + 20) - 0.5) * along * 0.6;
+			const w = k * (PUMP_ISLAND_D / 2 + 44);
+			const o = artOpts(oil, 64, 48, Z.decal);
+			o.rotation = horizontal ? 0 : math.pi / 2;
+			r.drawRect(cam, cx + (horizontal ? u : w), cy + (horizontal ? w : u), o);
+		}
+		if (!overlaps(s.x - 16, s.y - 16, s.w + 32, s.h + 32, v)) return;
+		const sb = artId("shadowBox");
+		if (sb !== undefined) {
+			const so = this.shadow(cx, cy, 10);
+			const o = sliced(artOpts(sb, s.w + 10, s.h + 10, Z.shadow), "shadowBox", 1.5);
+			o.alpha = 0.4;
+			r.drawRect(cam, cx + so.x, cy + so.y, o);
+		} else {
+			const so = this.shadow(cx, cy, 8);
+			r.drawRect(cam, cx + so.x, cy + so.y, {
+				w: s.w,
+				h: s.h,
+				color: BLACK,
+				alpha: 0.3,
+				cornerRadius: 8,
+				zIndex: Z.shadow,
+			});
+		}
 		r.drawRect(cam, cx, cy, {
 			w: s.w,
 			h: s.h,
@@ -956,18 +1044,133 @@ export class WorldView {
 			strokeThickness: 2,
 			zIndex: Z.structure,
 		});
-		for (const k of [-1, 1]) {
-			const off = (horizontal ? s.w : s.h) * 0.25 * k;
-			r.drawRect(cam, cx + (horizontal ? off : 0), cy + (horizontal ? 0 : off), {
-				w: horizontal ? 30 : 24,
-				h: horizontal ? 24 : 30,
-				color: COLORS.wallShop,
-				cornerRadius: 4,
-				stroke: COLORS.wallShop.Lerp(BLACK, 0.5),
+		this.drawIslandKit(r, cam, s);
+		const art = artId("dispenser");
+		const size = artSize("dispenser");
+		for (const k of SIDES) {
+			const off = along * PUMP_DISPENSER_AT * k;
+			// upright, never rotated: the cabinet rises from its foot, the display near its top, the red stripe below it
+			const dx = cx + (horizontal ? off : 0);
+			const foot = cy + (horizontal ? 0 : off) + PUMP_FOOT;
+			if (art !== undefined) {
+				const ph = size.h * WORLD_TEXEL;
+				r.drawRect(cam, dx, foot - ph / 2, artOpts(art, size.w * WORLD_TEXEL, ph, Z.structure + 3));
+				continue;
+			}
+			r.drawRect(cam, dx, foot - PUMP_FLAT_H / 2, {
+				w: PUMP_FLAT_W,
+				h: PUMP_FLAT_H,
+				color: PUMP_BODY,
+				cornerRadius: 3,
+				stroke: PUMP_INK,
 				strokeThickness: 1,
+				zIndex: Z.structure + 3,
+			});
+			r.drawRect(cam, dx - 3, foot - PUMP_FLAT_H + 11, {
+				w: 16,
+				h: 10,
+				color: PUMP_DISPLAY,
+				zIndex: Z.structure + 4,
+			});
+			r.drawRect(cam, dx, foot - PUMP_FLAT_H * 0.4, {
+				w: PUMP_FLAT_W,
+				h: 5,
+				color: PUMP_STRIPE,
+				zIndex: Z.structure + 4,
+			});
+		}
+	}
+
+	/** the noses of a pump island and the canopy's column on it: flat Frames in the flat and the art drawing alike */
+	private drawIslandKit(r: Renderer, cam: Camera, s: Solid): void {
+		const cx = s.x + s.w / 2;
+		const cy = s.y + s.h / 2;
+		const horizontal = s.w >= s.h;
+		const along = horizontal ? s.w : s.h;
+		const across = horizontal ? s.h : s.w;
+		for (const k of SIDES) {
+			const off = (along / 2 - 8) * k;
+			r.drawRect(cam, cx + (horizontal ? off : 0), cy + (horizontal ? 0 : off), {
+				w: horizontal ? 8 : across - 8,
+				h: horizontal ? across - 8 : 8,
+				color: GROUND.nose,
+				cornerRadius: 3,
 				zIndex: Z.structure + 1,
 			});
 		}
+		r.drawRect(cam, cx, cy + (horizontal ? 0 : COLUMN_OFF_V), {
+			w: COLUMN_SIZE,
+			h: COLUMN_SIZE,
+			color: COLUMN,
+			stroke: COLUMN_EDGE,
+			strokeThickness: 1,
+			zIndex: Z.structure + 2,
+		});
+	}
+
+	/**
+	 * A gas station's canopy (EDI-16): a flat roof on a column per island, over the islands and half of each lane --
+	 * its fascia in the station's roof colour round a pale deck -- and, a canopy's height off, its shadow on the
+	 * forecourt. Above the actors like a tree's crown, and see-through like one while a body is under it
+	 * (`canopyAlpha`, eased by the loop's `updateCanopy`: VEG-04's fade, LEG-03). Aerial: nothing collides (COL-02).
+	 */
+	private drawCanopy(r: Renderer, cam: Camera, s: Solid, v: ViewRect): void {
+		if (!overlaps(s.x - 60, s.y - 60, s.w + 120, s.h + 120, v)) return;
+		const cx = s.x + s.w / 2;
+		const cy = s.y + s.h / 2;
+		const a = s.canopyAlpha ?? 1;
+		const so = this.shadow(cx, cy, CANOPY_LIFT);
+		r.drawRect(cam, cx + so.x, cy + so.y, { w: s.w, h: s.h, color: BLACK, alpha: 0.22, zIndex: Z.shadow });
+		// the fascia's colour and its shades, built once per canopy (the roofs' cache)
+		const shades = this.roofShadesOf(s, s.roofColor ?? COLORS.roofGray);
+		r.drawRect(cam, cx, cy, {
+			w: s.w,
+			h: s.h,
+			color: shades[0],
+			alpha: a,
+			stroke: shades[3],
+			strokeThickness: 2,
+			strokeAlpha: a,
+			zIndex: Z.roof,
+		});
+		// the deck, and its gutter along the fascia
+		r.drawRect(cam, cx, cy, {
+			w: s.w - CANOPY_FASCIA * 2,
+			h: s.h - CANOPY_FASCIA * 2,
+			color: CANOPY_DECK,
+			alpha: a,
+			stroke: shades[2],
+			strokeThickness: 2,
+			strokeAlpha: a,
+			zIndex: Z.roof + 1,
+		});
+	}
+
+	/** the price sign's concrete footing, and the pylon on it (client/view/buildingSigns.ts `drawPriceSign`) */
+	private drawGasSign(r: Renderer, cam: Camera, s: Solid, v: ViewRect): void {
+		if (overlaps(s.x - 16, s.y - 16, s.w + 32, s.h + 32, v)) {
+			const cx = s.x + s.w / 2;
+			const cy = s.y + s.h / 2;
+			const so = this.shadow(cx, cy, 6);
+			r.drawRect(cam, cx + so.x, cy + so.y, {
+				w: s.w,
+				h: s.h,
+				color: BLACK,
+				alpha: 0.3,
+				cornerRadius: 4,
+				zIndex: Z.shadow,
+			});
+			r.drawRect(cam, cx, cy, {
+				w: s.w,
+				h: s.h,
+				color: GROUND.island,
+				cornerRadius: 4,
+				stroke: COLORS.curb,
+				strokeThickness: 2,
+				zIndex: Z.structure,
+			});
+		}
+		drawPriceSign(r, cam, v, s, s.canopyAlpha ?? 1, this.shadow);
 	}
 
 	private drawTrash(r: Renderer, cam: Camera, s: Solid): void {
@@ -1671,8 +1874,10 @@ export class WorldView {
 		if (mask === undefined || trim === undefined) return false;
 		const askew = isAskew(s);
 		const roll = hash01(s.x, s.y, 23);
+		// left at a gas pump mid-fill (EDI-16): the driver ran, the door is open and the nozzle still in the tank
+		const filling = s.variant === PUMP_CAR_FILLING;
 		let state = CAR_INTACT;
-		let door = false;
+		let door = filling;
 		if (askew) {
 			door = roll >= 0.3;
 			state = roll < 0.3 ? CAR_BURNT : roll < 0.75 ? CAR_BROKEN : CAR_INTACT;
@@ -1763,7 +1968,43 @@ export class WorldView {
 				zIndex: Z.structure + 3,
 			});
 		}
+		if (filling) this.drawHose(r, cam, cx, cy, a, L, W);
 		return true;
+	}
+
+	/**
+	 * The hose of a car left mid-fill at a pump (EDI-16): from the filler on its right rear flank to the dispenser
+	 * behind the island's column, the island on the car's right (world.ts `placeGas`: the car stands PUMP_CAR_GAP off
+	 * the island's curb, centred on it), and the nozzle in the filler. Two flat Frames, over the car and the island.
+	 */
+	private drawHose(r: Renderer, cam: Camera, cx: number, cy: number, a: number, L: number, W: number): void {
+		const fx = math.cos(a);
+		const fy = math.sin(a);
+		// the filler, and the near face of the rear dispenser (in the car's frame: forward f, right l)
+		const f0 = -L * 0.3;
+		const l0 = W / 2 - 2;
+		const f1 = -PUMP_ISLAND_L * PUMP_DISPENSER_AT;
+		const l1 = W / 2 + PUMP_CAR_GAP + PUMP_ISLAND_D / 2 - 12;
+		const df = f1 - f0;
+		const dl = l1 - l0;
+		const len = math.sqrt(df * df + dl * dl);
+		const mf = (f0 + f1) / 2;
+		const ml = (l0 + l1) / 2;
+		r.drawRect(cam, cx + fx * mf - fy * ml, cy + fy * mf + fx * ml, {
+			w: len,
+			h: 3,
+			rotation: a + math.atan2(dl, df),
+			color: HOSE,
+			zIndex: Z.structure + 4,
+		});
+		part(r, cam, cx, cy, a, f0, l0, {
+			w: 10,
+			h: 6,
+			color: HOSE,
+			stroke: PUMP_STRIPE,
+			strokeThickness: 1,
+			zIndex: Z.structure + 4,
+		});
 	}
 
 	/** a wheelie bin with its soft shadow; half of them have spilled some litter beside them (flat, MOB-03) */
@@ -1798,41 +2039,56 @@ export class WorldView {
 		return true;
 	}
 
-	/** a pump island: the raised concrete curb, two dispensers, and the oil the forecourt collected */
-	private drawPumpArt(r: Renderer, cam: Camera, s: Solid): boolean {
-		const id = artId("pump");
+	/**
+	 * The canopy with art (EDI-16): the roofs' welded membrane (a texture every place already has) tinted as the pale
+	 * deck, inside the fascia in the station's roof colour, and the soft drop shadow of the roofs a canopy's height
+	 * off. Answers false when the membrane has no id (the flat canopy above is drawn instead).
+	 */
+	private drawCanopyArt(r: Renderer, cam: Camera, s: Solid, v: ViewRect): boolean {
+		const id = artId("roofMembrane");
 		if (id === undefined) return false;
+		if (!overlaps(s.x - 60, s.y - 60, s.w + 120, s.h + 120, v)) return true;
 		const cx = s.x + s.w / 2;
 		const cy = s.y + s.h / 2;
-		const horizontal = s.w >= s.h;
-		const oil = artId(OIL[math.floor(hash01(s.x, s.y, 81) * 2) % 2]);
-		if (oil !== undefined) {
-			const o = artOpts(oil, 64, 48, Z.decal);
-			o.rotation = horizontal ? 0 : math.pi / 2;
-			r.drawRect(cam, cx + (horizontal ? -30 : 64), cy + (horizontal ? 60 : -30), o);
-		}
-		const so = this.shadow(cx, cy, 10);
+		const a = s.canopyAlpha ?? 1;
+		const so = this.shadow(cx, cy, CANOPY_LIFT);
 		const sb = artId("shadowBox");
 		if (sb !== undefined) {
-			const o = sliced(artOpts(sb, s.w + 10, s.h + 10, Z.shadow), "shadowBox", 1.5);
-			o.alpha = 0.4;
+			const o = sliced(artOpts(sb, s.w + 16, s.h + 16, Z.shadow), "shadowBox", 3);
+			o.alpha = 0.3;
 			r.drawRect(cam, cx + so.x, cy + so.y, o);
+		} else {
+			r.drawRect(cam, cx + so.x, cy + so.y, { w: s.w, h: s.h, color: BLACK, alpha: 0.22, zIndex: Z.shadow });
 		}
+		const shades = this.roofShadesOf(s, s.roofColor ?? COLORS.roofGray);
 		r.drawRect(cam, cx, cy, {
 			w: s.w,
 			h: s.h,
-			color: GROUND.island,
-			cornerRadius: 8,
-			stroke: COLORS.curb,
+			color: shades[0],
+			alpha: a,
+			stroke: shades[3],
 			strokeThickness: 2,
-			zIndex: Z.structure,
+			strokeAlpha: a,
+			zIndex: Z.roof,
 		});
-		for (const k of SIDES) {
-			const off = (horizontal ? s.w : s.h) * 0.25 * k;
-			const o = artOpts(id, 32, 24, Z.structure + 1);
-			o.rotation = horizontal ? 0 : math.pi / 2;
-			r.drawRect(cam, cx + (horizontal ? off : 0), cy + (horizontal ? 0 : off), o);
-		}
+		const F = CANOPY_FASCIA;
+		this.tileRect(
+			r,
+			cam,
+			s.x + F,
+			s.y + F,
+			s.w - F * 2,
+			s.h - F * 2,
+			v,
+			"roofMembrane",
+			id,
+			Z.roof + 1,
+			CANOPY_DECK,
+			a,
+			shades[2],
+			2,
+			a,
+		);
 		return true;
 	}
 }

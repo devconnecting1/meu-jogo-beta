@@ -719,6 +719,9 @@ export const LANG_TABLE: Array<string> = [
 	"Launch drone",
 	"Call back drone",
 	"Drone charging",
+	// a gas station's pump island holding fuel: what E does there (client/systems/interaction.ts PUMP_HINT,
+	// DESIGN_RULES EDI-16; the HUD shows the text after "E: ")
+	"Siphon Oil",
 ];
 
 /**

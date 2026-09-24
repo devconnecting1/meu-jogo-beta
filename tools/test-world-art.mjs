@@ -367,7 +367,7 @@ const texOf = Object.fromEntries(ALL.manifest.textures.map(t => [t.name, t]));
 		"parapet",
 		"shadowBox",
 		"bin",
-		"pump",
+		"dispenser",
 		"manhole",
 		"dirt",
 		"apron",
@@ -496,8 +496,11 @@ function localImage(id) {
 	return images.get(name);
 }
 const inRect = (q, x, y) => x >= q.x && x < q.x + q.w && y >= q.y && y < q.y + q.h;
+/** a gas station's canopies (EDI-16): aerial, so no solid -- but a ground under one is measured under it (below) */
+const CANOPIES = world.solids.filter(s => s.kind === "canopy");
 function surfaceAt(x, y) {
 	if (buildingAt(world, x, y) !== undefined) return "building";
+	for (const c of CANOPIES) if (inRect(c, x, y)) return "canopy";
 	if (pointInSolid(world, x, y, 60) !== undefined) return "solid";
 	for (const road of world.roads) {
 		if (!inRect(road, x, y)) continue;
@@ -695,6 +698,41 @@ function silhouette(ground, withBody) {
 		"with the characters' art, the survivor still clears the bar on the worst ground",
 		`${worstSurvivorChars.toFixed(1)} ΔE`,
 	);
+}
+{
+	// EDI-16: under a gas station's canopy -- see-through while a body is under it, the tree crown's fade opened
+	// further (WorldView.SHELTER_SEE_THROUGH, eased by gameLoop.updateCanopy) -- a walker and the survivor clear the same
+	// bars as on open ground: in a lane beside an island, with the canopy at its see-through opacity over them
+	const canopy = CANOPIES[0];
+	const see = WV.SHELTER_SEE_THROUGH;
+	if (canopy === undefined || see === undefined) {
+		check(false, "a gas station's canopy in the town, and the see-through opacity it fades to");
+	} else {
+		const island = world.solids.find(s => s.tags === "pump" && inRect(canopy, s.x + s.w / 2, s.y + s.h / 2));
+		const n = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] }[island.face];
+		// the lane on the shop's side of the island: 60 u off its middle, away from the street
+		const p = { x: island.x + island.w / 2 - n[0] * 60, y: island.y + island.h / 2 - n[1] * 60 };
+		const res = {};
+		canopy.canopyAlpha = see;
+		for (const actor of ["zombie", "survivor"]) {
+			for (const look of ["flat", "town", "chars"]) {
+				const base = shot(p, actor === "zombie" ? "zombieShadow" : "none", look);
+				res[`${actor}.${look}`] = silhouette(base, shot(p, actor, look));
+			}
+		}
+		canopy.canopyAlpha = 1;
+		const f = (actor, look) => res[`${actor}.${look}`].toFixed(1);
+		check(
+			res["zombie.town"] >= 25 && res["survivor.town"] >= 30,
+			"under the see-through canopy of a gas station, a walker and the survivor clear the open-ground bars",
+			`walker ${f("zombie", "flat")} -> ${f("zombie", "town")} -> art ${f("zombie", "chars")}, survivor ${f("survivor", "flat")} -> ${f("survivor", "town")} -> art ${f("survivor", "chars")} ΔE, canopy at ${see}`,
+		);
+		check(
+			res["zombie.chars"] >= 40 && res["survivor.chars"] >= 35,
+			"and with the characters' art too",
+			`walker ${f("zombie", "chars")}, survivor ${f("survivor", "chars")} ΔE`,
+		);
+	}
 }
 setArt({});
 

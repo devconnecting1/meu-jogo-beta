@@ -26,6 +26,8 @@ import {
 	edgeDist,
 	interactTarget,
 	isFire,
+	nearestPump,
+	pumpsOf,
 	repairMaterial,
 	SOLID_REACH,
 } from "shared/sim/interactQuery";
@@ -65,6 +67,13 @@ const SKILL_HANDY = 17;
  */
 export const PRESS_COOLDOWN_S = 0.2;
 export const TOGGLE_COOLDOWN_S = 0.25;
+/**
+ * A survivor outside every building is told about the pump island within this of its edge (EDI-16, the LootFlag of
+ * §4.5): wider than the reach of E (SOLID_REACH), so the flag is on this client before the survivor is at the island
+ * and the hint never lies for a moment; narrow enough that the two islands of a station (80 u apart) are told one at
+ * a time, the nearer first.
+ */
+export const PUMP_FLAG_REACH = 160;
 
 /** what the press did, for the caller's Fx and for the tests */
 export type InteractOutcome =
@@ -75,6 +84,8 @@ export type InteractOutcome =
 	| { kind: "mapItem"; solid: Solid; dropped: boolean }
 	| { kind: "repair"; solid: Solid }
 	| { kind: "search"; building: Solid; taken: number }
+	/** a gas station's pump island drained into the backpack (EDI-16): `taken` entries (its oil) */
+	| { kind: "pump"; solid: Solid; taken: number }
 	/** an electric build did its own job (server/sim/power.ts): charged, refuelled, switched, launched a drone… */
 	| { kind: "machine"; machine: MachineOutcome }
 	| { kind: "refused"; why: "range" | "blocked" | "material" | "empty" | "cooldown" | "taken" };
@@ -129,6 +140,8 @@ export class ServerInteraction {
 	private readonly pressCd = new Map<number, number>();
 	/** seconds until this door or lamp can change again (TOGGLE_COOLDOWN_S) */
 	private readonly toggleCd = new Map<Solid, number>();
+	/** the town's pump islands, listed the first time the loot flags need them (static: the world is this one's) */
+	private pumps?: Array<Solid>;
 
 	constructor(options: ServerInteractionOptions) {
 		this.world = options.world;
@@ -188,6 +201,7 @@ export class ServerInteraction {
 		}
 		if (target.kind === "light") return this.light(ctx, target.solid);
 		if (target.kind === "mapItem") return this.mapItem(ctx, target.solid);
+		if (target.kind === "pump") return this.pump(ctx, target.solid);
 		if (target.kind === "solid") return this.repair(ctx, target.solid);
 		return this.search(ctx, target.building);
 	}
@@ -292,6 +306,20 @@ export class ServerInteraction {
 		return { kind: "search", building: b, taken: found.taken.size() };
 	}
 
+	// ---------------------------------------------------------------- a gas station's pump
+
+	/**
+	 * E at a pump island (EDI-16): its oil into the backpack, the island dry for everybody until its respawn -- the
+	 * building search's rules (MP-05), at the SERVER's position, within SOLID_REACH of the island with a clear line to
+	 * it. The flag that it held something goes down on the next tick's sweep, for everyone told about it.
+	 */
+	private pump(ctx: InteractContext, s: Solid): InteractOutcome {
+		if (!this.inReach(ctx.state, s, SOLID_REACH)) return { kind: "refused", why: "range" };
+		const taken = this.items.drain(ctx.save, s, ctx.hours);
+		if (taken.size() === 0) return { kind: "refused", why: "empty" };
+		return { kind: "pump", solid: s, taken: taken.size() };
+	}
+
 	// ---------------------------------------------------------------- the world's own upkeep
 
 	/**
@@ -341,12 +369,20 @@ export class ServerInteraction {
 	 *
 	 * One sweep instead of a flag pushed from `search`, because two survivors can be in the same house: the
 	 * one who did not press E has to watch the hint go out too.
+	 *
+	 * The container a survivor is AT: the building they stand in, or -- outside every building -- the gas station's
+	 * pump island within PUMP_FLAG_REACH (EDI-16). Same message, same rule: the island's static id (a town's pump ids
+	 * are small, like its buildings'; the wire's u16 holds them), "something here", never what.
 	 */
 	private publishLootFlags(players: ReadonlyArray<PlayerState>, slots: ReadonlyArray<number>): void {
 		for (let i = 0; i < players.size(); i++) {
 			const slot = slots[i] ?? i;
 			const p = players[i];
-			const b = p.dead ? undefined : buildingAt(this.world, p.x, p.y);
+			let b = p.dead ? undefined : buildingAt(this.world, p.x, p.y);
+			if (b === undefined && !p.dead) {
+				if (this.pumps === undefined) this.pumps = pumpsOf(this.world);
+				b = nearestPump(this.pumps, p.x, p.y, PUMP_FLAG_REACH);
+			}
 			const has = b !== undefined && this.items.hasLoot(b);
 			const id = b !== undefined && has ? b.id : 0;
 			if (this.lootSeen.get(slot) === id) continue;

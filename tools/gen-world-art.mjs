@@ -1174,18 +1174,30 @@ function drain() {
 	return t;
 }
 
-/** a fuel dispenser seen from above (blue display: machines are blue, LEG-02), its hose hanging to one side */
-function pump() {
-	const t = new Tex(8, 6);
-	const body = [206, 208, 212];
-	t.rect(0, 0, 8, 6, mix(body, BLACK, 0.5));
-	t.rect(1, 1, 6, 4, body);
-	t.rect(1, 1, 6, 1, mix(body, WHITE, 0.5));
-	t.rect(2, 2, 3, 2, C.uiBlue);
-	t.set(2, 2, mix(C.uiBlue, WHITE, 0.4));
-	t.rect(6, 2, 1, 3, [30, 30, 32]);
-	t.set(7, 4, [30, 30, 32]);
-	return t;
+/**
+ * A fuel dispenser (DESIGN_RULES EDI-16), standing UPRIGHT on its island like the storefront signs stand on their
+ * parapets (ART-07): a pump is read by its side view, the one the station's own sign draws (shared/data/
+ * buildingSigns.ts, EDI-03: the pumps look like the sign says) -- the white cabinet with the dark display (unlit: the
+ * power went, ART-07) and the red stripe, the hose down its side to the holstered nozzle, the steel plinth. Seen from
+ * straight above it would be a white box, which is what the forecourt looked like before. 9 x 12 texels (36 x 48 u)
+ * and its baked shadow; drawn twice on each island, never rotated (client/view/worldView.ts `drawPump`).
+ */
+const PUMP_ROWS = [
+	"kkkkkkk..",
+	"kWWWWWkX.",
+	"kWdddwk.X",
+	"kWdgdwk.X",
+	"kWdddwk.X",
+	"kWWWWwk.X",
+	"krrrrRk.X",
+	"kWWWWwk.X",
+	"kWWWWwkss",
+	"kWWWWwk..",
+	"kgggggk..",
+	"kkkkkkk..",
+];
+function pump(palette) {
+	return withShadow(machineSprite({ rows: PUMP_ROWS }, palette));
 }
 
 // ================================================================ RIDEABLE VEHICLES (VEI-05)
@@ -1516,7 +1528,15 @@ function build() {
 	for (let i = 0; i < 2; i++) add_(`crack${i}`, "sprite", crack(97 + i), "asphalt crack");
 	add_("manhole", "sprite", manhole(), "manhole cover");
 	add_("drain", "sprite", drain(), "storm drain");
-	add_("pump", "sprite", pump(), "fuel dispenser");
+	// a NEW name, not the old top-down "pump": the owner's place holds an id for that one, and the upright art under
+	// it would be the old picture stretched until the next upload; a new texture has no id, so ART-01's flat
+	// dispenser stands in until then (EDI-16)
+	add_(
+		"dispenser",
+		"sprite",
+		pump(loadSigns().SIGN_ART),
+		"fuel dispenser, upright: the station sign's white cabinet, dark display, red stripe, hose and nozzle",
+	);
 	add_("acUnit", "sprite", acUnit(), "rooftop air conditioner");
 	add_("vent", "sprite", vent(), "roof vent");
 	add_("chimney", "sprite", chimney(), "brick chimney on a house roof");
@@ -1531,6 +1551,13 @@ function build() {
 		"sprite",
 		helipad(signs.HELIPAD, signs.SIGN_ART),
 		"hospital roof: the heliport's red H on a white cross",
+	);
+	// a gas station's price pylon (EDI-16): its grid, texel for texel, the post's '.' margins transparent
+	add_(
+		signs.PRICE_SIGN.texture,
+		"sprite",
+		machineSprite(signs.PRICE_SIGN, signs.SIGN_ART),
+		`gas station price sign: ${signs.PRICE_SIGN.shows}`,
 	);
 	// the rideable builds (VEI-05), parked or under a rider (client/view/vehicleView.ts)
 	add_("bicycle", "sprite", bicycle(), "a bicycle from above, nose to +x: tyres, frame, pedals, saddle, bars");

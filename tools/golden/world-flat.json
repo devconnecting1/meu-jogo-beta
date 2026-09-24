@@ -1,6 +1,6 @@
 {
 	"note": "draw-call digests of WorldView.drawGround + drawSolids with no world art (tools/test-world-art.mjs --golden); noSigns: the same with the building-signage hook stubbed out",
-	"recordedFrom": "the interiors branch after the review of ea5cf71 (compound footprints under one roof, every door and window marked -- only those in view --, porches and patios; ART-07 signs on the main wing; the furnishing of 1d98ae5); noSigns = the same without the signage hook",
+	"recordedFrom": "the gas station's forecourt (EDI-16, 2026-09-24: the canopy, the upright dispensers, the price sign, the cars at the pumps) -- only the gas scene differs from the golden before it (the interiors branch after the review of ea5cf71, the ART-07 signs on the main wing, the furnishing of 1d98ae5); noSigns = the same without the signage hook",
 	"scenes": {
 		"street": {
 			"count": 1234,
@@ -35,11 +35,11 @@
 			}
 		},
 		"gas": {
-			"count": 1007,
-			"sha1": "4489b83db1385475d2cfafaca2e8d243453727ab",
+			"count": 1930,
+			"sha1": "d36d53b74c1c52a406b5d4194c2f75d474005b00",
 			"noSigns": {
-				"count": 747,
-				"sha1": "594598224d1710e620781e0bf17e346a511f175d"
+				"count": 1670,
+				"sha1": "969d245840298d8bf3fdf90e6bc74cd3d131d9e8"
 			}
 		},
 		"street-night": {
