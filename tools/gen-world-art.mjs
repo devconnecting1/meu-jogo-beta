@@ -36,7 +36,12 @@
  *            (client/view/interiorArt.ts), under the same sha1 rule: a stale one would put a bed where a shelf is.
  *            So is the combat blood's (`blood`, tools/blood-art.mjs, ART-15): drops, splats and smears in three bands
  *            (matte for the tint, a survivor's wet red, the horde's), its cells in src/client/view/bloodAtlas.ts
- *   ui       not town art either: the game's name, LAST TOWN, in the bold pixel font of tools/title-font.mjs (the one
+ *            And the everyday town's fixtures' (`townProps`, tools/town-prop-art.mjs, ART-16): the market's stalls,
+ *            tents, crates and carts, the street's lamps, hydrants and benches, the parks' and the backyards' things,
+ *            the building site's, and the ground they stand on, its cells in src/client/view/townPropAtlas.ts
+ *            And the trees' (`trees`, tools/tree-art.mjs, VEG-06): every kind's crowns in their looks, greyscale (the
+ *            tree's green tints them), their light in a second band, and the trunk; its cells in treeAtlas.ts
+ *   ui      not town art either: the game's name, LAST TOWN, in the bold pixel font of tools/title-font.mjs (the one
  *            the store art's wordmark uses, docs/promo) -- the lobby's title and the splash (client/ui/logo.ts).
  *            GREYSCALE + alpha like the UI skin: three cells stacked top to bottom (the ink -- outline and hard
  *            shadow --, the fill of LAST, the fill of TOWN), each drawn by its own ImageLabel tinted with a theme
@@ -60,6 +65,7 @@ import { buildIconAtlas, loadIconData } from "./icon-atlas.mjs";
 import { furnitureArt, furnitureAtlasModule, furnitureSheet } from "./furniture-art.mjs";
 import { bloodArt, bloodAtlasModule, bloodSheet } from "./blood-art.mjs";
 import { treeArt, treeAtlasModule, treeSheet } from "./tree-art.mjs";
+import { townPropArt, townPropAtlasModule, townPropSheet } from "./town-prop-art.mjs";
 import { dilate, layoutText, TITLE_H } from "./title-font.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -72,6 +78,8 @@ const BLOOD_TS_OUT = join(ROOT, "src", "client", "view", "bloodAtlas.ts");
 const BLOOD_SHEET = join(ROOT, "docs", "art", "blood-sheet.png");
 const TREE_TS_OUT = join(ROOT, "src", "client", "view", "treeAtlas.ts");
 const TREE_SHEET = join(ROOT, "docs", "art", "tree-sheet.png");
+const TOWN_PROP_TS_OUT = join(ROOT, "src", "client", "view", "townPropAtlas.ts");
+const TOWN_PROP_SHEET = join(ROOT, "docs", "art", "town-props-sheet.png");
 const SHEET = join(ROOT, "docs", "art", "world-art-sheet.png");
 /** world units per texel */
 const WORLD_TEXEL = 4;
@@ -614,18 +622,21 @@ function floorTiles(size, tile, base, seed, checker, { chips = 0 } = {}) {
 }
 
 /**
- * The shadow at the foot of an interior wall (ART-12): a 9-slice drawn round every wall, its centre under the wall
- * and its three-texel border on the floor, dark at the wall's foot and gone three texels out, the corners rounded.
+ * An interior wall's outline and the shadow at its foot (ART-12), one 9-slice drawn round every wall: its centre is
+ * the wall's own rect, opaque WHITE (tinted to the outline's colour, `imageTint`: the dark rect the plaster sits on,
+ * showing a texel wide where the wall is free), and its three-texel border the shadow on the floor, dark at the
+ * wall's foot and gone three texels out, the corners rounded (black: the tint leaves it black). One sprite a wall
+ * where it was two (the outline was a Frame of its own): a building of many rooms costs what its walls cost.
  */
 function wallShade() {
 	const n = 7;
 	const t = new Tex(n, n);
-	const alpha = [0.3, 0.26, 0.14, 0.06];
+	const alpha = [1, 0.26, 0.14, 0.06];
 	for (let y = 0; y < n; y++) {
 		for (let x = 0; x < n; x++) {
 			const k = Math.round(Math.hypot(x - 3, y - 3));
 			if (k > 3) continue;
-			t.set(x, y, BLACK, Math.round(255 * alpha[k]));
+			t.set(x, y, k === 0 ? WHITE : BLACK, Math.round(255 * alpha[k]));
 		}
 	}
 	return t;
@@ -1100,6 +1111,199 @@ function bloodDry(seed) {
 	// the smear trails off to one side, and a few drops
 	for (let x = 11; x < 16; x++) if (r() < 0.8) t.set(x, 6 + Math.round((r() - 0.5) * 2), dark, 160);
 	for (let k = 0; k < 4; k++) t.set(Math.floor(r() * 16), Math.floor(r() * 12), dark, 200);
+	return t;
+}
+
+/**
+ * The rain's puddles (DESIGN_RULES LUZ-05, client/view/weatherView.ts `PUDDLE_ART`): standing water on the asphalt, on
+ * the town's 4-u texel. The pool is three or four overlapping ellipses along its length, each a little higher or
+ * lower, its shores stepping a texel in or out every few columns and broken by noise, so the edge steps irregularly,
+ * texel by texel (a dip in old asphalt, never a pill). Four
+ * tones: the dark water, the sky's reflection as lighter streaks across it, a 1-texel highlight rim on the light side
+ * (the top and the left, where the town's light comes from, ART-02) and a 1-texel halo of wet, darker ground round it.
+ * `lobe`: the main pool keeps to one end and a small pool lies off the other (-1: at the left, +1: at the right), a
+ * texel of wet ground between them. Drawn along +x; `transposed()` turns it for a vertical road with the rim still on
+ * the light side (a turn by 90° would put it on the right). The palette is colors.ts's own (`puddle`, `puddleSheen`).
+ */
+function puddle(w, h, seed, { lobe = 0 } = {}) {
+	const t = new Tex(w, h);
+	const size = Math.max(w, h);
+	const n = fbm(
+		size,
+		[
+			[4, 1],
+			[9, 0.4],
+		],
+		seed,
+	);
+	const r = rng(seed);
+	const water = new Uint8Array(w * h);
+	const at = (x, y) => (x >= 0 && y >= 0 && x < w && y < h ? water[y * w + x] : 0);
+	const mid = (h - 1) / 2;
+	const half = (h - 2) / 2;
+	// the main pool's stretch of the length (a lobed puddle leaves the rest to its small pool)
+	const share = lobe ? 0.72 : 1;
+	const x0 = lobe < 0 ? (w - 1) * (1 - share) + 0.5 : 0.5;
+	const len = (w - 1) * share - 0.5;
+	// a long pool is four of them, a short one three; the middle ones the deepest
+	const k = len / h > 2.2 ? 4 : 3;
+	const blobs = [];
+	for (let i = 0; i < k; i++) {
+		const end = i === 0 || i === k - 1;
+		blobs.push({
+			cx: 0,
+			cy: mid + (r() - 0.5) * half * (end ? 0.8 : 0.35),
+			rx: (len / k) * (end ? 0.8 : 0.9) * (0.92 + r() * 0.16),
+			ry: half * (end ? 0.6 + r() * 0.3 : 0.84 + r() * 0.2),
+		});
+	}
+	// the end ones reach the ends and no further (an ellipse cut by the picture's edge is a square end); the rest
+	// spread evenly between them
+	const first = x0 + blobs[0].rx;
+	const last = x0 + len - blobs[k - 1].rx;
+	blobs.forEach((b, i) => (b.cx = first + ((last - first) * i) / (k - 1)));
+	for (let y = 1; y < h - 1; y++) {
+		for (let x = 1; x < w - 1; x++) {
+			const q = n[y * size + x] * 0.7;
+			for (const b of blobs) {
+				if (((x - b.cx) / b.rx) ** 2 + ((y - b.cy) / b.ry) ** 2 + q < 1) {
+					water[y * w + x] = 1;
+					break;
+				}
+			}
+		}
+	}
+	// no lone texels and no one-texel necks: a water texel with fewer than 2 water neighbours dries, a dry one with 3+ fills
+	const smooth = () => {
+		for (let pass = 0; pass < 2; pass++) {
+			const next = Uint8Array.from(water);
+			for (let y = 1; y < h - 1; y++) {
+				for (let x = 1; x < w - 1; x++) {
+					const k = at(x - 1, y) + at(x + 1, y) + at(x, y - 1) + at(x, y + 1);
+					if (at(x, y) && k < 2) next[y * w + x] = 0;
+					else if (!at(x, y) && k >= 3) next[y * w + x] = 1;
+				}
+			}
+			water.set(next);
+		}
+	};
+	// the shore steps: along the length, the top and the bottom edge each move a texel in or out every few columns,
+	// on their own (the steps of a pixel-art puddle, not the curve of an ellipse)
+	{
+		let dt = 0;
+		let db = 0;
+		let runT = 0;
+		let runB = 0;
+		for (let x = 2; x < w - 2; x++) {
+			if (runT <= 0) {
+				dt = Math.max(-1, Math.min(1, dt + (r() < 0.5 ? -1 : 1)));
+				runT = 2 + Math.floor(r() * 3);
+			}
+			if (runB <= 0) {
+				db = Math.max(-1, Math.min(1, db + (r() < 0.5 ? -1 : 1)));
+				runB = 2 + Math.floor(r() * 3);
+			}
+			runT--;
+			runB--;
+			let y0 = -1;
+			let y1 = -1;
+			for (let y = 1; y < h - 1; y++) {
+				if (!water[y * w + x]) continue;
+				if (y0 < 0) y0 = y;
+				y1 = y;
+			}
+			// the thin ends are left as they are: they round the pool off
+			if (y0 < 0 || y1 - y0 < 3) continue;
+			const top = Math.max(1, y0 + dt);
+			const bot = Math.min(h - 2, y1 + db);
+			if (bot - top < 2) continue;
+			for (let y = 1; y < h - 1; y++) water[y * w + x] = y >= top && y <= bot ? 1 : 0;
+		}
+	}
+	smooth();
+	if (lobe) {
+		// the small pool, off the main one's end and a little to one side, a texel of wet ground apart
+		const main = Uint8Array.from(water);
+		const near = (x, y) => {
+			for (let dy = -1; dy <= 1; dy++)
+				for (let dx = -1; dx <= 1; dx++) if (main[(y + dy) * w + x + dx]) return true;
+			return false;
+		};
+		const sx = lobe > 0 ? (w - 1) * (share + (1 - share) * 0.45) : (w - 1) * (1 - share) * 0.55;
+		const sy = mid + (r() < 0.5 ? -1 : 1) * half * 0.25;
+		const srx = (w - 1) * (1 - share) * 0.42;
+		const sry = half * 0.62;
+		for (let y = 1; y < h - 1; y++) {
+			for (let x = 1; x < w - 1; x++) {
+				if (main[y * w + x] || near(x, y)) continue;
+				if (((x - sx) / srx) ** 2 + ((y - sy) / sry) ** 2 + n[y * size + x] * 0.3 < 1) water[y * w + x] = 1;
+			}
+		}
+	}
+	// the top row of water in each column (the sky's streaks sit under it)
+	const top = [];
+	for (let x = 0; x < w; x++) {
+		let y0 = -1;
+		for (let y = 0; y < h && y0 < 0; y++) if (at(x, y)) y0 = y;
+		top.push(y0);
+	}
+	const halo = mix(C.road, BLACK, 0.55);
+	const dark = C.puddle;
+	const band = mix(C.puddle, C.puddleSheen, 0.45);
+	const rim = C.puddleSheen;
+	// the sky in the water: a long streak in the first half, a shorter one further on and lower (a deep puddle only)
+	const streak = (x, y) => {
+		const a = Math.round(x0 + len * 0.18);
+		const b = Math.round(x0 + len * 0.5);
+		const c = Math.round(x0 + len * 0.58);
+		const d = Math.round(x0 + len * 0.76);
+		if (x >= a && x < b && y === top[x] + 2) return true;
+		return x >= c && x < d && y === top[x] + 4 && h > 9;
+	};
+	for (let y = 0; y < h; y++) {
+		for (let x = 0; x < w; x++) {
+			if (!at(x, y)) {
+				// the wet ground: a texel touching the water (sides, not corners: a stepped ring)
+				if (at(x - 1, y) || at(x + 1, y) || at(x, y - 1) || at(x, y + 1)) t.set(x, y, halo, 128);
+				continue;
+			}
+			// the rim catches the light along the near shore and fades out along the far end and the lower left
+			const up = !at(x, y - 1);
+			const left = !at(x - 1, y);
+			let c = dark;
+			if ((up && x < x0 + len * 0.8) || (left && y <= mid)) c = rim;
+			else if (up || left || (streak(x, y) && at(x, y + 1) && at(x + 1, y))) c = band;
+			t.set(x, y, c, 236);
+		}
+	}
+	return t;
+}
+
+/** `t` mirrored across its diagonal (x <-> y): a puddle for a vertical road, its lit rim still at the top and left */
+function transposed(t) {
+	const o = new Tex(t.h, t.w);
+	for (let y = 0; y < t.h; y++) {
+		for (let x = 0; x < t.w; x++) {
+			const [r, g, b, a] = t.get(x, y);
+			if (a > 0) o.set(y, x, [r, g, b], a);
+		}
+	}
+	return o;
+}
+
+/**
+ * A drop landing on a puddle: four texels round an empty one, the ring it leaves (weatherView `PUDDLE_DROPS`). A static
+ * picture: the view moves it from spot to spot on a beat, and not at all with Reduce Motion.
+ */
+function puddleDrop() {
+	const t = new Tex(3, 3);
+	for (const [x, y] of [
+		[1, 0],
+		[0, 1],
+		[2, 1],
+		[1, 2],
+	])
+		t.set(x, y, C.puddleRipple, 210);
 	return t;
 }
 
@@ -1759,6 +1963,19 @@ function build() {
 	for (let i = 0; i < 2; i++) add_(`oil${i}`, "sprite", oilStain(95 + i), "oil stain");
 	for (let i = 0; i < 2; i++) add_(`crack${i}`, "sprite", crack(97 + i), "asphalt crack");
 	add_("manhole", "sprite", manhole(), "manhole cover");
+	// the rain's puddles (LUZ-05): two long gutter shapes and two lane ones, each along x and turned for a vertical
+	// road, and the drop that lands on them
+	const PUDDLES = [
+		[puddle(38, 11, 201), "in a gutter: long, stepped edge"],
+		[puddle(30, 10, 202, { lobe: 1 }), "in a gutter, a small pool past its end"],
+		[puddle(22, 14, 203), "in a lane: a dip in the asphalt"],
+		[puddle(32, 15, 204, { lobe: -1 }), "in a lane, a small pool before it"],
+	];
+	PUDDLES.forEach(([tex, what], i) => {
+		add_(`puddle${i}`, "sprite", tex, `rain puddle ${what} (sky streaks, lit rim, wet halo)`);
+		add_(`puddle${i}V`, "sprite", transposed(tex), `rain puddle ${what}, on a vertical road`);
+	});
+	add_("puddleDrop", "sprite", puddleDrop(), "a drop's ring on a puddle (4 texels)");
 	add_("drain", "sprite", drain(), "storm drain");
 	// a NEW name, not the old top-down "pump": the owner's place holds an id for that one, and the upright art under
 	// it would be the old picture stretched until the next upload; a new texture has no id, so ART-01's flat
@@ -1818,9 +2035,15 @@ function build() {
 	add_("floorCarpet", "tile", carpet(16, C.floorCarpet, 47), "bedroom / office carpet: a low loop pile");
 	add_("floorKitchen", "tile", floorTiles(16, 8, C.floorKitchen, 45, true), "kitchen floor: checker tiles");
 	add_("floorBath", "tile", floorTiles(16, 4, C.floorBath, 46, false), "bathroom / cold room: small tiles");
-	add_("wallShade", "slice", wallShade(), "the shadow at the foot of an interior wall (round every wall)", {
-		slice: [3, 3, 4, 4],
-	});
+	add_(
+		"wallShade",
+		"slice",
+		wallShade(),
+		"an interior wall's outline (its centre, tinted) and the shadow at its foot",
+		{
+			slice: [3, 3, 4, 4],
+		},
+	);
 	// the survivors (arms baked per grip), their weapons, the horde and the pets (ART-08..ART-11)
 	for (const t of characterArt(Tex)) add_(t.name, t.kind, t.tex, t.description, { character: true });
 	// the four bosses, one sheet each (ART-14, tools/boss-art.mjs)
@@ -1855,6 +2078,15 @@ function build() {
 		blood.atlas,
 		`combat blood: ${blood.cells.length} cells of drops, splats and smears, matte and wet (client/view/bloodView.ts)`,
 		{ blood },
+	);
+	// the everyday town's fixtures (DESIGN_RULES ART-16): the market, the street, the parks, the backyards, the site
+	const townProps = townPropArt({ C });
+	add_(
+		"townProps",
+		"atlas",
+		townProps.atlas,
+		`the town's fixtures: ${townProps.report.cells} cells of market, street, park, backyard and building-site pieces and their ground (client/view/townPropArt.ts)`,
+		{ townProps },
 	);
 	// the game's name (UI-10): the lobby's title and the splash, not the town -- uploaded with it all the same
 	const mark = wordmark();
@@ -2044,6 +2276,20 @@ function writeTreeModule() {
 	console.log(`wrote ${TREE_SHEET} (${sheet.w}x${sheet.h})`);
 }
 
+/** src/client/view/townPropAtlas.ts and docs/art/town-props-sheet.png (every fixture in every look, magnified) */
+function writeTownPropModule() {
+	const t = textures.find(x => x.townProps !== undefined);
+	writeFileSync(TOWN_PROP_TS_OUT, townPropAtlasModule(t.townProps, t.name));
+	console.log(
+		`wrote ${TOWN_PROP_TS_OUT} (${t.townProps.report.cells} cells, ${t.townProps.report.unique} unique, atlas ${t.tex.w} x ${t.tex.h})`,
+	);
+	if (process.argv.includes("--no-sheet")) return;
+	const sheet = townPropSheet(t.townProps, drawText);
+	mkdirSync(dirname(TOWN_PROP_SHEET), { recursive: true });
+	writeFileSync(TOWN_PROP_SHEET, encodePNG(sheet, true));
+	console.log(`wrote ${TOWN_PROP_SHEET} (${sheet.w}x${sheet.h})`);
+}
+
 /** every texture magnified on one page, labelled, tiles shown 2 x 2 so the seams can be checked */
 function contactSheet() {
 	const zoom = 4;
@@ -2058,7 +2304,8 @@ function contactSheet() {
 				t.atlas === undefined &&
 				t.furniture === undefined &&
 				t.blood === undefined &&
-				t.trees === undefined,
+				t.trees === undefined &&
+				t.townProps === undefined,
 		)
 		.map(t => {
 			const reps = t.kind === "tile" || t.kind === "tileTint" ? 2 : 1;
@@ -2140,6 +2387,7 @@ if (!process.argv.includes("--assets")) {
 	writeFurnitureModule();
 	writeBloodModule();
 	writeTreeModule();
+	writeTownPropModule();
 	console.log(`world-art: ${textures.length} textures in ${OUT_DIR} (${(bytes / 1024).toFixed(1)} kB)`);
 	if (!process.argv.includes("--no-sheet")) contactSheet();
 }

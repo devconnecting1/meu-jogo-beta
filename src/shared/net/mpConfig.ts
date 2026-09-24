@@ -239,10 +239,35 @@ export const DESPAWN_NEAR_S = 0.3;
 export const DESPAWN_MID_S = 0.6;
 export const DESPAWN_FADE_S = 0.15;
 /**
+ * (§4.4, §5.1) Faster than any zombie can move, u/s: the charger's rush tops out at 750 (zombieTuning RUSH_SPEED_MAX),
+ * a walker at 150 with a 270 knockback on top. Two samples of one netId further apart than this (plus
+ * TRACK_SNAP_SLACK_U) are not one walk, and the client does not draw them as one: it starts the track again at the new
+ * sample, faded in (client/net/snapshotBuffer.ts `discontinuous`). The server never sends that since a relocation
+ * takes a new netId (server/sim/zombies.ts); this is the client's own guard, for whatever else could.
+ */
+export const ZOMBIE_TELEPORT_UPS = 1500;
+/** what two samples may disagree by on top of ZOMBIE_TELEPORT_UPS: the wire's 0.5 u steps and a tick of rounding */
+export const TRACK_SNAP_SLACK_U = 24;
+/**
+ * The same bound for a survivor drawn by another client (client/net/snapshotBuffer.ts `allyJumped`): three times the
+ * motorcycle's 510 u/s (VEI-05), and nothing a knockback does. Faster is a body PUT somewhere -- a stand-up at daybreak
+ * or a Rebirth at a safe spot, an admin -- and it is drawn appearing there, faded in, not sliding across the town
+ * (review of 577c729, N3).
+ */
+export const SURVIVOR_TELEPORT_UPS = 1500;
+/**
  * A received body's fade-in, alpha per second (client/net/snapshotBuffer.ts). The server needs it too: a track that
  * never fully appeared fades out sooner, and server/net/interest.ts has to know when the client's track is gone.
  */
 export const TRACK_FADE_IN_RATE = 3;
+/**
+ * A Snap stream that has delivered nothing for this long is silent as a whole -- a loss burst, a link that stalled, a
+ * server that stopped -- and a body missing from a stream that carries nothing is no news: no track fades out through
+ * it, and the silence counts against no despawn timeout (client/net/snapshotBuffer.ts `notePart`). The server forgives
+ * the same silence of its own rounds when it mirrors the client's retirements (server/net/interest.ts `noteRound`).
+ * Three near intervals (review of 577c729, M1).
+ */
+export const STREAM_QUIET_S = 0.15;
 
 // ---------------------------------------------------------------- packet sizes (§1.1, §4.1, §4.2, §4.5)
 

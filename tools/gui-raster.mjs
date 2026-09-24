@@ -268,7 +268,14 @@ export function rasterise(drawn, bgColor, resolve) {
 	const cv = new Canvas(drawn.vw, drawn.vh, bgColor);
 	rasterLayer(cv, drawn.layer, resolve);
 	if (drawn.dark !== undefined) {
-		for (const lm of drawn.dark.GetChildren().filter(visible)) {
+		// the maps in the night's layer by ZIndex, ties in child order: the fog (0) under the night (1), LUZ-05
+		const maps = drawn.dark
+			.GetChildren()
+			.filter(visible)
+			.map((f, i) => ({ f, i }))
+			.sort((a, b) => (a.f.ZIndex ?? 1) - (b.f.ZIndex ?? 1) || a.i - b.i)
+			.map(e => e.f);
+		for (const lm of maps) {
 			for (const strip of lm.GetChildren().filter(visible)) rasterStrip(cv, strip);
 		}
 	}

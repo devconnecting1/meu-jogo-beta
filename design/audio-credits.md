@@ -63,7 +63,7 @@ publica a pasta `content/sounds`.
 
 Desde a auditoria de 2026-09-24 o jogo tem **sons próprios**: 40 eventos, 67 takes, gerados por código em
 `tools/gen-sfx.mjs` (osciladores, ruído filtrado, envelopes, uma corda de Karplus-Strong, um reverb pequeno; nenhuma
-amostra, nenhuma biblioteca, nenhuma dependência) e empacotados em cinco bancos WAV em `design/audio/banks/`. São
+amostra, nenhuma biblioteca, nenhuma dependência) e empacotados em seis bancos WAV em `design/audio/banks/`. São
 **nossos** — nada a creditar, nada que uma biblioteca possa retirar. A tabela evento → banco → takes → loudness → por
 que soa assim está em `design/audio/README.md`; para ouvir, `docs/audio/preview.html`. As regras (estilo, loudness,
 variação, limites, a volta à biblioteca) são a seção **SND** de `docs/DESIGN_RULES.md`.
@@ -182,6 +182,7 @@ a que ninguém segurou esvai em 0,25 s e volta ao pool. SFX em 0 as para.
 | `heartbeat3`       | `rbxassetid://9043365993` — "HEARTBEAT 03 96BPM"                         | APMOfficial     | 60,1 s  | Nível 3 (< 10 % HP), 1,40×.                                                                                                                             |
 | `stingerWave1/2/3` | `rbxassetid://12222030` — "HalloweenThunder.wav"                         | Roblox (id 1)   | 3,71 s  | Mesmo trovão nas três ondas, cada vez mais grave (1,00× / 0,90× / 0,78×).                                                                               |
 | `stingerDawn`      | `rbxasset://sounds/victory.wav`                                          | Roblox (engine) | 1,31 s  | 7 h: você sobreviveu à noite.                                                                                                                           |
+| `thunder`          | `rbxassetid://12222030` — "HalloweenThunder.wav"                         | Roblox (id 1)   | 3,71 s  | O trovão da tempestade (LUZ-05), no SFX, enquanto o banco `weather` (o nosso trovão sintetizado, três takes) não tem id.                                |
 
 ## Calibração de volume
 

@@ -32,6 +32,12 @@ export interface RemotePlayerView {
 	y: number;
 	/** facing/aim in radians (world frame) */
 	angle: number;
+	/**
+	 * 0..1: 1 as always, except after a jump no survivor can walk (a stand-up at daybreak or a Rebirth at a safe spot):
+	 * then the body is drawn at the new spot fading in, never sliding there (client/net/snapshotBuffer.ts `allyJumped`).
+	 * Absent = 1.
+	 */
+	alpha?: number;
 	hp: number;
 	hpMax: number;
 	/** downed survivors crawl and show the revive ring (MP-03) */

@@ -852,13 +852,17 @@ try {
 		const ts = readFileSync(audioTs, "utf8");
 		const idOf = bank => new RegExp(`\\b${bank}: "(rbxassetid://\\d+)"`).exec(ts)?.[1];
 		const uploadedBanks = Object.values(fakeAssets().byId);
+		// every bank of the real manifest (six since LUZ-05's thunder got its own, `weather`)
+		const realBanks = JSON.parse(readFileSync(join(FULL, "design", "audio", "manifest.json"), "utf8")).banks;
 		check(
 			full.status === 0,
 			"upload-audio --ci over the real banks: exit 0",
 			full.status === 0 ? undefined : full.stderr.slice(-300),
 		);
 		check(
-			uploadedBanks.length === 5 && uploadedBanks.every(u => idOf(u.name) === `rbxassetid://${u.id}`),
+			uploadedBanks.length === realBanks.length &&
+				realBanks.every(b => uploadedBanks.some(u => u.name === b.name)) &&
+				uploadedBanks.every(u => idOf(u.name) === `rbxassetid://${u.id}`),
 			"src/shared/data/audioAssets.ts (the real generator): each bank's id is its approved upload",
 			uploadedBanks.map(u => `${u.name}=${idOf(u.name) ?? "-"}`).join(" "),
 		);

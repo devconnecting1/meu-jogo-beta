@@ -218,7 +218,7 @@ export const STREET_DEAD = 0.03;
  * A park's grove: its trees are the grove's species, but for a companion of another kind, a shrub at its edge and,
  * rarely, a dead one; the lone trees on the open lawn between the groves are any of the park's kinds.
  */
-export const GROVE_COMPANION = 0.12;
+export const GROVE_COMPANION = 0.08;
 export const GROVE_EDGE_SHRUB = 0.35;
 export const GROVE_DEAD = 0.02;
 

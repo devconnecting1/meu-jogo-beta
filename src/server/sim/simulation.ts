@@ -397,7 +397,7 @@ export class ServerSimulation {
 	 * boot took (`buildAround`): the horde and the bosses, the projectiles in flight, the combat's rewind history,
 	 * the kill credit, and — where the server owns them (F3) — the ground items, the loot timers, the doors, the
 	 * fires and the constructions. The clock opens day 1 at 07:00 with no night promised (`WorldClock.restart`),
-	 * and the §3.6 day count starts again.
+	 * and the §3.6 day count starts again; `seed`, the new town's, rolls its weather from then on (LUZ-05).
 	 *
 	 * What stays: the survivors in their slots, their input queues and the tick counter — the session (and the
 	 * clock epoch every client is anchored to) does not end with the town. Their BODIES belong to the old streets,
@@ -409,7 +409,7 @@ export class ServerSimulation {
 	 * simulation exactly as it was — the one thing construction touches outside itself, the clock's `onWaveFill`
 	 * (a ZombieWorld subscribes on construction), is put back — so the caller can let the old world go on.
 	 */
-	restartWorld(world: WorldData): void {
+	restartWorld(world: WorldData, seed?: number): void {
 		const fill = this.clock.onWaveFill;
 		const [built, systems] = pcall(() => this.buildAround(world));
 		if (!built) {
@@ -434,7 +434,8 @@ export class ServerSimulation {
 		}
 		this.dayTicks = 0;
 		this.world = world;
-		this.clock.restart();
+		// day 1 at 07:00, and the new town's own skies (LUZ-05: the weather is rolled from the town's seed)
+		this.clock.restart(1, 7, seed);
 		this.adoptSystems(systems as TownSystems);
 		// the reset is committed: the old world's Heartbeat debt is not the new one's to repay, and neither is the
 		// time this reset is taking (generating the town, 100-250 ms), which the NEXT heartbeat's delta will carry
@@ -599,10 +600,11 @@ export class ServerSimulation {
 				// §9.3: an assisted run's pickups and searches earn no achievement (Woodpile), as it earns no coins
 				paysRewards: slot => this.paysSlot(slot),
 				windows,
-				// IA-02: a door turning is heard by the next zombie over
-				noise: (x, y, radius) => {
+				// IA-02: a door turning is heard by the next zombie over; EDI-24: the bank vault's work, its door giving
+				// way and its alarm
+				noise: (x, y, radius, shot) => {
 					const horde = this.horde;
-					if (horde !== undefined) emitSound(horde.refs, x, y, radius, false);
+					if (horde !== undefined) emitSound(horde.refs, x, y, radius, shot === true);
 				},
 			});
 			// VEI-05: a parked vehicle is one of the constructions above; this is getting on, riding and getting off.
@@ -723,6 +725,9 @@ export class ServerSimulation {
 		// `onExp` fires LATER, from the brain that removes the body, for that very same zombie: paying it
 		// again would double every kill, so it deliberately credits nobody.
 		horde.onExp = () => {};
+		// a body the population moves across the map is a new body to every client (a new netId): the past a shot could
+		// be rewound into belongs to the one that left (review of 577c729, L4)
+		horde.onMoved = z => combat.history.forget(z.id);
 		return out;
 	}
 
@@ -1094,7 +1099,8 @@ export class ServerSimulation {
 			// rider's step never "walks" (no feet, no footsteps: VEI-05), so for them the stick moving the vehicle is the
 			// presence -- else three minutes on a motorcycle read as AFK and lost the day's credit (review V1)
 			const went = res.walking || (rode && res.moved > WALK_EPSILON);
-			this.notePresence(sp, sp.counters.consumed > consumed && ((cmd.moveMag > 0 && went) || cmd.edges !== 0));
+			const arrived = sp.counters.consumed > consumed;
+			this.notePresence(sp, arrived && ((cmd.moveMag > 0 && went) || cmd.edges !== 0));
 			// the weapon machine runs on the SAME command as the movement: the aim a shot is fired along is
 			// the one the player was holding when they walked that step, never the one two ticks later. While a
 			// construction is on the cursor the attack and reload edges are the builder's (place, rotate): the weapon
@@ -1111,7 +1117,7 @@ export class ServerSimulation {
 			this.swinger = undefined;
 			// ...and so do the discrete actions (§2.4): the E press and the build edges belong to the command
 			// the player made them during, which is the one just consumed
-			this.stepWorldActions(sp, cmd);
+			this.stepWorldActions(sp, cmd, arrived);
 			if (died && this.onDeath !== undefined) this.onDeath(sp);
 		}
 		prof?.end();
@@ -1192,10 +1198,14 @@ export class ServerSimulation {
 	 * edges mean build, exactly as `BuildSystem.handleInput` swallows the frame on the client; otherwise the
 	 * action press is the E key and the server picks the target itself.
 	 */
-	private stepWorldActions(sp: ServerPlayer, cmd: InputCommand): void {
+	private stepWorldActions(sp: ServerPlayer, cmd: InputCommand, arrived: boolean): void {
 		const build = this.build;
 		const interaction = this.interaction;
 		if (build === undefined || interaction === undefined) return;
+		// E held down (the command's held Action bit): the work at a bank's vault door goes on (EDI-24); a survivor who
+		// died, walked off or let go stops there. Only a command the client really sent holds it: a tick filled with the
+		// last input (players.ts) repeats the held bit, and a client gone silent with E down must not crack a vault
+		interaction.hold(sp.slot, sp.state, sp.save, arrived && (cmd.held & HeldBit.Action) !== 0);
 		if (sp.state.dead) return;
 		const action = edgeCount(cmd.edges, EdgeShift.ActionPress);
 		const attack = edgeCount(cmd.edges, EdgeShift.AttackPress);

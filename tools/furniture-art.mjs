@@ -49,12 +49,12 @@ const FACES = ["top", "bottom", "left", "right"];
 
 // ---------------------------------------------------------------- colour helpers
 
-const mix = (a, b, k) => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
+export const mix = (a, b, k) => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
 const BLACK = [0, 0, 0];
 const WHITE = [255, 255, 255];
 const INK = [22, 18, 20];
 
-function rng(seed) {
+export function rng(seed) {
 	let a = seed >>> 0;
 	return () => {
 		a = (a + 0x6d2b79f5) >>> 0;
@@ -65,7 +65,7 @@ function rng(seed) {
 	};
 }
 
-function hashStr(s) {
+export function hashStr(s) {
 	let h = 2166136261;
 	for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
 	return h >>> 0;
@@ -78,7 +78,7 @@ function hashStr(s) {
  * two lights. `soft` materials (cloth, paper) keep a gentler ramp; `shine` ones (glass, porcelain, steel) a sharper
  * highlight.
  */
-function ramp(base, { shine = false, soft = false, outline } = {}) {
+export function ramp(base, { shine = false, soft = false, outline } = {}) {
 	return {
 		o: outline ?? mix(base, INK, 0.74),
 		dd: mix(base, BLACK, soft ? 0.3 : 0.38),
@@ -89,7 +89,7 @@ function ramp(base, { shine = false, soft = false, outline } = {}) {
 	};
 }
 
-function materials(C) {
+export function materials(C) {
 	const m = {};
 	const add = (name, base, opts) => (m[name] = ramp(base, opts));
 	add("wood", C.furnWood);
@@ -149,7 +149,7 @@ function materials(C) {
 }
 
 /** dried blood (LEG-02: red is blood) and the chalk, the loose ink colours drawn over a material */
-function inks(C) {
+export function inks(C) {
 	return {
 		blood: mix(C.blood, BLACK, 0.4),
 		bloodDark: mix(C.blood, BLACK, 0.58),
@@ -167,7 +167,7 @@ function inks(C) {
 
 // ---------------------------------------------------------------- the canvas: material + height per texel
 
-class Canvas {
+export class Canvas {
 	constructor(L, D) {
 		this.L = L;
 		this.D = D;
@@ -297,7 +297,7 @@ class Canvas {
 }
 
 /** the canonical canvas (front at the bottom) turned to face `face` in the world */
-function orient(cv, face) {
+export function orient(cv, face) {
 	const { L, D } = cv;
 	const across = face === "left" || face === "right";
 	const out = new Canvas(across ? D : L, across ? L : D);
@@ -333,7 +333,7 @@ function orient(cv, face) {
  * The world-facing map shaded into RGBA (see the header), with `shadow` texels of baked shadow to the bottom right
  * and `outline` off for flat decoration that sits in the floor (a rug's own border is its outline).
  */
-function shade(cv, MAT, { shadow = 1, outline = true } = {}) {
+export function shade(cv, MAT, { shadow = 1, outline = true } = {}) {
 	const W = cv.L;
 	const H = cv.D;
 	const out = { w: W + shadow, h: H + shadow, d: new Float32Array((W + shadow) * (H + shadow) * 4) };
@@ -1547,6 +1547,45 @@ function safe(c, L, D, look, r) {
 	if (look === 1) c.box(L - 5, 3, 2, 3, "goodsC", 6);
 }
 
+/**
+ * The bank vault's wall of safe deposit boxes (DESIGN_RULES EDI-24), from above: the brushed steel top with a seam
+ * between each column of boxes, and along the front the little doors in their darker frame, a brass keyhole on each.
+ */
+function deposit(c, L, D, look, r, K) {
+	c.box(0, 0, L, D, "steel", 5);
+	for (let x = 3; x < L - 1; x += 3) c.shadeBox(x, 0, 1, D - 3, -1);
+	c.box(0, D - 3, L, 3, "steelDark", 6);
+	for (let x = 1; x < L - 1; x += 3) c.inkAt(x + 1, D - 2, K.coin);
+}
+
+/**
+ * A row of folding chairs (the town hall's meeting hall, DESIGN_RULES EDI-19), from above: a grey steel seat per
+ * chair with a gap between them, the back rest a darker bar away from the front (the council table they face), and
+ * a chair or two folded flat or pushed askew when the meeting broke up.
+ */
+function foldchairs(c, L, D, look, r) {
+	const pitch = 7;
+	const n = Math.max(2, Math.floor((L - 1) / pitch));
+	const x0 = Math.floor((L - n * pitch) / 2) + 1;
+	// a row every 8 texels of depth (a block of two rows is 16): the front row at the bottom
+	const rows = Math.max(1, Math.floor(D / 8));
+	const band = Math.floor(D / rows);
+	for (let q = 0; q < rows; q++) {
+		const y0 = q * band;
+		for (let i = 0; i < n; i++) {
+			const folded = r() < 0.15;
+			const dx = !folded && r() < 0.2 ? (r() < 0.5 ? -1 : 1) : 0;
+			const sx = x0 + i * pitch + dx;
+			if (folded) {
+				c.box(sx, y0 + 1, 5, 2, "steelDark", 2);
+				continue;
+			}
+			c.box(sx, y0 + 1, 5, 2, "steelDark", 3);
+			c.box(sx, y0 + 3, 5, Math.max(2, band - 4), look === 1 ? "fabricGrey" : "steel", 2);
+		}
+	}
+}
+
 function bench(c, L, D, look, r) {
 	// three slats on steel frames
 	for (let s = 0; s < 3; s++) {
@@ -1629,6 +1668,8 @@ const KINDS = {
 	lockers: { draw: lockers, looks: 2, tall: true },
 	prep: { draw: prep, looks: 2 },
 	safe: { draw: safe, looks: 2, tall: true },
+	deposit: { draw: deposit, looks: 1, tall: true },
+	foldchairs: { draw: foldchairs, looks: 2 },
 	bench: { draw: bench, looks: 1 },
 	benchSeats: { draw: benchSeats, looks: 1, from: "bench" },
 	// the campus (EDI-17)
@@ -1651,7 +1692,8 @@ const KINDS = {
 export const ART_KIND_BY_TYPE = {
 	shelf: { 6: "shelfMeds", 10: "shelfClothes" },
 	display: { 9: "displayGuns" },
-	cabinet: { 1: "sideboard", 2: "sideboard", 4: "cabinetMed" },
+	// the town hall's one cabinet is its first-aid cabinet (EDI-19: the bandages it handed out)
+	cabinet: { 1: "sideboard", 2: "sideboard", 4: "cabinetMed", 23: "cabinetMed" },
 	bench: { 4: "benchSeats" },
 	counter: { 11: "counterSteel" },
 	table: { 11: "tableDiner", 13: "tableLibrary" },
@@ -1872,7 +1914,7 @@ export function readPlanner(ROOT) {
  * Every cell painted, deduplicated (the same pixels are stored once), and shelf-packed into one image of at most
  * MAX_SIDE x MAX_SIDE. Answers the RGBA image and, per key, [x, y, w, h, shadow] in texels.
  */
-function pack(entries) {
+export function pack(entries) {
 	const unique = [];
 	const byHash = new Map();
 	for (const e of entries) {

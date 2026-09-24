@@ -7,6 +7,7 @@ import { GroundItem, removeSolid, spawnGroundItem } from "shared/game/world";
 import { MAX_BUILDS_PER_PLAYER, MAX_BUILDS_PER_SERVER, SLOT_NONE } from "shared/net/mpConfig";
 import * as Mind from "shared/sim/ai/memory";
 import { spawnAlpha } from "shared/sim/ai/zombieBrain";
+import { Weather, weatherAssists, weatherName } from "shared/sim/weather";
 import type { AdminEvent, AdminResponse } from "shared/admin/protocol";
 import * as W from "shared/admin/worldOps";
 import type { MpHost } from "../net/mpHost";
@@ -31,8 +32,10 @@ import type { ServerSimulation } from "../sim/simulation";
  *   - whatever moves the world's clock (the hour, night, dawn, a wave) or clears its horde (kill all): EVERY run on the
  *     server, the lobby's kept runs included -- a clock moved backwards across midnight lets it cross it again and pay
  *     that day twice (server/sim/waves.ts `onClockSet`), and a horde cleared at night is a night nobody had to survive;
- *   - what only adds danger or is cosmetic (a spawned zombie or boss, the rain, clearing the blood): nobody. A spawn
- *     pays nobody either (`unpaid`: no XP, no kill, no loot), so it is never a way to farm.
+ *   - a weather (or the rain) that eases the night against the one the day rolled -- fog, rain or a storm over a
+ *     clearer day: the horde sees or hears less (shared/sim/weather.ts `weatherAssists`): EVERY run, likewise;
+ *   - what only adds danger or is cosmetic (a spawned zombie or boss, a clearer sky than the roll, clearing the blood):
+ *     nobody. A spawn pays nobody either (`unpaid`: no XP, no kill, no loot), so it is never a way to farm.
  *
  * The switches (god, noclip, infinite ammo) belong to the PERSON, not to a body: they are kept here by UserId and put
  * on whatever body the survivor has, every tick (`ServerSimulation.adminMods`), so a stand-up, a reset or a trip to
@@ -98,6 +101,10 @@ export interface AdminWorldTools {
 
 export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 	const mods = new Map<number, Mods>();
+	/** the simulation tick of the last change of the sky (the weather or the rain), for its cooldown */
+	let skyTick = -math.huge;
+	/** the simulation tick the hands last moved (clock, night, dawn, a wave), for theirs */
+	let handsTick = -math.huge;
 	/** UserIds whose free camera is on (only the on/off edges are logged, never the moves) */
 	const cams = new Set<number>();
 	let hooked: ServerSimulation | undefined;
@@ -118,6 +125,13 @@ export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 	}
 
 	function applyMods(sp: ServerPlayer): void {
+		// the admin's sky still eases the night against the day's own roll (LUZ-05, §9.3): whoever is in the world is
+		// helped by it -- a run that came in after the tool was used as well (it was only the runs of that moment)
+		const sim = hooked;
+		if (sim !== undefined && weatherAssists(sim.clock.dayRoll, sim.clock.weather)) {
+			const player = Players.GetPlayerByUserId(sp.userId);
+			if (player !== undefined) deps.markAssisted(player);
+		}
 		const m = mods.get(sp.userId);
 		const cam = cams.has(sp.userId);
 		if (m === undefined && !cam) return;
@@ -382,10 +396,39 @@ export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 				clock.specialWaveQueues[i] = population.scaled(specials[i]);
 			}
 		};
-		if (op.op === "rain") {
-			clock.setRain(op.on);
-			return done(caller, op, op.on ? "Rain on" : "Rain off", false, "all");
-		} else if (op.op === "clock") {
+		if (op.op === "rain" || op.op === "weather") {
+			// any of the five (LUZ-05; the rain is Rain or Clear), today's until midnight rolls the next day's
+			const kind = op.op === "rain" ? (op.on ? Weather.Rain : Weather.Clear) : op.weather;
+			const cooldown = W.ADMIN_WORLD_LIMITS.WEATHER_COOLDOWN_S;
+			// the server's own seconds (a new town may start its ticks again: then there is no wait to serve)
+			const since = sim.tick >= skyTick ? (sim.tick - skyTick) / sim.simHz : math.huge;
+			if (since < cooldown) {
+				return refuse(
+					op.op,
+					`the sky changes at most every ${cooldown} s: wait ${math.ceil(cooldown - since)} s`,
+				);
+			}
+			skyTick = sim.tick;
+			clock.setWeather(kind);
+			const text = op.op === "rain" ? (op.on ? "Rain on" : "Rain off") : `Weather: ${weatherName(kind)}`;
+			// a clearer sky than the day rolled only makes the night harder: it assists nobody
+			if (!weatherAssists(clock.dayRoll, kind)) return done(caller, op, text, false, "all");
+			// fog, rain or a storm over a clearer day is a weaker horde nobody earned (§9.3): every run is assisted
+			const [runs, mine] = assistWorld(caller);
+			return done(
+				caller,
+				op,
+				text,
+				mine,
+				"all",
+				joined(`the day rolled ${weatherName(clock.dayRoll)}`, runsText(runs)),
+			);
+		}
+		// the hands: at most every HANDS_COOLDOWN_S (the slider's cadence passes; a burst of skips does not)
+		const handsCool = W.ADMIN_WORLD_LIMITS.HANDS_COOLDOWN_S;
+		const handsSince = sim.tick >= handsTick ? (sim.tick - handsTick) / sim.simHz : math.huge;
+		if (handsSince < handsCool) return refuse(op.op, `the clock moves at most every ${handsCool} s: try again`);
+		if (op.op === "clock") {
 			// the hands move and nothing else: the hours skipped are nobody's (§3.6, `setClock` pays and announces none)
 			clock.setClock(op.hour);
 			message = `Clock set to ${hhmm(op.hour)}`;
@@ -425,6 +468,8 @@ export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 				message = "Wave 3 refilled";
 			}
 		}
+		// a move that happened (a refusal above waits for nothing)
+		handsTick = sim.tick;
 		if (!moved) return done(caller, op, message, false, "all");
 		// the dead wait for the 06:00 the clock now shows, not the one it showed when they fell (Dawn: none at all)
 		host.lives.clockMoved();
@@ -683,7 +728,14 @@ export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 		if (op.op === "state") return { res: { ok: true, data: data(caller, false) } };
 		if (op.op === "spawn") return spawn(caller, s, op);
 		if (op.op === "killAll") return killAll(caller, s, op);
-		if (op.op === "clock" || op.op === "night" || op.op === "dawn" || op.op === "wave" || op.op === "rain") {
+		if (
+			op.op === "clock" ||
+			op.op === "night" ||
+			op.op === "dawn" ||
+			op.op === "wave" ||
+			op.op === "rain" ||
+			op.op === "weather"
+		) {
 			return clockTool(caller, host, op);
 		}
 		if (op.op === "heal") return heal(caller, host, op);

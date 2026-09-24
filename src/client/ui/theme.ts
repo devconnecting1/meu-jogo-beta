@@ -273,6 +273,13 @@ export const GAME = {
 	/** day / night indicator */
 	sun: TOKENS.chart3,
 	moon: TOKENS.chart2,
+	/**
+	 * the sky's weather icon (hudSky.ts, LUZ-05): the cloud and the fog's bands in the muted grey, the rain's drops in the
+	 * moon's blue, the storm's bolt in the numbers' yellow -- all ≥ 3:1 on the groove (test:contrast)
+	 */
+	weatherCloud: TOKENS.mutedForeground,
+	weatherRain: TOKENS.chart2,
+	weatherBolt: TOKENS.statValue,
 	/** the "Z" of the logo */
 	brand: TOKENS.destructive,
 	/** damage vignette: destructive */

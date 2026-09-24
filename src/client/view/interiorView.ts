@@ -354,6 +354,26 @@ export class InteriorView {
 			return;
 		}
 		if (this.drawCampusPiece(r, cam, s, cx, cy, w, h, fx, fy, wide, k)) return;
+		if (t === "foldchairs") {
+			// the town hall's folding chairs (EDI-19): rows of steel seats (a row every 32 u of depth), a chair's width
+			// apart along each row
+			const along = wide;
+			const len = along ? w : h;
+			const depth = along ? h : w;
+			const n = math.max(2, math.floor(len / 30));
+			const rows = math.max(1, math.floor(depth / 32));
+			const pitch = len / n;
+			const band = depth / rows;
+			for (let q = 0; q < rows; q++) {
+				const off = -depth / 2 + band * (q + 0.5);
+				for (let i = 0; i < n; i++) {
+					const at = -len / 2 + pitch * (i + 0.5);
+					const seat = flat(along ? pitch - 8 : band - 8, along ? band - 8 : pitch - 8, COLORS.metal, z);
+					r.drawRect(cam, cx + (along ? at : off), cy + (along ? off : at), edged(seat, BLACK, 0.55));
+				}
+			}
+			return;
+		}
 		r.drawRect(cam, cx, cy, edged(flat(w, h, COLORS.furnWood, z), BLACK, 0.6));
 	}
 

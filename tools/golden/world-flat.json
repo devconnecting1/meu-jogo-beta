@@ -1,101 +1,101 @@
 {
 	"note": "draw-call digests of WorldView.drawGround + drawSolids with no world art (tools/test-world-art.mjs --golden); noSigns: the same with the building-signage hook stubbed out; noTrees: the same with the trees' drawing stubbed out (VEG-06)",
-	"recordedFrom": "the trees' kinds (VEG-06, 2026-09-24) over 72dd2dd: every tree is one of eight kinds with its own crown size and green (the flat drawing unchanged, reading them), and a park's trees stand in groves -- with the trees' drawing stubbed out (noTrees) every scene is 72dd2dd's, draw call for draw call (recorded with PZ_SRC on 72dd2dd and compared), so only the trees changed; the golden before it: the window glass (EDI-18, 2026-09-24) over the gas station's forecourt (EDI-16), the ART-07 signs and the furnishing of 1d98ae5; noSigns = the same without the signage hook",
+	"recordedFrom": "the trees' kinds (VEG-06, 2026-09-24) over c638602 (the everyday town and the weather): every tree is one of eight kinds with its own crown size and green (the flat drawing unchanged, reading them), and a park's trees stand in groves -- with the trees' drawing stubbed out (noTrees) every scene is c638602's, draw call for draw call (recorded with PZ_SRC on c638602 and compared), so only the trees changed; the golden before it: the everyday town with the window glass (780f2b5), re-recorded after the review of e9b0fbb (L5) with the lean flat fallback of the town's fixtures; noSigns = the same without the signage hook",
 	"scenes": {
 		"street": {
-			"count": 1234,
-			"sha1": "41f6a75b20e5a2f332b797c1d1732edd5ad0b858",
+			"count": 1147,
+			"sha1": "284a7c530606c3e0f25459e5f1984f7c8d7985b8",
 			"noSigns": {
-				"count": 1234,
-				"sha1": "41f6a75b20e5a2f332b797c1d1732edd5ad0b858"
+				"count": 1147,
+				"sha1": "284a7c530606c3e0f25459e5f1984f7c8d7985b8"
 			},
 			"noTrees": {
-				"count": 1026,
-				"sha1": "fcfdc61168f5745f4ac86c0cb884a30867f9c112"
+				"count": 1095,
+				"sha1": "3ab9470eee5b17eafbf98a5d61b066240bf2e592"
 			}
 		},
 		"downtown": {
-			"count": 1588,
-			"sha1": "146fa56e30394b8ced9ec8f7f85a4938def061ba",
+			"count": 1832,
+			"sha1": "a0781965554aac1197722b04932be1b85662a0d9",
 			"noSigns": {
-				"count": 1393,
-				"sha1": "a6a7aeb1c59d785f29f59423152617bee8aac5af"
+				"count": 1481,
+				"sha1": "347fd2a3037cea458f92ad5c2e69a9eedfd8d935"
 			},
 			"noTrees": {
-				"count": 1496,
-				"sha1": "a3de1cd2497d4cbea13cae6a60081fb21276f30b"
+				"count": 1468,
+				"sha1": "1a3ccf7f2174e2bc6f8a3f13322a5cbaeb70b433"
 			}
 		},
 		"park": {
-			"count": 1048,
-			"sha1": "d8933784d6313ff882abfd6466774758bed0781a",
+			"count": 1679,
+			"sha1": "27465d79d53da87ccc13fef50bfe8d015beb76eb",
 			"noSigns": {
-				"count": 1048,
-				"sha1": "d8933784d6313ff882abfd6466774758bed0781a"
+				"count": 1679,
+				"sha1": "27465d79d53da87ccc13fef50bfe8d015beb76eb"
 			},
 			"noTrees": {
-				"count": 292,
-				"sha1": "39aff48e14e7492f6b936c459ada90bb40bd83ac"
+				"count": 463,
+				"sha1": "2bb9d1bfbb760545f0e5ea7adfb4350d5a439db7"
 			}
 		},
 		"school": {
-			"count": 841,
-			"sha1": "9311027ec14f8a749ad24468515ca3cfe3e65e7b",
+			"count": 1161,
+			"sha1": "a868e5cc19aec25a5ea66d069d9c35d8efce7d4f",
 			"noSigns": {
-				"count": 568,
-				"sha1": "35fad7e0e98230935bc8f58f25c2f91cbe75e855"
+				"count": 849,
+				"sha1": "5dee9bed87f849bfe1912237bb374dbef70c0220"
 			},
 			"noTrees": {
-				"count": 753,
-				"sha1": "89e1323a9ac36f118f93fd369aabe3368d80bc2f"
+				"count": 937,
+				"sha1": "c82a629c505a575432b2c7f4dbe984a0cfbb3789"
 			}
 		},
 		"gas": {
-			"count": 2229,
-			"sha1": "b83d076844a9bde1bcd0cb0594486f1f5795b2fa",
+			"count": 2505,
+			"sha1": "c42684fb9a1865ae762979445982a11e5d0a174e",
 			"noSigns": {
-				"count": 1969,
-				"sha1": "c7d8a7fbb97aef64023e5814136691edb432abac"
+				"count": 2258,
+				"sha1": "0e3da44340372feec7956fe448e536b23db83a7f"
 			},
 			"noTrees": {
-				"count": 2221,
-				"sha1": "5d23f146a792da909dec0c50346b470eb2f57637"
+				"count": 2485,
+				"sha1": "43999b7780647931c6aa200123ba4eeeff467c3a"
 			}
 		},
 		"street-night": {
-			"count": 1234,
-			"sha1": "c6eef5151760b00fd9ecfb6f97fe2ec631417ab2",
+			"count": 1142,
+			"sha1": "19a1bde19ecdc6b97a093f7d230f12b05ba3b6aa",
 			"noSigns": {
-				"count": 1234,
-				"sha1": "c6eef5151760b00fd9ecfb6f97fe2ec631417ab2"
+				"count": 1142,
+				"sha1": "19a1bde19ecdc6b97a093f7d230f12b05ba3b6aa"
 			},
 			"noTrees": {
-				"count": 1026,
-				"sha1": "783031a1391bc57b73b29745400dfc2fd71c1c46"
+				"count": 1090,
+				"sha1": "3185f6416d53f45b81a9312a38ec2277de6afea3"
 			}
 		},
 		"overview": {
-			"count": 5148,
-			"sha1": "f47c969c6c7b1cc8bc689e743a5671694e8a583e",
+			"count": 4791,
+			"sha1": "df11bc59412a9fda80d88818d713c35a3b5d7427",
 			"noSigns": {
-				"count": 4836,
-				"sha1": "c48947212eb6d7c79d45f5c6e5ee6772b5c9c9ea"
+				"count": 4609,
+				"sha1": "8db633ad048700aac96feefeff9a6a68e015d849"
 			},
 			"noTrees": {
-				"count": 3872,
-				"sha1": "a65f48f2c2d9212a748970b600ea3a8902958c56"
+				"count": 3607,
+				"sha1": "b1821e18b4cec8ae5eca43ef12e10ac9621522a4"
 			}
 		},
 		"border": {
-			"count": 553,
-			"sha1": "573b697d555fed709e49c121b1b52aa1f311cbdd",
+			"count": 841,
+			"sha1": "b6ab52221ec4d39a724bf72f81ae0ab2669de4de",
 			"noSigns": {
-				"count": 553,
-				"sha1": "573b697d555fed709e49c121b1b52aa1f311cbdd"
+				"count": 841,
+				"sha1": "b6ab52221ec4d39a724bf72f81ae0ab2669de4de"
 			},
 			"noTrees": {
-				"count": 533,
-				"sha1": "65991db34d3d44676bb04b1c00a87f3fa3ea52a9"
+				"count": 737,
+				"sha1": "fe2ba40be0d07f9c37c4c2bd6d79df31cb5d9986"
 			}
 		}
 	}

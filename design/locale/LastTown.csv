@@ -41,6 +41,10 @@ watch the tutorial?"
 ,,,Wave 1
 ,,,Wave 2
 ,,,Wave 3
+,,,Rain: zombies see and hear less
+,,,Thunderstorm: each thunderclap hides your noise
+,,,Fog at dawn: you and the zombies see less
+,,,Fog: you and the zombies see less
 ,,,You killed it
 ,,,Dagger
 ,,,Wooden stick
@@ -855,4 +859,12 @@ The backpack and the menu never stop the world: open them somewhere safe."
 ,,,Pick something up
 ,,,"Walk over food, ammo and materials. For weapons and gear, press use."
 ,,,Siphon Oil
+,,,Search stall
+,,,Search food truck
+,,,Search pile
+,,,Search shed
+,,,Open deposit boxes
+,,,Crack vault (hold)
+,,,Cracking vault
+,,,Vault: needs
 ,,,Break window

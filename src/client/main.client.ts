@@ -15,6 +15,7 @@ import type { GamePhase } from "shared/game/context";
 import { getCtx, setPhase } from "./bootstrap";
 import { GameLoop } from "./gameLoop";
 import { audio, gameAudio, startAudio } from "./audio";
+import { stepBankAlarm } from "./audio/bankAlarm";
 import * as Boot from "./boot";
 import {
 	netActive,
@@ -584,6 +585,9 @@ function pushHud(): void {
 		dayTime: dn.dayTime,
 		isNight: dn.isNight,
 		showClock,
+		// the sky's weather icon (LUZ-05): the server's weather as the clock mirrors it
+		weather: dn.weather,
+		fog: dn.fogShown,
 		// the hotbar's blue tile (the blade for a hand that chose nothing, -1); the tiles themselves are the list keys 1-5
 		// pick from (shared/game/weaponSlots.ts) -- and none while the weapon is put away (ITM-06)
 		weaponId: w.id,
@@ -877,6 +881,8 @@ function mountRun(enterWorld = true): void {
 		// the listener follows the camera, and whatever is still queued in refs.fx is played before
 		// GameLoop.render() consumes (and clears) it — so no cosmetic event is ever heard twice
 		gameAudio.frame(refs, ctx.cam.x, ctx.cam.y);
+		// a bank's alarm bell, ringing after its vault was cracked (EDI-24)
+		stepBankAlarm(refs.world, dt);
 		debug.profilebegin("pz.render");
 		loop.render();
 		debug.profileend();

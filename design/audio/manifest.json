@@ -16,7 +16,8 @@
 		"pickup": -18,
 		"reward": -17,
 		"stinger": -16,
-		"heart": -18
+		"heart": -18,
+		"thunder": -16
 	},
 	"banks": [
 		{
@@ -48,6 +49,12 @@
 			"file": "banks/cues.wav",
 			"seconds": 21.525,
 			"sha1": "cf32467032f7dd746bd4279d1f097814cb6a0502"
+		},
+		{
+			"name": "weather",
+			"file": "banks/weather.wav",
+			"seconds": 12.727,
+			"sha1": "e898ce7b59260fa9f38408cd3c12398d19ece60a"
 		}
 	],
 	"sounds": {
@@ -1246,6 +1253,49 @@
 			],
 			"loopStart": 19.4,
 			"loopEnd": 21.275
+		},
+		"thunder": {
+			"bank": "weather",
+			"category": "thunder",
+			"target": -16,
+			"volume": 0.5,
+			"pitchMin": 0.92,
+			"pitchMax": 1.05,
+			"why": "A storm's thunderclap (LUZ-05): a close one tears (a chopped bright crack) and rolls; a far one only rumbles, darker and longer. While it rolls the horde hears less.",
+			"takes": [
+				{
+					"startAt": 0.19,
+					"maxPlay": 3.746
+				},
+				{
+					"startAt": 4.15,
+					"maxPlay": 4.087
+				},
+				{
+					"startAt": 8.45,
+					"maxPlay": 4.058
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 3.705,
+					"lufs": -16,
+					"truePeak": -4.84,
+					"brightness": 0.013
+				},
+				{
+					"seconds": 4.047,
+					"lufs": -16,
+					"truePeak": -5.54,
+					"brightness": 0.003
+				},
+				{
+					"seconds": 4.017,
+					"lufs": -16,
+					"truePeak": -3.43,
+					"brightness": 0
+				}
+			]
 		}
 	}
 }

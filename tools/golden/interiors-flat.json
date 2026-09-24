@@ -1,170 +1,269 @@
 {
 	"note": "draw-call digests of each building type's first building seen from inside with no world art (tools/test-world-art.mjs --golden-interiors); noTrees: the same with the trees' drawing stubbed out (the town round the building, VEG-06)",
-	"recordedFrom": "the trees' kinds (VEG-06, 2026-09-24) over 72dd2dd: the interiors are untouched, the town round each building is not -- its trees' crowns are their kinds' sizes and greens, a park's trees in groves; with the trees' drawing stubbed out (noTrees) each of the 15 buildings is 72dd2dd's, call for call (recorded with PZ_SRC on 72dd2dd and compared). The golden before it: the window glass (EDI-18, 2026-09-24) over 8277c20, and with every call within 64 u of a window left out 6d21f20's flat interiors",
+	"recordedFrom": "the trees' kinds (VEG-06, 2026-09-24) over c638602 (the everyday town and the weather): the interiors are untouched, the town round each building is not -- its trees' crowns are their kinds' sizes and greens, a park's trees in groves; with the trees' drawing stubbed out (noTrees) each of the 15 buildings is c638602's, call for call (recorded with PZ_SRC on c638602 and compared). The golden before it: the everyday town with the window glass (780f2b5), re-recorded after the review of e9b0fbb (L5): the fixtures round each building the lean flat fallback, the interiors 780f2b5's",
 	"scenes": {
 		"type1": {
-			"building": 1,
-			"x": 1272,
-			"y": 672,
-			"count": 897,
-			"sha1": "02b06d7eec4663cd4e9312761ddaf7b596a69d32",
+			"building": 51,
+			"x": 656,
+			"y": 1164,
+			"count": 935,
+			"sha1": "9d12bac14a82cb659bfb5fadc15a3a5268c92346",
 			"noTrees": {
-				"count": 813,
-				"sha1": "ed3725c775bd1554109150114039178b2919f09e"
+				"count": 879,
+				"sha1": "c9c6a7e0f212a20c9ca2c9c04b10b6dd539acbc8"
 			}
 		},
 		"type2": {
-			"building": 4,
-			"x": 656,
-			"y": 3100,
-			"count": 983,
-			"sha1": "cbca3318b34a8797a33b8046d2d1809e7aba7704",
+			"building": 56,
+			"x": 712,
+			"y": 2776,
+			"count": 1210,
+			"sha1": "52f92c12aadc894a39ce0a30cb302ac03a059adf",
 			"noTrees": {
-				"count": 899,
-				"sha1": "a8869cdfb5186aad8f386cf78e44eb17c8c08cec"
+				"count": 1154,
+				"sha1": "3e475eba357b058bcea5a07d34e8b8d563d91bb3"
 			}
 		},
 		"type3": {
-			"building": 54,
-			"x": 4996,
+			"building": 116,
+			"x": 4632,
 			"y": 2800,
-			"count": 1565,
-			"sha1": "55ed9090850a5e112e49d9dd63ee400890f687e2",
+			"count": 1876,
+			"sha1": "8a28c4fd4a757f9a0fb322e16bf7da9c866c3f01",
 			"noTrees": {
-				"count": 1453,
-				"sha1": "0aeaaa596e333b67dee68bfcd20b464725f90afb"
+				"count": 1736,
+				"sha1": "f6b47e3f34b346ccfcb8bc5fc183aaa40f04f101"
 			}
 		},
 		"type4": {
-			"building": 9,
-			"x": 864,
-			"y": 6988,
-			"count": 1778,
-			"sha1": "effe163daacdc1fa1da140d305899c054b6afdc4",
+			"building": 89,
+			"x": 2816,
+			"y": 8952,
+			"count": 1373,
+			"sha1": "45ab957b199db9bc7237a52f4ae63f5514767e78",
 			"noTrees": {
-				"count": 1694,
-				"sha1": "78b88c808aa90eab09fbae52dcbbfb787ee56375"
+				"count": 1289,
+				"sha1": "c5381b76e3706ff91502844c6e5199ee28481bd3"
 			}
 		},
 		"type5": {
-			"building": 15,
+			"building": 62,
 			"x": 1260,
-			"y": 9208,
-			"count": 1473,
-			"sha1": "d1765db43f2e35b15541acd8a986d1758ec99f41",
+			"y": 6988,
+			"count": 1596,
+			"sha1": "1cd6ddc47a44d38f7f4a3c7a206ff2744c9c72f2",
 			"noTrees": {
-				"count": 1273,
-				"sha1": "11e8cf465d1d8299402c9b3562db768f6850cea7"
+				"count": 1384,
+				"sha1": "c4170eeebd4b0a66be2bf6e22c66d60db4f08c3b"
 			}
 		},
 		"type6": {
-			"building": 59,
-			"x": 4624,
-			"y": 7300,
-			"count": 1904,
-			"sha1": "b150fc943a6f105869bd0fd819647f143ee3f4ea",
+			"building": 71,
+			"x": 696,
+			"y": 8904,
+			"count": 1273,
+			"sha1": "0c032f3bcd70607ef07d06a0f34e8bfb1aec2f65",
 			"noTrees": {
-				"count": 1792,
-				"sha1": "5c3185f3ecc3645bfcfa6c550dd2f338f80864e2"
+				"count": 1049,
+				"sha1": "d62782035d0b70d7ca8c25fb40d020e6f1885a28"
 			}
 		},
 		"type7": {
-			"building": 65,
-			"x": 4680,
-			"y": 8904,
-			"count": 1435,
-			"sha1": "3ae69198e73a2b3e380f5ff0169264a71df3821d",
+			"building": 143,
+			"x": 6592,
+			"y": 8896,
+			"count": 1324,
+			"sha1": "2270f86fa0a071a9989fe4b252e45f502f5f97f6",
 			"noTrees": {
-				"count": 1299,
-				"sha1": "6c38c70c6558c5f6858332b101346a16eb12c8ef"
+				"count": 1208,
+				"sha1": "590569066080c16958818cd5528f1bee63fe72d6"
 			}
 		},
 		"type8": {
-			"building": 60,
-			"x": 5172,
-			"y": 6560,
-			"count": 1357,
-			"sha1": "05ef85aa99f8037b65c98250cd15495a95d1ed20",
+			"building": 135,
+			"x": 6568,
+			"y": 7308,
+			"count": 1895,
+			"sha1": "2893fd7665f0fbeb75dfc26ed39f5bce751e0fad",
 			"noTrees": {
-				"count": 1301,
-				"sha1": "5b4c4cc2abfc9d99493a82c7f2646bb3754ad688"
+				"count": 1731,
+				"sha1": "93487c46ccaaadde16ac2da46690c61a943fdeb0"
 			}
 		},
 		"type9": {
-			"building": 118,
-			"x": 8488,
-			"y": 8896,
-			"count": 1931,
-			"sha1": "17ab355b6e90fc84428720a1e0d81d69e9cede90",
+			"building": 136,
+			"x": 7100,
+			"y": 6600,
+			"count": 1503,
+			"sha1": "04c9ebba3e2fa8c2ca894c4f094653b65f73a99c",
 			"noTrees": {
-				"count": 1823,
-				"sha1": "0d44960c9ebacfd8bead99697b2b8f9874973562"
+				"count": 1387,
+				"sha1": "842b124b7d14872e82465ef03b98a17afd3c03b2"
 			}
 		},
 		"type10": {
-			"building": 82,
-			"x": 6592,
+			"building": 358,
+			"x": 18504,
 			"y": 7300,
-			"count": 1533,
-			"sha1": "fc9dc8bac12542752e7d153da5956b84d7d8c656",
+			"count": 1615,
+			"sha1": "cb5d7f0db74d239ae992c7b69bb02a8934788793",
 			"noTrees": {
-				"count": 1365,
-				"sha1": "c490df3255bbda716d05cd56c64d8d9bb0d9ae9a"
+				"count": 1455,
+				"sha1": "12663cbfe69fe25803a9b8969bb5d6e03d8bd915"
 			}
 		},
 		"type11": {
-			"building": 147,
+			"building": 251,
 			"x": 10704,
-			"y": 2744,
-			"count": 1578,
-			"sha1": "cff61ef68abb0c861821944dd5b121af36bbff31",
+			"y": 4632,
+			"count": 1479,
+			"sha1": "b9862b5ba0f361fc6624d73af4fb4c2d6e3cfc08",
 			"noTrees": {
-				"count": 1482,
-				"sha1": "5da78c85c14e4c7196181fa6ba2d31016c35c04c"
+				"count": 1383,
+				"sha1": "3b1906e2f4240c2abe031255a338eda9462e660a"
 			}
 		},
 		"type12": {
-			"building": 1275,
-			"x": 18488,
-			"y": 2704,
-			"count": 1993,
-			"sha1": "2590bfcee350273346127d43b47b3cd354609d2f",
+			"building": 1451,
+			"x": 15120,
+			"y": 3464,
+			"count": 2059,
+			"sha1": "81cfab7a2a8e4a488e2011142a1a22cf93b87945",
 			"noTrees": {
-				"count": 1821,
-				"sha1": "1f335585c95c47b298655911783f08e83953b4a1"
+				"count": 1911,
+				"sha1": "d56f0be57ea9f07b4a05d63a5412ee9483dcb48c"
 			}
 		},
 		"type13": {
-			"building": 1276,
-			"x": 19000,
+			"building": 1454,
+			"x": 15528,
 			"y": 2704,
-			"count": 1848,
-			"sha1": "9468a68435e20ca50d95f93506ed88ee3b50d772",
+			"count": 1874,
+			"sha1": "d3713e9de10db8974caad495065656e3a851fd71",
 			"noTrees": {
-				"count": 1736,
-				"sha1": "73f3ab79c876c55ebbaf60a77396a5f7ac150233"
+				"count": 1558,
+				"sha1": "11fb4b196ad9ba916d4422ed7add36fb3d001bfd"
 			}
 		},
 		"type14": {
-			"building": 1278,
-			"x": 18488,
-			"y": 3512,
-			"count": 1679,
-			"sha1": "362e0fe620b7895f57cc10b03ef77b18c28d3a58",
+			"building": 1452,
+			"x": 14624,
+			"y": 3168,
+			"count": 1929,
+			"sha1": "fcd88ecfff2643cfe349f123700427db65ff25c3",
 			"noTrees": {
-				"count": 1603,
-				"sha1": "054add1084da9fd181cedd108ab4805434b789a7"
+				"count": 1753,
+				"sha1": "dcaef87c62fd7298ea00fb77612fb43a86e470d3"
 			}
 		},
 		"type15": {
-			"building": 1277,
-			"x": 19368,
-			"y": 3168,
-			"count": 1940,
-			"sha1": "10e65f63ab1d9afe0c7c170062ef932a9edcccdc",
+			"building": 1453,
+			"x": 14624,
+			"y": 2704,
+			"count": 1847,
+			"sha1": "decbc5a20a84cb7ac99d0487f029b26a21bbef37",
 			"noTrees": {
-				"count": 1840,
-				"sha1": "cd9ea02820216e3f0eb39257a21b0ddb7466f701"
+				"count": 1679,
+				"sha1": "c0ebe299b8b8cfa44b8dba30bc253b098f99bfd3"
+			}
+		},
+		"type16": {
+			"building": 226,
+			"x": 8520,
+			"y": 9548,
+			"count": 1476,
+			"sha1": "4ae834e1a6208797fa9add9db058f2692d9ade7d",
+			"noTrees": {
+				"count": 1392,
+				"sha1": "9b4e0443d91d46a80918480a72ea73ff5c140c33"
+			}
+		},
+		"type17": {
+			"building": 337,
+			"x": 16656,
+			"y": 7292,
+			"count": 1487,
+			"sha1": "4b178300ef4a0dce588da9557757f3d38dfb5386",
+			"noTrees": {
+				"count": 1223,
+				"sha1": "917cdf5f034e217ec5a335990e16d7ae0029e4f3"
+			}
+		},
+		"type18": {
+			"building": 262,
+			"x": 10704,
+			"y": 8984,
+			"count": 1542,
+			"sha1": "003d7cdb1938db9cbb77174fb295177d4543ad4b",
+			"noTrees": {
+				"count": 1370,
+				"sha1": "7c20fc64c6845161468172a91ef421db6026b70f"
+			}
+		},
+		"type19": {
+			"building": 231,
+			"x": 8440,
+			"y": 10832,
+			"count": 1701,
+			"sha1": "d5e9b76053845aeb18839db7d9f836b4dc5efef8",
+			"noTrees": {
+				"count": 1529,
+				"sha1": "27f74eb82e9bf9dd32a7a59d951ee3f4e789c3a0"
+			}
+		},
+		"type22": {
+			"building": 216,
+			"x": 8956,
+			"y": 7008,
+			"count": 1978,
+			"sha1": "fcbc9d11a0a79c68e3b0b3c46e1a87667f283dd0",
+			"noTrees": {
+				"count": 1814,
+				"sha1": "3e35ba3830350d34120d718dd09b8f6becd13619"
+			}
+		},
+		"type23": {
+			"building": 134,
+			"x": 6632,
+			"y": 4600,
+			"count": 1541,
+			"sha1": "97741b8007092b9d4c0821535a62f799cb2d6553",
+			"noTrees": {
+				"count": 1313,
+				"sha1": "56d9e67990de78ab527500a22cbbf2f24c322ed3"
+			}
+		},
+		"type24": {
+			"building": 376,
+			"x": 20456,
+			"y": 6924,
+			"count": 873,
+			"sha1": "d24b694df5268c17219462344f57abe21cfbbe38",
+			"noTrees": {
+				"count": 761,
+				"sha1": "466c8294e98f2a5e56114cb045da449c561ca82b"
+			}
+		},
+		"type25": {
+			"building": 225,
+			"x": 8520,
+			"y": 8896,
+			"count": 1640,
+			"sha1": "0e205a429a431d284c86e35c2eeb1f649a5372d0",
+			"noTrees": {
+				"count": 1536,
+				"sha1": "55c5319749343486387759d01eb98e28f90b4b9c"
+			}
+		},
+		"type26": {
+			"building": 230,
+			"x": 9108,
+			"y": 10840,
+			"count": 1714,
+			"sha1": "158ca2d2346c2e983d71a5a305bd7e166ab31f20",
+			"noTrees": {
+				"count": 1562,
+				"sha1": "fd2a04022c25d5bd8486432ba8c265af6f756800"
 			}
 		}
 	}

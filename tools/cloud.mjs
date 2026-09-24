@@ -916,7 +916,7 @@ function regenerateArtModule() {
 const AUDIO_DIR = process.env.PZ_AUDIO_DIR ?? join(ROOT, "design", "audio");
 
 /**
- * Uploads our own sound banks (tools/gen-sfx.mjs: five WAVs, every take of the set packed with silence between them)
+ * Uploads our own sound banks (tools/gen-sfx.mjs: six WAVs, every take of the set packed with silence between them)
  * as Audio assets, through the same core as the art (`uploadAssets`: only new or changed banks by sha1, --ci,
  * moderation, `pending`, `rejected`, retries). At the end src/shared/data/audioAssets.ts is regenerated from
  * assets.json -- with an id only for a bank whose sha1 is the WAV's on disk, so an id never points at an older cut of
@@ -924,7 +924,7 @@ const AUDIO_DIR = process.env.PZ_AUDIO_DIR ?? join(ROOT, "design", "audio");
  *
  * The Assets API for audio (create.roblox.com, cloud/guides/usage-assets and audio/assets, read 2026-09-24): .mp3 /
  * .ogg / .wav / .flac (`audio/wav`), up to 7 minutes and 20 MB, <= 48 kHz, mono or stereo; audio cannot be UPDATED (a
- * changed bank is a new asset); and audio uploads are counted per month -- the reason the set is five banks, not
+ * changed bank is a new asset); and audio uploads are counted per month -- the reason the set is six banks, not
  * sixty files. An upload is private to its creator: an experience owned by the same user or group plays it.
  */
 async function uploadAudio(flags) {
