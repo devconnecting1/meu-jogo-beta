@@ -368,6 +368,7 @@ const texOf = Object.fromEntries(ALL.manifest.textures.map(t => [t.name, t]));
 		"shadowBox",
 		"bin",
 		"dispenser",
+		"gasCanopyN",
 		"manhole",
 		"dirt",
 		"apron",
@@ -378,6 +379,23 @@ const texOf = Object.fromEntries(ALL.manifest.textures.map(t => [t.name, t]));
 		"ground, kerbs, paint, roofs, rims, soft shadows, bins, pumps, manholes all drawn",
 		missing.join(", "),
 	);
+	// a gas station's canopy roof (EDI-16) is one sprite of its street side's texture, texel for texel: every canopy of
+	// the town is exactly its texture at 4 units a texel (the generator's 113 x 29 is world.ts's 452 x 116)
+	{
+		const side = { top: "gasCanopyN", bottom: "gasCanopyS", left: "gasCanopyW", right: "gasCanopyE" };
+		const bad = world.solids
+			.filter(s => s.kind === "canopy")
+			.filter(s => {
+				const t = texOf[side[s.face]];
+				return t === undefined || t.w * 4 !== s.w || t.h * 4 !== s.h;
+			});
+		const n = world.solids.filter(s => s.kind === "canopy").length;
+		check(
+			n > 0 && bad.length === 0,
+			"every gas station canopy is its street side's roof texture at 4 units a texel",
+			`${n - bad.length}/${n}${bad.length > 0 ? `; #${bad[0].id} ${bad[0].w}x${bad[0].h} ${bad[0].face}` : ""}`,
+		);
+	}
 	const cars = Object.keys(counts).filter(n => /^car\d$/.test(n)).length;
 	const crowns = Object.keys(counts).filter(n => /^canopy\d$/.test(n)).length;
 	check(cars >= 3, "cars come in several body styles", `${cars} styles on screen`);

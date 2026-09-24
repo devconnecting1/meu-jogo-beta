@@ -1200,6 +1200,182 @@ function pump(palette) {
 	return withShadow(machineSprite({ rows: PUMP_ROWS }, palette));
 }
 
+/**
+ * A gas station's canopy roof (DESIGN_RULES EDI-16), 113 x 29 texels: exactly the canopy of shared/game/world.ts
+ * (PUMP_CANOPY_L x PUMP_CANOPY_D = 452 x 116 u at 4 u a texel), one texture per side its street is on (`street`: "N",
+ * "S", "W", "E"), because what is on it is placed by where the islands stand -- and every one is lit from the top left
+ * (ART-02), so they are drawn, not flipped.
+ *
+ * What a real canopy shows from above: the fascia round its edge in the station's colours (the storefront sign's
+ * charcoal, shared/data/buildingSigns.ts, with the red pinstripe of its pump: no text, no brand, CON-02) and the lit /
+ * shaded faces the top-left light gives it; the standing-seam steel deck, one panel every 6 texels, each seam a lit
+ * ridge and its shadow; the backs of the light fixtures in two rows over the lanes (their lenses are underneath:
+ * unlit, the power went, ART-07); the drain over each column with the rain's dirt streaked along the panels towards it;
+ * a roof hatch; and a few days of weather -- soft stains, grime along the gutter, leaves blown into its corners.
+ *
+ * `u` runs along the street (0..112), `v` from the street eave (0..28); the islands' middle is v = 11 and their
+ * columns u = 27.75 and 85.25 (the canopy is symmetric in u: the far corner's station gets the same picture).
+ */
+const CANOPY_U = 113;
+const CANOPY_V = 29;
+function gasCanopy(street, palette, seed) {
+	const along = street === "N" || street === "S";
+	const W = along ? CANOPY_U : CANOPY_V;
+	const H = along ? CANOPY_V : CANOPY_U;
+	const t = new Tex(W, H);
+	const r = rng(seed);
+	// canopy space (u along the street, v from the eave) -> canvas
+	const X = (u, v) => (street === "N" || street === "S" ? u : street === "W" ? v : W - 1 - v);
+	const Y = (u, v) => (street === "N" ? v : street === "S" ? H - 1 - v : u);
+	const put = (u, v, c, a = 255) => {
+		if (u < 0 || v < 0 || u >= CANOPY_U || v >= CANOPY_V) return;
+		t.over(X(u, v), Y(u, v), c, a);
+	};
+	/** the canvas top-left corner of a `du` x `dv` block whose canopy-space corner is (u, v): things with a light and a
+	 * shadow are drawn in canvas space from there (their light is the canvas's top left on every side) */
+	const corner = (u, v, du, dv) => [
+		Math.min(X(u, v), X(u + du - 1, v + dv - 1)),
+		Math.min(Y(u, v), Y(u + du - 1, v + dv - 1)),
+	];
+	const k = palette.k;
+	const lit = palette.z;
+	const body = palette.x;
+	const shade = palette.X;
+	const stripe = palette.r;
+	const deck = mix(C.wallShop, WHITE, 0.32);
+	// each standing-seam panel (6 texels wide, across the canopy) a slightly different sheet
+	const panelTone = [];
+	for (let i = 0; i < 24; i++) panelTone.push((r() - 0.5) * 9);
+	const panelOf = u => Math.floor((u - 3) / 6);
+	const deckNoise = fbm(
+		128,
+		[
+			[8, 1],
+			[32, 0.4],
+		],
+		seed,
+	);
+	// the ring: outline, the fascia's outer face (lit on the canvas's top and left, shaded on the bottom and right), the
+	// red pinstripe, the fascia's body, and the gutter inside it (in the fascia's shadow on the top and left)
+	for (let y = 0; y < H; y++) {
+		for (let x = 0; x < W; x++) {
+			const m = Math.min(x, y, W - 1 - x, H - 1 - y);
+			const litSide = Math.min(x, y) <= Math.min(W - 1 - x, H - 1 - y);
+			if (m === 0) t.set(x, y, k);
+			else if (m === 1) t.set(x, y, litSide ? lit : shade);
+			else if (m === 2) t.set(x, y, stripe);
+			else if (m === 3) t.set(x, y, body);
+			else {
+				const n = deckNoise[(y % 128) * 128 + (x % 128)];
+				const u = along ? x : y;
+				// grime gathers towards the gutters: the deck darkens a little over its last few texels to the fascia
+				const grime = Math.max(0, 3 - (m - 4)) / 3;
+				let c = add(deck, n * 6 + (panelTone[panelOf(u)] ?? 0));
+				c = mix(c, [120, 114, 100], 0.12 * grime);
+				if (m === 4) c = litSide ? mix(c, BLACK, 0.24) : mix(c, BLACK, 0.08);
+				t.set(x, y, c);
+			}
+		}
+	}
+	// standing seams across the deck, perpendicular to the street: a lit ridge, its shadow beside it
+	const inDeck = (u, v) => u >= 5 && v >= 5 && u < CANOPY_U - 5 && v < CANOPY_V - 5;
+	for (let u = 9; u < CANOPY_U - 5; u += 6) {
+		for (let v = 5; v < CANOPY_V - 5; v++) {
+			// the ridge's light faces the canvas's left (N/S) or top (W/E) in both cases: the next texel is its shade
+			put(u, v, WHITE, 96);
+			put(u + 1, v, BLACK, 58);
+		}
+	}
+	// the drains' 4 x 4 texel blocks, centred on the columns (u 27.75 and 85.25, v 11: the islands' middle)
+	const cols = [26, 83];
+	const colV = 9;
+	// the rain runs along the panels to the drain over each column: dirt streaked towards it, from both eaves
+	for (const cu of cols) {
+		for (let du = 0; du < 4; du++) {
+			const len = 3 + Math.floor(r() * 5);
+			for (let s = 1; s <= len; s++) {
+				const a = Math.round(46 * (1 - s / (len + 1)));
+				if (inDeck(cu + du, colV - s)) put(cu + du, colV - s, [70, 66, 58], a);
+				if (inDeck(cu + du, colV + 3 + s)) put(cu + du, colV + 3 + s, [70, 66, 58], a);
+			}
+		}
+		// the drain: a grate in a dark sump, its lip lit on the canvas's top left
+		const [dx, dy] = corner(cu, colV, 4, 4);
+		for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) t.over(dx + i, dy + j, [96, 98, 104], 255);
+		for (let i = 1; i < 3; i++) for (let j = 1; j < 3; j++) t.over(dx + i, dy + j, [34, 34, 38], 255);
+		for (let i = 0; i < 4; i++) {
+			t.over(dx + i, dy, [150, 152, 158], 255);
+			t.over(dx, dy + i, [150, 152, 158], 255);
+		}
+		t.over(dx + 1, dy + 1, [70, 72, 78], 255);
+	}
+	// the backs of the light fixtures, over the lanes: small boxes, their shadow down and right on the canvas
+	const fixture = (u, v) => {
+		// a 3 x 2 box along the street (2 x 3 on a canopy along y): its lit top edge, its body, its shadow
+		const box = [150, 154, 162];
+		const [x, y] = corner(u, v, 3, 2);
+		const [w, h] = along ? [3, 2] : [2, 3];
+		for (let i = 0; i < w; i++) {
+			for (let j = 0; j < h; j++) t.over(x + i, y + j, i === 0 || j === 0 ? mix(box, WHITE, 0.35) : box, 255);
+		}
+		t.over(x + w - 1, y + h - 1, mix(box, BLACK, 0.25), 255);
+		for (let i = 1; i <= w; i++) t.over(x + i, y + h, BLACK, 64);
+		for (let j = 1; j <= h; j++) t.over(x + w, y + j, BLACK, 64);
+	};
+	for (let u = 12; u < CANOPY_U - 10; u += 12) {
+		if (!cols.some(cu => Math.abs(u - cu - 1) < 4)) fixture(u, 5);
+		if (!cols.some(cu => Math.abs(u + 6 - cu - 1) < 4) && u + 6 < CANOPY_U - 10) fixture(u + 6, 20);
+	}
+	// a roof hatch at one end of the deck, over the shop's lane: a lid lit on its top-left edges, its handle, its shadow
+	{
+		const lid = [150, 154, 160];
+		const [x, y] = corner(101, 16, 5, 4);
+		const [w, h] = along ? [5, 4] : [4, 5];
+		for (let i = 0; i < w; i++) {
+			for (let j = 0; j < h; j++) t.over(x + i, y + j, i === 0 || j === 0 ? mix(lid, WHITE, 0.3) : lid, 255);
+		}
+		for (let i = 1; i <= w; i++) t.over(x + i, y + h, BLACK, 70);
+		for (let j = 1; j <= h; j++) t.over(x + w, y + j, BLACK, 70);
+		t.over(x + Math.floor(w / 2), y + Math.floor(h / 2), [60, 62, 68], 255);
+	}
+	// a few days of weather: soft stains on the deck, grime along the gutter, leaves blown into the corners
+	for (let i = 0; i < 7; i++) {
+		const su = 8 + r() * (CANOPY_U - 16);
+		const sv = 6 + r() * (CANOPY_V - 12);
+		const rad = 1.2 + r() * 2.2;
+		for (let du = -4; du <= 4; du++) {
+			for (let dv = -4; dv <= 4; dv++) {
+				const d = Math.hypot(du, dv * 1.4) / rad;
+				const u = Math.round(su + du);
+				const v = Math.round(sv + dv);
+				if (d < 1 && inDeck(u, v)) put(u, v, [88, 84, 74], Math.round(34 * (1 - d * d)));
+			}
+		}
+	}
+	for (let u = 4; u < CANOPY_U - 4; u++) {
+		if (r() < 0.5) put(u, CANOPY_V - 5, [96, 90, 78], 40);
+		if (r() < 0.3) put(u, 4, [96, 90, 78], 28);
+	}
+	const leaf = [
+		[128, 96, 52],
+		[104, 110, 58],
+		[150, 110, 60],
+	];
+	for (const [lu, lv] of [
+		[5, 5],
+		[CANOPY_U - 7, CANOPY_V - 6],
+		[6, CANOPY_V - 6],
+		[CANOPY_U - 6, 5],
+	]) {
+		for (let i = 0; i < 4; i++) {
+			const u = lu + Math.floor(r() * 3);
+			const v = lv + Math.floor(r() * 2);
+			put(u, v, leaf[Math.floor(r() * leaf.length)]);
+		}
+	}
+	return t;
+}
+
 // ================================================================ RIDEABLE VEHICLES (VEI-05)
 //
 // Seen from above with the nose to the right (+x), on exactly the footprint the game parks them on (VEHICLES length
@@ -1552,6 +1728,15 @@ function build() {
 		helipad(signs.HELIPAD, signs.SIGN_ART),
 		"hospital roof: the heliport's red H on a white cross",
 	);
+	// a gas station's canopy roof (EDI-16), one per side its street is on
+	for (const [i, side] of ["N", "S", "W", "E"].entries()) {
+		add_(
+			`gasCanopy${side}`,
+			"sprite",
+			gasCanopy(side, signs.SIGN_ART, 151 + i),
+			`gas station canopy roof, street to the ${side}: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather`,
+		);
+	}
 	// a gas station's price pylon (EDI-16): its grid, texel for texel, the post's '.' margins transparent
 	add_(
 		signs.PRICE_SIGN.texture,

@@ -432,6 +432,9 @@ export function drawBuildingSign(
 // ------------------------------------------------------------------ a gas station's price sign (EDI-16)
 
 let priceRuns: Array<SignRun> | undefined;
+/** the pylon's shadow: its length per unit of height (a canopy's is ~0.5 of its height), and how far it reaches */
+const PYLON_SHADOW_K = 0.55;
+const PYLON_SHADOW_REACH = 120;
 
 /** tests: the price sign's runs as plain data [x, y, w, h, r, g, b, layer] in texels */
 export function priceSignRuns(): Array<[number, number, number, number, number, number, number, number]> {
@@ -470,17 +473,30 @@ export function drawPriceSign(
 	shadow: (x: number, y: number, len: number) => { x: number; y: number },
 ): void {
 	const q = priceSignRect(footing, SPOT);
-	// the board stands a post's height up: its shadow lies on the forecourt that far off the foot, in the light's
-	// direction, as wide as the board and foreshortened
+	// its shadow on the forecourt, from the foot away from the light (LUZ-01): the post's, thin, then the board's at
+	// the end of it -- as wide as the board seen from the light (the board faces the camera's south, like every sign)
 	const fx = footing.x + footing.w / 2;
 	const fy = footing.y + footing.h / 2;
-	const so = shadow(fx, fy, 64);
-	const sw = q.w;
-	const sh = (q.h - PRICE_SIGN_POST_ROWS * SIGN_TEXEL) * 0.5;
-	const sx = fx + so.x;
-	const sy = fy + so.y;
-	if (sx + sw / 2 >= v.minX && sx - sw / 2 <= v.maxX && sy + sh / 2 >= v.minY && sy - sh / 2 <= v.maxY) {
-		r.drawRect(cam, sx, sy, fresh(sw, sh, Z.shadow, BLACK, 0.22));
+	const so = shadow(fx, fy, 1);
+	const d = math.max(1e-3, math.sqrt(so.x * so.x + so.y * so.y));
+	const dx = so.x / d;
+	const dy = so.y / d;
+	if (
+		fx + PYLON_SHADOW_REACH >= v.minX &&
+		fx - PYLON_SHADOW_REACH <= v.maxX &&
+		fy + PYLON_SHADOW_REACH >= v.minY &&
+		fy - PYLON_SHADOW_REACH <= v.maxY
+	) {
+		const rot = math.atan2(dy, dx);
+		const post = PRICE_SIGN_POST_ROWS * SIGN_TEXEL * PYLON_SHADOW_K;
+		const board = (q.h - PRICE_SIGN_POST_ROWS * SIGN_TEXEL) * PYLON_SHADOW_K;
+		const o = fresh(post, 6, Z.shadow, BLACK, 0.26);
+		o.rotation = rot;
+		r.drawRect(cam, fx + (dx * post) / 2, fy + (dy * post) / 2, o);
+		const across = math.max(8, q.w * math.abs(dy));
+		const b = fresh(board, across, Z.shadow, BLACK, 0.24);
+		b.rotation = rot;
+		r.drawRect(cam, fx + dx * (post + board / 2), fy + dy * (post + board / 2), b);
 	}
 	if (q.x > v.maxX || q.x + q.w < v.minX || q.y > v.maxY || q.y + q.h < v.minY) return;
 	const name = textureOf(PRICE_SIGN);

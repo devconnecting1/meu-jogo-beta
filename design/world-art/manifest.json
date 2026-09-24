@@ -646,6 +646,38 @@
 			"description": "hospital roof: the heliport's red H on a white cross"
 		},
 		{
+			"name": "gasCanopyN",
+			"file": "gasCanopyN.png",
+			"kind": "sprite",
+			"w": 113,
+			"h": 29,
+			"description": "gas station canopy roof, street to the N: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather"
+		},
+		{
+			"name": "gasCanopyS",
+			"file": "gasCanopyS.png",
+			"kind": "sprite",
+			"w": 113,
+			"h": 29,
+			"description": "gas station canopy roof, street to the S: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather"
+		},
+		{
+			"name": "gasCanopyW",
+			"file": "gasCanopyW.png",
+			"kind": "sprite",
+			"w": 29,
+			"h": 113,
+			"description": "gas station canopy roof, street to the W: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather"
+		},
+		{
+			"name": "gasCanopyE",
+			"file": "gasCanopyE.png",
+			"kind": "sprite",
+			"w": 29,
+			"h": 113,
+			"description": "gas station canopy roof, street to the E: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather"
+		},
+		{
 			"name": "signPrice",
 			"file": "signPrice.png",
 			"kind": "sprite",

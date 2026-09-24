@@ -94,6 +94,10 @@ export type WorldArtName =
 	| "signClothes"
 	| "signDiner"
 	| "helipad"
+	| "gasCanopyN"
+	| "gasCanopyS"
+	| "gasCanopyW"
+	| "gasCanopyE"
 	| "signPrice"
 	| "bicycle"
 	| "motorcycle"
@@ -286,6 +290,14 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	signDiner: { id: "rbxassetid://135810788333250", w: 32, h: 20 },
 	/** sprite: hospital roof: the heliport's red H on a white cross */
 	helipad: { id: "rbxassetid://103885604953798", w: 64, h: 64 },
+	/** sprite: gas station canopy roof, street to the N: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather */
+	gasCanopyN: { id: "", w: 113, h: 29 },
+	/** sprite: gas station canopy roof, street to the S: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather */
+	gasCanopyS: { id: "", w: 113, h: 29 },
+	/** sprite: gas station canopy roof, street to the W: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather */
+	gasCanopyW: { id: "", w: 29, h: 113 },
+	/** sprite: gas station canopy roof, street to the E: charcoal fascia with a red pinstripe, standing seams, fixtures, drains, weather */
+	gasCanopyE: { id: "", w: 29, h: 113 },
 	/** sprite: gas station price sign: a price pylon: the pump pictogram over three grade tabs and their dark price panels, on a steel post */
 	signPrice: { id: "", w: 16, h: 25 },
 	/** sprite: a bicycle from above, nose to +x: tyres, frame, pedals, saddle, bars */
@@ -436,6 +448,10 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"signClothes",
 	"signDiner",
 	"helipad",
+	"gasCanopyN",
+	"gasCanopyS",
+	"gasCanopyW",
+	"gasCanopyE",
 	"signPrice",
 	"bicycle",
 	"motorcycle",

@@ -89,9 +89,9 @@
 			"sprites": 142,
 			"images": 73,
 			"flat": 69,
-			"strokes": 26,
+			"strokes": 24,
 			"corners": 42,
-			"instances": 286
+			"instances": 284
 		}
 	},
 	"wreck": {
@@ -165,9 +165,9 @@
 			"sprites": 143,
 			"images": 73,
 			"flat": 70,
-			"strokes": 26,
+			"strokes": 24,
 			"corners": 42,
-			"instances": 556
+			"instances": 554
 		}
 	}
 }

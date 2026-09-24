@@ -525,13 +525,19 @@ export const PUMP_CAR_FILLING = 2;
 const PUMP_CAR_SHARE = 0.55;
 const PUMP_FILLING_SHARE = 0.5;
 /**
- * The canopy over both islands and half of each lane: its `u` span from the corner and its depth round the islands'
- * middle. It stops PUMP_CANOPY_CLEAR short of the shop's front wall: the shop's doors and windows are planned where
- * the ground outside is really free (planInteriors), and a canopy touching that ground would change them.
+ * The canopy over both islands: its `u` span from the corner, and its depth from the islands' middle -- towards the
+ * street only to the eave over a pump car's flank (12 u of its 100: a car cut in half by a closed roof reads as a
+ * box), towards the shop over the lane where a survivor stands to drain the pump. It stops 88 u short of the shop's
+ * front wall: the shop's doors and windows are planned where the ground outside is really free (planInteriors), and a
+ * canopy touching that ground would change them. 452 x 116 u: the texture of its roof is 113 x 29 texels
+ * (tools/gen-world-art.mjs `gasCanopy`).
  */
 const PUMP_CANOPY_U0 = 34;
 const PUMP_CANOPY_U1 = 486;
-const PUMP_CANOPY_HALF = 72;
+export const PUMP_CANOPY_L = PUMP_CANOPY_U1 - PUMP_CANOPY_U0;
+const PUMP_CANOPY_STREET = PUMP_ISLAND_D / 2 + PUMP_CAR_GAP + 12;
+const PUMP_CANOPY_SHOP = 72;
+export const PUMP_CANOPY_D = PUMP_CANOPY_STREET + PUMP_CANOPY_SHOP;
 /** the price sign's concrete footing at the street corner of the forecourt (the pylon above it is aerial) */
 export const GAS_SIGN_SIZE = 24;
 const GAS_SIGN_U = 8;
@@ -1266,7 +1272,7 @@ function placeGas(g: Gen, lot: Lot, e1: LotEdge, e2: LotEdge, atA: boolean): boo
 	// the canopy over the islands (aerial: nothing collides with it; its column stands on each island)
 	{
 		const [c0, c1] = fromCorner(PUMP_CANOPY_U0, PUMP_CANOPY_U1);
-		const q = edgeRect(e1, c0, c1, vMid - PUMP_CANOPY_HALF, vMid + PUMP_CANOPY_HALF);
+		const q = edgeRect(e1, c0, c1, vMid - PUMP_CANOPY_STREET, vMid + PUMP_CANOPY_SHOP);
 		addSolid(g.w, {
 			kind: "canopy",
 			x: q.x,
@@ -1278,8 +1284,8 @@ function placeGas(g: Gen, lot: Lot, e1: LotEdge, e2: LotEdge, atA: boolean): boo
 			destructible: false,
 			tags: "canopy",
 			passable: true,
+			// the side its street is on: the roof's art is drawn for that side (its eave, its drains over the columns)
 			face: e1.side,
-			roofColor: SHOP_ROOF[5],
 			canopyAlpha: 1,
 		});
 	}

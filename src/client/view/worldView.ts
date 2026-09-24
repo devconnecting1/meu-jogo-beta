@@ -97,9 +97,33 @@ const COLUMN = COLORS.metal;
 const COLUMN_EDGE = COLUMN.Lerp(BLACK, 0.55);
 const COLUMN_SIZE = 14;
 const COLUMN_OFF_V = -12;
-/** the canopy: a pale deck, and round it a fascia in the station's roof colour (`Solid.roofColor`, EDI-03) */
-const CANOPY_DECK = COLORS.wallShop.Lerp(WHITE, 0.45);
+/**
+ * The canopy (EDI-16): round its pale steel deck a fascia in the storefront sign's charcoal with the red pinstripe of
+ * its pump (EDI-03: the station's colours, no text, no brand), the colours of its texture (tools/gen-world-art.mjs
+ * `gasCanopy`, the ones the flat drawing uses without an id).
+ */
+const CANOPY_DECK = COLORS.wallShop.Lerp(WHITE, 0.32);
+const CANOPY_FASCIA_BODY = SIGN_ART.x;
+const CANOPY_OUTLINE = SIGN_ART.k;
+const CANOPY_STRIPE = SIGN_ART.r;
+const CANOPY_GUTTER = CANOPY_DECK.Lerp(BLACK, 0.3);
+const CANOPY_SEAM = CANOPY_DECK.Lerp(BLACK, 0.16);
+const CANOPY_DRAIN = Color3.fromRGB(58, 60, 66);
+/** the fascia's depth: the outline, its face, the pinstripe and its body (4 texels) */
 const CANOPY_FASCIA = 16;
+/** the flat drawing's seams: the texture's first ridge (texel 9) and every second panel (12 texels) */
+const CANOPY_SEAM0 = 36;
+const CANOPY_SEAM_PITCH = 48;
+/** the columns' drains, in canopy space: along the street from the canopy's end (symmetric), and from the street eave */
+const CANOPY_DRAINS: ReadonlyArray<number> = [111, 341];
+const CANOPY_COLUMN_V = 44;
+/** the roof's texture for each side its street is on */
+const CANOPY_ART: Record<DoorSide, WorldArtName> = {
+	top: "gasCanopyN",
+	bottom: "gasCanopyS",
+	left: "gasCanopyW",
+	right: "gasCanopyE",
+};
 /** how high the canopy stands, as the length of its shadow (a building's is 20-30, a tree's 18-34) */
 const CANOPY_LIFT = 44;
 /** the pump's hose and nozzle, left in the tank of a car abandoned mid-fill */
@@ -244,6 +268,23 @@ function sideNormal(side: string | undefined): { x: number; y: number } {
 	if (side === "left") return { x: -1, y: 0 };
 	if (side === "right") return { x: 1, y: 0 };
 	return { x: 0, y: 1 };
+}
+
+/**
+ * A point of a gas station's canopy (EDI-16) by canopy space: `u` along its street from its low end, `v` from its
+ * street eave (`Solid.face`: the side its street is on). One scratch point, read at once.
+ */
+const CANOPY_SPOT = { x: 0, y: 0 };
+function canopySpot(s: Solid, u: number, v: number): { x: number; y: number } {
+	const face = s.face ?? "top";
+	if (face === "top" || face === "bottom") {
+		CANOPY_SPOT.x = s.x + u;
+		CANOPY_SPOT.y = face === "top" ? s.y + v : s.y + s.h - v;
+	} else {
+		CANOPY_SPOT.y = s.y + u;
+		CANOPY_SPOT.x = face === "left" ? s.x + v : s.x + s.w - v;
+	}
+	return CANOPY_SPOT;
 }
 
 /** axis-aligned square rect clipped to the view (huge roads / lots never become huge Frames) */
@@ -595,7 +636,7 @@ export class WorldView {
 				if (!this.drawTreeArt(r, cam, s, v)) this.drawTree(r, cam, s, v);
 			} else if (s.kind === "canopy") {
 				// a gas station's canopy (EDI-16): culled on its own (its shadow reaches further than its rect)
-				if (!this.drawCanopyArt(r, cam, s, v)) this.drawCanopy(r, cam, s, v);
+				this.drawCanopy(r, cam, s, v);
 			} else if (s.tags === "gas_sign") {
 				// its footing, and the price pylon standing on it (upright: it reaches past the footing's rect)
 				this.drawGasSign(r, cam, s, v);
@@ -1109,10 +1150,12 @@ export class WorldView {
 	}
 
 	/**
-	 * A gas station's canopy (EDI-16): a flat roof on a column per island, over the islands and half of each lane --
-	 * its fascia in the station's roof colour round a pale deck -- and, a canopy's height off, its shadow on the
-	 * forecourt. Above the actors like a tree's crown, and see-through like one while a body is under it
-	 * (`canopyAlpha`, eased by the loop's `updateCanopy`: VEG-04's fade, LEG-03). Aerial: nothing collides (COL-02).
+	 * A gas station's canopy (EDI-16): a flat roof on a column per island, over the islands and the eave of a pump car's
+	 * flank, its shadow on the forecourt a canopy's height off. Above the actors like a tree's crown, and see-through
+	 * like one while a body is under it (`canopyAlpha`, eased by the loop's `updateCanopy`: VEG-04's fade, LEG-03).
+	 * Aerial: nothing collides (COL-02). With its texture (`gasCanopy` + the side its street is on) the roof is ONE
+	 * sprite of pixel art; without an id, this: the fascia in the storefront sign's charcoal with the red pinstripe of
+	 * its pump, the pale steel deck, a seam every second panel and the drain over each column -- 15 Frames.
 	 */
 	private drawCanopy(r: Renderer, cam: Camera, s: Solid, v: ViewRect): void {
 		if (!overlaps(s.x - 60, s.y - 60, s.w + 120, s.h + 120, v)) return;
@@ -1120,30 +1163,81 @@ export class WorldView {
 		const cy = s.y + s.h / 2;
 		const a = s.canopyAlpha ?? 1;
 		const so = this.shadow(cx, cy, CANOPY_LIFT);
-		r.drawRect(cam, cx + so.x, cy + so.y, { w: s.w, h: s.h, color: BLACK, alpha: 0.22, zIndex: Z.shadow });
-		// the fascia's colour and its shades, built once per canopy (the roofs' cache)
-		const shades = this.roofShadesOf(s, s.roofColor ?? COLORS.roofGray);
+		const tex = artId(CANOPY_ART[s.face ?? "top"]);
+		const sb = artId("shadowBox");
+		if (sb !== undefined) {
+			const o = sliced(artOpts(sb, s.w + 16, s.h + 16, Z.shadow), "shadowBox", 3);
+			o.alpha = 0.34;
+			r.drawRect(cam, cx + so.x, cy + so.y, o);
+		} else {
+			r.drawRect(cam, cx + so.x, cy + so.y, { w: s.w, h: s.h, color: BLACK, alpha: 0.24, zIndex: Z.shadow });
+		}
+		if (tex !== undefined) {
+			const o = artOpts(tex, s.w, s.h, Z.roof);
+			o.alpha = a;
+			r.drawRect(cam, cx, cy, o);
+			return;
+		}
+		// the fascia, and its red pinstripe one texel in (a stroke round an empty rect: UIStroke draws outside it)
+		const T = WORLD_TEXEL;
 		r.drawRect(cam, cx, cy, {
 			w: s.w,
 			h: s.h,
-			color: shades[0],
+			color: CANOPY_FASCIA_BODY,
 			alpha: a,
-			stroke: shades[3],
+			stroke: CANOPY_OUTLINE,
 			strokeThickness: 2,
 			strokeAlpha: a,
 			zIndex: Z.roof,
 		});
-		// the deck, and its gutter along the fascia
 		r.drawRect(cam, cx, cy, {
-			w: s.w - CANOPY_FASCIA * 2,
-			h: s.h - CANOPY_FASCIA * 2,
+			w: s.w - T * 6,
+			h: s.h - T * 6,
+			color: CANOPY_STRIPE,
+			alpha: 0,
+			stroke: CANOPY_STRIPE,
+			strokeThickness: math.max(1, math.floor(T * cam.zoom + 0.5)),
+			strokeAlpha: a,
+			zIndex: Z.roof + 1,
+		});
+		const F = CANOPY_FASCIA;
+		r.drawRect(cam, cx, cy, {
+			w: s.w - F * 2,
+			h: s.h - F * 2,
 			color: CANOPY_DECK,
 			alpha: a,
-			stroke: shades[2],
+			stroke: CANOPY_GUTTER,
 			strokeThickness: 2,
 			strokeAlpha: a,
 			zIndex: Z.roof + 1,
 		});
+		// a standing seam every second panel, across the canopy (perpendicular to its street)
+		const along = s.face === "top" || s.face === "bottom";
+		const len = along ? s.w : s.h;
+		const deep = (along ? s.h : s.w) - F * 2;
+		for (let u = CANOPY_SEAM0; u < len - F; u += CANOPY_SEAM_PITCH) {
+			r.drawRect(cam, along ? s.x + u : cx, along ? cy : s.y + u, {
+				w: along ? 3 : deep,
+				h: along ? deep : 3,
+				color: CANOPY_SEAM,
+				alpha: a,
+				zIndex: Z.roof + 2,
+			});
+		}
+		// the drain over each column: at the islands' middle, CANOPY_COLUMN_V from the street eave
+		for (const u of CANOPY_DRAINS) {
+			const p = canopySpot(s, u, CANOPY_COLUMN_V);
+			r.drawRect(cam, p.x, p.y, {
+				w: 14,
+				h: 14,
+				color: CANOPY_DRAIN,
+				alpha: a,
+				stroke: CANOPY_GUTTER,
+				strokeThickness: 1,
+				strokeAlpha: a,
+				zIndex: Z.roof + 3,
+			});
+		}
 	}
 
 	/** the price sign's concrete footing, and the pylon on it (client/view/buildingSigns.ts `drawPriceSign`) */
@@ -2036,59 +2130,6 @@ export class WorldView {
 			r.drawRect(cam, cx + so.x, cy + so.y, o);
 		}
 		r.drawRect(cam, cx, cy, artOpts(id, s.w, s.h, Z.structure));
-		return true;
-	}
-
-	/**
-	 * The canopy with art (EDI-16): the roofs' welded membrane (a texture every place already has) tinted as the pale
-	 * deck, inside the fascia in the station's roof colour, and the soft drop shadow of the roofs a canopy's height
-	 * off. Answers false when the membrane has no id (the flat canopy above is drawn instead).
-	 */
-	private drawCanopyArt(r: Renderer, cam: Camera, s: Solid, v: ViewRect): boolean {
-		const id = artId("roofMembrane");
-		if (id === undefined) return false;
-		if (!overlaps(s.x - 60, s.y - 60, s.w + 120, s.h + 120, v)) return true;
-		const cx = s.x + s.w / 2;
-		const cy = s.y + s.h / 2;
-		const a = s.canopyAlpha ?? 1;
-		const so = this.shadow(cx, cy, CANOPY_LIFT);
-		const sb = artId("shadowBox");
-		if (sb !== undefined) {
-			const o = sliced(artOpts(sb, s.w + 16, s.h + 16, Z.shadow), "shadowBox", 3);
-			o.alpha = 0.3;
-			r.drawRect(cam, cx + so.x, cy + so.y, o);
-		} else {
-			r.drawRect(cam, cx + so.x, cy + so.y, { w: s.w, h: s.h, color: BLACK, alpha: 0.22, zIndex: Z.shadow });
-		}
-		const shades = this.roofShadesOf(s, s.roofColor ?? COLORS.roofGray);
-		r.drawRect(cam, cx, cy, {
-			w: s.w,
-			h: s.h,
-			color: shades[0],
-			alpha: a,
-			stroke: shades[3],
-			strokeThickness: 2,
-			strokeAlpha: a,
-			zIndex: Z.roof,
-		});
-		const F = CANOPY_FASCIA;
-		this.tileRect(
-			r,
-			cam,
-			s.x + F,
-			s.y + F,
-			s.w - F * 2,
-			s.h - F * 2,
-			v,
-			"roofMembrane",
-			id,
-			Z.roof + 1,
-			CANOPY_DECK,
-			a,
-			shades[2],
-			2,
-			a,
-		);
 		return true;
 	}
 }
