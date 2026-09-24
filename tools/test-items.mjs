@@ -1641,6 +1641,72 @@ section(
 );
 
 section(
+	"C1b. VIT-01: what heals from the backpack heals AT ONCE, through the server's useItem, whatever the wait after a hit",
+	() => {
+		const VIT = require(join(SRC, "shared/sim/vitals.ts"));
+		const craft = new SCRAFT.ServerCraft({ world: W.createWorld(2000, 2000), build: { placing: () => false } });
+		const bitten = u => {
+			const save = bareSave();
+			save.invenUse[u.id] = 1;
+			const p = Ply.createPlayer(save, 1000, 1000);
+			p.hp = 40;
+			p.hungry = 40;
+			Ply.applyPlayerDamage(p, save, 10);
+			return { save, p };
+		};
+		checkRows(
+			"every usable that heals: its hp lands on the use a bite ago, and the body's own wait is left running",
+			USABLES.filter(u => u.hp > 0),
+			u => {
+				const { save, p } = bitten(u);
+				const hp = p.hp;
+				craft.remove(0);
+				const out = craft.useItem(0, p, save, u.id);
+				if (out.kind !== "used") return JSON.stringify(out);
+				if (!near(p.hp, Math.min(p.hpMax, hp + u.hp), 1e-9)) return `hp ${hp} -> ${p.hp}, data +${u.hp}`;
+				return p.sinceHurt === 0 || `the use changed the wait (sinceHurt ${p.sinceHurt})`;
+			},
+		);
+		checkRows(
+			"a usable that HURTS (rotten meat) is hp lost: the wait starts over, even on a rested body",
+			USABLES.filter(u => u.hp < 0),
+			u => {
+				const save = bareSave();
+				save.invenUse[u.id] = 1;
+				const p = Ply.createPlayer(save, 1000, 1000);
+				p.hp = 60;
+				craft.remove(0);
+				craft.useItem(0, p, save, u.id);
+				return (p.hp === 60 + u.hp && p.sinceHurt === 0) || `hp ${p.hp}, sinceHurt ${p.sinceHurt}`;
+			},
+		);
+		checkRows(
+			"food that only feeds does not heal by itself: past the wait it lets the BODY heal, and pays for it",
+			USABLES.filter(u => u.hp === 0 && u.hunger > 0),
+			u => {
+				const save = bareSave();
+				save.invenUse[u.id] = 1;
+				const p = Ply.createPlayer(save, 1000, 1000);
+				p.hp = 60;
+				p.hungry = VIT.REGEN_FOOD_MIN - 5;
+				craft.remove(0);
+				craft.useItem(0, p, save, u.id);
+				if (p.hp !== 60) return `hp ${p.hp} straight from the item`;
+				const fed = p.hungry;
+				stepPlayer(W.createWorld(2000, 2000), p, save, P.makeCommand(1, 0, 0, 0, 0, 0), TICK_DT);
+				const healed = p.hp - 60;
+				const spent = fed - p.hungry - 0.3 * TICK_DT;
+				if (!VIT.fedEnough(fed)) return healed === 0 || `healed ${healed} under the food gate (FOOD ${fed})`;
+				return (
+					(healed > 0 && near(spent, healed * VIT.REGEN_FOOD_PER_HP, 1e-9)) ||
+					`healed ${healed}, food ${spent}`
+				);
+			},
+		);
+	},
+);
+
+section(
 	"C2. the three timed effects do what the card says, and wear off (shared/game/player.ts, server/sim/combat.ts)",
 	() => {
 		const world = W.createWorld(8000, 8000);
@@ -2774,7 +2840,8 @@ section("E3. every skill's effect, measured where the game applies it", () => {
 	effect[0] = lv =>
 		Ply.createPlayer(withSkill(0, lv), 0, 0).hpMax === 100 + 10 * lv ||
 		`hpMax ${Ply.createPlayer(withSkill(0, lv), 0, 0).hpMax}`;
-	// 1 Recovery: regeneration × (1 + level) (stepPlayer)
+	// 1 Recovery: regeneration × (1 + level) (stepPlayer) -- the RATE only: the wait after a hit is the same at every
+	// level (DESIGN_RULES VIT-01)
 	effect[1] = lv => {
 		const regen = s => {
 			const p = Ply.createPlayer(s, 1000, 1000);
@@ -2784,7 +2851,20 @@ section("E3. every skill's effect, measured where the game applies it", () => {
 		};
 		const a = regen(bareSave());
 		const b = regen(withSkill(1, lv));
-		return near(b / a, 1 + lv, 0.01) || `${a.toFixed(2)} -> ${b.toFixed(2)} hp/s`;
+		if (!near(b / a, 1 + lv, 0.01)) return `${a.toFixed(2)} -> ${b.toFixed(2)} hp/s`;
+		const s = withSkill(1, lv);
+		const p = Ply.createPlayer(s, 1000, 1000);
+		p.hp = 50;
+		Ply.applyPlayerDamage(p, s, 10);
+		let t = 0;
+		while (p.hp <= 40 && t < 20 * CFG.SIM_HZ) {
+			stepPlayer(world, p, s, P.makeCommand(1, 0, 0, 0, 0, 0), TICK_DT);
+			t += 1;
+		}
+		return (
+			near(t / CFG.SIM_HZ, 7, 2 / CFG.SIM_HZ) ||
+			`heals ${(t / CFG.SIM_HZ).toFixed(2)} s after a bite (the wait: 7 s)`
+		);
 	};
 	/** one blade hit on a zombie through the server's weapon machine: its damage and its knockback */
 	const bladeHit = s => {
@@ -3148,6 +3228,8 @@ section("E3. every skill's effect, measured where the game applies it", () => {
 			"server/sim/interaction.ts",
 			"server/sim/items.ts",
 			"shared/sim/playerMove.ts",
+			// the body's step (Recovery, Patience, Poison immunity: DESIGN_RULES VIT-01), called by playerMove.ts
+			"shared/sim/vitals.ts",
 			"shared/sim/ai/zombieBrain.ts",
 			"shared/sim/craftRule.ts",
 			"shared/sim/loot.ts",

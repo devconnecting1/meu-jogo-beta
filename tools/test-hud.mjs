@@ -24,6 +24,10 @@
  *     its arc and the horde's pips, the red pulse of the last 30 s (still with Reduce Motion), and the life's day only
  *     when it differs from the world's (MP-13 / MP-20); no text carries a contour (UI-04); with Reduce Motion
  *     nothing throbs: low HP holds its fill lit, low food holds it red, the low-HP vignette holds one value;
+ *  4c. DESIGN_RULES VIT-01's cue (hudRegen.ts): a soft glow round the HP bar while the body heals (in with the ramp,
+ *     outside the groove so the label keeps its plate), nothing during the wait after a hit, a fork on the FOOD bar
+ *     while only food stands in the way (in a fight too, and starving), popping once; Reduce Motion holds the glow and
+ *     drops the pop; 600 frames through every phase create nothing, a steady frame writes nothing;
  *  5. touch: the compact console never covers the move stick or the fire controls, measured on the touch layout's
  *     own numbers (shared/engine/input.ts), at 1120x630 ("phone") and 1360x435 (wide), with the default controls,
  *     left-handed, at the largest sizes and with a fixed stick -- and its tiles stay a thumb wide; the sky's touch
@@ -588,6 +592,165 @@ check(
 		deep(consoleFrame(), "Magazine")?.Text.endsWith("7</font> / 41"),
 	`${deep(consoleFrame(), "WeaponName")?.Text} / ${deep(consoleFrame(), "WeaponType")?.Text} / ${deep(consoleFrame(), "Magazine")?.Text}`,
 );
+
+// ---------------------------------------------------------------- 4c) VIT-01: the healing cue on the vitals bars
+
+console.log("\n4c) VIT-01: o HP brilha enquanto cura; um garfo na FOOD quando so a comida impede a cura\n");
+{
+	const VIT = require(join(SRC, "shared/sim/vitals.ts"));
+	const gs = service("GuiService");
+	const glow = () => deep(consoleFrame(), "HpGlow");
+	const glowParts = () => ["GlowV", "GlowH"].map(n => deep(glow(), n));
+	const fork = () => deep(deep(consoleFrame(), "FoodBar"), "EatHint");
+	const lit = () => glow()?.Visible === true;
+	const eat = () => fork()?.Visible === true;
+	const glowT = () => glowParts()[0].BackgroundTransparency;
+	const forkSize = () => fork().Size.X.Scale;
+	const RESTED = VIT.REGEN_RESTED_S;
+	const healing = { hp: 60, hunger: 80, sinceHurt: RESTED };
+	setClock(7000);
+	hud.update(state());
+	check(
+		"o brilho e o garfo existem desde a montagem, escondidos (sem sinceHurt, a HUD nao inventa cura)",
+		glow() !== undefined && fork() !== undefined && !lit() && !eat(),
+	);
+	hud.update(state(healing));
+	check(
+		"curando: o HP ganha um brilho na cor de cura do tema (GAME.success), e nada na FOOD",
+		lit() &&
+			glowParts().every(f => sameColor(f.BackgroundColor3, GAME.success) && f.BackgroundTransparency < 1) &&
+			!eat(),
+		`transparencia ${glowT()}`,
+	);
+	{
+		// the ring sits OUTSIDE the HP groove and under it: the bar's fill and label (UI-05's 4,5:1) are untouched
+		const g = glow();
+		const groove = deep(consoleFrame(), "HpBar");
+		const inside =
+			g.Position.X.Scale < groove.Position.X.Scale &&
+			g.Position.Y.Scale < groove.Position.Y.Scale &&
+			g.Position.X.Scale + g.Size.X.Scale > groove.Position.X.Scale + groove.Size.X.Scale &&
+			g.Position.Y.Scale + g.Size.Y.Scale > groove.Position.Y.Scale + groove.Size.Y.Scale;
+		check(
+			"o brilho abraca o sulco do HP por fora e por baixo dele: o texto da barra continua sobre a chapa",
+			inside && g.ZIndex < groove.ZIndex && g.Parent === groove.Parent,
+		);
+	}
+	// the ramp: fainter at its start than at the full rate (same clock: the same breath)
+	hud.update(state({ ...healing, sinceHurt: VIT.REGEN_DELAY_S + VIT.REGEN_RAMP_S * 0.25 }));
+	const early = glowT();
+	hud.update(state(healing));
+	check("o brilho entra com a rampa: mais fraco no comeco da cura", early > glowT(), `${early} -> ${glowT()}`);
+	hud.update(state({ ...healing, sinceHurt: 2 }));
+	check("na espera depois de um golpe: nada (a luta ja diz isso)", !lit() && !eat());
+	hud.update(state({ ...healing, hp: 100 }));
+	check("vida cheia: nada", !lit() && !eat());
+
+	// low food: the fork, with one pop
+	const rest = forkSize();
+	setClock(7100);
+	hud.update(state({ ...healing, hunger: VIT.REGEN_FOOD_MIN - 1 }));
+	const popped = forkSize();
+	check(
+		`FOOD abaixo de ${VIT.REGEN_FOOD_MIN} com vida faltando: o garfo aparece na ponta da barra de FOOD, e o HP nao brilha`,
+		eat() && !lit() && fork().Position.X.Scale > 0.8,
+		`x ${fork().Position.X.Scale.toFixed(3)}`,
+	);
+	check("...e ele pulsa uma vez ao aparecer", popped > rest * 1.3, `${popped.toFixed(4)} contra ${rest.toFixed(4)}`);
+	for (let i = 1; i <= 30; i++) {
+		setClock(7100 + i / 60);
+		hud.update(state({ ...healing, hunger: VIT.REGEN_FOOD_MIN - 1 }));
+	}
+	check("...e volta ao tamanho em 0,3 s, sem pulsar de novo", forkSize() === rest, `${forkSize()}`);
+	hud.update(state({ ...healing, hunger: VIT.REGEN_FOOD_MIN - 1, sinceHurt: 1 }));
+	check("o garfo fica tambem no meio da luta: a espera acaba sozinha, a fome nao", eat());
+	hud.update(state({ ...healing, hunger: 0 }));
+	check("e passando fome (FOOD 0)", eat());
+	{
+		const lum = c => {
+			const f = v => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+			return 0.2126 * f(c.R) + 0.7152 * f(c.G) + 0.0722 * f(c.B);
+		};
+		const px = deep(fork(), "Px0");
+		const a = lum(px.BackgroundColor3);
+		const b = lum(SURFACE.groove);
+		const ratio = (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+		check(
+			"o garfo e o claro do rotulo sobre o sulco escuro: >= 3:1 (grafico, WCAG 1.4.11)",
+			sameColor(px.BackgroundColor3, THEME.foreground) && ratio >= 3,
+			`${ratio.toFixed(2)}:1`,
+		);
+	}
+	// Reduce Motion: no pop, and the glow holds one value
+	gs.ReducedMotionEnabled = true;
+	flush();
+	hud.update(state(healing));
+	hud.update(state({ ...healing, hunger: 10 }));
+	const stillPop = forkSize();
+	const values = new Set();
+	for (let i = 0; i < 90; i++) {
+		setClock(7200 + i / 30);
+		hud.update(state(healing));
+		values.add(glowT());
+	}
+	gs.ReducedMotionEnabled = false;
+	flush();
+	check(
+		"com Reduce Motion: o garfo aparece sem pulsar e o brilho fica num valor so",
+		stillPop === rest && [...values].length === 1,
+		`garfo ${stillPop.toFixed(4)}, brilho ${[...values].join(", ")}`,
+	);
+	const breath = new Set();
+	for (let i = 0; i < 90; i++) {
+		setClock(7300 + i / 30);
+		hud.update(state(healing));
+		breath.add(glowT());
+	}
+	check("sem ele, o brilho respira devagar (0,5 Hz)", [...breath].length > 3, `${[...breath].length} valores em 3 s`);
+
+	// no churn: 600 frames through every phase create nothing; a steady frame writes nothing; breathing writes 2 at most
+	const phases = [
+		healing,
+		{ ...healing, sinceHurt: 0.5 },
+		{ ...healing, sinceHurt: VIT.REGEN_DELAY_S + 1 },
+		{ ...healing, hunger: 12 },
+		{ ...healing, hp: 100 },
+		{ ...healing, hunger: 0, hp: 20 },
+	];
+	const churn = phase("600 quadros passando por curando / espera / rampa / fome / cheio", () => {
+		for (let i = 0; i < 600; i++) {
+			setClock(7400 + i / 60);
+			hud.update(state(phases[Math.floor(i / 25) % phases.length]));
+		}
+	});
+	check("600 quadros de dicas de cura nao criam nem destroem Instance", zero(churn), cost(churn));
+	gs.ReducedMotionEnabled = true;
+	flush();
+	hud.update(state(healing));
+	const steady = phase("60 quadros curando, Reduce Motion", () => {
+		for (let i = 0; i < 60; i++) {
+			setClock(7500 + i / 60);
+			hud.update(state(healing));
+		}
+	});
+	gs.ReducedMotionEnabled = false;
+	flush();
+	check(
+		"curando parado (Reduce Motion): nenhum quadro escreve nada",
+		steady.writes === 0 && zero(steady),
+		cost(steady),
+	);
+	let worst = 0;
+	for (let i = 0; i < 60; i++) {
+		const one = phase("um quadro respirando", () => {
+			setClock(7600 + i / 60);
+			hud.update(state(healing));
+		});
+		worst = Math.max(worst, one.writes);
+	}
+	check("respirando: no maximo 2 escritas por quadro (as duas partes do anel)", worst <= 2, `pior ${worst}`);
+	hud.update(state());
+}
 
 // ---------------------------------------------------------------- 4b) the sky (the day clock, hudSky.ts)
 
