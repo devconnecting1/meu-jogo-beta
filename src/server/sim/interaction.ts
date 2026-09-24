@@ -459,9 +459,11 @@ export class ServerInteraction {
 				// outside: the pump island (or the stall, the pile, the shed) in reach; inside the bank's vault: its
 				// deposit boxes (EDI-23), not the bank's own drawers
 				const near = nearestPump(this.pumps, p.x, p.y, PUMP_FLAG_REACH * 2);
-				if (b === undefined)
+				if (b === undefined) {
 					b = near !== undefined && edgeDist(near, p.x, p.y) < PUMP_FLAG_REACH ? near : undefined;
-				else if (near !== undefined && isVaultBox(near) && near.bankId === b.id) b = near;
+				} else if (near !== undefined && isVaultBox(near) && near.bankId === b.id) {
+					b = near;
+				}
 			}
 			const has = b !== undefined && this.items.hasLoot(b);
 			const id = b !== undefined && has ? b.id : 0;
