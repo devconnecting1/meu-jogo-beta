@@ -1,9 +1,11 @@
 import { ADMIN_ATTRIBUTE } from "shared/admin/config";
 import type { AdminRequest, AdminResponse, PlayerRow } from "shared/admin/protocol";
+import { langGet } from "shared/data/lang";
 import type { GameContext } from "shared/game/context";
 import type { GameLoop } from "../gameLoop";
+import { InputDevice, inputDevice, onInputDeviceChanged } from "../ui/device";
 import { TEXT, THEME, space } from "../ui/theme";
-import { Badge, Card, ToastKind, makeAnchored, makeLabel, showToast } from "../ui/widgets";
+import { Button, Card, ToastKind, makeAnchored, makeLabel, showToast } from "../ui/widgets";
 import { qualityReadout } from "../view/quality";
 import { adminRequest, adminRequestAsync, logLocal, onAdminEvent, startAdminNet } from "./net";
 import { AdminPanel } from "./panel";
@@ -11,14 +13,18 @@ import { PanelCtx, SectionId } from "./panelTypes";
 import { startAdminListeners } from "./patches";
 import { Placement } from "./placement";
 import { worldPrefs } from "./sectionWorld";
-import { LocalAdminWorld } from "./world";
+import { AdminWorldHost } from "./serverWorld";
 
 /*
  * Admin mode entry point (wired by main.client.ts).
  * - every client: admin networking + save patches + announcements (patches.ts)
- * - admins only (the server sets the PZAdmin attribute after checking the UserId): the panel, the ADMIN badge, the
+ * - admins only (the server sets the PZAdmin attribute after checking the UserId): the panel, the ADMIN button, the
  *   debug overlay and the input bindings are created; nothing of it exists for other players
- * - F2 (or `) opens / closes the panel (neither key is taken by the Roblox CoreGui: it uses Esc, F9, F11, F12)
+ * - opening the panel, on every device an admin may hold: F2 (or `) on a keyboard (neither key is taken by the
+ *   Roblox CoreGui: it uses Esc, F9, F11, F12), R3 (the right stick's click, which the game uses for nothing) on a
+ *   pad, and the ADMIN button itself -- a click, or a tap on a phone, where it grows to a thumb's size and moves to
+ *   the top-left corner, away from the stick. B / Backspace close it like any screen (client/ui/backStack.ts)
+ * - world tools go to the server when it owns the world (client/admin/serverWorld.ts, docs/MULTIPLAYER.md §10)
  */
 
 const Players = game.GetService("Players");
@@ -27,6 +33,13 @@ const Stats = game.GetService("Stats");
 const UserInputService = game.GetService("UserInputService");
 
 const PANEL_KEYS = new Set<Enum.KeyCode>([Enum.KeyCode.F2, Enum.KeyCode.Backquote]);
+/** the pad's way to the panel: the right stick's click (the game binds nothing to it, client/bootstrap.ts) */
+const PANEL_PAD_KEY = Enum.KeyCode.ButtonR3;
+/** the ADMIN button: a small plate at the bottom-left with a mouse; a thumb's target (>= 44 px on a phone) on touch */
+const BADGE_W = 110;
+const BADGE_H = 28;
+const BADGE_TOUCH_W = 132;
+const BADGE_TOUCH_H = 76;
 const PLAYER_POLL = 2;
 const STATS_REFRESH = 0.25;
 const FREECAM_SPEED = 900;
@@ -101,8 +114,9 @@ function enableAdmin(deps: AdminDeps): AdminMode {
 	overlayLayer.ZIndex = 86;
 	overlayLayer.Parent = ctx.root;
 
-	const world = new LocalAdminWorld(ctx, loop, overlayLayer);
-	// a world tool changed the run: tell the server once per run (it stops crediting coins / achievements / records)
+	const world = new AdminWorldHost(ctx, loop, overlayLayer, player.UserId);
+	// a world tool changed the run of a world this client simulates: tell the server once per run (it stops crediting
+	// coins / achievements / records). Where the server owns the world it marks the run itself and says so
 	let assistedRunRev = -1;
 	world.onAssist = what => {
 		const runRev = ctx.save.runRev;
@@ -112,6 +126,13 @@ function enableAdmin(deps: AdminDeps): AdminMode {
 			if (res.ok) notify(`Assisted run (${what}): no coins, achievements or records from it`, "info");
 		});
 	};
+	world.onServerAssist = () => {
+		const runRev = ctx.save.runRev;
+		if (runRev === assistedRunRev) return;
+		assistedRunRev = runRev;
+		notify("Assisted run: no coins, achievements or records from it", "info");
+	};
+	world.notify = (text, kind) => notify(text, kind);
 	const placement = new Placement(ctx, world, gui);
 	let panel: AdminPanel | undefined;
 	let statsOn = false;
@@ -162,13 +183,53 @@ function enableAdmin(deps: AdminDeps): AdminMode {
 	panel = new AdminPanel(
 		p,
 		gui,
-		`${player.Name} · UserId ${player.UserId} · F2 or \` toggles · world tools act on your own world`,
+		`${player.Name} · UserId ${player.UserId} · F2, \` or R3 toggles · world tools act on the town you play in`,
 	);
 
-	// ADMIN badge (bottom-left, discreet)
-	const badgeText = "ADMIN · F2";
-	const badgeBox = makeAnchored(gui, "AdminBadge", 0, 1, 110, 24, 14, 14, false);
-	Badge(badgeBox, "Badge", badgeText, { x: 0, y: 0, w: 110, h: 24, variant: "secondary" });
+	/** opens or closes the panel; `pad`: opened from a gamepad, which then needs a control selected to navigate */
+	const togglePanel = (pad: boolean): void => {
+		if (placement.active()) {
+			placement.cancel();
+			return;
+		}
+		panel?.toggle();
+		if (panel !== undefined && panel.isOpen()) {
+			world.syncState();
+			if (pad) panel.focusFirst();
+		}
+	};
+
+	// the ADMIN button: a discreet plate at the bottom-left, a thumb-sized one at the top-left on a touch screen (the
+	// left half of a phone is the movement stick's; the top-left corner under the Roblox bar is the least in its way)
+	let badgeBox: Frame | undefined;
+	const buildBadge = (device: InputDevice): void => {
+		badgeBox?.Destroy();
+		const touch = device === "touch";
+		const w = touch ? BADGE_TOUCH_W : BADGE_W;
+		const h = touch ? BADGE_TOUCH_H : BADGE_H;
+		const key = device === "gamepad" ? "R3" : "F2";
+		const box = makeAnchored(gui, "AdminBadge", 0, touch ? 0 : 1, w, h, 14, 14, touch);
+		Button(
+			box,
+			"Badge",
+			touch
+				? langGet("ADMIN", ctx.save.settings.langType)
+				: `${langGet("ADMIN", ctx.save.settings.langType)} · ${key}`,
+			{
+				x: 0,
+				y: 0,
+				w,
+				h,
+				size: "sm",
+				variant: "secondary",
+				onClick: () => togglePanel(device === "gamepad"),
+			},
+		);
+		badgeBox = box;
+	};
+	buildBadge(inputDevice());
+	const deviceConn = onInputDeviceChanged(device => buildBadge(device));
+	if (deviceConn !== undefined) conns.push(deviceConn);
 
 	// stats card (Debug → Stats card), right-middle
 	const statsW = 300;
@@ -218,8 +279,11 @@ function enableAdmin(deps: AdminDeps): AdminMode {
 		UserInputService.InputBegan.Connect((input, gpe) => {
 			if (input.UserInputType === Enum.UserInputType.Keyboard) {
 				if (gpe || !PANEL_KEYS.has(input.KeyCode)) return;
-				if (placement.active()) placement.cancel();
-				else panel?.toggle();
+				togglePanel(false);
+				return;
+			}
+			if (input.KeyCode === PANEL_PAD_KEY) {
+				togglePanel(true);
 				return;
 			}
 			if (gpe) return;
@@ -237,9 +301,11 @@ function enableAdmin(deps: AdminDeps): AdminMode {
 					ctx.input.attackBlocked = true;
 					const m = UserInputService.GetMouseLocation();
 					const at = world.screenToWorld(m.X, m.Y);
+					// (a server teleport YIELDS: this handler runs in a thread of its own)
 					const res = world.teleport(at.x, at.y);
-					if (res.ok) logLocal("teleport", `ctrl+click to (${math.floor(at.x)}, ${math.floor(at.y)})`);
-					else notify(res.message, "error");
+					const where = `ctrl+click to (${math.floor(at.x)}, ${math.floor(at.y)})`;
+					if (!res.ok) notify(res.message, "error");
+					else if (!res.audited) logLocal("teleport", where);
 				}
 			} else if (input.UserInputType === Enum.UserInputType.MouseButton2) {
 				if (placement.active()) {

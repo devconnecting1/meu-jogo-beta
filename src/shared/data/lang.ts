@@ -268,6 +268,9 @@ export const LANG_TABLE: Array<string> = [
 	// an admin's save edit reaching the player (client/admin/patches.ts): nobody's name, just what happened
 	"Your progress was updated by an administrator",
 	"Your progress was reset by an administrator",
+	// the button that opens the admin panel (client/admin/adminClient.ts): only an admin ever sees it, on a mouse, a pad
+	// or a phone (the panel itself is English on purpose, UI-03)
+	"ADMIN",
 	// the lobby has no body, so nobody hears it (MP-18): the chat bar is off there, and this says why, once
 	"Chat reaches the survivors near you in town. Enter the city to talk.",
 	// "/w name ..." with whispers off (MP-17): said to nobody, and the sender is told why (client/chatInput.ts)
@@ -292,6 +295,31 @@ export const LANG_TABLE: Array<string> = [
 	"Unseen",
 	"Camp Cook",
 	"Sentry Builder",
+	// what earns each achievement (shared/data/achievements.ts `howTo`), under its name in the window (UI-14)
+	"Step into the city for the first time.",
+	"Switch on an electric lamp that has power.",
+	"Put down zombies with melee weapons.",
+	"Put down zombies with a bow.",
+	"Cook food over a fire or a stove.",
+	"Smelt metal in a brazier or a furnace.",
+	"Put down zombies with a sniper rifle.",
+	"Help bring down the Centipede boss.",
+	"Help bring down the Rafflesia boss.",
+	"Help bring down the Giant boss.",
+	"Help bring down the Hedgehog boss.",
+	"Put down zombies, any kind.",
+	"Put down special zombies (not walkers).",
+	"Gather wood into your backpack.",
+	"Live through a whole day in the city.",
+	"Ride a bicycle or a motorcycle.",
+	"Survive nights in one life without dying.",
+	"Put down a zombie with a turret you built.",
+	// the Achievements window (client/ui/achievements.ts, UI-14): the three states, the summary, the "?"
+	"Unlocked",
+	"In progress",
+	"Not started",
+	"No coins or items: a record of what you did.",
+	"Achievements count what you do in the city. The server keeps the count, as you play.#In progress comes first, the closest to done at the top; then what you have unlocked; then what is left.#They are a record of what you did: they give no coins and no items. Titles are earned their own way, in the Wardrobe.",
 	"Continue",
 	"New game",
 	"Shop",
@@ -404,21 +432,39 @@ export const LANG_TABLE: Array<string> = [
 	"Owned",
 	"Packs",
 	"Earn coins",
-	"Delivered when your next game starts",
+	// the Shop window (client/ui/shop.ts, MON-03 / MON-06): the note over the cards (a pack is delivered when the
+	// survivor is in the city: a New game is not needed), a pack waiting, a pet pack's truth, the "?"
+	"Fixed contents, shown in full. A pack goes into your backpack when you enter the city.",
+	"Pending",
+	"Stays until a New game",
+	"Every pack has fixed contents, shown in full on its card: what you see is what you get.#Packs go into your backpack the next time you enter the city.#A pet from a pack stays until a New game. The Wardrobe sells outfits and pets you keep for good.#Coins are earned by playing: the Earn coins tab shows how, and how far you are from the next ones.",
+	// Earn coins: how each source pays, and how far the player is from it
+	"Paid at every midnight your survivor lives through.",
+	"Next pay at midnight",
+	"Paid the first time a life reaches a new best day that is a multiple of 5.",
+	"day to go",
+	"days to go",
+	// "Help bring one down. Bosses wake at landmarks from day 5." (the first boss's world day follows)
+	"Help bring one down. Bosses wake at landmarks from day",
+	"Given once, to every new survivor.",
+	"Received",
 	"Progress not loaded",
 	"Your progress could not be loaded.#Nothing will be overwritten: retry,#or play without saving.",
 	"Retry",
 	"Play without saving",
 	"Saving is unavailable in this environment",
-	"Progress saved",
+	// SAV-01: saving is automatic only (no Save button); the corner indicator says what the server's writes did
+	// (client/ui/saveIndicator.ts)
 	"Saving...",
+	"Saved",
+	"Progress not saved — retrying",
+	"Progress not saved",
 	"Could not save",
 	"Welcome, survivor! Here are 20 coins to start",
 	// the in-run menu (P / Start / the menu button). DESIGN_RULES UI-06: no menu pauses the world, so no text
 	// may say it does -- no "Paused" title, no "Resume", no "(pauses)" (tools/test-contrast.mjs checks).
-	// "Menu" and "Backpack" are already listed (the settings' Controls tab)
+	// "Menu" and "Backpack" are already listed (the settings' Controls tab). No "Save": saving is automatic (SAV-01)
 	"Back to game",
-	"Save",
 	"Home",
 	"Game over",
 	// the death screen's epitaph (client/onboarding/gameOver.ts `epitaph`), one of four: the first is the first death's
@@ -787,6 +833,14 @@ export const LANG_TABLE: Array<string> = [
 	"Launch drone",
 	"Call back drone",
 	"Drone charging",
+	// the ground items (client/systems/interaction.ts, client/ui/pickupToast.ts, DESIGN_RULES ITM-07): the prompt
+	// ("E: Pick up Shotgun ammo ×8"), an item the save already holds as many of as it can keep ("Wood full (9999)"),
+	// and the lesson that teaches the two ways -- walked up for supplies, E for weapons and gear. The feedback line is
+	// a number and an item's name ("+12 Wood"), both already here
+	"Pick up",
+	"full",
+	"Pick something up",
+	"Walk over food, ammo and materials. For weapons and gear, press use.",
 	// a gas station's pump island holding fuel: what E does there (client/systems/interaction.ts PUMP_HINT,
 	// DESIGN_RULES EDI-16; the HUD shows the text after "E: ")
 	"Siphon Oil",

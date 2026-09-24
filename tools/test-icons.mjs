@@ -21,7 +21,8 @@
  *   2. NO ID, NO CHANGE. With no atlas id every icon, dimmed icon and glyph, at five sizes (and in Scale, before the
  *      view knows its size), in one pooled view and in a reserved one, draws the same Frames with the same colours
  *      as before the atlas: the digest of every Frame's properties after every draw equals
- *      tools/golden/item-icons-flat.json, recorded from the drawer of 38c363a. And no ImageLabel exists.
+ *      tools/golden/item-icons-flat.json: the Frame drawer of 38c363a (itemIcon.ts has not changed since), re-recorded
+ *      with --golden when the ART changes on purpose (the ART-13 pass, 2026-09-24). And no ImageLabel exists.
  *   3. WITH AN ID. Every icon and glyph draws as ONE visible ImageLabel (no Frame run at all): the atlas's id,
  *      ImageRectOffset / ImageRectSize = its cell (the dimmed cell when dimmed), Pixelated, untinted for art and
  *      tinted with the ink for a glyph, opaque, filling the same square the Frames fill. Rasterised, it is the Frame
@@ -36,6 +37,9 @@
  *      square's centre; the "cell" drawing pixel for pixel, moved by whole pixels; drawnRects() exactly the runs the
  *      view places; the same centring in Scale before the size is known; no churn. The default fit ("cell") is what
  *      parts 1-5 measure, unchanged.
+ *   7. THE STYLE (DESIGN_RULES ART-13). Every outline colour is a dark hue (under 2% luminance) darker than every
+ *      tile face an icon sits on; every icon is closed (each pixel touching empty space is an outline colour), has
+ *      no stray single pixel and draws 12-14 pixels on its longest side (one visual weight).
  *
  * Pure Node (>= 18) + the project's TypeScript on tools/ui-shim.mjs (the counted fake Instance tree).
  */
@@ -182,7 +186,7 @@ const flat = flatDigests();
 if (GOLDEN_MODE) {
 	const golden = {
 		note: "digests of client/ui/itemIcon.ts drawing every icon, dimmed icon and glyph with Frames (no atlas id): tools/test-icons.mjs --golden",
-		recordedFrom: "38c363a (the Frame drawer before the atlas)",
+		recordedFrom: "the ART-13 icon art (2026-09-24), drawn by the Frame drawer of 38c363a (unchanged)",
 		digests: flat,
 	};
 	writeFileSync(GOLDEN, `${JSON.stringify(golden, undefined, "\t")}\n`);
@@ -405,7 +409,7 @@ setAtlas("");
 
 // ================================================================ 2. no id, no change
 
-section("2) no atlas id: the Frame drawing of 38c363a, Frame for Frame");
+section("2) no atlas id: the Frame drawing of the golden (the drawer of 38c363a), Frame for Frame");
 {
 	const golden = JSON.parse(readFileSync(GOLDEN, "utf8")).digests;
 	for (const [name, want] of Object.entries(golden)) {
@@ -803,6 +807,88 @@ section('6) fit "drawn": what is drawn sits in the middle of the square, the sam
 		v.frame.Destroy();
 	}
 	setAtlas("");
+}
+
+// ================================================================ 7. the style (DESIGN_RULES ART-13)
+
+section("7) the style of the art (ART-13): outline all around in a dark hue, no stray pixel, one weight");
+{
+	const { ICON_ART, ICON_OUTLINES } = require(join(SRC, "shared/engine/colors.ts"));
+	const lin = v => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+	const lum = c => 0.2126 * lin(c.R) + 0.7152 * lin(c.G) + 0.0722 * lin(c.B);
+	const ratio = (a, b) => (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
+	const outlines = [...ICON_OUTLINES];
+	// the faces an item icon sits on: an owned tile, an equipped one, the selection (the Bag and the hotbar)
+	const { SURFACE } = require(join(SRC, "client/ui/theme.ts"));
+	const FACES = [
+		["dark iron (owned)", SURFACE.section],
+		["iron (equipped)", THEME.secondary],
+		["blue (selected)", THEME.tabActive],
+	];
+	const dim = outlines.filter(ch => ICON_ART[ch] === undefined || lum(ICON_ART[ch]) > 0.02);
+	check(
+		dim.length === 0 && outlines.length === 11,
+		`the ${outlines.length} outline colours (${outlines.join(" ")}) are all under 2% luminance: a dark hue of their material, never lighter than a shadow`,
+		dim.join(", "),
+	);
+	let worst = Infinity;
+	let worstAt = "";
+	for (const ch of outlines) {
+		for (const [name, face] of FACES) {
+			const r = ratio(ICON_ART[ch], face);
+			if (r < worst) {
+				worst = r;
+				worstAt = `"${ch}" on ${name}`;
+			}
+		}
+	}
+	check(
+		worst >= 1.5,
+		`every outline is darker than every tile face it sits on, at least 1.5:1 (worst ${worst.toFixed(2)}:1, ${worstAt}; 3:1 and more on the equipped iron and the selection)`,
+	);
+	const open = [];
+	const stray = [];
+	const weight = [];
+	const longest = {};
+	for (const k of ICON_KEYS) {
+		const rows = ITEM_ICONS[k];
+		const at = (x, y) => (x < 0 || y < 0 || x > 15 || y > 15 ? "." : rows[y][x]);
+		let box = [16, 16, -1, -1];
+		for (let y = 0; y < 16; y++) {
+			for (let x = 0; x < 16; x++) {
+				const c = at(x, y);
+				if (c === ".") continue;
+				box = [Math.min(box[0], x), Math.min(box[1], y), Math.max(box[2], x), Math.max(box[3], y)];
+				const n4 = [at(x - 1, y), at(x + 1, y), at(x, y - 1), at(x, y + 1)];
+				if (!outlines.includes(c) && n4.includes(".")) open.push(`${k} ${x},${y}`);
+				let n8 = 0;
+				for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (at(x + dx, y + dy) !== ".") n8++;
+				if (n8 === 1) stray.push(`${k} ${x},${y}`);
+			}
+		}
+		const side = Math.max(box[2] - box[0], box[3] - box[1]) + 1;
+		longest[side] = (longest[side] ?? 0) + 1;
+		if (side < 12 || side > 14) weight.push(`${k} ${side}`);
+	}
+	check(
+		open.length === 0,
+		`all ${ICON_KEYS.length} icons are closed: every pixel that touches empty space (or the cell's edge) is an outline colour`,
+		open.slice(0, 6).join("; "),
+	);
+	check(
+		stray.length === 0,
+		"no stray single pixel: every painted pixel touches another",
+		stray.slice(0, 6).join("; "),
+	);
+	check(
+		weight.length === 0,
+		`one visual weight: what each icon draws is 12-14 pixels on its longest side, 75-88% of the 16-pixel cell (${Object.entries(
+			longest,
+		)
+			.map(([s, n]) => `${n} x ${s}`)
+			.join(", ")})`,
+		weight.join(", "),
+	);
 }
 
 // ================================================================ the pictures (--render <dir>)

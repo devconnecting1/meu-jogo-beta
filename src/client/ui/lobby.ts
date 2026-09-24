@@ -1,6 +1,5 @@
 import { GameContext } from "shared/game/context";
 import { ownsEquip, outfitLookOf, petLookOf, totalPendingPacks } from "shared/game/save";
-import { ACHIEVEMENTS } from "shared/data/achievements";
 import { COSTUMES } from "shared/data/shop";
 import { cosmeticSlotOf, PetLook } from "shared/data/cosmetics";
 import { langGet } from "shared/data/lang";
@@ -10,29 +9,24 @@ import { TOWN_KEEPER_ATTR } from "shared/net/townNet";
 import { onWalletChanged } from "../systems/saveClient";
 import { SurvivorPreview } from "../view/cosmeticPreview";
 import { pinFlyover, TownFlyover } from "../view/townFlyover";
+import { achievementCounts, showAchievements } from "./achievements";
 import { Wordmark } from "./logo";
 import { paintPlate } from "./plate";
 import { PixelIcon, PixelIconKind } from "./pixelIcon";
 import { showRecords } from "./records";
 import { askRestartTown, showServers } from "./servers";
 import { RunState, SURVIVOR_WINDOW, SurvivorScreen } from "./survivor";
-import { GAME, SURFACE, TEXT, THEME, fontOf, space } from "./theme";
+import { SURFACE, TEXT, THEME, fontOf, space } from "./theme";
 import { drawingBox } from "./wardrobe";
 import {
 	Button,
-	Dialog,
 	Keycap,
-	Progress,
 	autoFocus,
 	buttonForeground,
-	fmtInt,
 	makeCoinPill,
 	makeFrame,
 	makeLabel,
-	makeListRow,
 	makeScreen,
-	makeScrollList,
-	makeSurface,
 	setVisible,
 } from "./widgets";
 import * as Kit from "./window";
@@ -44,7 +38,7 @@ export type { RunState } from "./survivor";
  * (client/ui/survivor.ts). Both stand on the town flyover (client/view/townFlyover.ts): the real town of the world
  * the player is about to enter, drifting past under a dark scrim.
  *
- *   PROJECT Z                                                    ($ 1,843)
+ *   PROJECT Z                                                    (● 1,843)
  *   Zombie survival                                     (loading / offline)
  *   ┌───────────────────────────┐   ┌ Fabricio ──────────────── LEVEL 7 ┐
  *   │ ▶  START                  │   │                                    │
@@ -52,7 +46,7 @@ export type { RunState } from "./survivor";
  *   └───────────────────────────┘   │                                    │
  *   [🛍 Shop      Packs & costumes]   └────────────────────────────────────┘
  *   [👕 Wardrobe             2 / 9]   ┌ Millbrook ─── [Restart town] [Servers] ┐
- *   [🏆 Achievements        3 / 15]   │ [☀ Day 7   ] [👤 2 / 6  ] [✝ Day 12]      │
+ *   [🏆 Achievements        3 / 18]   │ [☀ Day 7   ] [👤 2 / 6  ] [✝ Day 12]      │
  *   [▮ Records         Best day 12]   │   Afternoon    in town     last fell      │
  *   [? How to play               ]   └──────────────────────────────────────────┘
  *   [⚙ Settings                  ]
@@ -147,83 +141,6 @@ export const IN_WORLD_ATTR = "pz_sim_players";
 function numberAttr(name: string): number | undefined {
 	const v = game.GetService("Workspace").GetAttribute(name);
 	return typeIs(v, "number") ? v : undefined;
-}
-
-// ---------------------------------------------------------------- the two dialogs of the menu
-
-const ACH_W = 660;
-const ACH_H = 530;
-const ACH_ROW_H = 60;
-
-function visibleAchievements(ctx: GameContext): [number, number] {
-	let done = 0;
-	let total = 0;
-	for (const a of ACHIEVEMENTS) {
-		if (a.hidden === true) continue;
-		total++;
-		if ((ctx.save.achievements[a.id] ?? 0) >= a.max) done++;
-	}
-	return [done, total];
-}
-
-function showAchievements(ctx: GameContext): void {
-	const lang = ctx.save.settings.langType;
-	const tr = (k: string): string => langGet(k, lang);
-	const visible = ACHIEVEMENTS.filter(a => a.hidden !== true);
-	const [done] = visibleAchievements(ctx);
-	const dialog = Dialog(ctx.uiLayer, "Achievements", {
-		w: ACH_W,
-		h: ACH_H,
-		title: tr("Achievements"),
-		description: `${done} / ${visible.size()}`,
-		zIndex: 300,
-		closeButton: true,
-	});
-	const pad = space(6);
-	const listW = ACH_W - pad * 2;
-	const list = makeScrollList(dialog.card, "List", pad, dialog.contentY, listW, ACH_H - dialog.contentY - pad);
-	// unfinished (closest to done first), then finished
-	const ordered = [...visible];
-	const ratio = (a: (typeof visible)[number]): number => (ctx.save.achievements[a.id] ?? 0) / math.max(a.max, 1);
-	ordered.sort((a, b) => {
-		const ra = ratio(a) >= 1 ? -1 : ratio(a);
-		const rb = ratio(b) >= 1 ? -1 : ratio(b);
-		return ra > rb;
-	});
-	for (let i = 0; i < ordered.size(); i++) {
-		const a = ordered[i];
-		const cur = math.min(ctx.save.achievements[a.id] ?? 0, a.max);
-		const complete = cur >= a.max;
-		const row = makeListRow(list, `Ach${a.id}`, i, ACH_ROW_H);
-		// pixel chip: filled in `success` when the achievement is done, an empty socket otherwise
-		const badge = makeSurface(row, "Badge", space(4), 16, 28, 28, "well", {
-			fill: complete ? GAME.success : THEME.background,
-			border: complete ? GAME.success : THEME.border,
-			zIndex: 2,
-		});
-		if (complete) {
-			makeLabel(badge, "Check", "✓", 0, 0, 28, 28, TEXT.base, THEME.background, {
-				weight: Enum.FontWeight.Bold,
-				zIndex: 3,
-			});
-		}
-		const textX = space(4) + 28 + space(3);
-		const nameColor = complete ? THEME.foreground : THEME.mutedForeground;
-		makeLabel(row, "Name", tr(a.title), textX, 8, 330, 24, TEXT.base, nameColor, { font: "label", align: "left" });
-		const bar = Progress(row, "Progress", {
-			x: textX,
-			y: 38,
-			w: 360,
-			h: 8,
-			color: complete ? GAME.success : THEME.primary,
-		});
-		bar.setRatio(cur / math.max(a.max, 1));
-		const value = `${fmtInt(cur)} / ${fmtInt(a.max)}`;
-		makeLabel(row, "Value", value, listW - 170, 14, 150, 32, TEXT.sm, THEME.mutedForeground, {
-			font: "numeric",
-			align: "right",
-		});
-	}
 }
 
 // ---------------------------------------------------------------- the menu page (1120 x 630 design units)
@@ -375,9 +292,11 @@ class MenuPage {
 			{
 				key: "Achievements",
 				icon: "trophy",
-				onClick: (): void => showAchievements(ctx),
+				onClick: (): void => {
+					showAchievements(ctx);
+				},
 				sub: () => {
-					const [done, total] = visibleAchievements(ctx);
+					const [done, total] = achievementCounts(ctx.save);
 					return `${done} / ${total}`;
 				},
 			},

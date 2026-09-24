@@ -604,9 +604,11 @@ check(
 	`${signIds.length} letreiros`,
 );
 check(
-	"2o as folhas dos personagens (charSheets.ts: sobreviventes, armas, zumbis, cachorros, passaros)",
-	laterNames.length === 12 &&
-		["survivorsA", "weapons", "zombies", "dogs", "birds"].every(n => laterNames.includes(n)) &&
+	"2o as folhas dos personagens (charSheets.ts: sobreviventes, armas, zumbis, cachorros, passaros e os chefes, ART-14)",
+	laterNames.length === 24 &&
+		["survivorsA", "weapons", "zombies", "dogs", "birds", "bossGiant", "bossCentipedeRim"].every(n =>
+			laterNames.includes(n),
+		) &&
 		JSON.stringify(calls[2]) === JSON.stringify(laterIds),
 	`${calls[2]?.length}: ${laterNames.join(", ")}`,
 );

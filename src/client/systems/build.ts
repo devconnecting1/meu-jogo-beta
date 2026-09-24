@@ -13,6 +13,7 @@ import {
 } from "shared/sim/placement";
 import { addItem } from "shared/sim/inventory";
 import { noteBuildEdge, serverOwnsWorld } from "../net/authority";
+import { notePlaced, noteRefused } from "./buildCues";
 import { GameRefs } from "./types";
 
 /*
@@ -115,9 +116,14 @@ export class BuildSystem {
 	}
 
 	private confirm(refs: GameRefs): void {
-		if (!this.ghostValid) return;
+		if (!this.ghostValid) {
+			// heard, not only seen: the ghost is red (./buildCues.ts -> the build-deny sound)
+			noteRefused();
+			return;
+		}
 		const def = PLACEABLES[refs.pendingPlace];
 		if (def === undefined) return;
+		notePlaced();
 		if (serverOwnsWorld()) {
 			this.leaveCursor(refs);
 			return;

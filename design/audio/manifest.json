@@ -1,0 +1,1251 @@
+{
+	"generator": "tools/gen-sfx.mjs",
+	"sampleRate": 32000,
+	"bits": 16,
+	"channels": 1,
+	"peakCeiling": -1,
+	"targets": {
+		"shot": -14,
+		"weapon": -19,
+		"swing": -19,
+		"impact": -17,
+		"use": -19,
+		"step": -22,
+		"ui": -20,
+		"hover": -27,
+		"pickup": -18,
+		"reward": -17,
+		"stinger": -16,
+		"heart": -18
+	},
+	"banks": [
+		{
+			"name": "ui",
+			"file": "banks/ui.wav",
+			"seconds": 3.002,
+			"sha1": "7b10e2b85ad8678986dfea45008cc55f37d043e4"
+		},
+		{
+			"name": "items",
+			"file": "banks/items.wav",
+			"seconds": 7.892,
+			"sha1": "4b345798f3f8a4567392d28eef0c9a0667236253"
+		},
+		{
+			"name": "weapons",
+			"file": "banks/weapons.wav",
+			"seconds": 19.53,
+			"sha1": "519c30e149df17b4c1ab3b6fb307838e826c8d65"
+		},
+		{
+			"name": "impacts",
+			"file": "banks/impacts.wav",
+			"seconds": 9.061,
+			"sha1": "ca7855cee3cc637d1f3e190ccb798e7e49c73b49"
+		},
+		{
+			"name": "cues",
+			"file": "banks/cues.wav",
+			"seconds": 21.525,
+			"sha1": "cf32467032f7dd746bd4279d1f097814cb6a0502"
+		}
+	],
+	"sounds": {
+		"uiHover": {
+			"bank": "ui",
+			"category": "hover",
+			"target": -27,
+			"volume": 0.3,
+			"pitchMin": 0.98,
+			"pitchMax": 1.03,
+			"why": "A 30 ms triangle tick on E6: sweeping a list is a row of tiny ticks, not a row of clicks.",
+			"takes": [
+				{
+					"startAt": 0.19,
+					"maxPlay": 0.1
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.06,
+					"lufs": -27,
+					"truePeak": -5.64,
+					"brightness": 0.163
+				}
+			]
+		},
+		"uiClick": {
+			"bank": "ui",
+			"category": "ui",
+			"target": -20,
+			"volume": 0.36,
+			"pitchMin": 0.98,
+			"pitchMax": 1.03,
+			"why": "A falling square blip (A6 to E6 in 10 ms) with a pinch of noise: the pixel button's own click.",
+			"takes": [
+				{
+					"startAt": 0.5,
+					"maxPlay": 0.11
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.07,
+					"lufs": -21.4,
+					"truePeak": -1.33,
+					"brightness": 0.397
+				}
+			]
+		},
+		"uiOpen": {
+			"bank": "ui",
+			"category": "ui",
+			"target": -20,
+			"volume": 0.32,
+			"pitchMin": 1,
+			"pitchMax": 1.02,
+			"why": "Two notes up a fourth (E5, A5): a window opening rises.",
+			"takes": [
+				{
+					"startAt": 0.82,
+					"maxPlay": 0.277
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.236,
+					"lufs": -20,
+					"truePeak": -4.5,
+					"brightness": 0.041
+				}
+			]
+		},
+		"uiClose": {
+			"bank": "ui",
+			"category": "ui",
+			"target": -20,
+			"volume": 0.28,
+			"pitchMin": 1,
+			"pitchMax": 1.02,
+			"why": "The same two notes falling (A5, E5), a little softer: closing is the answer to opening.",
+			"takes": [
+				{
+					"startAt": 1.31,
+					"maxPlay": 0.22
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.18,
+					"lufs": -20,
+					"truePeak": -3.55,
+					"brightness": 0.041
+				}
+			]
+		},
+		"uiBuy": {
+			"bank": "ui",
+			"category": "reward",
+			"target": -17,
+			"volume": 0.36,
+			"pitchMin": 1,
+			"pitchMax": 1,
+			"why": "A major arpeggio (A5, C#6, E6) with a short echo: confirmation, the purchase went through.",
+			"takes": [
+				{
+					"startAt": 1.74,
+					"maxPlay": 0.565
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.525,
+					"lufs": -17,
+					"truePeak": -6.03,
+					"brightness": 0.143
+				}
+			]
+		},
+		"uiError": {
+			"bank": "ui",
+			"category": "ui",
+			"target": -20,
+			"volume": 0.34,
+			"pitchMin": 0.98,
+			"pitchMax": 1,
+			"why": "Two low buzzy steps down (G3, F#3), lowpassed: 'no' without a harsh beep.",
+			"takes": [
+				{
+					"startAt": 2.52,
+					"maxPlay": 0.263
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.222,
+					"lufs": -20,
+					"truePeak": -4.94,
+					"brightness": 0.004
+				}
+			]
+		},
+		"pickupItem": {
+			"bank": "items",
+			"category": "pickup",
+			"target": -18,
+			"volume": 0.4,
+			"pitchMin": 0.97,
+			"pitchMax": 1.05,
+			"why": "A quick upward swish and an E6 blip: something went into the bag (gear, or a searched building).",
+			"takes": [
+				{
+					"startAt": 0.19,
+					"maxPlay": 0.194
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.154,
+					"lufs": -18.2,
+					"truePeak": -1.17,
+					"brightness": 0.436
+				}
+			]
+		},
+		"pickupAmmo": {
+			"bank": "items",
+			"category": "pickup",
+			"target": -18,
+			"volume": 0.4,
+			"pitchMin": 0.96,
+			"pitchMax": 1.04,
+			"why": "Two metallic 'chk' 70 ms apart, ringing at inharmonic ratios: cartridges, not candy.",
+			"takes": [
+				{
+					"startAt": 0.6,
+					"maxPlay": 0.175
+				},
+				{
+					"startAt": 0.99,
+					"maxPlay": 0.175
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.134,
+					"lufs": -20.8,
+					"truePeak": -1.24,
+					"brightness": 0.744
+				},
+				{
+					"seconds": 0.134,
+					"lufs": -20.4,
+					"truePeak": -1.39,
+					"brightness": 0.754
+				}
+			]
+		},
+		"pickupFood": {
+			"bank": "items",
+			"category": "pickup",
+			"target": -18,
+			"volume": 0.4,
+			"pitchMin": 0.96,
+			"pitchMax": 1.05,
+			"why": "A round 'bloop' rising 280 to 620 Hz and a little crinkle of wrapper: soft, edible.",
+			"takes": [
+				{
+					"startAt": 1.38,
+					"maxPlay": 0.241
+				},
+				{
+					"startAt": 1.83,
+					"maxPlay": 0.241
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.2,
+					"lufs": -18,
+					"truePeak": -1.54,
+					"brightness": 0.006
+				},
+				{
+					"seconds": 0.2,
+					"lufs": -18,
+					"truePeak": -1.64,
+					"brightness": 0.006
+				}
+			]
+		},
+		"pickupMaterial": {
+			"bank": "items",
+			"category": "pickup",
+			"target": -18,
+			"volume": 0.4,
+			"pitchMin": 0.95,
+			"pitchMax": 1.05,
+			"why": "Two hollow knocks, a wood-and-stone 'tok-tok': a material, heavy in the hand.",
+			"takes": [
+				{
+					"startAt": 2.28,
+					"maxPlay": 0.224
+				},
+				{
+					"startAt": 2.72,
+					"maxPlay": 0.224
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.184,
+					"lufs": -18.4,
+					"truePeak": -1.36,
+					"brightness": 0.003
+				},
+				{
+					"seconds": 0.184,
+					"lufs": -18.2,
+					"truePeak": -1.38,
+					"brightness": 0.003
+				}
+			]
+		},
+		"pickupCoin": {
+			"bank": "items",
+			"category": "reward",
+			"target": -17,
+			"volume": 0.36,
+			"pitchMin": 1,
+			"pitchMax": 1.03,
+			"why": "A square jump up a fifth (A5 to E6), the second note ringing: the universal 'coin', in our own interval.",
+			"takes": [
+				{
+					"startAt": 3.16,
+					"maxPlay": 0.441
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.4,
+					"lufs": -17,
+					"truePeak": -7.36,
+					"brightness": 0.162
+				}
+			]
+		},
+		"levelUp": {
+			"bank": "items",
+			"category": "reward",
+			"target": -17,
+			"volume": 0.36,
+			"pitchMin": 1,
+			"pitchMax": 1,
+			"why": "An A-major run (A4 C#5 E5 A5) then A5 and E6 held with a vibrato: the classic level-up, in the UI's key.",
+			"takes": [
+				{
+					"startAt": 3.81,
+					"maxPlay": 1.36
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 1.32,
+					"lufs": -17,
+					"truePeak": -4.5,
+					"brightness": 0.061
+				}
+			]
+		},
+		"craftDone": {
+			"bank": "items",
+			"category": "reward",
+			"target": -17,
+			"volume": 0.34,
+			"pitchMin": 0.98,
+			"pitchMax": 1.02,
+			"why": "A workbench thunk, then a two-note chime with a bell's inharmonic partial: made by hand, and done.",
+			"takes": [
+				{
+					"startAt": 5.38,
+					"maxPlay": 0.74
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.7,
+					"lufs": -17,
+					"truePeak": -3.9,
+					"brightness": 0.115
+				}
+			]
+		},
+		"buildPlace": {
+			"bank": "items",
+			"category": "pickup",
+			"target": -18,
+			"volume": 0.42,
+			"pitchMin": 0.95,
+			"pitchMax": 1.04,
+			"why": "A heavy low thud and a wooden clack 40 ms later: a barricade or a door set down, solid.",
+			"takes": [
+				{
+					"startAt": 6.33,
+					"maxPlay": 0.34
+				},
+				{
+					"startAt": 6.88,
+					"maxPlay": 0.34
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.3,
+					"lufs": -18,
+					"truePeak": -3.29,
+					"brightness": 0.005
+				},
+				{
+					"seconds": 0.3,
+					"lufs": -18,
+					"truePeak": -2.36,
+					"brightness": 0.006
+				}
+			]
+		},
+		"buildDeny": {
+			"bank": "items",
+			"category": "ui",
+			"target": -20,
+			"volume": 0.34,
+			"pitchMin": 1,
+			"pitchMax": 1,
+			"why": "Two short detuned low pulses (A2): 'can't put it there', heard without looking at the red ghost.",
+			"takes": [
+				{
+					"startAt": 7.43,
+					"maxPlay": 0.242
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.202,
+					"lufs": -20,
+					"truePeak": -2.27,
+					"brightness": 0.001
+				}
+			]
+		},
+		"shotPistol": {
+			"bank": "weapons",
+			"category": "shot",
+			"target": -14,
+			"volume": 0.4,
+			"pitchMin": 0.96,
+			"pitchMax": 1.05,
+			"why": "A tight 9 mm pop: a bright crack, a short blast closing from 9 to 1.4 kHz, a 180 Hz thump and a street slap.",
+			"takes": [
+				{
+					"startAt": 0.19,
+					"maxPlay": 0.564
+				},
+				{
+					"startAt": 0.97,
+					"maxPlay": 0.563
+				},
+				{
+					"startAt": 1.75,
+					"maxPlay": 0.563
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.524,
+					"lufs": -15.4,
+					"truePeak": -1.05,
+					"brightness": 0.241
+				},
+				{
+					"seconds": 0.523,
+					"lufs": -16.1,
+					"truePeak": -1.05,
+					"brightness": 0.253
+				},
+				{
+					"seconds": 0.523,
+					"lufs": -15,
+					"truePeak": -1.05,
+					"brightness": 0.252
+				}
+			]
+		},
+		"shotRifle": {
+			"bank": "weapons",
+			"category": "shot",
+			"target": -14,
+			"volume": 0.42,
+			"pitchMin": 0.96,
+			"pitchMax": 1.04,
+			"why": "Heavier than the pistol: a longer blast, a deeper body (130 to 50 Hz) and a longer slap down the street.",
+			"takes": [
+				{
+					"startAt": 2.53,
+					"maxPlay": 0.919
+				},
+				{
+					"startAt": 3.66,
+					"maxPlay": 0.911
+				},
+				{
+					"startAt": 4.79,
+					"maxPlay": 0.92
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.879,
+					"lufs": -14.7,
+					"truePeak": -1.05,
+					"brightness": 0.152
+				},
+				{
+					"seconds": 0.87,
+					"lufs": -14.9,
+					"truePeak": -1.05,
+					"brightness": 0.16
+				},
+				{
+					"seconds": 0.88,
+					"lufs": -14.9,
+					"truePeak": -1.05,
+					"brightness": 0.138
+				}
+			]
+		},
+		"shotShotgun": {
+			"bank": "weapons",
+			"category": "shot",
+			"target": -14,
+			"volume": 0.46,
+			"pitchMin": 0.95,
+			"pitchMax": 1.03,
+			"why": "The widest blast (a second, delayed layer: the spread), the lowest body (95 to 40 Hz): one shot, not a burst.",
+			"takes": [
+				{
+					"startAt": 5.92,
+					"maxPlay": 1.161
+				},
+				{
+					"startAt": 7.29,
+					"maxPlay": 1.161
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 1.12,
+					"lufs": -14.3,
+					"truePeak": -1.24,
+					"brightness": 0.086
+				},
+				{
+					"seconds": 1.12,
+					"lufs": -14.4,
+					"truePeak": -1.28,
+					"brightness": 0.074
+				}
+			]
+		},
+		"shotMg": {
+			"bank": "weapons",
+			"category": "shot",
+			"target": -14,
+			"volume": 0.3,
+			"pitchMin": 1,
+			"pitchMax": 1.1,
+			"why": "Short and tight (0.3 s, no echo) so a burst stays a rhythm, never a wall; three takes rotate.",
+			"takes": [
+				{
+					"startAt": 8.66,
+					"maxPlay": 0.34
+				},
+				{
+					"startAt": 9.22,
+					"maxPlay": 0.34
+				},
+				{
+					"startAt": 9.78,
+					"maxPlay": 0.34
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.3,
+					"lufs": -15.6,
+					"truePeak": -1.05,
+					"brightness": 0.287
+				},
+				{
+					"seconds": 0.3,
+					"lufs": -16.3,
+					"truePeak": -1.05,
+					"brightness": 0.325
+				},
+				{
+					"seconds": 0.3,
+					"lufs": -16.5,
+					"truePeak": -1.05,
+					"brightness": 0.296
+				}
+			]
+		},
+		"shotSniper": {
+			"bank": "weapons",
+			"category": "shot",
+			"target": -14,
+			"volume": 0.46,
+			"pitchMin": 0.97,
+			"pitchMax": 1.02,
+			"why": "The loudest crack and a long roll across the town (echo 160 ms + reverb): heard far, like it should be.",
+			"takes": [
+				{
+					"startAt": 10.33,
+					"maxPlay": 1.558
+				},
+				{
+					"startAt": 12.1,
+					"maxPlay": 1.563
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 1.517,
+					"lufs": -15.1,
+					"truePeak": -1.05,
+					"brightness": 0.136
+				},
+				{
+					"seconds": 1.523,
+					"lufs": -15.2,
+					"truePeak": -1.05,
+					"brightness": 0.14
+				}
+			]
+		},
+		"shotBow": {
+			"bank": "weapons",
+			"category": "weapon",
+			"target": -19,
+			"volume": 0.36,
+			"pitchMin": 0.96,
+			"pitchMax": 1.05,
+			"why": "A plucked string (Karplus-Strong at ~100 Hz) and the arrow's airy whoosh: the quiet weapon of daytime.",
+			"takes": [
+				{
+					"startAt": 13.88,
+					"maxPlay": 0.49
+				},
+				{
+					"startAt": 14.58,
+					"maxPlay": 0.481
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.45,
+					"lufs": -19,
+					"truePeak": -6.8,
+					"brightness": 0.26
+				},
+				{
+					"seconds": 0.44,
+					"lufs": -19,
+					"truePeak": -5.94,
+					"brightness": 0.271
+				}
+			]
+		},
+		"shotElectric": {
+			"bank": "weapons",
+			"category": "weapon",
+			"target": -19,
+			"volume": 0.34,
+			"pitchMin": 0.95,
+			"pitchMax": 1.05,
+			"why": "A buzzing saw wobbling at 27 Hz, a crackle and a falling ping: electricity (LEG-02 yellow), not a gun.",
+			"takes": [
+				{
+					"startAt": 15.28,
+					"maxPlay": 0.36
+				},
+				{
+					"startAt": 15.85,
+					"maxPlay": 0.36
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.32,
+					"lufs": -19.1,
+					"truePeak": -1.36,
+					"brightness": 0.296
+				},
+				{
+					"seconds": 0.32,
+					"lufs": -19.1,
+					"truePeak": -1.36,
+					"brightness": 0.308
+				}
+			]
+		},
+		"reloadStart": {
+			"bank": "weapons",
+			"category": "weapon",
+			"target": -19,
+			"volume": 0.36,
+			"pitchMin": 0.97,
+			"pitchMax": 1.03,
+			"why": "Click, slide, click: the magazine released and pulled out.",
+			"takes": [
+				{
+					"startAt": 16.419,
+					"maxPlay": 0.276
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.235,
+					"lufs": -19.2,
+					"truePeak": -1.18,
+					"brightness": 0.486
+				}
+			]
+		},
+		"reloadEnd": {
+			"bank": "weapons",
+			"category": "weapon",
+			"target": -19,
+			"volume": 0.38,
+			"pitchMin": 0.97,
+			"pitchMax": 1.03,
+			"why": "The magazine seated (a low 'chk'), then the slide racked home with a hard metallic clack.",
+			"takes": [
+				{
+					"startAt": 16.91,
+					"maxPlay": 0.28
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.24,
+					"lufs": -19.2,
+					"truePeak": -1.27,
+					"brightness": 0.156
+				}
+			]
+		},
+		"weaponSwitch": {
+			"bank": "weapons",
+			"category": "weapon",
+			"target": -19,
+			"volume": 0.3,
+			"pitchMin": 0.96,
+			"pitchMax": 1.04,
+			"why": "A cloth-and-strap swish and a small latch click: the weapon drawn or put away (ITM-06).",
+			"takes": [
+				{
+					"startAt": 17.4,
+					"maxPlay": 0.224
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.184,
+					"lufs": -19,
+					"truePeak": -2.07,
+					"brightness": 0.477
+				}
+			]
+		},
+		"emptyClick": {
+			"bank": "weapons",
+			"category": "weapon",
+			"target": -24,
+			"volume": 0.5,
+			"pitchMin": 0.98,
+			"pitchMax": 1.03,
+			"why": "A dry hammer click and its tiny echo, nothing else: the most disappointing sound in the game, on purpose.",
+			"takes": [
+				{
+					"startAt": 17.84,
+					"maxPlay": 0.1
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.06,
+					"lufs": -25.3,
+					"truePeak": -1.35,
+					"brightness": 0.682
+				}
+			]
+		},
+		"meleeSwing": {
+			"bank": "weapons",
+			"category": "swing",
+			"target": -19,
+			"volume": 0.34,
+			"pitchMin": 0.94,
+			"pitchMax": 1.08,
+			"why": "A whoosh whose band sweeps up and back (500 Hz to 1.7 kHz), three speeds: a blade or a bat through the air.",
+			"takes": [
+				{
+					"startAt": 18.15,
+					"maxPlay": 0.241
+				},
+				{
+					"startAt": 18.599,
+					"maxPlay": 0.28
+				},
+				{
+					"startAt": 19.09,
+					"maxPlay": 0.22
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.2,
+					"lufs": -19,
+					"truePeak": -2.8,
+					"brightness": 0.396
+				},
+				{
+					"seconds": 0.24,
+					"lufs": -19,
+					"truePeak": -3.13,
+					"brightness": 0.425
+				},
+				{
+					"seconds": 0.18,
+					"lufs": -19,
+					"truePeak": -3.39,
+					"brightness": 0.447
+				}
+			]
+		},
+		"hitFlesh": {
+			"bank": "impacts",
+			"category": "impact",
+			"target": -17,
+			"volume": 0.34,
+			"pitchMin": 0.92,
+			"pitchMax": 1.08,
+			"why": "A low thump, a wet squelch (a band-pass wobbling at 12 Hz) and a short splat: a hit that landed on a body.",
+			"takes": [
+				{
+					"startAt": 0.19,
+					"maxPlay": 0.28
+				},
+				{
+					"startAt": 0.679,
+					"maxPlay": 0.28
+				},
+				{
+					"startAt": 1.17,
+					"maxPlay": 0.28
+				},
+				{
+					"startAt": 1.66,
+					"maxPlay": 0.28
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.24,
+					"lufs": -19.4,
+					"truePeak": -1.37,
+					"brightness": 0.008
+				},
+				{
+					"seconds": 0.24,
+					"lufs": -18.8,
+					"truePeak": -1.36,
+					"brightness": 0.009
+				},
+				{
+					"seconds": 0.239,
+					"lufs": -18.2,
+					"truePeak": -1.37,
+					"brightness": 0.01
+				},
+				{
+					"seconds": 0.24,
+					"lufs": -18.4,
+					"truePeak": -1.4,
+					"brightness": 0.012
+				}
+			]
+		},
+		"debrisMetal": {
+			"bank": "impacts",
+			"category": "impact",
+			"target": -17,
+			"volume": 0.3,
+			"pitchMin": 0.92,
+			"pitchMax": 1.08,
+			"why": "Four inharmonic partials (x1, 2.32, 3.87, 5.61) each with its beating twin, over a sharp transient: a panel struck.",
+			"takes": [
+				{
+					"startAt": 2.15,
+					"maxPlay": 0.64
+				},
+				{
+					"startAt": 3,
+					"maxPlay": 0.64
+				},
+				{
+					"startAt": 3.85,
+					"maxPlay": 0.64
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.6,
+					"lufs": -17,
+					"truePeak": -1.78,
+					"brightness": 0.183
+				},
+				{
+					"seconds": 0.6,
+					"lufs": -17,
+					"truePeak": -1.87,
+					"brightness": 0.22
+				},
+				{
+					"seconds": 0.6,
+					"lufs": -17,
+					"truePeak": -1.94,
+					"brightness": 0.249
+				}
+			]
+		},
+		"debrisWood": {
+			"bank": "impacts",
+			"category": "impact",
+			"target": -17,
+			"volume": 0.3,
+			"pitchMin": 0.92,
+			"pitchMax": 1.08,
+			"why": "A hollow knock (band-passed noise at 750 Hz, a 210 Hz body, one partial) and a little splinter crunch.",
+			"takes": [
+				{
+					"startAt": 4.7,
+					"maxPlay": 0.26
+				},
+				{
+					"startAt": 5.17,
+					"maxPlay": 0.26
+				},
+				{
+					"startAt": 5.64,
+					"maxPlay": 0.26
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.22,
+					"lufs": -17.2,
+					"truePeak": -1.4,
+					"brightness": 0.008
+				},
+				{
+					"seconds": 0.22,
+					"lufs": -17.3,
+					"truePeak": -1.4,
+					"brightness": 0.008
+				},
+				{
+					"seconds": 0.22,
+					"lufs": -17.3,
+					"truePeak": -1.4,
+					"brightness": 0.008
+				}
+			]
+		},
+		"useInject": {
+			"bank": "impacts",
+			"category": "use",
+			"target": -19,
+			"volume": 0.4,
+			"pitchMin": 0.98,
+			"pitchMax": 1.02,
+			"why": "The autoinjector: a plastic snap, a 'pssht' of air, a glassy tink. Fills the slot the library could not (pendency D).",
+			"takes": [
+				{
+					"startAt": 6.11,
+					"maxPlay": 0.46
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.42,
+					"lufs": -19,
+					"truePeak": -7.53,
+					"brightness": 0.919
+				}
+			]
+		},
+		"footstepA": {
+			"bank": "impacts",
+			"category": "step",
+			"target": -22,
+			"volume": 0.3,
+			"pitchMin": 0.94,
+			"pitchMax": 1.06,
+			"why": "A soft heel thump (noise under 700 Hz, a 80 Hz body) with a trace of asphalt grit: felt more than heard.",
+			"takes": [
+				{
+					"startAt": 6.78,
+					"maxPlay": 0.181
+				},
+				{
+					"startAt": 7.17,
+					"maxPlay": 0.181
+				},
+				{
+					"startAt": 7.56,
+					"maxPlay": 0.176
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.14,
+					"lufs": -22.1,
+					"truePeak": -1.36,
+					"brightness": 0.009
+				},
+				{
+					"seconds": 0.14,
+					"lufs": -23.2,
+					"truePeak": -1.33,
+					"brightness": 0.011
+				},
+				{
+					"seconds": 0.135,
+					"lufs": -22.4,
+					"truePeak": -1.33,
+					"brightness": 0.013
+				}
+			]
+		},
+		"footstepB": {
+			"bank": "impacts",
+			"category": "step",
+			"target": -22,
+			"volume": 0.3,
+			"pitchMin": 0.94,
+			"pitchMax": 1.06,
+			"why": "The other foot: a toe roll, a little brighter and shorter, so left and right never sound like a metronome.",
+			"takes": [
+				{
+					"startAt": 7.95,
+					"maxPlay": 0.159
+				},
+				{
+					"startAt": 8.32,
+					"maxPlay": 0.156
+				},
+				{
+					"startAt": 8.69,
+					"maxPlay": 0.151
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 0.118,
+					"lufs": -22.9,
+					"truePeak": -1.12,
+					"brightness": 0.023
+				},
+				{
+					"seconds": 0.116,
+					"lufs": -22.4,
+					"truePeak": -1.4,
+					"brightness": 0.03
+				},
+				{
+					"seconds": 0.111,
+					"lufs": -22.9,
+					"truePeak": -1.26,
+					"brightness": 0.036
+				}
+			]
+		},
+		"stingerWave1": {
+			"bank": "cues",
+			"category": "stinger",
+			"target": -16,
+			"volume": 0.4,
+			"pitchMin": 1,
+			"pitchMax": 1,
+			"why": "19:00, night falls and the first wave: a detuned A-minor brass stab, a boom, an unresolved tritone above.",
+			"takes": [
+				{
+					"startAt": 0.19,
+					"maxPlay": 3.036
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 2.996,
+					"lufs": -16,
+					"truePeak": -1.53,
+					"brightness": 0.003
+				}
+			]
+		},
+		"stingerWave2": {
+			"bank": "cues",
+			"category": "stinger",
+			"target": -16,
+			"volume": 0.43,
+			"pitchMin": 1,
+			"pitchMax": 1,
+			"why": "22:00, wave 2: the same motif a whole tone lower (G), grittier.",
+			"takes": [
+				{
+					"startAt": 3.44,
+					"maxPlay": 3.071
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 3.031,
+					"lufs": -16,
+					"truePeak": -2.09,
+					"brightness": 0.004
+				}
+			]
+		},
+		"stingerWave3": {
+			"bank": "cues",
+			"category": "stinger",
+			"target": -16,
+			"volume": 0.46,
+			"pitchMin": 1,
+			"pitchMax": 1,
+			"why": "01:00, wave 3: lower still (F) and the boom doubles like a heartbeat: the worst of the night.",
+			"takes": [
+				{
+					"startAt": 6.73,
+					"maxPlay": 3.359
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 3.319,
+					"lufs": -16,
+					"truePeak": -2.07,
+					"brightness": 0.002
+				}
+			]
+		},
+		"stingerDawn": {
+			"bank": "cues",
+			"category": "stinger",
+			"target": -16,
+			"volume": 0.34,
+			"pitchMin": 1,
+			"pitchMax": 1,
+			"why": "07:00, you made it: an A-major arpeggio over a soft pad, two bird chirps, a long room.",
+			"takes": [
+				{
+					"startAt": 10.3,
+					"maxPlay": 2.817
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 2.776,
+					"lufs": -16,
+					"truePeak": -6.34,
+					"brightness": 0.013
+				}
+			]
+		},
+		"heartbeat1": {
+			"bank": "cues",
+			"category": "heart",
+			"target": -18,
+			"volume": 0.4,
+			"pitchMin": 1,
+			"pitchMax": 1,
+			"why": "Below 35 % HP: lub-dub at 76 bpm, four beats, its tail folded onto its start so the loop point never clicks.",
+			"takes": [
+				{
+					"startAt": 13.33,
+					"maxPlay": 3.198
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 3.158,
+					"lufs": -18,
+					"truePeak": -2.62,
+					"brightness": 0
+				}
+			],
+			"loopStart": 13.34,
+			"loopEnd": 16.497875
+		},
+		"heartbeat2": {
+			"bank": "cues",
+			"category": "heart",
+			"target": -18,
+			"volume": 0.46,
+			"pitchMin": 1,
+			"pitchMax": 1,
+			"why": "Below 22 %: 100 bpm. A real faster tempo instead of the same loop sped up (the pitch stays a heart's).",
+			"takes": [
+				{
+					"startAt": 16.74,
+					"maxPlay": 2.44
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 2.4,
+					"lufs": -18,
+					"truePeak": -2.63,
+					"brightness": 0
+				}
+			],
+			"loopStart": 16.75,
+			"loopEnd": 19.15
+		},
+		"heartbeat3": {
+			"bank": "cues",
+			"category": "heart",
+			"target": -18,
+			"volume": 0.52,
+			"pitchMin": 1,
+			"pitchMax": 1,
+			"why": "Below 10 %: 128 bpm, the beats almost on top of each other.",
+			"takes": [
+				{
+					"startAt": 19.389,
+					"maxPlay": 1.915
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 1.875,
+					"lufs": -18,
+					"truePeak": -2.67,
+					"brightness": 0
+				}
+			],
+			"loopStart": 19.4,
+			"loopEnd": 21.275
+		}
+	}
+}

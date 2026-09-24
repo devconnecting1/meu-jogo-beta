@@ -3,6 +3,8 @@ import { DESIGN, TOWN } from "shared/engine/constants";
 import { chance, rnd, rndInt, rndRange } from "shared/engine/rng";
 import { Vec2, v2 } from "shared/engine/vec2";
 import { DYNAMIC_ID_BASE } from "shared/net/mpConfig";
+import { campusLayout, campusQuad, CampusRng, campusSeed, CAMPUS_SETBACK, CAMPUS_SIDES } from "./campus";
+import type { CampusBuilding } from "./campus";
 import { buildingSeed, planBuilding } from "./interiors";
 import type { Decor, Opening, RoomRect } from "./interiors";
 import { gridInsert, gridOf, gridRemove, newGrid, pointInSolid, querySolids, rectOverlap } from "./solidGrid";
@@ -30,7 +32,12 @@ export type SolidKind =
 	 * A gas station's canopy over its pump islands (tags "canopy", EDI-16): aerial like a tree's crown (COL-02),
 	 * passable, drawn over the actors and see-through while a body is under it (`canopyAlpha`, the crown's fade).
 	 */
-	| "canopy";
+	| "canopy"
+	/**
+	 * a fixture of the town that belongs to no building (tags: what it is -- the campus quad's fountain, statue and
+	 * benches, EDI-17): blocks bodies; a `low` one lets bullets by; it never hides anyone from a zombie's eyes
+	 */
+	| "prop";
 
 export type DoorSide = "top" | "bottom" | "left" | "right";
 
@@ -152,6 +159,12 @@ export interface GroundItem {
 	vy: number;
 	/** server only: the simulation time (s) it appeared at, for its lifetime (server/sim/items.ts) */
 	born?: number;
+	/**
+	 * An admin dropped it (server/admin/adminWorld.ts, §10): whoever picks it up gets the item and nothing else -- no
+	 * collector credit (`creditTaken`) -- and the pickup is logged. Server-side only; never on the wire. It is litter
+	 * like any other ground item (the lifetime and the cap of server/sim/items.ts apply to it too).
+	 */
+	unpaid?: boolean;
 }
 
 /**
@@ -1722,6 +1735,336 @@ function parkCars(g: Gen): void {
 }
 
 // ---------------------------------------------------------------------------
+// the college campus (docs/DESIGN_RULES.md EDI-17, shared/game/campus.ts)
+
+/** the campus's buildings, by type (the footprint comes from the campus plan; w / h are only its bounds) */
+const CAMPUS_DEFS: Record<number, BuildingDef> = {
+	12: { type: 12, w: 760, h: 400, slots: 3, name: "college", weight: 1 },
+	13: { type: 13, w: 760, h: 352, slots: 2, name: "library", weight: 1 },
+	14: { type: 14, w: 760, h: 352, slots: 2, name: "lab", weight: 1 },
+	15: { type: 15, w: 760, h: 352, slots: 2, name: "dorm", weight: 1 },
+};
+/**
+ * One roof for the whole campus: the blue slate of an old college hall, a colour no other building has (EDI-03) --
+ * ΔE 27 from the nearest, the gun shop's grey and the clothes shop's violet, further than the school is from the
+ * market. The campus is one institution; which building is which, the storefront plate says (ART-07), as the two
+ * food stores share their roof and not their sign.
+ */
+export const CAMPUS_ROOF = Color3.fromRGB(64, 88, 140);
+/** the lot a campus takes stands at least this many blocks (Chebyshev) from a school or a hospital */
+const CAMPUS_CIVIC_SPACING = 2;
+/** how many of the campus curbs' parking places hold a car (the students' cars: the campus has no lot of its own) */
+const CAMPUS_CURB_PARKING = 0.4;
+/**
+ * where a campus building's main door may slide along its facade to miss a street tree (EDI-01, VEG-01): a little
+ * only, so every template's middle column still holds it (interiors.ts `fitMain`); failing that, the tree goes
+ */
+const CAMPUS_DOOR_OFFSETS: Array<number> = [0, -16, 16];
+/** a street tree this close (along the edge) to a door's centre stands in its approach (the validator's corridor) */
+const DOOR_TREE_CLEAR = TOWN.DOOR_W / 2 + 24 + TOWN.TREE_TRUNK / 2;
+
+/** (u along, v inward from the curb) of a point, relative to a lot edge */
+function edgeUV(e: LotEdge, x: number, y: number): { u: number; v: number } {
+	return isAlongX(e.side) ? { u: x, v: (y - e.curb) * e.inward } : { u: y, v: (x - e.curb) * e.inward };
+}
+
+/** the street trees in the service strip of edge `e` whose trunk would stand in front of a door at `doorU` */
+function treesAtDoor(g: Gen, e: LotEdge, doorU: number): Array<Solid> {
+	const out: Array<Solid> = [];
+	const band = edgeRect(e, doorU - DOOR_TREE_CLEAR, doorU + DOOR_TREE_CLEAR, 0, TOWN.SIDEWALK);
+	for (const s of querySolids(g.w, band.x, band.y, band.x + band.w, band.y + band.h)) {
+		if (s.kind !== "tree") continue;
+		const c = edgeUV(e, s.x + s.w / 2, s.y + s.h / 2);
+		if (c.v >= 0 && c.v <= TOWN.SIDEWALK && math.abs(c.u - doorU) < DOOR_TREE_CLEAR) out.push(s);
+	}
+	return out;
+}
+
+/** lots from the map's border to this one (0 = on the border): the campus prefers the town's outskirts */
+function lotRing(w: WorldData, lot: Lot): number {
+	const pitch = TOWN.LOT_TARGET + TOWN.ROAD_W;
+	const cx = lot.x + lot.w / 2;
+	const cy = lot.y + lot.h / 2;
+	const B = TOWN.BORDER;
+	return math.floor(math.min(cx - B, w.width - B - cx, cy - B, w.height - B - cy) / pitch);
+}
+
+/** the side of `lot` that looks towards the avenues' crossing (downtown): where the campus's main hall faces */
+function sideTowardsTown(w: WorldData, lot: Lot): DoorSide {
+	let ax = w.width / 2;
+	let ay = w.height / 2;
+	for (const r of w.roads) {
+		if (!r.avenue) continue;
+		if (r.vertical) ax = r.x + r.w / 2;
+		else ay = r.y + r.h / 2;
+	}
+	const dx = ax - (lot.x + lot.w / 2);
+	const dy = ay - (lot.y + lot.h / 2);
+	if (math.abs(dx) >= math.abs(dy)) return dx > 0 ? "right" : "left";
+	return dy > 0 ? "bottom" : "top";
+}
+
+/**
+ * The college campus (EDI-17): at most one a town, on a whole residential block of its outskirts (four streets
+ * round it, none of them an avenue, only houses on it, two blocks from any school or hospital) big enough for four
+ * buildings and a quad (shared/game/campus.ts). A town without such a block has no campus.
+ *
+ * Laid LAST, once the rest of the town stands (every tree, bin and car), from its own random stream: the block's
+ * houses, yard trees, bins and lawns give way to the campus, and nothing else in the town moves -- every other lot,
+ * street, tree and car is exactly the town this seed always made (the validated towns, the tests' and the goldens').
+ * That is also what happened in a real town: the college bought a block of houses and built on it.
+ */
+function placeCampus(g: Gen): void {
+	const w = g.w;
+	const rng = new CampusRng(campusSeed(g.townSeed));
+	const pitch = TOWN.LOT_TARGET + TOWN.ROAD_W;
+	// the schools and hospitals, to keep the campus apart from them
+	const civic: Array<Solid> = [];
+	for (const lot of w.lots) {
+		for (const p of g.placed.get(lot) ?? []) if (p.def.type === 3 || p.def.type === 4) civic.push(p.solid);
+	}
+	const eligible: Array<{ lot: Lot; ring: number }> = [];
+	for (const lot of w.lots) {
+		if (lot.kind !== "block" || lot.zone !== "residential" || lot.edges.size() !== 4) continue;
+		let ok = true;
+		for (const e of lot.edges) if (w.roads[e.road].avenue) ok = false;
+		for (const p of g.placed.get(lot) ?? []) if (p.def.type !== 1 && p.def.type !== 2) ok = false;
+		const cx = lot.x + lot.w / 2;
+		const cy = lot.y + lot.h / 2;
+		for (const c of civic) {
+			const d = math.max(math.abs(c.x + c.w / 2 - cx), math.abs(c.y + c.h / 2 - cy)) / pitch;
+			if (d < CAMPUS_CIVIC_SPACING - 0.5) ok = false;
+		}
+		if (ok) eligible.push({ lot, ring: lotRing(w, lot) });
+	}
+	if (eligible.size() === 0) return;
+	// the outskirts first (the fewest blocks to the forest), in the campus's own shuffled order within a ring
+	for (let i = eligible.size() - 1; i > 0; i--) {
+		const j = rng.int(0, i);
+		const t = eligible[i];
+		eligible[i] = eligible[j];
+		eligible[j] = t;
+	}
+	let best: { lot: Lot; plan: NonNullable<ReturnType<typeof campusLayout>> } | undefined;
+	let bestRing = math.huge;
+	for (const cand of eligible) {
+		if (cand.ring >= bestRing) continue;
+		// the hall faces the town, then the other sides; the pinwheel's turn and the side buildings from the seed
+		const toward = sideTowardsTown(w, cand.lot);
+		const i0 = CAMPUS_SIDES.indexOf(toward);
+		const cw = rng.chance(0.5);
+		const swap = rng.chance(0.5);
+		for (const k of [0, 1, 3, 2]) {
+			if (best !== undefined && best.lot === cand.lot) break;
+			for (const turn of [cw, !cw]) {
+				const plan = campusLayout(cand.lot.yard, CAMPUS_SIDES[(i0 + k) % 4], turn, swap);
+				if (plan === undefined) continue;
+				let clear = true;
+				for (const b of plan.buildings) {
+					for (const c of g.placer.bossClear) {
+						if (circleHitsRect(c, b.rect.x, b.rect.y, b.rect.w, b.rect.h)) clear = false;
+					}
+				}
+				if (!clear) continue;
+				best = { lot: cand.lot, plan };
+				bestRing = cand.ring;
+				break;
+			}
+		}
+	}
+	if (best === undefined) return;
+	buildCampus(g, best.lot, best.plan.buildings, best.plan.quad, best.plan.lanes, rng);
+}
+
+/** clears the block and lays the campus on it: buildings, lanes, the quad, bins at the entrances, cars at the curbs */
+function buildCampus(
+	g: Gen,
+	lot: Lot,
+	buildings: Array<CampusBuilding>,
+	quad: Rect,
+	lanes: Array<{ side: DoorSide; rect: Rect; a: number; b: number }>,
+	rng: CampusRng,
+): void {
+	const w = g.w;
+	// --- the block's houses, yard trees and bins go; its street trees and the street itself stay
+	for (const p of g.placed.get(lot) ?? []) removeSolid(w, p.solid);
+	g.placed.set(lot, []);
+	const gone: Array<Solid> = [];
+	for (const s of querySolids(w, lot.x, lot.y, lot.x + lot.w, lot.y + lot.h)) {
+		const cx = s.x + s.w / 2;
+		const cy = s.y + s.h / 2;
+		const inLot = cx >= lot.x && cx <= lot.x + lot.w && cy >= lot.y && cy <= lot.y + lot.h;
+		const inYard =
+			cx >= lot.yard.x && cx <= lot.yard.x + lot.yard.w && cy >= lot.yard.y && cy <= lot.yard.y + lot.yard.h;
+		if ((s.kind === "tree" && inYard) || (s.tags === "trash" && inLot)) gone.push(s);
+	}
+	for (const s of gone) removeSolid(w, s);
+	lot.ground.clear();
+	lot.patches.clear();
+	for (const e of lot.edges) g.cuts.set(e, []);
+	lot.zone = "civic";
+	// --- the four buildings, each with its main door on its street (slid along the facade to miss a street tree)
+	const front = TOWN.SIDEWALK + CAMPUS_SETBACK;
+	const doors: Array<{ e: LotEdge; u: number }> = [];
+	for (const b of buildings) {
+		let e: LotEdge | undefined;
+		for (const q of lot.edges) if (q.side === b.side) e = q;
+		if (e === undefined) continue;
+		const r = b.rect;
+		const mid = isAlongX(e.side) ? r.x + r.w / 2 : r.y + r.h / 2;
+		let doorU = mid;
+		let found = false;
+		for (const off of CAMPUS_DOOR_OFFSETS) {
+			if (treesAtDoor(g, e, mid + off).size() === 0) {
+				doorU = mid + off;
+				found = true;
+				break;
+			}
+		}
+		// no free place along it: the street tree in front of the door is not planted (an empty pit, VEG-02)
+		if (!found) for (const t of treesAtDoor(g, e, doorU)) removeSolid(w, t);
+		const rec = addBuilding(g, lot, CAMPUS_DEFS[b.type], r, e, doorU, front);
+		rec.roofColor = CAMPUS_ROOF;
+		doors.push({ e, u: doorU });
+	}
+	// --- nobody parks in front of a campus door (VEI-02): the cars the houses' street left there are towed
+	for (const d of doors) {
+		const z = edgeRect(d.e, d.u - 110, d.u + 110, -(TOWN.CURB_GAP + TOWN.CAR_W + 24), 0);
+		const towed: Array<Solid> = [];
+		for (const s of querySolids(w, z.x, z.y, z.x + z.w, z.y + z.h)) if (s.tags === "car") towed.push(s);
+		for (const s of towed) removeSolid(w, s);
+	}
+	// --- the lanes into the quad: a paved walk from the sidewalk, and the verge left open where it meets the street
+	for (const l of lanes) {
+		let e: LotEdge | undefined;
+		for (const q of lot.edges) if (q.side === l.side) e = q;
+		const inset = 16;
+		const along = l.side === "top" || l.side === "bottom";
+		const walk = along
+			? { x: l.rect.x + inset, y: l.rect.y, w: l.rect.w - inset * 2, h: l.rect.h }
+			: { x: l.rect.x, y: l.rect.y + inset, w: l.rect.w, h: l.rect.h - inset * 2 };
+		if (walk.w > 8 && walk.h > 8) lot.ground.push({ ...walk, kind: "walk" });
+		if (e !== undefined) cutsOf(g, e).push({ a: l.a + inset, b: l.b - inset, kind: "walk" });
+	}
+	// --- the quad: its walks and plaza, the centrepiece, benches and trees
+	const q = campusQuad(quad, rng);
+	for (const gr of q.ground) lot.ground.push({ x: gr.x, y: gr.y, w: gr.w, h: gr.h, kind: gr.kind });
+	for (const p of q.props) {
+		let clear = true;
+		for (const c of g.placer.bossClear) if (circleHitsRect(c, p.x, p.y, p.w, p.h)) clear = false;
+		if (!clear) continue;
+		addSolid(w, {
+			kind: "prop",
+			x: p.x,
+			y: p.y,
+			w: p.w,
+			h: p.h,
+			hp: 999999,
+			hpMax: 999999,
+			destructible: false,
+			tags: p.kind,
+			low: p.kind !== "statue",
+			face: p.face,
+			variant: rng.int(0, 3),
+		});
+	}
+	for (const t of q.trees) {
+		let clear = true;
+		for (const c of g.placer.bossClear) if (circleHitsRect(c, t.x - 22, t.y - 22, 44, 44)) clear = false;
+		if (clear) addTree(w, t.x, t.y);
+	}
+	// --- the verges, ramps and paved cuts of the block's sidewalks, again, round the campus's own entrances
+	sidewalkGround(g, lot);
+	campusBins(g, doors, rng);
+	campusCurbParking(g, lot, doors, rng);
+	// --- a few lighter tufts on the lawns
+	const n = rng.int(3, 6);
+	for (let i = 0; i < n; i++) {
+		const pw = 80 + rng.int(0, 100);
+		const ph = 60 + rng.int(0, 80);
+		const p = {
+			x: lot.yard.x + rng.int(0, math.max(1, math.floor(lot.yard.w - pw))),
+			y: lot.yard.y + rng.int(0, math.max(1, math.floor(lot.yard.h - ph))),
+			w: pw,
+			h: ph,
+		};
+		if (!overlapsGround(lot, p)) lot.patches.push(p);
+	}
+}
+
+/** a bin at the curb beside most campus entrances (MOB-01), in the service strip, never in front of a door */
+function campusBins(g: Gen, doors: Array<{ e: LotEdge; u: number }>, rng: CampusRng): void {
+	const s = TOWN.TRASH;
+	for (const d of doors) {
+		if (!rng.chance(0.8)) continue;
+		const e = d.e;
+		const range = stripRange(e, TOWN.CORNER_CLEAR);
+		const dir = rng.chance(0.5) ? 1 : -1;
+		for (const sgn of [dir, -dir]) {
+			const u = d.u + sgn * (112 + rng.int(0, 38));
+			if (u - s / 2 < range.a || u + s / 2 > range.b) continue;
+			if (inCut(g, e, u - s / 2, u + s / 2, 8)) continue;
+			const r = edgeRect(e, u - s / 2, u + s / 2, TOWN.VERGE / 2 - s / 2, TOWN.VERGE / 2 + s / 2);
+			if (querySolids(g.w, r.x - 8, r.y - 8, r.x + r.w + 8, r.y + r.h + 8).size() > 0) continue;
+			addTrash(g.w, r.x, r.y);
+			break;
+		}
+	}
+}
+
+/**
+ * The campus has no parking lot of its own (the block is all buildings and quad): the students park on its four
+ * streets, parallel to the curb in the direction of traffic (VEI-01), a car length off every corner (CID-03), never
+ * in front of a door (VEI-02) and a stall apart from the next car.
+ */
+function campusCurbParking(g: Gen, lot: Lot, doors: Array<{ e: LotEdge; u: number }>, rng: CampusRng): void {
+	const w = g.w;
+	const L = TOWN.CAR_L;
+	const W = TOWN.CAR_W;
+	for (const e of lot.edges) {
+		const road = w.roads[e.road];
+		const v = road.vertical;
+		// the lot lies on the road's high side when the road is above it or to its left
+		const high = e.side === "top" || e.side === "left";
+		const heading = v ? (high ? -math.pi / 2 : math.pi / 2) : high ? 0 : math.pi;
+		const across = v
+			? high
+				? road.x + road.w - TOWN.CURB_GAP - W
+				: road.x + TOWN.CURB_GAP
+			: high
+				? road.y + road.h - TOWN.CURB_GAP - W
+				: road.y + TOWN.CURB_GAP;
+		const lo = e.a + (e.cornerA ? TOWN.CORNER_CLEAR + 40 : 120);
+		const hi = e.b - (e.cornerB ? TOWN.CORNER_CLEAR + 40 : 120);
+		for (let t = lo; t + L <= hi; t += TOWN.PARK_SLOT) {
+			if (!rng.chance(CAMPUS_CURB_PARKING)) continue;
+			const at = math.floor(t + rng.int(0, 16));
+			let atDoor = false;
+			for (const d of doors) if (d.e === e && at < d.u + 110 && at + L > d.u - 110) atDoor = true;
+			if (atDoor) continue;
+			const x = v ? across : at;
+			const y = v ? at : across;
+			const cw = v ? W : L;
+			const ch = v ? L : W;
+			// nothing within 8 u, and no other car within a stall gap (40 u, VEI-01) plus a margin
+			let free = true;
+			for (const s of querySolids(w, x - 44, y - 44, x + cw + 44, y + ch + 44)) {
+				if (s.tags === "car" || rectOverlap(x - 8, y - 8, cw + 16, ch + 16, s.x, s.y, s.w, s.h)) free = false;
+			}
+			for (const c of g.placer.bossClear) if (circleHitsRect(c, x, y, cw, ch)) free = false;
+			if (!free) continue;
+			// VEI-03: a lane of 150 stays free across the street beside it, the cars parked and the wrecks left
+			// across the way counted (the campus's streets are never avenues: one carriageway, curb to curb)
+			const base = v ? road.x : road.y;
+			const size = v ? road.w : road.h;
+			const spans = laneSpans(w, road, at - 24, at + L + 24, base, base + size);
+			spans.push(v ? [x, x + cw] : [y, y + ch]);
+			if (freeWidth(spans, base, base + size) >= TOWN.LANE_FREE) addCar(w, x, y, cw, ch, heading);
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // interiors
 
 /**
@@ -2265,6 +2608,9 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 	border(0, w.height - t, w.width, t, "wall_h");
 	border(0, t, t, w.height - t * 2, "wall_v");
 	border(w.width - t, t, t, w.height - t * 2, "wall_v");
+
+	// --- the college campus, last: one block's houses give way to it, and nothing else in the town moves ---
+	placeCampus(g);
 
 	// --- the inside of every building, now that nothing else will be placed ---
 	planInteriors(g);

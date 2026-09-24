@@ -1,19 +1,11 @@
 import { GAME_NAME } from "shared/module";
-import {
-	carrySettings,
-	equipSlotOf,
-	expMaxInit,
-	ownsEquip,
-	ownsWeapon,
-	pendingPacks,
-	resetRun,
-} from "shared/game/save";
+import { carrySettings, equipSlotOf, expMaxInit, ownsEquip, ownsWeapon, resetRun } from "shared/game/save";
 import { BossState } from "shared/game/entities";
 import { currentWeapon, weaponReserve } from "shared/game/player";
 import { CRAFT_RECIPES } from "shared/data/crafts";
 import { EQUIPS, EquipSlot } from "shared/data/equips";
 import { langGet } from "shared/data/lang";
-import { rebirthPrice, SHOP_PACKS } from "shared/data/shop";
+import { rebirthPrice } from "shared/data/shop";
 import { USABLES } from "shared/data/usables";
 import { MP_PHASE } from "shared/net/mpConfig";
 import { ShopActionRequest, ShopActionResult } from "shared/net/net";
@@ -21,10 +13,18 @@ import { daybreakWaitSeconds } from "shared/sim/clock";
 import type { GamePhase } from "shared/game/context";
 import { getCtx, setPhase } from "./bootstrap";
 import { GameLoop } from "./gameLoop";
-import { audio, gameAudio, playFootstep, startUiAudio } from "./audio";
-import { onFootstep } from "./view/footsteps";
+import { audio, gameAudio, startAudio } from "./audio";
 import * as Boot from "./boot";
-import { netActive, netEnterWorld, netHosted, netLeaveWorld, netOnTown, netPrewarm, TownNotice } from "./net/netClient";
+import {
+	netActive,
+	netEnterWorld,
+	netHosted,
+	netLeaveWorld,
+	netOnTown,
+	netPrewarm,
+	remotePlayers,
+	TownNotice,
+} from "./net/netClient";
 import {
 	attachRun,
 	DaybreakWait,
@@ -36,8 +36,7 @@ import {
 } from "./onboarding";
 import { craft, craftBlocker, stationNear } from "./systems/craftSystem";
 import { chooseWeapon } from "./systems/combat";
-import { interactHint } from "./systems/interaction";
-import { addItem } from "./systems/items";
+import { hintedItem, interactHint } from "./systems/interaction";
 import * as net from "./systems/saveClient";
 import * as Bag from "./net/backpackSync";
 import { showLogo } from "./ui/logo";
@@ -45,8 +44,8 @@ import { LobbyHandle, LobbyPage, LobbyStatus, RunState, showLobby } from "./ui/l
 import * as Flyover from "./view/townFlyover";
 import { actionErrorText, showShop } from "./ui/shop";
 import { showWardrobe } from "./ui/wardrobe";
-import { startTitleNotices } from "./ui/titleNotice";
-import { startAchievementNotices } from "./ui/achievementNotice";
+import { startServerNotices } from "./ui/serverNotices";
+import * as PackNotice from "./ui/packNotice";
 import { showSettings } from "./ui/settings";
 import { showCredits } from "./ui/credits";
 import { showTutorial } from "./ui/tutorial";
@@ -67,6 +66,8 @@ import { AdminHooks, startAdmin } from "./admin/adminClient";
  * - after a game over the run can only continue with a paid Rebirth (server) or restart at day 1 (New game)
  * - progress is reported to the server every 60 s, on a new day, on a boss kill, on death and when
  *   leaving the run; nothing is reported before the server's LoadAck was adopted
+ * - saving is automatic only (DESIGN_RULES SAV-01): there is no Save button, and a report is never a write -- the
+ *   server writes on its own schedule and tells the corner indicator (client/ui/saveIndicator.ts)
  */
 
 const RunService = game.GetService("RunService");
@@ -238,22 +239,16 @@ net.onLoad(info => {
 	if (ctx.phase !== "boot") goLobby(lobbyNav.handle !== undefined ? lobbyNav.page : "menu");
 });
 
-net.onSaveAck((ack, manual) => {
+net.onSaveAck(ack => {
 	if (ack.ok) {
 		if (ack.earned > 0) {
 			const parts: Array<string> = [];
 			if (ack.earnedDays > 0) parts.push(`${tr("Day survived")} ×${ack.earnedDays}`);
 			if (ack.earnedBosses > 0) parts.push(`${tr("Boss defeated")} ×${ack.earnedBosses}`);
-			toast(ctx, `+${fmtInt(ack.earned)} $   ${parts.join("  ·  ")}`, "coin");
-		}
-		if (manual) {
-			if (net.savingPersistent()) toast(ctx, tr("Progress saved"), "success");
-			else toast(ctx, tr("Saving is unavailable in this environment"), "error");
+			toast(ctx, `+${fmtInt(ack.earned)} ${tr("coins")}   ${parts.join("  ·  ")}`, "coin");
 		}
 	} else if (ack.reason === "readonly" || ack.reason === "stale") {
 		toast(ctx, `${tr("Could not save")}: ${tr("Progress not loaded")}`, "error");
-	} else if (manual) {
-		toast(ctx, tr("Could not save"), "error");
 	}
 });
 
@@ -278,7 +273,10 @@ function trackAfter(): void {
 		net.requestSave("day");
 	}
 	if (save.level > lastLevel) {
-		if (lastLevel > 0) hud.showMessage("Level UP");
+		if (lastLevel > 0) {
+			hud.showMessage("Level UP");
+			gameAudio.levelUp();
+		}
 		lastLevel = save.level;
 	}
 }
@@ -473,30 +471,6 @@ function goLobby(page: LobbyPage = "menu"): void {
 
 // ---------------------------------------------------------------- run lifecycle
 
-/**
- * The packs bought in the shop and not opened yet go into the backpack. From WORLD_SERVER_PHASE the SERVER opens them
- * into its own save as soon as the survivor is in the world (server/sim/backpack.ts `deliverPacks`) and the items
- * come back in the bag: this client only says so, and stops asking again.
- */
-function deliverPacks(): void {
-	const save = ctx.save;
-	const serverDelivers = Bag.owned();
-	const names: Array<string> = [];
-	for (const p of SHOP_PACKS) {
-		const n = pendingPacks(save, p.id);
-		if (n <= 0) continue;
-		for (const item of p.items) {
-			if (item.index >= 0 && !serverDelivers) addItem(save, item.kind, item.index, item.count * n);
-		}
-		save.packsOpened[p.id] = save.packsBought[p.id];
-		names.push(n > 1 ? `${tr(p.name)} ×${n}` : tr(p.name));
-	}
-	if (names.size() > 0) {
-		toast(ctx, `${tr("Delivered")}: ${names.join(", ")}`, "success");
-		if (!serverDelivers) net.requestSave("packs");
-	}
-}
-
 function refreshDeskFlags(): void {
 	const refs = loop.getRefs();
 	const pro = stationNear(refs, "pro") !== undefined;
@@ -564,6 +538,8 @@ function pushHud(): void {
 		reloadRatio,
 		ammoPool: weaponReserve(save, w),
 		hitFlash: p.hitFlash ?? 0,
+		// VIT-01: the wait before healing, for the vitals' cue (the HP glow, the fork on FOOD)
+		sinceHurt: p.sinceHurt,
 	});
 	// the compass or the GPS in hand (E2): the needle to the camp, or the map of the streets around you
 	hud.updateNav(refs.world, p.x, p.y, save);
@@ -571,6 +547,8 @@ function pushHud(): void {
 	// now run behind the MP-21 wait for daybreak too)
 	const held = pack.isOpen() || pauseCleanup !== undefined || dawnWait !== undefined || p.dead;
 	hud.setInteractHint(held ? undefined : interactHint(refs));
+	// the item the prompt names wears the brackets on the ground, and only while the prompt is up (ITM-07)
+	loop.setItemTarget(held ? -1 : hintedItem());
 }
 
 function warnNoAmmo(): void {
@@ -587,7 +565,7 @@ function warnNoAmmo(): void {
 	if (now - lastNoAmmo < NO_AMMO_COOLDOWN) return;
 	lastNoAmmo = now;
 	hud.showMessage("No ammo");
-	gameAudio.emptyMagazine(refs);
+	gameAudio.emptyMagazine();
 }
 
 function openPause(): void {
@@ -598,10 +576,6 @@ function openPause(): void {
 		0,
 		{
 			onResume: closePause,
-			onSave: () => {
-				if (net.requestSave("manual")) toast(ctx, tr("Saving..."));
-				else toast(ctx, offlineNote() ?? tr("Could not save"), "error");
-			},
 			onHome: goLobby,
 			onShop: () => {
 				stopGame();
@@ -817,7 +791,9 @@ function mountRun(enterWorld = true): void {
 function newWorld(): void {
 	clearScreen();
 	stopGame();
-	deliverPacks();
+	// the packs bought and not opened: from WORLD_SERVER_PHASE the server opens them, into a LIVING body, and the wallet
+	// that says so is what announces them (client/ui/packNotice.ts); a dead entry changes and says nothing
+	PackNotice.deliverPacks(ctx, Bag.owned());
 	buildRun();
 	mountRun();
 }
@@ -895,7 +871,7 @@ function onTown(notice: TownNotice): void {
 	const keepDead = loop.getRefs().player.dead && !(fellOn !== undefined && notice.newLife);
 	clearScreen();
 	stopGame(true);
-	deliverPacks();
+	PackNotice.deliverPacks(ctx, Bag.owned());
 	buildRun();
 	mountRun(false);
 	if (keepDead) {
@@ -909,14 +885,14 @@ function onTown(notice: TownNotice): void {
 
 netOnTown(onTown);
 // MON-05: "Title unlocked: [Survivor]" the moment the server grants one; CON-04: "Achievement unlocked" the moment
-// the server's counter reaches its goal
-startTitleNotices(ctx);
-startAchievementNotices(ctx);
+// the server's counter reaches its goal; SAV-01: "Saving..." / "Saved" in the corner when the server writes the save;
+// MON-03: "Delivered" when the server's wallet says the packs were opened (into a living body, never at a dead entry)
+startServerNotices(ctx);
 
 function resumeRun(): void {
 	clearScreen();
 	stopGame();
-	deliverPacks();
+	PackNotice.deliverPacks(ctx, Bag.owned());
 	mountRun();
 }
 
@@ -1171,13 +1147,10 @@ function begin(): void {
 	});
 }
 
-// audio (src/client/audio): the mixer boots with the client, reads the Settings sliders straight from the
-// save (so it follows a LoadAck that swaps `ctx.save`) and hooks the interface by watching the HUD and menu layers.
-audio.start();
-audio.bindSettings(() => ctx.save.settings);
-startUiAudio(ctx);
-// the walk cycle only reports the moment a foot lands; until something listens, nothing is heard
-onFootstep(playFootstep);
+// audio (src/client/audio/boot.ts): the mixer boots with the client, reads the Settings sliders straight from the
+// save (so it follows a LoadAck that swaps `ctx.save`), hooks the interface by watching the HUD and menu layers and
+// the footsteps; the network is handed to it here, so the audio never imports netClient
+startAudio(ctx, { netActive, remotePlayers });
 // one ordered preload (client/boot/preloadPlan.ts): the skin and the lobby's town, the signs and characters, the sounds
 Boot.startPreload(ids => audio.preloadSounds(ids));
 

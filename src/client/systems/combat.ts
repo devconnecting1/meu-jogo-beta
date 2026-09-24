@@ -887,7 +887,7 @@ export class Combat {
 				if (p.infiniteAmmo !== true) {
 					refs.save.ammoArrow += 1;
 					// heard, and counted by the "Pick something up" lesson, as any pickup (./pickups.ts)
-					took();
+					took(4, 47, 1);
 				}
 				return true;
 			}

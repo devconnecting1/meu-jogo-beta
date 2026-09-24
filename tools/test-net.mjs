@@ -2087,6 +2087,81 @@ test("Intent gate: the §8.2 bucket, the malformed window, and presence left to 
 	}
 });
 
+test("ShopAction guard: one bucket on both sides, the §8.2 line, the purchase nonce and its receipts", () => {
+	const G = require(join(SRC, "shared/net/shopGuard.ts"));
+	// the bucket: SHOP_BURST at one instant, then SHOP_RATE a second -- the numbers of the §8.2 table
+	let b = G.newShopBucket(0);
+	let taken = 0;
+	for (let i = 0; i < 50; i++) if (G.takeShopToken(b, 0)) taken += 1;
+	eq("a burst of SHOP_BURST at one instant", taken, CFG.SHOP_BURST);
+	eq("…then one more after 1/SHOP_RATE s", G.takeShopToken(b, 1 / CFG.SHOP_RATE + 1e-9), true);
+	b = G.newShopBucket(100);
+	for (let i = 0; i < CFG.SHOP_BURST; i++) G.takeShopToken(b, 100);
+	eq("a clock that goes backwards mints nothing", G.takeShopToken(b, 50), false);
+	// what the bucket lets through in any FLOOD_RATE_WINDOW_S (an honest client, whatever it clicks) stays under the line
+	b = G.newShopBucket(0);
+	const times = [];
+	for (let t = 0; t < 60; t += 0.01) if (G.takeShopToken(b, t)) times.push(t);
+	let most = 0;
+	for (let i = 0, j = 0; i < times.length; i++) {
+		while (times[i] - times[j] >= CFG.FLOOD_RATE_WINDOW_S) j++;
+		most = Math.max(most, i - j + 1);
+	}
+	eq(
+		"the flood line is 3× the limit for 5 s",
+		G.SHOP_FLOOD_CALLS,
+		CFG.SHOP_RATE * CFG.FLOOD_RATE_MULT * CFG.FLOOD_RATE_WINDOW_S,
+	);
+	ok(
+		most <= CFG.SHOP_BURST + CFG.SHOP_RATE * CFG.FLOOD_RATE_WINDOW_S + 1 && most * 1.5 < G.SHOP_FLOOD_CALLS,
+		`the most the bucket lets through in ${CFG.FLOOD_RATE_WINDOW_S} s (${most}) is far under the line (${G.SHOP_FLOOD_CALLS})`,
+	);
+	// viewShop takes no token; everything else, junk included, does
+	eq("viewShop takes no token", G.takesShopToken("viewShop"), false);
+	for (const k of ["buyPack", "buyCostume", "equipTitle", "rebirth", "newRun", undefined, 7, "VIEWSHOP", ""])
+		eq(`${String(k)} takes one`, G.takesShopToken(k), true);
+	// the nonce: a whole number in 1..SHOP_NONCE_MAX, nothing else
+	for (const n of [1, 2, 1000, G.SHOP_NONCE_MAX]) eq(`nonce ${n}`, G.isShopNonce(n), true);
+	for (const n of [
+		0,
+		-1,
+		0.5,
+		1.5,
+		NaN,
+		Infinity,
+		-Infinity,
+		G.SHOP_NONCE_MAX + 1,
+		1e300,
+		"1",
+		true,
+		null,
+		undefined,
+		{},
+		[],
+	])
+		eq(`nonce ${String(n)}`, G.isShopNonce(n), false);
+	// the receipts: the newest SHOP_RECEIPTS, looked up by nonce
+	const receipts = [];
+	for (let i = 1; i <= G.SHOP_RECEIPTS + 3; i++) G.keepReceipt(receipts, { nonce: i, packId: i % 4, price: 10 * i });
+	eq("the newest SHOP_RECEIPTS are kept", receipts.length, G.SHOP_RECEIPTS);
+	eq("the oldest are gone", G.receiptOf(receipts, 3), undefined);
+	eq(
+		"a kept one is found, with what it charged",
+		G.receiptOf(receipts, G.SHOP_RECEIPTS + 3)?.price,
+		10 * (G.SHOP_RECEIPTS + 3),
+	);
+	// fuzz: hostile times never break the bucket; hostile nonces never throw
+	b = G.newShopBucket(0);
+	let t = 0;
+	for (let i = 0; i < FUZZ_N; i++) {
+		t += rnd() < 0.1 ? -rfloat(0, 5) : rfloat(0, 0.3);
+		G.takeShopToken(b, t);
+		if (!(b.tokens >= 0 && b.tokens <= CFG.SHOP_BURST)) fail(`bucket out of range: ${b.tokens}`);
+		G.isShopNonce(pick([rfloat(-1e9, 1e9), rint(-5, 5), "x", NaN, {}, undefined]));
+		checks += 1;
+	}
+});
+
 test("Intent gate: out of the world only a cosmetic slot moves, and only to something owned (MON-04)", () => {
 	const G = require(join(SRC, "server/net/intentGate.ts"));
 	const { EQUIPS, EquipSlot } = require(join(SRC, "shared/data/equips.ts"));

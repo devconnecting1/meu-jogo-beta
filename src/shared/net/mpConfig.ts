@@ -122,7 +122,7 @@ export const FX_FLUSH_EVERY_TICKS = SNAP_NEAR_EVERY_TICKS;
 export const MAX_PLAYERS = 6;
 /** player slots are 0..MAX_PLAYERS-1, stable during the session (§4.4); this value means "no player" */
 export const SLOT_NONE = 255;
-/** hard server cap of live zombies (§3.5) and the admin override (§10) */
+/** hard server cap of live zombies (§3.5) and the admin override (§10: an admin's spawns may go past it, up to it) */
 export const MAX_ZOMBIES = 150;
 export const MAX_ZOMBIES_ADMIN = 250;
 /** simultaneous bosses (§3.5) */
@@ -232,7 +232,7 @@ export const GROUND_ITEM_CAP = 1000;
  * twice a second) and cost a light test per item in range per sweep.
  */
 export const ITEM_NEWS_S = 30;
-/** admin free camera: interest radius cap (§10) */
+/** admin free camera (§10): the point the admin's interest follows is kept this close to their body */
 export const FREECAM_MAX_RANGE = 3000;
 /** client-side removal of an entity not seen for this long, by ring, and its fade-out (§4.4) */
 export const DESPAWN_NEAR_S = 0.3;
@@ -282,10 +282,14 @@ export const INTENT_BURST = 30;
 export const INTENT_HOLD_TICKS = 30;
 /** backpack verbs one survivor may have waiting in the simulation at once (the wire rate caps it anyway) */
 export const INTENT_QUEUE_MAX = 8;
-/** ShopAction (already enforced by server/main.server.ts) */
+/** ShopAction: the bucket of shared/net/shopGuard.ts, kept by the server and by the client alike */
 export const SHOP_RATE = 2;
 export const SHOP_BURST = 6;
-/** admin requests */
+/**
+ * Admin remote: a NON-admin calling it faster than this (per second, past a burst of ADMIN_BURST) is flooding a remote
+ * the game never lets them use, and is kicked, once, with one audit entry (server/admin/adminServer.ts, §9.2 level 2).
+ * An admin's own requests have the panel's bucket there (4/s, burst 12) and the free camera one of its own (§10: 5/s).
+ */
 export const ADMIN_RATE = 10;
 export const ADMIN_BURST = 10;
 /** TimeSync probe (decision F0A, not in the doc): at most 2/s, burst 4 */

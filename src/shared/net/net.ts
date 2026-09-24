@@ -6,8 +6,10 @@ import type { PlayerSaveData, Wallet } from "shared/game/save";
  *
  *   LoadRequest  C→S  RemoteEvent     ()                       ask for (or re-try) the session save
  *   LoadAck      S→C  RemoteEvent     (LoadResult)             sent once the save is read (and on re-requests)
- *   SaveRequest  C→S  RemoteEvent     (token, json)            progress report, JSON of PlayerSaveData
- *   SaveAck      S→C  RemoteEvent     (SaveAckPayload)         result + coins earned + wallet
+ *   SaveRequest  C→S  RemoteEvent     (token, json)            progress report, JSON of PlayerSaveData. It is NOT a
+ *                                                              request to write: the server alone decides when the
+ *                                                              DataStore is written (SAV-01, server/save/saveCadence.ts)
+ *   SaveAck      S→C  RemoteEvent     (SaveAckPayload)         result + coins earned + wallet; pushes: wallet, store
  *   ShopAction   C→S  RemoteFunction  (ShopActionRequest) → ShopActionResult
  */
 export const NET_FOLDER = "Net";
@@ -69,13 +71,32 @@ export interface SaveAckPayload {
 	wallet?: Wallet;
 	/**
 	 * Not an answer to a report: the server pushed the wallet because the simulation changed it (XP, a level,
-	 * midnight's coins). The client applies the wallet and nothing else -- no retry, no "saved" toast.
+	 * midnight's coins), or tells what happened to a write of the save (`store`). The client applies the wallet and
+	 * nothing else -- no retry, no toast.
 	 */
 	push?: boolean;
+	/** SAV-01: a push about the DataStore write of this player's save (client/ui/saveIndicator.ts) */
+	store?: StoreState;
 }
 
+/**
+ * SAV-01 (docs/DESIGN_RULES.md): what the server tells a player about the writes of their save, pushed on SaveAck.
+ * Only a write that carries something new is announced (a lock refresh of an unchanged save is not).
+ *
+ * saving   a write of new progress started
+ * saved    it landed in the DataStore
+ * failing  it failed after its retries (the DataStore is down): it is tried again, and the player is told
+ * stopped  this server lost the session lock (another server holds the player): it will never write again
+ */
+export type StoreState = "saving" | "saved" | "failing" | "stopped";
+
 export type ShopActionRequest =
-	| { kind: "buyPack"; packId: number }
+	/**
+	 * `nonce` (shared/net/shopGuard.ts): the same nonce again is answered as the first time and never charged twice.
+	 * client/systems/saveClient.ts `invokeShopAction` numbers every purchase; a request that carries none is a purchase
+	 * of its own each time.
+	 */
+	| { kind: "buyPack"; packId: number; nonce?: number }
 	| { kind: "buyCostume"; costumeId: number }
 	/** MON-05: show an EARNED title under the name (-1 = none); the server checks it (server/save/titles.ts) */
 	| { kind: "equipTitle"; titleId: number }
@@ -95,7 +116,10 @@ export interface ShopActionResult {
 	reason?: ShopActionReason;
 	/** coins charged */
 	price?: number;
-	/** current server wallet (also sent with most refusals, so the client re-syncs) */
+	/**
+	 * current server wallet (also sent with most refusals, so the client re-syncs). Never with "rate", "loading" or
+	 * "readonly": a refusal that costs the server nothing to make must not cost it a wallet to answer (§8.2)
+	 */
 	wallet?: Wallet;
 }
 
