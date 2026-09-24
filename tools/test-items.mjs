@@ -775,10 +775,12 @@ section("A6. the HUD and the Bag draw every weapon with its own name and a pixel
  * pack's content and every costume.
  */
 function itemSources() {
-	const { MAP_ITEM_LOOT, BOSS_TROPHIES } = require(join(SRC, "shared/data/spawns.ts"));
+	const { MAP_ITEM_LOOT, BOSS_TROPHIES, PUMP_LOOT } = require(join(SRC, "shared/data/spawns.ts"));
 	const out = [];
 	for (const table of BUILDING_SPAWNS)
 		for (const e of table) out.push({ kind: e.kind, index: e.index, from: "loot" });
+	// a gas station's pump islands (EDI-16), on a checkout that has them
+	for (const e of PUMP_LOOT ?? []) out.push({ kind: e.kind, index: e.index, from: "gas pump" });
 	for (const r of CRAFT_RECIPES) out.push({ kind: r.resultKind, index: r.resultIndex, from: `recipe ${r.id}` });
 	for (const p of SHOP_PACKS) for (const it of p.items) out.push({ kind: it.kind, index: it.index, from: p.name });
 	for (const [what, table] of Object.entries(MAP_ITEM_LOOT))
@@ -5167,6 +5169,8 @@ section(
 			);
 			press(pl, 0, P2.packEdges(1, 0, 0, 0));
 			untilConsumed(sp, seq);
+			// the World batch goes out on the snapshot's cadence (audit M3)
+			for (let i = 0; i < (CFG2.WORLD_FLUSH_EVERY_TICKS ?? 1); i++) s.beat();
 			const built = world.solids.find(q => q.placeable === recipe.resultIndex && q.owner === sp.slot);
 			check(
 				built !== undefined && built.id >= CFG2.DYNAMIC_ID_BASE && s.sim.build.pendingOf(sp.slot) === -1,

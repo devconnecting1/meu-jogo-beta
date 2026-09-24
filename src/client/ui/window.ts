@@ -293,7 +293,7 @@ const METER_GROOVE_UNIT = 2;
 const METER_FILL_UNIT = 2;
 
 /**
- * The HUD console's bar as a kit piece (DESIGN_RULES UI-09, UI-13): the dark notched groove, the fill a PLATE in relief
+ * The HUD console's bar as a kit piece (DESIGN_RULES UI-09, UI-14): the dark notched groove, the fill a PLATE in relief
  * inside it (its light band and lip), and the light Bold label centred over both -- "17 / 500" reads on the fill and
  * on the empty groove alike (test:contrast measures both). Not the thin web progress line: a sliver of progress keeps
  * its notched shape (the narrowest fill is its own relief), and nothing is drawn for zero.

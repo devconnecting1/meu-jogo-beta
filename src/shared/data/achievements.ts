@@ -22,12 +22,12 @@ export interface AchievementDef {
 	title: string;
 	/**
 	 * What earns it, in one line and in our words, as the server counts it (server/save/achievements.ts): the window
-	 * shows it under the name (UI-13). No number in it: the goal is the progress bar's ("17 / 500"), so a goal that
+	 * shows it under the name (UI-14). No number in it: the goal is the progress bar's ("17 / 500"), so a goal that
 	 * changes never leaves the sentence lying. A lang.ts entry
 	 */
 	howTo: string;
 	/**
-	 * Its picture (UI-13): an item icon that already says the thing (shared/data/itemIcons.ts: the bow of Quiet Archer,
+	 * Its picture (UI-14): an item icon that already says the thing (shared/data/itemIcons.ts: the bow of Quiet Archer,
 	 * the wood of Woodpile), or one of shared/data/badgeIcons.ts (the zombies, the bosses, the sunrise). test:nav checks
 	 * that every row on view has one that draws
 	 */

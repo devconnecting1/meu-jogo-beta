@@ -271,6 +271,10 @@ export function showShop(ctx: GameContext, onBack: () => void, onWardrobe: () =>
 	const touch = inputDevice() === "touch";
 	// a menu screen: see-through, over the town flyover behind the menus (UI-10), its window centred on the screen
 	const { root, body } = makeScreen(ctx.uiLayer, "Shop", { transparency: 1, content: SHOP_WINDOW });
+	// the Shop funnel's first step (docs/ANALYTICS.md): fired and forgotten, once per visit (this screen opening; a
+	// tab switch is not a visit) -- the answer carries nothing, the screen never waits on it, and the server decides
+	// what it is worth (server/analytics/events.ts `shopViewed`)
+	task.spawn(() => invokeShopAction({ kind: "viewShop", screen: 0 }));
 	const win = Kit.Window(body, "Window", {
 		...SHOP_WINDOW,
 		title: tr("Shop"),

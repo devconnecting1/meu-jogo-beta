@@ -1,5 +1,5 @@
 /*
- * The Achievements window, opened from the lobby's Achievements plate (docs/DESIGN_RULES.md UI-13, CON-04): a UI-07
+ * The Achievements window, opened from the lobby's Achievements plate (docs/DESIGN_RULES.md UI-14, CON-04): a UI-07
  * window with the other windows' chrome ("?" at the left, the red X in relief at the right, B / Backspace = X), a
  * summary, and every achievement on view as a row with its picture, its name, what earns it and how far along it is.
  *

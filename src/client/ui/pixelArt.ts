@@ -1,6 +1,6 @@
 /*
  * Small pixel pictures of the UI drawn with Frames, in THEME colours (docs/DESIGN_RULES.md UI-01, UI-10, MON-06,
- * UI-13): the round coin that stands for coins everywhere, and the medal of an unlocked achievement. Not item art --
+ * UI-14): the round coin that stands for coins everywhere, and the medal of an unlocked achievement. Not item art --
  * those are shared/data/itemIcons.ts, drawn by client/ui/itemIcon.ts in their own art colours -- but interface marks,
  * each character of a bitmap one slot of a palette the caller fills with theme tokens.
  *
@@ -208,7 +208,7 @@ export function PixelCoin(
 	return PixelArt(parent, name, "coin", COIN_BITMAP, COIN_ORDER, coinPalette(), cx, cy, size, zIndex);
 }
 
-// ---------------------------------------------------------------- the medal (UI-13)
+// ---------------------------------------------------------------- the medal (UI-14)
 
 /**
  * The medal of an unlocked achievement: a gold disc with a check stamped on it, hung from a steel-blue ribbon (the

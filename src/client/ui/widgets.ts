@@ -2014,6 +2014,8 @@ export function showToast(layer: Instance, text: string, kind: ToastKind = "info
 	slot.LayoutOrder = -++toastOrder;
 	slot.SetAttribute("Text", text);
 	slot.SetAttribute("Born", os.clock());
+	// what the toast is, for its sound (client/audio/uiAudio.ts): the coin toast has no glyph to be read from
+	slot.SetAttribute("Kind", kind);
 	const card = makeSurface(slot, "Card", 0, 0, TOAST_W, TOAST_H, "panel", {
 		border: style.frame,
 		zIndex: 1002,

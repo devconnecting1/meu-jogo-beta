@@ -253,7 +253,7 @@ export const GAME = {
 	/** the light on the coin's upper left: chart-3 towards gold, lighter */
 	coinShine: TOKENS.coinShine,
 	/**
-	 * an UNLOCKED achievement (UI-13): the medal's gold, the row's ring and its "Unlocked" -- gold means unlocked and
+	 * an UNLOCKED achievement (UI-14): the medal's gold, the row's ring and its "Unlocked" -- gold means unlocked and
 	 * nothing else (numbers are STAT.value's yellow)
 	 */
 	medal: TOKENS.medal,

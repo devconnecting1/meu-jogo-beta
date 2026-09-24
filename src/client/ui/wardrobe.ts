@@ -38,7 +38,7 @@ import * as Kit from "./window";
  * and the titles, which are never bought: earned by playing, chosen here, shown under the name.
  *
  *   ┌──────────────────────────── Wardrobe ───────────────────────────── X ┐
- *   │ [Outfits] [Pets]                                        ($ 1,843)    │
+ *   │ [Outfits] [Pets]                                        (● 1,843)    │
  *   │ ┌ Outfits ───── 1 / 3 ┐   ┌ Santa ─────────────────────── OUTFIT ┐   │
  *   │ │ ▣ ▣ ▣               │   │  the survivor wearing it (+ your pet) │   │
  *   │ └─────────────────────┘   │  Price | 30 coins                     │   │
@@ -198,6 +198,8 @@ export function showWardrobe(ctx: GameContext, handlers: WardrobeHandlers): () =
 	// a menu screen: see-through, over the town flyover behind the menus (UI-10), its window centred on the screen
 	const { root, body } = makeScreen(ctx.uiLayer, "Wardrobe", { transparency: 1, content: centredRect(WIN_W, WIN_H) });
 	const RunService = game.GetService("RunService");
+	// the Shop funnel's first step, on the wardrobe's screen (docs/ANALYTICS.md): fired and forgotten, as in shop.ts
+	task.spawn(() => invokeShopAction({ kind: "viewShop", screen: 1 }));
 
 	const win = Kit.Window(body, "Window", {
 		...centredRect(WIN_W, WIN_H),

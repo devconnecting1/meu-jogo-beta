@@ -1,5 +1,5 @@
 /*
- * The pictures of what the game counts that no item stands for (docs/DESIGN_RULES.md UI-13, MON-06): the zombies and
+ * The pictures of what the game counts that no item stands for (docs/DESIGN_RULES.md UI-14, MON-06): the zombies and
  * the four bosses of the achievements, a sunrise, a trophy and a gift for the ways to earn coins. The same kind of
  * data as the item icons (shared/data/itemIcons.ts, UI-11): a 16 x 16 grid per icon, one character per pixel in the
  * art colours of shared/engine/colors.ts ICON_ART, a 1-pixel `k` outline, 2-4 colours and the light from the top left,

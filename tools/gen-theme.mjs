@@ -92,7 +92,7 @@ const COLOR_TOKENS = [
 	["coin-shade", "chart-3"],
 	/** the light on the coin's upper left: chart-3 towards gold, lighter */
 	["coin-shine", "chart-3"],
-	// the achievements (docs/DESIGN_RULES UI-13): what is unlocked is gold -- the medal, its ring and its "Unlocked".
+	// the achievements (docs/DESIGN_RULES UI-14): what is unlocked is gold -- the medal, its ring and its "Unlocked".
 	// A theme without them falls back to the item card's yellow
 	/** an unlocked achievement: the medal's gold, the row's ring and its word */
 	["medal", "stat-value"],

@@ -24,6 +24,10 @@
  *                       both keys, through the same handler as its own control; a help popup closes alone and gives
  *                       the pad back to its "?"; a question is dismissed, never answered; never the lobby's own menu,
  *                       the end-of-run choice, the daybreak wait or the HUD's scoreboard; nothing eaten in a run.
+ *   2c. THE DEATH       the death screen (client/onboarding/gameOver.ts, UI-13) with a pad: the focus lands on the action
+ *       SCREEN          that works (Rebirth when it can be paid, else Home in a wait and New game when the run is over);
+ *                       the world's buttons stay the screen's, Start and LB reach the game as from every menu; New game
+ *                       asks with the pad on Cancel and B dismisses the question unanswered; five cycles leave nothing.
  *   3. MENU PRESSES     a toggle pressed in the lobby (P, B, Start, a weapon key) is not left pending for the first
  *                       frame of the next run: main.client.ts drops them when a run mounts.
  *   4. UI-06            Settings opened over a run keeps the survivor held like the menu it came from (source guard).
@@ -865,6 +869,145 @@ console.log(
 	}
 }
 
+// ================================================================ 2c. the death screen with a pad (UI-13)
+
+console.log(
+	"\n2c) a tela de morte pelo controle: o foco na acao que funciona, New game pergunta com o foco no Cancel, nada sobra\n",
+);
+
+{
+	const { rebirthPrice } = require(join(SRC, "shared/data/shop.ts"));
+	const save = ctx.save;
+	const money = save.money;
+	const deaths = save.deathCount;
+	const summary = { days: 3, bestDay: 12, level: 7, kills: 20, bosses: 0, first: false, record: false };
+	const death = () => layer.FindFirstChild("RunOver");
+	const sel = () => GuiService.SelectedObject?.Name;
+	/** a death screen as main.client.ts opens it; `calls` counts what reached the handlers */
+	const openDeath = (wait, coins, withNew = true, standing = 1) => {
+		save.money = coins;
+		save.deathCount = 0;
+		ctx.phase = "dead";
+		const calls = { rebirth: 0, newRun: 0, home: 0 };
+		const handlers = {
+			onRebirth: () => calls.rebirth++,
+			onNewRun: withNew ? () => calls.newRun++ : undefined,
+			onHome: () => calls.home++,
+		};
+		let close;
+		if (wait) {
+			const w = showDaybreakWait(ctx, summary, handlers, !withNew, () => standing);
+			w.setRemaining(120, true);
+			close = () => w.close();
+		} else close = showRunSummary(ctx, summary, handlers);
+		flush();
+		return { calls, close: () => (close(), flush()) };
+	};
+	const price = rebirthPrice(0);
+	lastInput.type = Enum.UserInputType.Gamepad1;
+	// where the pad lands: the action that works
+	const landings = [];
+	for (const [label, wait, coins, withNew, want] of [
+		["espera, com moedas", true, price, true, "Rebirth"],
+		["espera, sem moedas (esperar nao pede botao)", true, 0, true, "Home"],
+		["vida nova esperando, sem moedas", true, 0, false, "Home"],
+		["fim, com moedas", false, price, true, "Rebirth"],
+		["fim, sem moedas (o unico caminho)", false, 0, true, "NewGame"],
+	]) {
+		const s = openDeath(wait, coins, withNew);
+		if (sel() !== want) landings.push(`${label}: ${sel() ?? "nada"} (esperado ${want})`);
+		s.close();
+		GuiService.SelectedObject = undefined;
+	}
+	check(
+		"o foco do controle cai na acao que funciona: Rebirth quando da para pagar; senao Home numa espera, New game no fim",
+		landings.length === 0,
+		landings.join("; "),
+	);
+
+	// with the pad on the screen: A / X / Y / RT / RB stay the menu's; Start and LB still reach the game, as from every
+	// menu (main.client.ts ignores both while the survivor is dead: the Menu opens only while playing, the Bag too)
+	{
+		const s = openDeath(true, price);
+		const held = [];
+		for (const k of ["ButtonA", "ButtonX", "ButtonY", "ButtonR2", "ButtonR1"]) {
+			input.beginFrame();
+			tap(pad(k));
+			if (input.attackPressed || input.actionPressed || input.reloadPressed) held.push(k);
+		}
+		input.attackHeld = false;
+		input.beginFrame();
+		tap(pad("ButtonStart"));
+		const start = input.pausePressed === true;
+		input.beginFrame();
+		tap(pad("ButtonL1"));
+		const lb = input.backpackPressed === true;
+		input.beginFrame();
+		const main = readFileSync(join(SRC, "client/main.client.ts"), "utf8");
+		const ignoredDead =
+			/if \(input\.pausePressed && ctx\.phase === "playing"\)/.test(main) &&
+			/function toggleBackpack\(\): void \{\n\tif \(ctx\.phase !== "playing"/.test(main);
+		s.close();
+		check(
+			"...com o foco nela, A / X / Y / RT / RB ficam com a tela; Start e LB chegam ao jogo (como de todo menu), que os ignora com o sobrevivente morto",
+			held.length === 0 && start && lb && s.calls.rebirth === 0 && ignoredDead,
+			JSON.stringify({ held, start, lb, ignoredDead }),
+		);
+	}
+
+	// New game asks first: the pad lands on Cancel, B dismisses the question unanswered (the screen stays), and only the
+	// confirmation starts the new life
+	{
+		const s = openDeath(true, 0);
+		GuiService.SelectedObject = findIn(death(), "NewGame");
+		findIn(death(), "NewGame").Activated.Fire();
+		flush();
+		const pop = layer.FindFirstChild("PopupOverlay");
+		const onCancel = sel() === "PopupBtn0" && findIn(pop, "PopupBtn0")?.Text === "Cancel";
+		tap(pad("ButtonB"), true);
+		const dismissed = layer.FindFirstChild("PopupOverlay") === undefined && death() !== undefined;
+		const unanswered = s.calls.newRun === 0;
+		findIn(death(), "NewGame").Activated.Fire();
+		flush();
+		findIn(layer.FindFirstChild("PopupOverlay"), "PopupBtn1").Activated.Fire();
+		flush();
+		const confirmed = s.calls.newRun === 1;
+		s.close();
+		check(
+			"New game pelo controle: pergunta com o foco no Cancel; B tira a pergunta sem responder e a tela fica; so a confirmacao chama o handler",
+			pop !== undefined && onCancel && dismissed && unanswered && confirmed,
+			JSON.stringify({ asked: pop !== undefined, onCancel, dismissed, unanswered, confirmed }),
+		);
+	}
+
+	// five open / close cycles of each build, the question opened in between: no Instance and no connection left
+	{
+		const conns = connCount();
+		const r = measure(() => {
+			for (let i = 0; i < 5; i++) {
+				for (const wait of [true, false]) {
+					const s = openDeath(wait, i % 2 === 0 ? price : 0, true, i % 3);
+					findIn(death(), "NewGame").Activated.Fire();
+					flush();
+					s.close();
+				}
+			}
+		});
+		check(
+			"5 ciclos de cada tela de morte (com a pergunta aberta ao fechar) -- nenhuma Instance e nenhuma conexao sobrando",
+			r.created === r.destroyed && connCount() === conns && layer.FindFirstChild("PopupOverlay") === undefined,
+			`${r.created} criadas, ${r.destroyed} destruidas, ${connCount() - conns} conexoes a mais`,
+		);
+	}
+	GuiService.SelectedObject = undefined;
+	lastInput.type = Enum.UserInputType.MouseMovement;
+	input.beginFrame();
+	save.money = money;
+	save.deathCount = deaths;
+	ctx.phase = "lobby";
+	flush();
+}
+
 // ================================================================ 3. presses made in the menus
 
 console.log("\n3) teclas apertadas nos menus nao ficam pendentes para o primeiro quadro da partida\n");
@@ -962,7 +1105,7 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 		const g = findIn(row, name);
 		return g !== undefined && shown(g, dialog);
 	};
-	// UI-13: each row -- its "cur / goal" on the meter while it is being earned, the medal and "Unlocked" once done
+	// UI-14: each row -- its "cur / goal" on the meter while it is being earned, the medal and "Unlocked" once done
 	const wrong = visible.filter((a, i) => {
 		const cur = Math.min(save.achievements[a.id] ?? 0, a.max);
 		const v = findIn(rows[i], "Value")?.Text;
@@ -1095,8 +1238,31 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 		save.day = 1;
 		save.bossKills = 0;
 		ctx.phase = "shop";
+		// the Shop funnel (docs/ANALYTICS.md; the server's side is test:analytics): opening the shop asks for ONE
+		// `viewShop` (screen 0) per visit -- the tabs send nothing. The shim's task.spawn runs nothing; here what is
+		// spawned is caught and run against a stand-in for the remote
+		const spawned = [];
+		const shopCalls = [];
+		const realSpawn = globalThis.task.spawn;
+		const realInvoke = saveClient.invokeShopAction;
+		globalThis.task.spawn = (fn, ...a) => spawned.push(() => fn(...a));
+		saveClient.invokeShopAction = req => {
+			shopCalls.push(req);
+			return { ok: false, reason: "network" };
+		};
+		const runSpawned = () => {
+			for (const f of spawned.splice(0)) {
+				try {
+					f();
+				} catch {
+					// a spawned loop that waits (task.wait) is not simulated here
+				}
+			}
+		};
+		const views = screen => shopCalls.filter(q => q.kind === "viewShop" && q.screen === screen).length;
 		const close = SHOP.showShop(ctx, noop, noop);
 		flush();
+		runSpawned();
 		const root = layer.FindFirstChild("Shop");
 		const card = i => findIn(findIn(root, "Content"), `Pack${SHOP_PACKS[i].id}`);
 		const buyOf = i => findIn(card(i), "Buy");
@@ -1190,8 +1356,26 @@ console.log("\n5) conquistas e recordes: o que a tela mostra e o que da para gan
 			r.created === 0 && r.destroyed === 0,
 			`${r.created} / ${r.destroyed}`,
 		);
+		runSpawned();
+		const afterTabs = views(0);
 		close();
 		flush();
+		// a second visit is a second view; the wardrobe's screen is its own (screen 1), once per visit too
+		SHOP.showShop(ctx, noop, noop)();
+		flush();
+		runSpawned();
+		const closeWardrobeView = showWardrobe(ctx, { onBack: noop, onEquip: noop, onUnequip: noop });
+		flush();
+		runSpawned();
+		closeWardrobeView();
+		flush();
+		check(
+			"analytics: abrir a loja pede UM viewShop (tela 0) por visita -- as abas nao contam; o guarda-roupa, um (tela 1)",
+			afterTabs === 1 && views(0) === 2 && views(1) === 1 && shopCalls.every(q => q.kind === "viewShop"),
+			`loja ${afterTabs} depois das abas, ${views(0)} em 2 visitas; guarda-roupa ${views(1)}; ${shopCalls.length} chamadas`,
+		);
+		globalThis.task.spawn = realSpawn;
+		saveClient.invokeShopAction = realInvoke;
 		Object.assign(save, { money: keep.money, bestDay: keep.bestDay, day: keep.day, bossKills: keep.bossKills });
 		save.packsBought = keep.bought;
 		save.packsOpened = keep.opened;
@@ -1652,24 +1836,63 @@ function textsIn(root, where) {
 		() => showPause(ctx, 0, { onResume: noop, onSave: noop, onHome: noop, onShop: noop, onSettings: noop }),
 		"Menu",
 	);
-	// the end-of-run screen's four epitaphs (gameOver.ts closingLine): a record, five days, a first death, the rest
+	// the death screen (gameOver.ts, UI-13): its four epitaphs (a record, five days, a first death, the rest), with and
+	// without the coins for a Rebirth, and every state of the wait -- somebody standing (one, two), by day, the town
+	// falling, the town's window run out, a new life waiting, the count at zero
 	const summaries = [
-		{ days: 12, bestDay: 12, level: 7, kills: 20, bosses: 0, first: false },
+		{ days: 12, bestDay: 12, level: 7, kills: 20, bosses: 0, first: false, record: true },
 		{ days: 6, bestDay: 12, level: 7, kills: 20, bosses: 0, first: false },
 		{ days: 1, bestDay: 3, level: 1, kills: 0, bosses: 0, first: true },
-		{ days: 3, bestDay: 12, level: 7, kills: 20, bosses: 0, first: false },
+		{ days: 3, bestDay: 12, level: 7, kills: 20, bosses: 2, first: false },
 	];
-	for (const summary of summaries) {
-		visit(
-			`Fim de partida (${summary.days} dias)`,
-			() => showRunSummary(ctx, summary, { onRebirth: noop, onNewRun: noop, onHome: noop }),
-			"RunOver",
-		);
+	const deathHandlers = { onRebirth: noop, onNewRun: noop, onHome: noop };
+	const coins = ctx.save.money;
+	for (const money of [999, 0]) {
+		ctx.save.money = money;
+		for (const summary of summaries) {
+			visit(
+				`Fim de partida (${summary.days} dias, ${money} moedas)`,
+				() => showRunSummary(ctx, summary, deathHandlers),
+				"RunOver",
+			);
+		}
+		const waits = [
+			["alguem de pe", 2, 197, true, false, 0],
+			["um de pe", 1, 197, true, false, 0],
+			["de dia", 1, 180, false, false, 0],
+			["a cidade cai", 0, 150, true, false, 6],
+			["a janela acabou", 0, 150, true, false, 31],
+			["vida nova", 2, 120, true, true, 0],
+			["vida nova, a cidade cai", 0, 120, true, true, 6],
+			["zero", 2, 0, true, false, 0],
+			["sem lista", undefined, 197, true, false, 0],
+		];
+		for (const [label, standing, seconds, night, newLife, later] of waits) {
+			visit(
+				`Espera do amanhecer (${label}, ${money} moedas)`,
+				() => {
+					const handlers = newLife ? { ...deathHandlers, onNewRun: undefined } : deathHandlers;
+					const w = showDaybreakWait(ctx, summaries[3], handlers, newLife, () => standing);
+					w.setRemaining(seconds, night);
+					ui.setClock(ui.getClock() + later);
+					w.setRemaining(seconds, night);
+					return () => w.close();
+				},
+				"RunOver",
+			);
+		}
 	}
+	ctx.save.money = coins;
+	// the New game question
 	visit(
-		"Espera do amanhecer",
-		() => showDaybreakWait(ctx, summaries[3], { onRebirth: noop, onNewRun: noop, onHome: noop }).close,
-		"RunOver",
+		"Morte: a pergunta do New game",
+		() => {
+			const close = showRunSummary(ctx, summaries[1], deathHandlers);
+			flush();
+			findIn(layer.FindFirstChild("RunOver"), "NewGame").Activated.Fire();
+			return close;
+		},
+		"PopupOverlay",
 	);
 	for (let t = 0; t < 6; t++) {
 		visit(

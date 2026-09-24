@@ -35,7 +35,7 @@ export type { RunState } from "./survivor";
  * (client/ui/survivor.ts). Both stand on the town flyover (client/view/townFlyover.ts): the real town of the world
  * the player is about to enter, drifting past under a dark scrim.
  *
- *   PROJECT Z                                                    ($ 1,843)
+ *   PROJECT Z                                                    (● 1,843)
  *   Zombie survival                                     (loading / offline)
  *   ┌───────────────────────────┐   ┌ Fabricio ──────────────── LEVEL 7 ┐
  *   │ ▶  START                  │   │                                    │

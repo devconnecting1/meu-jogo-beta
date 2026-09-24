@@ -26,7 +26,10 @@ export type PixelIconKind =
 	| "sun"
 	| "moon"
 	| "people"
-	| "grave";
+	| "grave"
+	| "heart"
+	| "restart"
+	| "home";
 
 /** bitmap side (pixels) */
 const N = 9;
@@ -176,6 +179,42 @@ const BITMAPS: Record<PixelIconKind, Array<string>> = {
 		".#######.",
 		".#######.",
 		"#########",
+	],
+	// a heart: the death screen's Rebirth, the same life woken now (client/onboarding/gameOver.ts, UI-13)
+	heart: [
+		".........",
+		".##...##.",
+		"####.####",
+		"#########",
+		"#########",
+		".#######.",
+		"..#####..",
+		"...###...",
+		"....#....",
+	],
+	// a turning arrow: New game, a life started over from day 1
+	restart: [
+		"...###.#.",
+		".##...##.",
+		".#...###.",
+		"#........",
+		"#.......#",
+		"#.......#",
+		".#.....#.",
+		"..#####..",
+		".........",
+	],
+	// a house with its door: back to the lobby
+	home: [
+		"....#....",
+		"...###...",
+		"..#####..",
+		".#######.",
+		"#########",
+		".#######.",
+		".##...##.",
+		".##...##.",
+		".##...##.",
 	],
 };
 
