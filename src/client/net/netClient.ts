@@ -707,6 +707,19 @@ export function netActive(): boolean {
 }
 
 /**
+ * The survivor stands where the SERVER put them: a self block has been adopted since this run's body was bound (§7.1
+ * step 6). Until then the position is only where the client started, and client/net/entryHold.ts draws nothing.
+ */
+export function netPlaced(): boolean {
+	return prediction.placed();
+}
+
+/** how many times the prediction put the drawn survivor straight onto a far correction (a teleport, §5.2) */
+export function netSnaps(): number {
+	return prediction.snapCount();
+}
+
+/**
  * The server runs the MP host (its remotes exist), so the server owns this survivor's life: it keeps a body dead
  * until daybreak, a Rebirth or the end of the world (MP-21, MP-22), and it is the one that says so. Unlike
  * `netActive()` this does not wait for the handshake of a run, which is what a decision made from the lobby needs.
@@ -1320,6 +1333,7 @@ function viewOf(state: RemoteState, entry: RosterEntry): RemotePlayerView {
 		title: entry.title,
 		x: state.x,
 		y: state.y,
+		alpha: state.alpha,
 		angle: state.aim,
 		// §4.2 carries another survivor's health as a fraction of THEIR own maximum (`hp% u8`), never the raw
 		// number: the view only ever needs the ratio, and the ratio is all the wire can honestly give

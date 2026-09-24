@@ -38,6 +38,8 @@ import {
 	RENDER_DELAY_RATE,
 	SNAP_MID_EVERY_TICKS,
 	SNAP_NEAR_EVERY_TICKS,
+	SNAP_NEAR_HZ,
+	STREAM_QUIET_S,
 	TRACK_FADE_IN_RATE,
 } from "shared/net/mpConfig";
 
@@ -261,6 +263,12 @@ export function retiredAfterS(mid: boolean, shownFor: number): number {
  */
 export class ActorInterest {
 	private readonly rings = new Map<number, ActorRing>();
+	/**
+	 * The server's clock (s) at each viewer's last two snapshot rounds (`noteRound`): whether it went on sending that
+	 * viewer others while it sent them one body no more -- a gap in that body's track, not in the whole stream.
+	 */
+	private readonly lastRound = new Map<number, number>();
+	private readonly prevRound = new Map<number, number>();
 
 	private static key(viewer: number, netId: number): number {
 		return viewer * ACTOR_KEY_STRIDE + netId;
@@ -300,6 +308,38 @@ export class ActorInterest {
 	}
 
 	/**
+	 * A snapshot round goes to this viewer at `now` (the server's clock, s): call it before the round's `noteSent`.
+	 *
+	 * A round after a silence of STREAM_QUIET_S or more -- the server stalled, a heartbeat that dropped its surplus (§3.1)
+	 * -- is a silence of the WHOLE stream for that client: it keeps every track through it, alpha and all, and does not
+	 * count it against any despawn timeout (client/net/snapshotBuffer.ts `notePart`, review of 577c729, M1). The same
+	 * silence is forgiven here to every body this viewer was sent, so the retirement the server mirrors (`gone`) stays
+	 * the client's. What the server cannot see is a silence the link made alone (a loss burst on the way down): there
+	 * the client keeps a track the server may take as retired, at worst for the burst's length, and the one thing that
+	 * costs is the blood of a death in that window (the ZombieDied goes to who the server thinks draws the body).
+	 */
+	noteRound(viewer: number, now: number): void {
+		const last = this.lastRound.get(viewer);
+		if (last !== undefined) {
+			this.prevRound.set(viewer, last);
+			const quiet = now - last;
+			if (quiet > STREAM_QUIET_S) this.forgiveSilence(viewer, quiet - 1 / SNAP_NEAR_HZ);
+		}
+		this.lastRound.set(viewer, now);
+	}
+
+	/** a silence of `seconds` in this viewer's whole stream counts toward no body's retirement (`noteRound`) */
+	private forgiveSilence(viewer: number, seconds: number): void {
+		const from = viewer * ACTOR_KEY_STRIDE;
+		const to = from + ACTOR_KEY_STRIDE;
+		for (const [key, pair] of this.rings) {
+			if (key < from || key >= to || !pair.sent) continue;
+			pair.sentClock += seconds;
+			pair.shownClock += seconds;
+		}
+	}
+
+	/**
 	 * A snapshot of `tick` carried this body to this viewer with this `mid` flag, and `extra` is the mid ring's
 	 * extra delay in ticks (midViewExtraTicks); `now` is the server's clock (s, the replicator's). What the client does
 	 * with the flag: a new track takes its extra at once; a changed flag starts easing it from wherever it was when
@@ -317,7 +357,7 @@ export class ActorInterest {
 		const pair = this.rings.get(ActorInterest.key(viewer, netId));
 		if (pair === undefined) return;
 		const to = mid ? extra : 0;
-		if (!pair.sent || ActorInterest.gone(pair, now)) {
+		if (!pair.sent || this.gone(viewer, pair, now)) {
 			pair.sent = true;
 			pair.wireMid = mid;
 			pair.sentAt = tick;
@@ -327,6 +367,14 @@ export class ActorInterest {
 			pair.extraTo = to;
 			pair.extraAt = tick;
 			return;
+		}
+		// the client starts a track again, faded in from nothing, when this body was not carried for longer than its ring's
+		// timeout while the stream carried others (client/net/snapshotBuffer.ts `discontinuity`, review of 577c729, M1):
+		// its fade out is measured from the new fade-in from here on (N1). A silence of the whole stream -- a round this
+		// viewer did not get at all -- is kept as one walk there, at its alpha, and here too
+		const timeout = pair.wireMid ? DESPAWN_MID_S : DESPAWN_NEAR_S;
+		if (now - pair.sentClock > timeout && (this.prevRound.get(viewer) ?? -math.huge) > pair.sentClock) {
+			pair.shownClock = now;
 		}
 		pair.sentAt = tick;
 		pair.sentClock = now;
@@ -356,12 +404,18 @@ export class ActorInterest {
 	 */
 	hasTrack(viewer: number, netId: number, now: number): boolean {
 		const pair = this.rings.get(ActorInterest.key(viewer, netId));
-		return pair !== undefined && pair.sent && !ActorInterest.gone(pair, now);
+		return pair !== undefined && pair.sent && !this.gone(viewer, pair, now);
 	}
 
-	/** has the viewer's client retired this track by `now` (the server's clock, s)? Its own rule, in real time */
-	private static gone(pair: ActorRing, now: number): boolean {
-		return now - pair.sentClock > retiredAfterS(pair.wireMid, pair.sentClock - pair.shownClock);
+	/**
+	 * Has the viewer's client retired this track by `now` (the server's clock, s)? Its own rule, in real time -- in the
+	 * time its stream was talking: a silence this viewer is in the middle of (no round for STREAM_QUIET_S) holds its
+	 * client's every track where it was, as the round that ends it will forgive (`noteRound`).
+	 */
+	private gone(viewer: number, pair: ActorRing, now: number): boolean {
+		const last = this.lastRound.get(viewer);
+		const at = last !== undefined && now - last > STREAM_QUIET_S ? last + 1 / SNAP_NEAR_HZ : now;
+		return at - pair.sentClock > retiredAfterS(pair.wireMid, pair.sentClock - pair.shownClock);
 	}
 
 	/** that entity is gone (§4.4 death or despawn): every viewer forgets it */
@@ -373,6 +427,8 @@ export class ActorInterest {
 
 	/** that viewer left: drop its half of the table */
 	forgetViewer(slot: number): void {
+		this.lastRound.delete(slot);
+		this.prevRound.delete(slot);
 		const from = slot * ACTOR_KEY_STRIDE;
 		const to = from + ACTOR_KEY_STRIDE;
 		const gone = new Array<number>();
@@ -398,6 +454,8 @@ export class ActorInterest {
 
 	clear(): void {
 		this.rings.clear();
+		this.lastRound.clear();
+		this.prevRound.clear();
 	}
 }
 

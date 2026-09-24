@@ -338,6 +338,14 @@ interface LifeRecord {
 	 */
 	newLifeOwed: boolean;
 	/**
+	 * Rule 6, decided at the departure (review of 577c729, L2 and L3): this survivor left the SERVER dead while nobody
+	 * in the world was alive -- the world was already lost, whether or not the window had opened yet (a death and a
+	 * departure in the same heartbeat). Leaving is declining (MP-22), so they still count among its fallen after they
+	 * are gone. Cleared the moment somebody stands again: a later fall is a new one, and a death left behind while
+	 * somebody still stood was only a departure.
+	 */
+	leftWhileLost: boolean;
+	/**
 	 * UI-13: the `Announce{Died}` arg of this survivor's last death (shared/data/deathCause.ts `deathWireOf`), told
 	 * again whenever they come back to the world still dead (`enter`); forgotten when they stand up. Undefined: none
 	 * known (a death this server did not see, one carried in over from another session's save).
@@ -367,6 +375,13 @@ export class LifeKeeper {
 	 * every record's own last save counts, as before.
 	 */
 	liveSave?: (userId: number) => PlayerSaveData | undefined;
+	/**
+	 * How many players are connected to the SERVER right now with their save loaded, in the world or not
+	 * (server/net/mpHost.ts: its links). A world lost by the departures of its dead ends only while somebody is here to
+	 * see it (review of 577c729, L1): an empty server keeps it lost, and the next player whose save loads ends it before
+	 * they can enter it. Unset (a pure test): the records of the players still connected.
+	 */
+	connected?: () => number;
 
 	private readonly sim: ServerSimulation;
 	private readonly wire: LifeWire;
@@ -375,6 +390,12 @@ export class LifeKeeper {
 	private wipeIn?: number;
 	/** the hook already fired for this fall; re-armed once somebody is standing again */
 	private wiped = false;
+	/**
+	 * The world was left lost by a departure (`leftWhileLost`), and nobody has stood in it since: it ends at the next
+	 * step with a player connected -- even once the records of those who left have expired (KEEP_AFTER_LEAVE_S), so a
+	 * server that outlives five empty minutes does not open its lost world to the next arrival (L1).
+	 */
+	private lostByLeaving = false;
 
 	constructor(sim: ServerSimulation, wire: LifeWire) {
 		this.sim = sim;
@@ -421,7 +442,10 @@ export class LifeKeeper {
 	/** the player (re)joined the server: a record kept from a disconnect stops expiring (§7.2) */
 	connect(userId: number): void {
 		const rec = this.records.get(userId);
-		if (rec !== undefined) rec.goneFor = undefined;
+		if (rec === undefined) return;
+		rec.goneFor = undefined;
+		// here again: counted by what they are now (dead and declined), not by how they left
+		rec.leftWhileLost = false;
 	}
 
 	/**
@@ -537,8 +561,14 @@ export class LifeKeeper {
 		// another server must have it reconciled BEFORE anything kept here is banked over it
 		const rec = this.recordFor(userId, save);
 		this.leave(userId);
-		if (rec.goneFor === undefined) rec.goneFor = 0;
+		const leaving = rec.goneFor === undefined;
+		if (leaving) rec.goneFor = 0;
 		if (rec.dead) rec.declined = true;
+		// rule 6, decided now (L2, L3): dead, and nobody left standing in the world -- the fall is theirs to share
+		if (leaving && rec.dead && rec.entered && this.standing(userId) === 0) {
+			rec.leftWhileLost = true;
+			this.lostByLeaving = true;
+		}
 		this.bank(rec);
 	}
 
@@ -822,6 +852,8 @@ export class LifeKeeper {
 			if (sp !== undefined) place.push(rec);
 			// nobody out of the world has had a body in the NEW world yet (rule 6 counts only those who have)
 			else rec.entered = false;
+			// the fall they left during is over: the debt above (`newLifeOwed`) is what remains of it
+			rec.leftWhileLost = false;
 		}
 		for (const rec of place) {
 			const sp = this.inWorld(rec);
@@ -831,6 +863,7 @@ export class LifeKeeper {
 		}
 		this.wipeIn = undefined;
 		this.wiped = false;
+		this.lostByLeaving = false;
 	}
 
 	/**
@@ -888,6 +921,7 @@ export class LifeKeeper {
 		}
 		this.wipeIn = undefined;
 		this.wiped = false;
+		this.lostByLeaving = false;
 	}
 
 	/** MP-22: the new life a world's end gives (the reset New game gives), and a body that stands up for it */
@@ -927,6 +961,7 @@ export class LifeKeeper {
 				unloaded: false,
 				entered: false,
 				newLifeOwed: false,
+				leftWhileLost: false,
 				downFor: dead ? daybreakWaitSeconds(this.sim.clock.dayTime) : undefined,
 			};
 			this.records.set(userId, rec);
@@ -1094,6 +1129,45 @@ export class LifeKeeper {
 	}
 
 	/**
+	 * Is this record standing in the world for rule 6 -- a body up in the street, or a living one kept in the lobby --
+	 * and is it counted at all? `undefined`: not one of this world's survivors right now (gone, never entered, or its
+	 * save still loading); `true`: standing; `false`: dead (in the street or in the lobby).
+	 */
+	private standingOf(userId: number, rec: LifeRecord): boolean | undefined {
+		// somebody who left the server is not a survivor of this world any more, and somebody who never had a body in
+		// it (a death carried in from another session, asked about from the lobby) never was
+		if (rec.goneFor !== undefined || !rec.entered) return undefined;
+		const sp = this.inWorld(rec);
+		// a body standing in the street is standing, whatever its save is doing
+		if (sp !== undefined && !sp.state.dead) return true;
+		// anybody else whose save is still loading is not counted yet, dead or alive: all that stands behind a
+		// reconnect is the CLOSED session's table (B1), and behind a retry the blank one — the world must not end,
+		// nor reset anybody, on its word, and a body carried dead into a new town must not end it again every
+		// window until the load is done (review of de4ba1e, N4; the host no longer runs a retry in the world)
+		if (this.liveSave !== undefined && this.liveSave(userId) === undefined) return undefined;
+		if (sp === undefined && !rec.dead && (rec.body !== undefined || rec.fullNext)) return true;
+		return rec.dead ? false : undefined;
+	}
+
+	/** how many of this world's survivors stand (`standingOf`), leaving `except` out */
+	private standing(except?: number): number {
+		let n = 0;
+		for (const [userId, rec] of this.records) {
+			if (userId !== except && this.standingOf(userId, rec) === true) n += 1;
+		}
+		return n;
+	}
+
+	/** players connected to the server (`connected`), or the records of those still here */
+	private connectedCount(): number {
+		const hook = this.connected;
+		if (hook !== undefined) return hook();
+		let n = 0;
+		for (const [, rec] of this.records) if (rec.goneFor === undefined) n += 1;
+		return n;
+	}
+
+	/**
 	 * MP-26, the town restarted by its keeper (server/match/townRestart.ts; the orchestrator's decision on the review of
 	 * 0b44458, M1 + M2): EVERY survivor of this town -- everyone who had a body in it and is still this server's
 	 * (connected, or gone less than KEEP_AFTER_LEAVE_S), standing or down. A restart is a whole MP-22 world end: all of
@@ -1113,42 +1187,52 @@ export class LifeKeeper {
 		let waiting = 0;
 		const dead = new Array<number>();
 		for (const [userId, rec] of this.records) {
-			// somebody who left the server is not a survivor of this world any more, and somebody who never had a
-			// body in it (a death carried in from another session, asked about from the lobby) never was
-			if (rec.goneFor !== undefined || !rec.entered) continue;
-			const sp = this.inWorld(rec);
-			// a body standing in the street is standing, whatever its save is doing
-			if (sp !== undefined && !sp.state.dead) {
+			if (rec.goneFor !== undefined) {
+				// gone from the server: never standing. One who left it DEAD with nobody alive in the world declined and
+				// still counts among its fallen (`leftWhileLost`, decided at the departure: L2, L3); a death left behind
+				// while somebody still stood was only a departure, and nobody waits on it
+				if (rec.dead && rec.leftWhileLost) dead.push(userId);
+				continue;
+			}
+			const up = this.standingOf(userId, rec);
+			if (up === undefined) continue;
+			if (up) {
 				alive += 1;
 				continue;
 			}
-			// anybody else whose save is still loading is not counted yet, dead or alive: all that stands behind a
-			// reconnect is the CLOSED session's table (B1), and behind a retry the blank one — the world must not end,
-			// nor reset anybody, on its word, and a body carried dead into a new town must not end it again every
-			// window until the load is done (review of de4ba1e, N4; the host no longer runs a retry in the world)
-			if (this.liveSave !== undefined && this.liveSave(userId) === undefined) continue;
-			if (sp === undefined && !rec.dead && (rec.body !== undefined || rec.fullNext)) {
-				alive += 1;
-				continue;
-			}
-			if (!rec.dead) continue;
 			dead.push(userId);
 			// in the street or in the lobby, a dead survivor who has not declined may still pay
 			if (!rec.declined) waiting += 1;
 		}
-		if (alive > 0 || dead.size() === 0) {
-			// somebody is standing (a Rebirth, a daybreak, a living survivor walking in), or nobody is here at all:
-			// an empty world is not a lost one
+		if (alive > 0) {
+			// somebody is standing (a Rebirth, a daybreak, a living survivor walking in): the fall is over, and those who
+			// left during it are only departures from now on
+			this.wipeIn = undefined;
+			this.wiped = false;
+			this.lostByLeaving = false;
+			for (const [, rec] of this.records) rec.leftWhileLost = false;
+			return;
+		}
+		if (dead.size() === 0 && !this.lostByLeaving) {
+			// nobody is here at all: an empty world is not a lost one
 			this.wipeIn = undefined;
 			this.wiped = false;
 			return;
 		}
 		if (this.wiped) return;
+		// a world its dead walked out of ends only with somebody on the server to see the next one (L1): with nobody
+		// connected the empty server keeps it lost -- Roblox closes it soon -- and the next player to connect ends it
+		// at once, before they can enter it
+		if (this.connectedCount() === 0) {
+			this.wipeIn = undefined;
+			return;
+		}
 		this.wipeIn = (this.wipeIn ?? WIPE_DECISION_S) - dt;
 		const reason = waiting === 0 ? "declined" : this.wipeIn <= 0 ? "timeout" : undefined;
 		if (reason === undefined) return;
 		this.wipeIn = undefined;
 		this.wiped = true;
+		this.lostByLeaving = false;
 		this.onWorldWiped?.({ day: this.sim.clock.day, reason, dead });
 	}
 }

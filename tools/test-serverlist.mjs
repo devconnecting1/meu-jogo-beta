@@ -1005,9 +1005,11 @@ section("8) a fiacao (o que o Node nao roda): nenhum teleporte tira alguem de um
 	const { readFileSync } = require("node:fs");
 	const host = readFileSync(join(SRC, "server/net/mpHost.ts"), "utf8");
 	const main = readFileSync(join(SRC, "server/main.server.ts"), "utf8");
+	// between the hold and the entry, only comments and the combat-log guard's hand-back (§7.2: a body still standing
+	// in the fight it was left in is theirs again -- only once the hold has let them in)
 	check(
 		"mpHost admit: quem tem uma entrada a caminho nao e posto na cidade (mayEnter)",
-		/function admit\(player: Player\)[\s\S]*?const mayEnter = options\.mayEnter;\s*if \(mayEnter !== undefined && !mayEnter\(player\)\) return;\s*const sp = lives\.enter/.test(
+		/function admit\(player: Player\)[\s\S]*?const mayEnter = options\.mayEnter;\s*if \(mayEnter !== undefined && !mayEnter\(player\)\) return;\s*(?:\/\/[^\n]*\n\s*)*(?:if \(lingers\.has\(player\.UserId\)\) endLinger\(player\.UserId, true\);\s*)?const sp = lives\.enter/.test(
 			host,
 		),
 	);

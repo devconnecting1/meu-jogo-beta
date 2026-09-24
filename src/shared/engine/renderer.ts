@@ -364,11 +364,20 @@ export class Renderer {
 	}
 
 	/**
+	 * Every sprite drawn while this is below 1 is that much more transparent (its own alpha and its stroke's, multiplied):
+	 * one body faded in or out as a whole -- an ally who appears somewhere new (client/view/playersView.ts, review of
+	 * 577c729, N3) -- without each of its parts knowing. Whoever lowers it puts it back to 1 after drawing. At 1 it changes
+	 * no number, so it costs no write.
+	 */
+	alphaScale = 1;
+
+	/**
 	 * Draw a rect sprite centred (by default) at a world position. Axis-aligned rects are snapped
 	 * to whole pixels edge-by-edge so adjacent tiles/walls never leave seams.
 	 */
 	drawRect(cam: Camera, wx: number, wy: number, opts: SpriteOpts): Frame {
 		const sp = this.next(opts.zIndex ?? 1);
+		const fade = this.alphaScale;
 		let ww = opts.w ?? 32;
 		let wh = opts.h ?? 32;
 		const worldRot = opts.rotation ?? 0;
@@ -417,8 +426,8 @@ export class Renderer {
 		} else if (opts.cornerRadius !== undefined && opts.cornerRadius > 0) {
 			corner = math.max(1, math.floor(opts.cornerRadius * zoom + 0.5));
 		}
-		const alpha = clamp01(opts.alpha ?? 1);
-		const strokeAlpha = clamp01(opts.strokeAlpha ?? 1);
+		const alpha = clamp01(opts.alpha ?? 1) * fade;
+		const strokeAlpha = clamp01(opts.strokeAlpha ?? 1) * fade;
 		// an image sprite shows no background of its own: the picture is the child label (and its cached
 		// background colour is left alone, so turning a slot into an image and back writes nothing extra)
 		const bgTransp = image === undefined ? 1 - alpha : 1;
