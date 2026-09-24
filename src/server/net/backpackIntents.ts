@@ -62,7 +62,9 @@ export function startBackpackIntents(options: BackpackIntentOptions): () => void
 	function kick(player: Player, reason: string): void {
 		if (kicked.has(player)) return;
 		kicked.add(player);
-		warn(`[${GAME_NAME}] kicking ${player.Name} (${player.UserId}): network flood — ${reason}`);
+		// one Error Report row for every flood kick (docs/ANALYTICS.md §10): who, and why, go to the log line
+		warn(`[${GAME_NAME}] kicking a player: network flood`);
+		print(`[${GAME_NAME}] flood kick: ${player.Name} (${player.UserId}), ${reason}`);
 		pcall(() => player.Kick("Network flood"));
 	}
 
