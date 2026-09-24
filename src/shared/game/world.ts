@@ -152,6 +152,12 @@ export interface GroundItem {
 	vy: number;
 	/** server only: the simulation time (s) it appeared at, for its lifetime (server/sim/items.ts) */
 	born?: number;
+	/**
+	 * An admin dropped it (server/admin/adminWorld.ts, §10): whoever picks it up gets the item and nothing else -- no
+	 * collector credit (`creditTaken`) -- and the pickup is logged. Server-side only; never on the wire. It is litter
+	 * like any other ground item (the lifetime and the cap of server/sim/items.ts apply to it too).
+	 */
+	unpaid?: boolean;
 }
 
 /**

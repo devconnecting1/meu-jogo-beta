@@ -39,6 +39,9 @@ function killBoss(refs: Ctx.AiRefs, b: BossState): void {
 	Ctx.fxMessage(refs, "You killed it");
 	Ctx.fxBlood(refs, b.x, b.y, 30);
 	Ctx.fxDebris(refs, b.x, b.y, 20, "boss");
+	fanCounters.delete(b.id);
+	// an admin's spawn pays nobody (docs/MULTIPLAYER.md §10): no loot, no trophy
+	if (b.unpaid === true) return;
 	for (let i = 0; i < 6; i++) {
 		const e = choose(BUILDING_SPAWNS[0]);
 		let count = 1;

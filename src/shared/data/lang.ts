@@ -268,6 +268,9 @@ export const LANG_TABLE: Array<string> = [
 	// an admin's save edit reaching the player (client/admin/patches.ts): nobody's name, just what happened
 	"Your progress was updated by an administrator",
 	"Your progress was reset by an administrator",
+	// the button that opens the admin panel (client/admin/adminClient.ts): only an admin ever sees it, on a mouse, a pad
+	// or a phone (the panel itself is English on purpose, UI-03)
+	"ADMIN",
 	// the lobby has no body, so nobody hears it (MP-18): the chat bar is off there, and this says why, once
 	"Chat reaches the survivors near you in town. Enter the city to talk.",
 	// "/w name ..." with whispers off (MP-17): said to nobody, and the sender is told why (client/chatInput.ts)

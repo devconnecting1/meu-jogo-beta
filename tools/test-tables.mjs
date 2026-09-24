@@ -567,6 +567,123 @@ check(
 		worldSrc.lastIndexOf("confirmAction(", clearAt) > worldSrc.lastIndexOf('Button(body, "Clear"', clearAt),
 );
 
+// the world tools toast what the SERVER answered (F6-6B, client/admin/serverWorld.ts): a refusal is an error with its
+// reason, never a success; an answer the server already audited is not logged again as a local tool
+{
+	const NET = require(join(SRC, "client/admin/net.ts"));
+	const realLog = NET.logLocal;
+	const localLogs = [];
+	NET.logLocal = (action, details) => localLogs.push([action, details]);
+	let answer = { ok: false, message: "refused by the server", audited: true };
+	let god = false;
+	const serverWorld = {
+		ready: () => true,
+		serverWorld: () => true,
+		clock: () => ({ day: 3, hour: 14, night: false, wave: 0, raining: false }),
+		killAll: () => answer,
+		clearCorpses: () => answer,
+		skipToNight: () => answer,
+		skipToDawn: () => answer,
+		forceWave: () => answer,
+		setRain: () => answer,
+		heal: () => answer,
+		god: () => god,
+		setGod: v => {
+			if (answer.ok) god = v;
+			return answer;
+		},
+		infiniteAmmo: () => false,
+		setInfiniteAmmo: () => answer,
+		noclip: () => false,
+		setNoclip: () => answer,
+		buildingCount: () => 1,
+		teleportToBuilding: () => answer,
+	};
+	const PW = { ...P, world: serverWorld };
+	content.ClearAllChildren();
+	const sec = WORLD.buildWorld(PW, content);
+	deep(content, "Tabs").FindFirstChild("Tab0").Activated.Fire();
+	flush();
+	notes.length = 0;
+	press(content, "Kill");
+	press(dialogs()[0], "Confirm");
+	check(
+		"World > Kill all refused by the server: an ERROR toast with its reason, never a success",
+		notes.length === 1 && notes[0][0] === "refused by the server" && notes[0][1] === "error",
+		JSON.stringify(notes),
+	);
+	answer = { ok: true, message: "Removed 12 enemies", audited: true };
+	press(content, "Kill");
+	press(dialogs()[0], "Confirm");
+	check(
+		"...answered OK: a success toast in the server's words",
+		notes.length === 2 && notes[1][0] === "Removed 12 enemies" && notes[1][1] === "success",
+		JSON.stringify(notes),
+	);
+	check(
+		"...and nothing logged as a local tool (the server wrote the audit line)",
+		localLogs.length === 0,
+		JSON.stringify(localLogs),
+	);
+	check(
+		"...the Kill all dialog says it assists every run on a server-owned world",
+		/Every run in the town becomes assisted/.test(worldSrc),
+	);
+	// the Survivor tab: a switch the server refuses goes back off
+	deep(content, "Tabs").FindFirstChild("Tab1").Activated.Fire();
+	flush();
+	answer = { ok: false, message: "you are not in the world", audited: true };
+	notes.length = 0;
+	const godSwitch = () => deep(content, "Switch50")?.FindFirstChild("Value")?.FindFirstChild("Switch");
+	godSwitch().Activated.Fire();
+	flush();
+	sec.update?.();
+	check(
+		"God mode refused: an error toast, and the switch shows the server's state (Off)",
+		notes.at(-1)?.[1] === "error" && deep(godSwitch(), "Legend")?.Text === "Off",
+		JSON.stringify(notes),
+	);
+	answer = { ok: true, message: "God mode on", audited: true };
+	godSwitch().Activated.Fire();
+	flush();
+	sec.update?.();
+	check(
+		"God mode accepted: the server's success toast, the switch On",
+		notes.at(-1)?.[0] === "God mode on" &&
+			notes.at(-1)?.[1] === "success" &&
+			deep(godSwitch(), "Legend")?.Text === "On",
+		JSON.stringify(notes),
+	);
+	sec.destroy?.();
+	content.ClearAllChildren();
+	// the Camera section tells the truth about a server-owned world: the survivor can be hurt meanwhile
+	const cam = WORLD.buildCamera({ ...PW, world: { ...serverWorld, freeCam: () => false, zoom: () => 1 } }, content);
+	check(
+		"Camera on a server-owned world: never 'cannot be hurt'",
+		/can still be hurt/.test(deep(content, "FreeCamNote").Text) &&
+			!/cannot be hurt/.test(deep(content, "FreeCamNote").Text),
+		deep(content, "FreeCamNote").Text,
+	);
+	cam.destroy?.();
+	content.ClearAllChildren();
+	// Debug: no pathfinding switch where there is no field to draw
+	WORLD.buildDebug(
+		{ ...PW, world: { ...serverWorld, hasFlowField: () => false, overlay: () => false, setOverlay() {} } },
+		content,
+	);
+	const debugLabels = content
+		.GetDescendants()
+		.filter(d => d.IsA?.("TextLabel"))
+		.map(d => d.Text);
+	check(
+		"Debug on a server-owned world: no 'Pathfinding flow field' switch (the field is the server's)",
+		!debugLabels.includes("Pathfinding flow field"),
+		debugLabels.slice(0, 6).join(" | "),
+	);
+	content.ClearAllChildren();
+	NET.logLocal = realLog;
+}
+
 // ================================================================ 3. Players (admin)
 
 console.log("\n3) Players (admin): tabela de dados, filtro, ordem, selecionar e agir\n");
@@ -1427,6 +1544,17 @@ hud.unmount();
 			},
 		},
 	);
+	// the same, on a world the SERVER owns: the tools say so, in longer texts that must fit too (F6-6B)
+	const serverStub = new Proxy(
+		{},
+		{
+			get: (_, k) => {
+				if (k === "serverWorld") return () => true;
+				if (k === "hasFlowField") return () => false;
+				return worldStub[k];
+			},
+		},
+	);
 	const P2 = {
 		...P,
 		world: worldStub,
@@ -1441,6 +1569,19 @@ hud.unmount();
 		["World", c => WORLD.buildWorld(P2, c)],
 		["Camera", c => WORLD.buildCamera(P2, c)],
 		["Debug", c => WORLD.buildDebug(P2, c)],
+		// (the admin audit of 2026-09-24: these two were never laid out here)
+		[
+			"Spawn",
+			c =>
+				require(join(SRC, "client/admin/sectionSpawn.ts")).buildSpawn(
+					{ ...P2, world: { ...worldStub, spawnRange: () => 1080 } },
+					c,
+				),
+		],
+		["Server", c => require(join(SRC, "client/admin/sectionServer.ts")).buildServer(P2, c)],
+		["World (server)", c => WORLD.buildWorld({ ...P2, world: serverStub }, c)],
+		["Camera (server)", c => WORLD.buildCamera({ ...P2, world: serverStub }, c)],
+		["Debug (server)", c => WORLD.buildDebug({ ...P2, world: serverStub }, c)],
 	];
 	// the admin's desktop screens (F2 is a keyboard tool): not the phone
 	for (const [w, h, bar, label, buttons] of SCREENS.slice(0, 3)) {

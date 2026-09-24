@@ -1416,6 +1416,12 @@ function adminEdit(player: Player, ops: Array<AdminOp> | undefined): AdminEditOu
 	Analytics.adminEdit(s.save, edited);
 	// same reason as processReport: one table per session, for its whole life
 	copySaveInto(s.save, edited);
+	// ...which is exactly why the body keeper cannot see a reset by itself (same table): the kept body, its death and
+	// its magazine belonged to the save that is gone (server/sim/life.ts `resetLife`, BUG-1 of the admin audit)
+	const host = mpHost;
+	if (ops === undefined && host !== undefined) {
+		guarded(`${s.key}: resetting the body`, () => host.lives.resetLife(player.UserId, s.save));
+	}
 	s.dirty = true;
 	s.pending = undefined;
 	s.pendingToken = undefined;

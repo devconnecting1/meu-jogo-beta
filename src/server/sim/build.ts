@@ -292,6 +292,45 @@ export class ServerBuild {
 		return { kind: "placed", solid };
 	}
 
+	/**
+	 * An admin's construction (docs/MULTIPLAYER.md §10): `placeable` centred on (x, y), unrotated, owned by nobody (the
+	 * server's, like a wall whose builder left) so it never eats a player's quota. The same validity as a survivor's
+	 * placement -- inside the world, over no solid, no survivor and no zombie -- and the server-wide cap still counts
+	 * it. Nothing is spent and there is no cooldown: the admin remote has its own rate limit.
+	 */
+	placeFree(
+		placeable: number,
+		x: number,
+		y: number,
+		players: ReadonlyArray<PlayerState>,
+		zombies: ReadonlyArray<ZombieState>,
+		builder?: { slot: number; userId: number },
+	): PlaceOutcome {
+		const def = PLACEABLES[placeable] as PlaceableDef | undefined;
+		if (def === undefined) return { kind: "refused", why: "unknown" };
+		// MP-24: the admin's account is the builder, with its own §8.1 cap (and its constructions rot like anybody's
+		// once the admin is out of the world past BUILD_ABANDON_GRACE_S, or are taken over by whoever repairs them)
+		if (builder !== undefined && this.countOfUser(builder.userId) >= MAX_BUILDS_PER_PLAYER) {
+			return { kind: "refused", why: "capPlayer" };
+		}
+		if (this.total >= MAX_BUILDS_PER_SERVER) return { kind: "refused", why: "capServer" };
+		const r: PlaceRect = { x: x - def.w / 2, y: y - def.h / 2, w: def.w, h: def.h };
+		if (!placementValid(this.world, r, players, zombies)) return { kind: "refused", why: "invalid" };
+		const shape = placedSolid(def, r, 0);
+		// MP-24 for an admin too: never the piece that pens a living survivor in (an admin's request is rate limited,
+		// so it is not held to SEALED_CHECKS_PER_TICK)
+		const blocks = isBlocking(shape as Solid) && def.kind !== "door" && def.kind !== "iron_door";
+		if (boxesIn(this.world, r, blocks, players) !== undefined) return { kind: "refused", why: "sealed" };
+		// `addSolid` fires `onSolidAdd`: the delta to everybody, the flow field, the grid (ELE-01) and the caps
+		const solid = addSolid(this.world, {
+			...shape,
+			placeable,
+			owner: builder?.slot ?? SLOT_NONE,
+			builder: builder?.userId,
+		});
+		return { kind: "placed", solid };
+	}
+
 	/** §8.1 `cancelPlace`: the construction leaves the cursor and its ingredients come back */
 	cancel(slot: number, save: PlayerSaveData): PlaceOutcome {
 		const p = this.pending.get(slot);
