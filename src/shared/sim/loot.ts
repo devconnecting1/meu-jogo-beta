@@ -6,7 +6,8 @@
  *
  *   rollBuildingLoot   a building's slots, rolled once and shared by whoever searches first (MP-05)
  *   rollPumpLoot       a gas station's pump island: the same, from its own table (EDI-16)
- *   isContainer        what the two sides' lazy sweeps roll: a building or a pump island
+ *   rollYardLoot       any container out in the open: a pump island, a market stall, a pile, a shed (EDI-20..MOB-06)
+ *   isContainer        what the two sides' lazy sweeps roll: a building or a container out in the open
  *   thiefFind          the Thief skill's extra: one more slot of the building's table, for the searcher alone
  *   rollMapItemDrop    one hit (or E) on a tree, a car or a bin
  *
@@ -20,11 +21,15 @@ import {
 	PUMP_LOOT_SLOTS,
 	SpawnEntry,
 	spawnRows,
+	YARD_LOOT,
+	YARD_TAGS,
+	yardLootKey,
 } from "shared/data/spawns";
 import { DESIGN } from "shared/engine/constants";
 import { chance, choose, rndInt } from "shared/engine/rng";
 import type { PlayerSaveData } from "shared/game/save";
 import type { Solid } from "shared/game/world";
+import { isYardContainer } from "./interactQuery";
 
 /** one thing a roll produced (the shape a building's `lootItems` holds) */
 export interface LootDrop {
@@ -71,11 +76,31 @@ export function rollPumpLoot(): Array<LootDrop> {
 }
 
 /**
- * Is this solid a container the lazy sweeps roll (the client's MP_PHASE 2 one and the server's): a building, or a gas
- * station's pump island (`rollPumpLoot`), as opposed to anything else in reach?
+ * The table of a searchable fixture out in the open (shared/data/spawns.ts YARD_LOOT, EDI-20, EDI-21, MOB-06): a
+ * market stall's by what it displays, a pile's by what it is; undefined for anything else.
+ */
+export function yardLootRows(s: Solid): Array<SpawnEntry> | undefined {
+	if (!YARD_TAGS.includes(s.tags)) return undefined;
+	return YARD_LOOT[yardLootKey(s.tags, s.variant)];
+}
+
+/**
+ * What a container out in the open holds: a pump island its fuel (`rollPumpLoot`), a market stall, the food truck, a
+ * pile of material or a shed its own table, one slot a time (`lootSlots`), rolled like a building's.
+ */
+export function rollYardLoot(s: Solid): Array<LootDrop> {
+	if (s.tags === "pump") return rollPumpLoot();
+	const rows = yardLootRows(s);
+	return rows === undefined ? [] : rollSlots(rows, s.lootSlots ?? 1);
+}
+
+/**
+ * Is this solid a container the lazy sweeps roll (the client's MP_PHASE 2 one and the server's): a building, a gas
+ * station's pump island, or one of the everyday town's searchable fixtures (`rollYardLoot`), as opposed to anything
+ * else in reach?
  */
 export function isContainer(s: Solid): boolean {
-	return (s.kind === "building" || s.tags === "pump") && s.lootItems !== undefined;
+	return (s.kind === "building" || isYardContainer(s)) && s.lootItems !== undefined;
 }
 
 /**

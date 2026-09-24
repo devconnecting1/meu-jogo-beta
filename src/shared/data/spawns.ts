@@ -79,6 +79,54 @@ export const PUMP_LOOT: Array<SpawnEntry> = [{ building: 5, kind: 4, index: 48, 
 /** slots a pump island rolls (one: the fuel in it) */
 export const PUMP_LOOT_SLOTS = 1;
 
+/**
+ * The searchable fixtures out in the open (docs/DESIGN_RULES.md EDI-20, EDI-21, MOB-06), by tag: what a market
+ * stall, the market's food truck, a pile of building material and a garden shed hold. Rolled like a pump island
+ * (shared/sim/loot.ts `rollYardLoot`: lazily when a survivor comes near, one slot, shared by whoever takes it first,
+ * back after ITEM_RESPAWN_HOURS -- MP-05), and told to the survivors outside by the same LootFlag. A stall's table is
+ * picked by what it displays (`Solid.variant`: 0 produce, 1 bread and preserves, 2 cloth and leather goods), a pile's
+ * by what it is (0 lumber, 1 bricks, 2 steel). `building` is -1: no building holds these.
+ */
+export const YARD_LOOT: Record<string, Array<SpawnEntry>> = {
+	stall0: [
+		{ building: -1, kind: 3, index: 17, min: 1, max: 2 },
+		{ building: -1, kind: 3, index: 18, min: 1, max: 2 },
+		{ building: -1, kind: 3, index: 2, min: 1, max: 2 },
+		{ building: -1, kind: 3, index: 15, min: 0.5, max: 0.5 },
+	],
+	stall1: [
+		{ building: -1, kind: 3, index: 4, min: 1, max: 2 },
+		{ building: -1, kind: 3, index: 9, min: 1, max: 1 },
+		{ building: -1, kind: 3, index: 18, min: 0.5, max: 0.5 },
+	],
+	stall2: [
+		{ building: -1, kind: 4, index: 34, min: 1, max: 2 },
+		{ building: -1, kind: 4, index: 41, min: 0.5, max: 0.5 },
+		{ building: -1, kind: 2, index: 0, min: 0.05, max: 0.05 },
+	],
+	foodtruck: [
+		{ building: -1, kind: 3, index: 14, min: 1, max: 1 },
+		{ building: -1, kind: 3, index: 11, min: 1, max: 1 },
+		{ building: -1, kind: 3, index: 4, min: 1, max: 2 },
+	],
+	pile0: [{ building: -1, kind: 4, index: 23, min: 2, max: 4 }],
+	pile1: [{ building: -1, kind: 4, index: 24, min: 2, max: 4 }],
+	pile2: [{ building: -1, kind: 4, index: 25, min: 1, max: 3 }],
+	shed: [
+		{ building: -1, kind: 4, index: 23, min: 1, max: 2 },
+		{ building: -1, kind: 4, index: 25, min: 1, max: 1 },
+		{ building: -1, kind: 4, index: 48, min: 2, max: 4 },
+		{ building: -1, kind: 4, index: 30, min: 0.2, max: 0.2 },
+		{ building: -1, kind: 1, index: 2, min: 0.04, max: 0.04 },
+	],
+};
+/** the tags of the searchable fixtures (their tables above are the tag, or the tag and the variant) */
+export const YARD_TAGS: ReadonlyArray<string> = ["stall", "foodtruck", "pile", "shed"];
+/** a searchable fixture's table key: its tag, and for a stall or a pile the variant too */
+export function yardLootKey(tags: string, variant: number | undefined): string {
+	return tags === "stall" || tags === "pile" ? `${tags}${variant ?? 0}` : tags;
+}
+
 export interface DayPopulation {
 	ambient: number;
 	ambientSpecial: number;

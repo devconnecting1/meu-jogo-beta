@@ -4,7 +4,7 @@ import type { PlayerState } from "shared/game/player";
 import { GroundItem, Solid, querySolids, removeGroundItem, spawnGroundItem } from "shared/game/world";
 import { gameHours } from "shared/sim/clock";
 import { addItem, countItem, removeItem } from "shared/sim/inventory";
-import { isContainer, mapItemLoot, rollBuildingLoot, rollMapItemDrop, rollPumpLoot, thiefFind } from "shared/sim/loot";
+import { isContainer, mapItemLoot, rollBuildingLoot, rollMapItemDrop, rollYardLoot, thiefFind } from "shared/sim/loot";
 import {
 	bodiesOverlapRect,
 	canRepair,
@@ -14,6 +14,7 @@ import {
 	interactTarget,
 	isFire,
 	isPump,
+	isYardContainer,
 	repairMaterial,
 } from "shared/sim/interactQuery";
 import { engineRuns, isRideable, vehicleBroken, vehicleDef, vehicleKindOfSolid } from "shared/sim/vehicle";
@@ -163,10 +164,24 @@ function takeItem(refs: GameRefs, it: GroundItem): void {
 	removeGroundItem(refs.world, it);
 }
 
-/** the shared roll (shared/sim/loot.ts), the one server/sim/items.ts rollLoot makes: a pump its fuel (EDI-16) */
+/**
+ * the shared roll (shared/sim/loot.ts), the one server/sim/items.ts rollLoot makes: a pump its fuel (EDI-16), a market
+ * stall, a pile or a shed its own table (EDI-20..MOB-06)
+ */
 function rollLoot(s: Solid): void {
-	s.lootItems = isPump(s) ? rollPumpLoot() : rollBuildingLoot(s.buildingType ?? 0, s.lootSlots ?? 2);
+	s.lootItems = isYardContainer(s) ? rollYardLoot(s) : rollBuildingLoot(s.buildingType ?? 0, s.lootSlots ?? 2);
 }
+
+/**
+ * The pill at the everyday town's searchable fixtures (EDI-20, EDI-21, MOB-06; LEG-01): what E does there, while this
+ * client knows it holds something -- the same rule as a pump island's.
+ */
+const YARD_HINTS: Record<string, string> = {
+	stall: "E: Search stall",
+	foodtruck: "E: Search food truck",
+	pile: "E: Search pile",
+	shed: "E: Search shed",
+};
 
 /**
  * The pill at a gas station's pump island (EDI-16, LEG-01): what E does -- drain the fuel left in it into the backpack
@@ -261,7 +276,10 @@ function hintFor(refs: GameRefs, target: InteractTarget): string | undefined {
 		return s.tags === "car" ? "E: Search car" : "E: Search trash";
 	}
 	if (target.kind === "vehicle") return vehicleHint(refs, target.solid);
-	if (target.kind === "pump") return holdsLoot(target.solid) ? PUMP_HINT : undefined;
+	if (target.kind === "pump") {
+		if (!holdsLoot(target.solid)) return undefined;
+		return isPump(target.solid) ? PUMP_HINT : (YARD_HINTS[target.solid.tags] ?? "E: Search");
+	}
 	if (target.kind === "solid") {
 		const s = target.solid;
 		if (!canRepair(s)) return undefined;
