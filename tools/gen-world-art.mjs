@@ -33,7 +33,9 @@
  *            sha1), because a stale atlas would show the wrong icons: until the new one is up, the Frames draw them.
  *            The interiors' atlas (`furniture`, tools/furniture-art.mjs) is one too: every piece of furniture, the
  *            floor decoration and the doorway and window frames, its cells in src/client/view/furnitureAtlas.ts
- *            (client/view/interiorArt.ts), under the same sha1 rule: a stale one would put a bed where a shelf is
+ *            (client/view/interiorArt.ts), under the same sha1 rule: a stale one would put a bed where a shelf is.
+ *            So is the combat blood's (`blood`, tools/blood-art.mjs, ART-15): drops, splats and smears in three bands
+ *            (matte for the tint, a survivor's wet red, the horde's), its cells in src/client/view/bloodAtlas.ts
  *
  * Light: the baked form shading (canopy highlights, car roofs, parapet rims) is lit from the top left, the
  * convention of top-down pixel art; what really moves with the sun (drop shadows, which roof slope is lit,
@@ -51,6 +53,7 @@ import { characterArt } from "./character-art.mjs";
 import { bossArt } from "./boss-art.mjs";
 import { buildIconAtlas, loadIconData } from "./icon-atlas.mjs";
 import { furnitureArt, furnitureAtlasModule, furnitureSheet } from "./furniture-art.mjs";
+import { bloodArt, bloodAtlasModule, bloodSheet } from "./blood-art.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT_DIR = join(ROOT, "design", "world-art");
@@ -58,6 +61,8 @@ const TS_OUT = join(ROOT, "src", "client", "view", "worldArtAssets.ts");
 const ICON_TS_OUT = join(ROOT, "src", "client", "ui", "itemIconAtlas.ts");
 const FURNITURE_TS_OUT = join(ROOT, "src", "client", "view", "furnitureAtlas.ts");
 const FURNITURE_SHEET = join(ROOT, "docs", "art", "furniture-sheet.png");
+const BLOOD_TS_OUT = join(ROOT, "src", "client", "view", "bloodAtlas.ts");
+const BLOOD_SHEET = join(ROOT, "docs", "art", "blood-sheet.png");
 const SHEET = join(ROOT, "docs", "art", "world-art-sheet.png");
 /** world units per texel */
 const WORLD_TEXEL = 4;
@@ -1841,6 +1846,15 @@ function build() {
 	if (furniture.report.generic.length > 0) {
 		console.log(`furniture: no drawer yet for ${furniture.report.generic.join(", ")} (painted as a plain cabinet)`);
 	}
+	// the blood a fight leaves (DESIGN_RULES ART-15): drops, splats, smears; a matte band and two wet ones
+	const blood = bloodArt({ C });
+	add_(
+		"blood",
+		"atlas",
+		blood.atlas,
+		`combat blood: ${blood.cells.length} cells of drops, splats and smears, matte and wet (client/view/bloodView.ts)`,
+		{ blood },
+	);
 }
 
 // ---------------------------------------------------------------- output
@@ -1995,6 +2009,18 @@ function writeFurnitureModule() {
 	console.log(`wrote ${FURNITURE_SHEET} (${sheet.w}x${sheet.h})`);
 }
 
+/** src/client/view/bloodAtlas.ts and docs/art/blood-sheet.png (every stain on the floors it lands on) */
+function writeBloodModule() {
+	const t = textures.find(x => x.blood !== undefined);
+	writeFileSync(BLOOD_TS_OUT, bloodAtlasModule(t.blood, t.name));
+	console.log(`wrote ${BLOOD_TS_OUT} (${t.blood.cells.length} cells, atlas ${t.tex.w} x ${t.tex.h})`);
+	if (process.argv.includes("--no-sheet")) return;
+	const sheet = bloodSheet(t.blood, drawText, C);
+	mkdirSync(dirname(BLOOD_SHEET), { recursive: true });
+	writeFileSync(BLOOD_SHEET, encodePNG(sheet, true));
+	console.log(`wrote ${BLOOD_SHEET} (${sheet.w}x${sheet.h})`);
+}
+
 /** every texture magnified on one page, labelled, tiles shown 2 x 2 so the seams can be checked */
 function contactSheet() {
 	const zoom = 4;
@@ -2003,7 +2029,7 @@ function contactSheet() {
 	const cols = 5;
 	// the characters' sheets are hundreds of texels wide: they have their own pages (docs/art/characters)
 	const cells = textures
-		.filter(t => !t.character && t.atlas === undefined && t.furniture === undefined)
+		.filter(t => !t.character && t.atlas === undefined && t.furniture === undefined && t.blood === undefined)
 		.map(t => {
 			const reps = t.kind === "tile" || t.kind === "tileTint" ? 2 : 1;
 			let z = zoom;
@@ -2083,6 +2109,7 @@ if (!process.argv.includes("--assets")) {
 	writeFileSync(join(OUT_DIR, "manifest.json"), manifestJson(manifest));
 	writeIconAtlasModule();
 	writeFurnitureModule();
+	writeBloodModule();
 	console.log(`world-art: ${textures.length} textures in ${OUT_DIR} (${(bytes / 1024).toFixed(1)} kB)`);
 	if (!process.argv.includes("--no-sheet")) contactSheet();
 }

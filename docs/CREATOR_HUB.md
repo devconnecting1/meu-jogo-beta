@@ -53,7 +53,8 @@ desktop/mobile/tablet/console habilitados.
   e ponha o mesmo grupo em **Social links**.
 - **Classificação**: não se escolhe aqui — sai do questionário (abaixo, "Maturity & Compliance"). Com as
   respostas honestas o jogo fica **Moderate (13+)**: o sobrevivente derrubado rasteja sangrando (consequência
-  realista = violência moderada) e há sangue de pixel a cada golpe, poças por 10 s e manchas secas no mapa.
+  realista = violência moderada) e há sangue de pixel a cada golpe, poças que secam num dia de jogo (ART-15) e
+  manchas secas no mapa.
 - **Gêneros**: Survival como principal; Action como secundário.
 - **Dispositivos**: desktop, celular e tablet ligados (temos controles de toque medidos em 500 combinações de
   tela). **Console pode ficar ligado** — o suporte a gamepad existe e foi construído junto. VR desligado.
@@ -195,16 +196,19 @@ Recorde de dias sobrevividos, via `OrderedDataStore`. Depende do XP e do progres
 ### Maturity & Compliance Questionnaire — **obrigatório, e declarando o sangue**
 
 Sem o questionário completo e correto, o Roblox **restringe a experiência para todos**; declarar menos do que o
-jogo mostra é o que gera moderação (declarar a mais não é punido). O jogo tem: sangue vermelho do sobrevivente e
-verde dos zumbis a cada golpe, poças que duram 10 s, manchas de sangue seco no mapa, o sobrevivente derrubado que
+jogo mostra é o que gera moderação (declarar a mais não é punido). O jogo tem: sangue em pixel art a cada golpe
+(vermelho vivo no sobrevivente, vermelho-escuro nos zumbis, LEG-02; só gotas, poças e respingos, nenhum pedaço ou
+víscera), poças que secam e somem em um dia e meio de jogo (ART-15; sem a textura, 10 s), manchas de sangue seco
+no mapa, o sobrevivente derrubado que
 **rasteja sangrando** por 30 s (MP-03), zumbis que somem ao morrer, armas e hordas à noite.
 
 **Checklist — Configure → Maturity & Compliance (Questionnaire):**
 
 - [ ] **Violence:** Yes → intensidade **Moderate**. Os zumbis somem ao morrer (seria Mild), mas basta **um**
       momento de consequência realista, e o sobrevivente derrubado rastejando e sangrando imita um ferimento real.
-- [ ] **Blood:** Yes → **Unrealistic** (pixel, e verde nos zumbis) → **não** é "infrequent / fleeting" (a cada
-      golpe, poças de 10 s, manchas permanentes no mapa): o nível pesado do sangue irrealista.
+- [ ] **Blood:** Yes → **Unrealistic** (pixelado: o Roblox chama de irrealista o sangue "pixelated or having a
+      different color or shape") → **não** é "infrequent / fleeting" (a cada golpe, poças que duram um dia de jogo,
+      manchas permanentes no mapa): o nível pesado do sangue irrealista.
 - [ ] **Fear:** Yes → **Mild** (NPCs assustadores, música e batimento cardíaco, tensão das ondas à noite; nada de
       susto repentino nem conteúdo perturbador).
 - [ ] **Crude humor:** No. **Romance:** No. **Alcohol:** No. **Strong language:** No (o chat é filtrado pelo
