@@ -1698,8 +1698,8 @@ test("World: the roster carries the title under the name, and nothing but a real
 	const lastKind = Math.max(...Object.values(P.AnnounceKind));
 	bogusKind[6] = lastKind + 1;
 	eq(
-		"an Announce kind past the last one (BreakNudge)",
-		lastKind === P.AnnounceKind.BreakNudge ? P.decodeWorld(bufOf(bogusKind)) : `a new last kind ${lastKind}`,
+		"an Announce kind past the last one (AdminItem)",
+		lastKind === P.AnnounceKind.AdminItem ? P.decodeWorld(bufOf(bogusKind)) : `a new last kind ${lastKind}`,
 		undefined,
 	);
 
@@ -1745,6 +1745,22 @@ test("World: the roster carries the title under the name, and nothing but a real
 		b[7] = bad & 255;
 		b[8] = (bad >> 8) & 255;
 		eq(`BreakNudge with an arg the server never writes (${bad})`, P.decodeWorld(bufOf(b)), undefined);
+	}
+	// §9.3 (review of b0174ed, L-1): Announce{AdminItem} carries arg 0 and nothing else, like the break line
+	const gift = P.encodeWorld({
+		tick: 3,
+		events: [{ t: P.WorldEv.Announce, msg: P.AnnounceKind.AdminItem, arg: 0 }],
+	}).packets[0];
+	const gifted = P.decodeWorld(gift);
+	ok(
+		gifted?.events.length === 1 && gifted.events[0].msg === P.AnnounceKind.AdminItem && gifted.events[0].arg === 0,
+		"AdminItem (arg 0) decodes",
+	);
+	for (const bad of [1, 9, 65535]) {
+		const b = bytesOf(gift).slice();
+		b[7] = bad & 255;
+		b[8] = (bad >> 8) & 255;
+		eq(`AdminItem with an arg the server never writes (${bad})`, P.decodeWorld(bufOf(b)), undefined);
 	}
 	// a boss kill keeps carrying any u16: the check is for titles only
 	const boss = P.decodeWorld(

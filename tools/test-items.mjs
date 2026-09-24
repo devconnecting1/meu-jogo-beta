@@ -7832,7 +7832,8 @@ section("G10. supplies are walked up, weapons and gear take E: one rule on the s
 			"4 wood walked up in a run that pays credit the collector 4; 3 more in an assisted run: the wood, no credit",
 			`collector ${paid} -> ${woods(t.save)}, wood ${t.save.invenEtc[23]}`,
 		);
-		// an admin's drop (unpaid), partly taken at the ceiling: the audit hears the 3 that went in, the collector nothing
+		// an admin's drop (unpaid) is never walked up (review of b0174ed, L-1: taking it assists the run, so it takes E);
+		// E takes it, partly at the ceiling: the audit hears the 3 that went in, the collector nothing
 		const u = server();
 		const heard = [];
 		u.sim.items.onUnpaidTaken = (slot, item, count) => heard.push({ slot, id: item.id, count });
@@ -7840,15 +7841,18 @@ section("G10. supplies are walked up, weapons and gear take E: one rule on the s
 		const gift = W.spawnGroundItem(u.world, ItemKind.Etc, 23, 5, 1004, 1000);
 		gift.unpaid = true;
 		u.run(1);
+		const walked = heard.length === 0 && gift.count === 5 && u.world.items.includes(gift);
+		u.sim.items.pickup(u.save, 1000, 1000, gift, 0);
 		check(
-			heard.length === 1 &&
+			walked &&
+				heard.length === 1 &&
 				heard[0].slot === 0 &&
 				heard[0].count === 3 &&
 				woods(u.save) === 0 &&
 				gift.count === 2 &&
 				u.world.items.length === 1,
-			"an admin's 5 wood walked over at 3 from the ceiling: 3 go in, the audit hears slot 0 took 3, no collector credit",
-			JSON.stringify(heard),
+			"an admin's 5 wood: walked over, nothing; with E at 3 from the ceiling, 3 go in, the audit hears slot 0 took 3, no collector credit",
+			JSON.stringify({ walked, heard }),
 		);
 	}
 	// 15. the magazine goes back into the reserve up to the save's ceiling, never over it (review, L2)

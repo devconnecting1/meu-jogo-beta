@@ -162,6 +162,9 @@ export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 		deps.note("world:taken", sp?.userId ?? 0, `kind ${item.kind} item ${item.itemId} ×${count} an admin dropped`);
 		const player = sp !== undefined ? Players.GetPlayerByUserId(sp.userId) : undefined;
 		if (player !== undefined) deps.markAssisted(player);
+		// ...and told so, at once (review of b0174ed, L-1): it is never a surprise. Only an E press takes an admin's drop
+		// (shared/sim/pickupRule.ts `walkPickupTarget` passes it over), so nobody walks into it
+		if (sp !== undefined) deps.host()?.replicator.adminItem(slot);
 	}
 
 	/**

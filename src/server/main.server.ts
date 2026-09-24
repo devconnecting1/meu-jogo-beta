@@ -56,7 +56,7 @@ import { Income, onIncome, serverOwnsProgress, stripClientProgress } from "./sim
 import { serverOwnsBackpack, stripClientBackpack } from "./sim/backpack";
 import { runActionRefusal, stripClientLife } from "./sim/life";
 import { stripClientAchievements } from "./save/achievements";
-import { kickOutOfDate, newerSaveVersion } from "./save/newerSave";
+import { kickOutOfDate, newerThanBuild } from "./save/newerSave";
 import { startProximityChat } from "./chat/proximityChat";
 import { startWorldLog } from "./save/worldLog";
 import { keepPrivateTown } from "./save/privateTown";
@@ -470,16 +470,16 @@ type LoadOutcome =
 	| { kind: "found"; data: unknown }
 	| { kind: "empty" }
 	| { kind: "failed"; err: string }
-	/** the stored save is NEWER than this build (H1): nothing was written, not even the lock */
-	| { kind: "newer"; version: number };
+	/** the stored save is NEWER than this build (H1, M-1): nothing was written, not even the lock. `why`: for the log */
+	| { kind: "newer"; why: string };
 /** a load this build may go on with (a v1 save is never newer) */
 type ReadOutcome = Exclude<LoadOutcome, { kind: "newer" }>;
 
-/** the version of stored data a newer build wrote (server/save/newerSave.ts); undefined: none, or not readable */
-function newerStored(data: unknown): number | undefined {
+/** why stored data is a newer build's (server/save/newerSave.ts); undefined: it is not, or it is not readable */
+function newerStored(data: unknown): string | undefined {
 	if (data === undefined) return undefined;
 	const [decoded, value] = decodeData(data);
-	return decoded ? newerSaveVersion(value) : undefined;
+	return decoded ? newerThanBuild(value) : undefined;
 }
 
 /** reads the save and takes the session lock in one UpdateAsync (retries with backoff) */
@@ -491,16 +491,16 @@ function loadWithLock(s: Session): LoadOutcome {
 	while (true) {
 		let result = "empty" as "found" | "empty" | "locked" | "newer";
 		let data: unknown;
-		let newer = 0;
+		let newer = "";
 		const [ok, err] = pcall(() => {
 			store.UpdateAsync<unknown, unknown>(s.key, old => {
 				const doc = readDoc(old);
 				// review of 97cd734, H1: a save a NEWER build wrote is never this server's to write -- not even its lock
 				// is taken (whoever holds it, the write is cancelled), and the session never writes it after
-				const version = newerStored(doc?.data);
-				if (version !== undefined) {
+				const why = newerStored(doc?.data);
+				if (why !== undefined) {
 					result = "newer";
-					newer = version;
+					newer = why;
 					return $tuple(undefined);
 				}
 				const now = os.time();
@@ -524,7 +524,7 @@ function loadWithLock(s: Session): LoadOutcome {
 				task.wait(2);
 				continue;
 			}
-			if (result === "newer") return { kind: "newer", version: newer };
+			if (result === "newer") return { kind: "newer", why: newer };
 			return result === "found" ? { kind: "found", data } : { kind: "empty" };
 		}
 		if (attempt >= RETRY_DELAYS.size()) return { kind: "failed", err: tostring(err) };
@@ -820,7 +820,7 @@ function readSession(s: Session): void {
 	let arm: string | undefined;
 	const loaded: LoadOutcome = dataStore === undefined ? { kind: "failed", err: "no DataStore" } : loadWithLock(s);
 	if (loaded.kind === "newer") {
-		refuseNewerSave(s, loaded.version);
+		refuseNewerSave(s, loaded.why);
 		return;
 	}
 	let outcome: ReadOutcome = loaded;
@@ -936,15 +936,16 @@ function readSession(s: Session): void {
 }
 
 /**
- * Review of 97cd734, H1: the stored save is NEWER than this build (server/save/newerSave.ts). This server would write
- * it back without what it does not know, so nothing of this player is ever written here: the load took no lock (its
- * UpdateAsync cancelled its own write), `released` stops every flush before it starts -- the autosave, an event save,
- * the leave's, BindToClose's -- the title record is never opened, `outdated` refuses a Retry, and the session is
- * read-only (`status` "error": no report, no purchase, no admin edit). The player is let go, told to rejoin.
+ * Reviews of 97cd734 (H1) and b0174ed (M-1): the stored save is NEWER than this build -- a later SAVE_VERSION, or an
+ * array longer than this build's table (server/save/newerSave.ts). This server would write it back without what it
+ * does not know, so nothing of this player is ever written here: the load took no lock (its UpdateAsync cancelled its
+ * own write), `released` stops every flush before it starts -- the autosave, an event save, the leave's, BindToClose's
+ * -- the title record is never opened, `outdated` refuses a Retry and a body in the world (`saveOf`), and the session
+ * is read-only (`status` "error": no report, no purchase, no admin edit). The player is let go, told to rejoin.
  */
-function refuseNewerSave(s: Session, version: number): void {
+function refuseNewerSave(s: Session, why: string): void {
 	warn(`[${GAME_NAME}] stored save is newer than this server; not loaded, player sent to rejoin`);
-	print(`[${GAME_NAME}] save of ${s.key} is v${version}: newer than this server`);
+	print(`[${GAME_NAME}] save of ${s.key} is newer than this server (${why})`);
 	s.outdated = true;
 	s.released = true;
 	s.status = "error";
@@ -1999,8 +2000,9 @@ if (MP_PHASE >= 1) {
 			const s = sessions.get(player);
 			// a read-only session (status "error", lock lost) still plays; it just never persists, exactly as
 			// in single player. A session that is still loading, or already closing, is not admitted yet — nor one
-			// whose retry is queued: the save it is about to load is the one its next body must come from (R3b)
-			if (s === undefined || s.closed || !s.loaded || s.retryQueued) return undefined;
+			// whose retry is queued: the save it is about to load is the one its next body must come from (R3b) -- nor
+			// one whose save is a newer build's (H1, review of b0174ed L-4): that player is on the way out, never in town
+			if (s === undefined || s.closed || !s.loaded || s.retryQueued || s.outdated) return undefined;
 			return s.save;
 		},
 		// nobody enters the city while their trip to a town of their own is in flight (review M2: the teleport would yank
@@ -2089,7 +2091,7 @@ if (MP_PHASE >= 1) {
 		queue: (slot, msg) => sim.queueIntent(slot, msg),
 		saveOf: player => {
 			const s = sessions.get(player);
-			return s !== undefined && s.loaded && !s.closed ? s.save : undefined;
+			return s !== undefined && s.loaded && !s.closed && !s.outdated ? s.save : undefined;
 		},
 		changed: player => {
 			const s = sessions.get(player);

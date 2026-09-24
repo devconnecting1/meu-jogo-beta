@@ -325,7 +325,7 @@ section("1) quem publica: so um servidor publico e ao vivo, com alguem nele", ()
 	s.list.tick();
 	const w = map.log.find(x => x.kind === "set");
 	check(
-		"com gente: a entrada e o JobId -> semente, dia, jogadores, capacidade, hora; TTL de ENTRY_TTL_S; chave de ordem 0 (nao cheio)",
+		"com gente: a entrada e o JobId -> semente, dia, jogadores, capacidade, hora; TTL de ENTRY_TTL_S; chave de ordem -2 x PlaceVersion (o build mais novo primeiro; nao cheio)",
 		w !== undefined &&
 			w.key === s.jobId &&
 			w.value.seed === 777 &&
@@ -334,7 +334,7 @@ section("1) quem publica: so um servidor publico e ao vivo, com alguem nele", ()
 			w.value.max === 6 &&
 			w.value.kind === "public" &&
 			w.expiration === SL.ENTRY_TTL_S &&
-			w.sortKey === 0,
+			w.sortKey === -2 * PLACE_VERSION,
 		JSON.stringify(w),
 	);
 	check(
@@ -392,7 +392,11 @@ section("2) com que frequencia: mudou -> no maximo a cada 15 s; parado -> a cada
 	clockNow += SL.PUBLISH_MIN_GAP_S;
 	s.list.tick();
 	const last = map.log.filter(x => x.kind === "set").at(-1);
-	check("cheio: chave de ordem 1 (os abertos vem antes numa leitura)", last.sortKey === 1 && last.value.n === 6);
+	check(
+		"cheio: a chave de ordem um acima da do aberto do mesmo build (os abertos vem antes numa leitura)",
+		last.sortKey === -2 * PLACE_VERSION + 1 && last.value.n === 6,
+		`${last.sortKey}`,
+	);
 	// the server dies: no more writes, and after the TTL nobody sees it
 	clockNow += SL.ENTRY_TTL_S - 1;
 	map.purge();
@@ -683,6 +687,32 @@ section("4) entrar: o servidor le a entrada de novo e decide; depois TeleportAsy
 		JSON.stringify({ fromOld, joinOld, fromNew }),
 	);
 	there.list.tick();
+	// L-5 (review of b0174ed): a publish without a restart leaves a page of old servers in the map. The read takes the
+	// first READ_COUNT entries only, and the map's order (`sortKeyOf`) puts the newest build first: the new build's
+	// towns are never cut off by old ones nobody here may join
+	{
+		const crowd = new FakeSortedMap();
+		const reader = makeServer(crowd);
+		const [r] = reader.add(1);
+		for (let i = 0; i < SL.READ_COUNT + 20; i++) {
+			const old = makeServer(crowd, { placeVersion: PLACE_VERSION - 1, seed: 500 + i });
+			old.add(1);
+			old.list.tick();
+		}
+		const fresh = [];
+		for (let i = 0; i < 3; i++) {
+			const f = makeServer(crowd, { seed: 900 + i });
+			f.add(2);
+			f.list.tick();
+			fresh.push(f.jobId);
+		}
+		const rows = (reader.list.list(r).servers ?? []).map(x => x.jobId);
+		check(
+			`L-5: ${SL.READ_COUNT + 20} servidores do build velho e 3 deste: a leitura de ${SL.READ_COUNT} traz os 3 deste build primeiro`,
+			fresh.every(id => rows.includes(id)) && rows.length === 3,
+			`${rows.length} linhas`,
+		);
+	}
 	const ok = here.list.join(me, there.jobId);
 	check(
 		"uma cidade aberta: TeleportAsync para ESSE servidor (o JoinedFromList e contado na chegada, no destino)",
@@ -978,11 +1008,11 @@ section("7) o lado Roblox: startServerList com as chamadas como a API as pede", 
 	const live = SL.startServerList(gameSide, (p, why) => notices.push({ p, why }));
 	const set = map.log.find(x => x.kind === "set");
 	check(
-		`publico: GetSortedMap("${SL.SERVER_LIST_MAP}"), e o laco do tique publica logo: SetAsync(JobId, entrada, ${SL.ENTRY_TTL_S}, 0)`,
+		`publico: GetSortedMap("${SL.SERVER_LIST_MAP}"), e o laco do tique publica logo: SetAsync(JobId, entrada, ${SL.ENTRY_TTL_S}, chave -2 x PlaceVersion)`,
 		asked.includes(`map:${SL.SERVER_LIST_MAP}`) &&
 			set?.key === "live-job-1" &&
 			set.expiration === SL.ENTRY_TTL_S &&
-			set.sortKey === 0 &&
+			set.sortKey === -2 * PLACE_VERSION &&
 			set.value.seed === 31337 &&
 			spawned.length === 1,
 		JSON.stringify(set),

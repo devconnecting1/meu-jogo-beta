@@ -16,7 +16,9 @@
  *             newer save without what it does not know (review of 97cd734, H1). PlaceVersion is 0 in Studio (and in
  *             an unpublished place): there the SAVE_VERSION still tells two builds apart.
  *   list      `list(player)`: GetRangeAsync over the map, at most READ_COUNT entries, cached READ_CACHE_S for the
- *             whole server (every lobby on it shares one read), and read only when somebody asks. The rows skip this
+ *             whole server (every lobby on it shares one read), and read only when somebody asks; the map's own order
+ *             puts the newest build first (`sortKeyOf`), so an old build still draining after a publish never fills
+ *             the page. The rows skip this
  *             server and anything stale or malformed, and come sorted: not full first, then the day closest to the
  *             player's best day, then the fuller town.
  *   join      `join(player, jobId)`: from the lobby only (never a teleport out of the city), one at a time per player
@@ -88,7 +90,7 @@ export interface ListStore {
 	readonly set: (key: string, value: unknown, ttl: number, sortKey: number) => void;
 	/** the entry's value, or undefined when there is none */
 	readonly get: (key: string) => unknown;
-	/** the first `count` entries, ascending by sort key (not full first) */
+	/** the first `count` entries, ascending by sort key (`sortKeyOf`: the newest build first, open before full) */
 	readonly range: (count: number) => Array<{ key: string; value: unknown }>;
 	readonly remove: (key: string) => void;
 }
@@ -187,6 +189,16 @@ export function readEntry(v: unknown): Entry | undefined {
 		max: r.max,
 		t: r.t,
 	};
+}
+
+/**
+ * The entry's sort key in the map: the NEWEST build first (a later PlaceVersion is a lower key), then open before full.
+ * A read takes the first READ_COUNT entries only, so after a publish the servers of the build every new lobby runs
+ * come before whatever old build is still draining -- they are never cut off by a page of servers nobody may join
+ * (review of b0174ed, L-5). An entry of the build before this change (v1) has key 0 or 1 and comes after them all.
+ */
+export function sortKeyOf(entry: { n: number; max: number; pv: number }): number {
+	return (entry.n >= entry.max ? 1 : 0) - 2 * entry.pv;
 }
 
 /** an entry this server may list and join: public, of this very place AND build, and fresh */
@@ -294,7 +306,7 @@ export class ServerList {
 		// the attempt counts as the write, failed or not: a store that fails is not retried faster than the cadence
 		this.publishedAt = h.clock();
 		this.stats.writes += 1;
-		const [ok, err] = pcall(() => store.set(h.jobId, entry, ENTRY_TTL_S, entry.n >= entry.max ? 1 : 0));
+		const [ok, err] = pcall(() => store.set(h.jobId, entry, ENTRY_TTL_S, sortKeyOf(entry)));
 		if (this.closed) {
 			// the server began shutting down while this write was in flight (SetAsync yields): whatever order the two
 			// requests land in, the entry must not outlive the server by a TTL -- it goes again, now

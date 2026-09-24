@@ -90,6 +90,9 @@ const NEAR = new Array<GroundItem>();
  * (it has lain long enough) and that the save has room for. Ties go to the oldest id, as the E target's do. Only the
  * items in the reach's box are read -- on the server the item grid's cells under the body (shared/game/world.ts
  * `queryGroundItems`), on a client its own short list.
+ *
+ * Never an admin's drop (`GroundItem.unpaid`, server-side only): taking one makes the run assisted (§9.3), so it takes
+ * an E press -- a choice, told by a toast -- and a bystander never walks into it (review of b0174ed, L-1).
  */
 export function walkPickupTarget(
 	world: WorldData,
@@ -111,7 +114,8 @@ export function walkPickupTarget(
 		if (dy > reach || dy < -reach) continue;
 		const d2 = dx * dx + dy * dy;
 		if (d2 > bestD2 || (d2 === bestD2 && best !== undefined && it.id > best.id)) continue;
-		if (!walkPickup(it.kind, it.itemId) || !ready(it) || pickupRoom(save, it.kind, it.itemId) <= 0) continue;
+		if (it.unpaid === true || !walkPickup(it.kind, it.itemId)) continue;
+		if (!ready(it) || pickupRoom(save, it.kind, it.itemId) <= 0) continue;
 		bestD2 = d2;
 		best = it;
 	}

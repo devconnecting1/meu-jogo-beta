@@ -5450,6 +5450,62 @@ section("38) a save a NEWER build wrote is never written here: no lock, no write
 			"a save of this version loads and plays as always",
 		);
 		srv3.quit(p3);
+
+		// review of b0174ed, M-1: a later build that only ADDED to a table (a title, a weapon, a costume) without a
+		// SAVE_VERSION bump. Its save says this very version, and one of its arrays is longer than this build's table:
+		// this build would cut it and write it back. Newer all the same -- and never admitted to the town (L-4)
+		const { TITLES } = require(join(SRC, "shared/data/titles.ts"));
+		const { WEAPONS } = require(join(SRC, "shared/data/weapons.ts"));
+		const grown = [
+			["a title more", d => d.titles.push(1)],
+			["a weapon more", d => d.invenWeapon.push(1)],
+		];
+		for (const [what, grow] of grown) {
+			const u4 = newUser();
+			{
+				const s4 = bootServer();
+				s4.quit(s4.join(u4, "grown"));
+			}
+			const doc4 = saveDocOf(u4);
+			const data4 = JSON.parse(doc4.data);
+			grow(data4);
+			doc4.data = JSON.stringify(data4);
+			const before4 = JSON.stringify(saveDocOf(u4));
+			landed.delete(String(u4));
+			const srv4 = bootServer();
+			const p4 = srv4.join(u4, "grown");
+			const body4 = srv4.enter(p4);
+			srv4.run(5, 1 / 10);
+			srv4.shutdown();
+			srv4.quit(p4);
+			check(
+				data4.version === SAVE_VERSION &&
+					p4.kicked &&
+					body4 === undefined &&
+					JSON.stringify(saveDocOf(u4)) === before4 &&
+					!landed.has(String(u4)),
+				`M-1: same SAVE_VERSION, ${what} than this build's table: let go, never in town, nothing written`,
+				`titles ${data4.titles.length}/${TITLES.length}, weapons ${data4.invenWeapon.length}/${WEAPONS.length}; kicked ${p4.kicked}`,
+			);
+		}
+		// an EARLIER version with a longer array is not a newer build (a table that shrank since, which none ever has)
+		const u5 = newUser();
+		{
+			const s5 = bootServer();
+			s5.quit(s5.join(u5, "old"));
+		}
+		const doc5 = saveDocOf(u5);
+		const data5 = JSON.parse(doc5.data);
+		data5.version = SAVE_VERSION - 1;
+		data5.titles.push(1);
+		doc5.data = JSON.stringify(data5);
+		const srv5 = bootServer();
+		const p5 = srv5.join(u5, "old");
+		check(
+			!p5.kicked && srv5.save(p5)?.titles.length === TITLES.length,
+			"an earlier version with a longer array loads (cut to this build's table): only a newer build is refused",
+		);
+		srv5.quit(p5);
 	} finally {
 		saves.UpdateAsync = original;
 	}

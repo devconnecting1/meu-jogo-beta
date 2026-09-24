@@ -1124,6 +1124,47 @@ export function storedVersion(raw: unknown): number {
 }
 
 /**
+ * Every array of the save that is sized to a table, with that table's size in THIS build (review of b0174ed, M-1).
+ * The save is written with each array at its table's full size, and read back cut to it (`readIntArray`): so a stored
+ * array LONGER than its table was written by a later build whose table grew -- a weapon, a skill, a pack, a costume, a
+ * title, an achievement added, with or without a SAVE_VERSION bump -- and this build would cut it (and the equipped
+ * ids pointing past it) and write it back. The server treats such a save as newer than itself
+ * (server/save/newerSave.ts). `robuxReceipts` is a list, not a table: its entries name costumes, which `costumes`
+ * covers. tools/test-save.mjs pins every array of the save to this list, so an array added to the save without it
+ * fails CI.
+ */
+export const SAVE_TABLE_ARRAYS: ReadonlyArray<[keyof PlayerSaveData, number]> = [
+	["skillLevels", SKILLS.size()],
+	["achievements", ACHIEVEMENTS.size()],
+	["packsBought", SHOP_PACKS.size()],
+	["packsOpened", SHOP_PACKS.size()],
+	["costumes", COSTUMES.size()],
+	["invenWeapon", WEAPONS.size()],
+	["invenEquip", EQUIPS.size()],
+	["invenUse", USABLES.size()],
+	["invenEtc", ETC_ITEMS.size()],
+	["titles", TITLES.size()],
+	["titleStats", TITLE_STAT_COUNT],
+];
+
+/**
+ * The first array of a stored document longer than its table in this build ("titles 26 > 25"), or undefined. Asked
+ * only of a document of THIS SAVE_VERSION (a later one is newer on its face): one of an earlier version with a longer
+ * array would be a table that shrank since, which is not a newer build -- and none ever has.
+ */
+export function longerThanTables(raw: unknown): string | undefined {
+	if (!typeIs(raw, "table")) return undefined;
+	const r = raw as Record<string, unknown>;
+	for (const [field, size] of SAVE_TABLE_ARRAYS) {
+		const a = r[field];
+		if (typeIs(a, "table") && (a as Array<unknown>).size() > size) {
+			return `${field} ${(a as Array<unknown>).size()} > ${size}`;
+		}
+	}
+	return undefined;
+}
+
+/**
  * Copies `src` field by field into `dst`, keeping `dst`'s identity (docs/MULTIPLAYER.md §6.3).
  *
  * From F2 on the SERVER writes into the live save table while a session is open — XP at the instant a zombie

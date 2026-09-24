@@ -3190,6 +3190,81 @@ section("35) v8: os recibos de Robux -- do servidor, lidos com cuidado, e o traj
 	checkEq(ROBUX.robuxPromptRefusal(r0, 2, true, true, false), undefined, "prompt: o resto abre");
 }
 
+// ---------------------------------------------------------------- 36. every array pinned to its table
+
+section(
+	"36) cada lista do save presa a sua tabela: um build que cresce uma tabela e um build mais novo (revisao de b0174ed, M-1)",
+);
+{
+	const { TITLES, TITLE_STAT_COUNT } = require(join(SRC, "shared/data/titles.ts"));
+	const NEWER = require(join(SRC, "server/save/newerSave.ts"));
+	// the table each array of the save is sized to, named HERE by hand: a table that grows moves its array with it, and
+	// a server of the build before would cut that array and write it back -- so the guard must know every one
+	const TABLE = {
+		skillLevels: SKILLS.length,
+		achievements: ACHIEVEMENTS.length,
+		packsBought: SHOP_PACKS.length,
+		packsOpened: SHOP_PACKS.length,
+		costumes: COSTUMES.length,
+		invenWeapon: WEAPONS.length,
+		invenEquip: EQUIPS.length,
+		invenUse: USABLES.length,
+		invenEtc: ETC_ITEMS.length,
+		titles: TITLES.length,
+		titleStats: TITLE_STAT_COUNT,
+	};
+	// not sized to a table: the Robux receipts (a list whose entries name costumes, which `costumes` covers)
+	const LISTS = new Set(["robuxReceipts"]);
+	const save = SAVE.defaultSave();
+	const arrays = Object.keys(save).filter(k => Array.isArray(save[k]));
+	const unpinned = arrays.filter(k => !(k in TABLE) && !LISTS.has(k));
+	check(
+		unpinned.length === 0,
+		"toda lista do save tem a sua tabela neste teste (uma lista nova no save sem ela faz a CI falhar)",
+		unpinned.join(", ") || arrays.join(", "),
+	);
+	const guard = new Map(SAVE.SAVE_TABLE_ARRAYS.map(([f, n]) => [f, n]));
+	const wrong = Object.entries(TABLE).filter(([f, n]) => guard.get(f) !== n || save[f].length !== n);
+	check(
+		wrong.length === 0 && SAVE.SAVE_TABLE_ARRAYS.length === Object.keys(TABLE).length,
+		"SAVE_TABLE_ARRAYS (o guarda do servidor) = cada lista, do tamanho da sua tabela, e o save novo nasce assim",
+		wrong.map(([f, n]) => `${f}: tabela ${n}, guarda ${guard.get(f)}, save ${save[f].length}`).join("; "),
+	);
+	// every array one longer, at THIS version, is a newer build; the same at an earlier version is not (a table that
+	// shrank since: none ever has, and a save of the build before must still load)
+	const missed = [];
+	const flaggedOld = [];
+	for (const f of Object.keys(TABLE)) {
+		const doc = JSON.parse(JSON.stringify(save));
+		doc[f].push(0);
+		if (NEWER.newerThanBuild(doc) === undefined) missed.push(f);
+		doc.version = SAVE.SAVE_VERSION - 1;
+		if (NEWER.newerThanBuild(doc) !== undefined) flaggedOld.push(f);
+	}
+	check(
+		missed.length === 0,
+		`uma lista mais longa que a tabela, na mesma versao: mais novo (${Object.keys(TABLE).length} listas)`,
+		missed.join(", "),
+	);
+	check(
+		flaggedOld.length === 0,
+		"a mesma lista numa versao anterior: nao e mais novo (carrega, cortada)",
+		flaggedOld.join(", "),
+	);
+	const later = JSON.parse(JSON.stringify(save));
+	later.version = SAVE.SAVE_VERSION + 1;
+	check(
+		NEWER.newerThanBuild(save) === undefined &&
+			NEWER.newerThanBuild(later) === `v${SAVE.SAVE_VERSION + 1}` &&
+			NEWER.newerThanBuild("not a save") === undefined,
+		"o save deste build carrega; um SAVE_VERSION maior e mais novo; lixo nao e (a leitura decide depois)",
+	);
+	// the reason names the array, for the server log
+	const one = JSON.parse(JSON.stringify(save));
+	one.titles.push(1);
+	checkEq(NEWER.newerThanBuild(one), `titles ${TITLES.length + 1} > ${TITLES.length}`, "o motivo diz qual lista");
+}
+
 // ---------------------------------------------------------------- verdict
 
 console.log("");

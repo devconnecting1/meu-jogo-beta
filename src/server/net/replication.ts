@@ -878,6 +878,14 @@ export class Replicator {
 		this.queueFor(slot, { t: WorldEv.Announce, msg: AnnounceKind.BreakNudge, arg: 0 });
 	}
 
+	/**
+	 * §9.3 (review of b0174ed, L-1): the survivor in `slot` just picked up an admin's drop, and their run is assisted from
+	 * now on (server/admin/adminWorld.ts `taken`). Directed: their toast, nobody else's.
+	 */
+	adminItem(slot: number): void {
+		this.queueFor(slot, { t: WorldEv.Announce, msg: AnnounceKind.AdminItem, arg: 0 });
+	}
+
 	// ------------------------------------------------------------ per tick (§3.1 step 4)
 
 	/** call once per simulation tick, after the step */

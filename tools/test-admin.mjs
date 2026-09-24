@@ -2388,8 +2388,34 @@ section(
 		);
 		const ach0 = bsave.achievements[WOODS] ?? 0;
 		const inv0 = bsave.invenEtc[WOOD] ?? 0;
+		// review of b0174ed, L-1: Bob stands on it for a second -- wood is a walk-up supply, but an admin's drop is not
+		// walked into: taking it assists the run, so it takes an E press
+		b.state.x = wood.x;
+		b.state.y = wood.y;
+		t.s.run(1.5);
+		verify(
+			"L-1: Bob stands on the admin's wood: the walk-over passes it by -- still on the ground, his run still pays",
+			t.s.sim.world.items.includes(wood) &&
+				(bsave.invenEtc[WOOD] ?? 0) === inv0 &&
+				t.s.sim.paysRewards({ userId: t.bob.UserId }) === true,
+			`inventory ${inv0}->${bsave.invenEtc[WOOD]}`,
+		);
+		const World = t.s.env.services.ReplicatedStorage.FindFirstChild("Net").FindFirstChild("World");
+		World.sent.length = 0;
 		const paid0 = t.s.sim.paysRewards({ userId: t.bob.UserId });
 		const got = t.s.sim.items.pickup(bsave, wood.x, wood.y, wood, b.slot);
+		flushWorld(t);
+		const told = [];
+		for (const e of World.sent) {
+			for (const ev of t.s.P.decodeWorld(e.args[0])?.events ?? []) {
+				if (ev.t === t.s.P.WorldEv.Announce && ev.msg === t.s.P.AnnounceKind.AdminItem) told.push(e.to);
+			}
+		}
+		verify(
+			"L-1: the E press takes it, and Bob alone is told (Announce AdminItem: the toast that his run earns no more)",
+			told.length === 1 && told[0] === t.bob,
+			`${told.length} notice(s)`,
+		);
 		verify(
 			"Bob picks it up: the wood is his, the Woods collector credit is not",
 			got.ok && (bsave.invenEtc[WOOD] ?? 0) === inv0 + 5 && (bsave.achievements[WOODS] ?? 0) === ach0,
@@ -2413,6 +2439,15 @@ section(
 			"a wood the town dropped still credits the collector (control)",
 			(bsave.achievements[WOODS] ?? 0) === ach0 + 3,
 			`${ach0} -> ${bsave.achievements[WOODS]}`,
+		);
+		// and the walk-over itself still works where Bob stands (control for L-1): the town's wood under him goes in
+		const street = spawnGroundItem(t.s.sim.world, 4, WOOD, 2, b.state.x, b.state.y);
+		const before = bsave.invenEtc[WOOD] ?? 0;
+		t.s.run(1.5);
+		verify(
+			"control: the town's wood under Bob is walked up as ever (only an admin's drop waits for E)",
+			!t.s.sim.world.items.includes(street) && (bsave.invenEtc[WOOD] ?? 0) === before + 2,
+			`${before} -> ${bsave.invenEtc[WOOD]}`,
 		);
 		const cosmetic = EQUIPS.findIndex(e => e.kind >= 4);
 		const n0 = t.s.sim.world.items.length;

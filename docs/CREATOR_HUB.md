@@ -194,20 +194,38 @@ Cada gravação do save e do registro de títulos leva o UserId do dono (`Update
 o próprio Data Stores Manager mostra de quem é cada chave. O sufixo `_studio` (feito) separa os playtests do
 Studio dos saves de produção.
 
-### Publicar uma versão que muda o save — **sempre reiniciando os servidores**
+### Publicar — **todo publish reinicia os servidores**
 
-Quando uma versão sobe o `SAVE_VERSION` (`src/shared/game/save.ts`; o PR diz "save vN"), **publique e reinicie
-todos os servidores na hora**: Creator Hub → a experiência → **Restart servers** (o antigo "Migrate to latest
-update"; basta "só os desatualizados", **sem** bleed-off) ou **Shut down all servers**. Nunca "deixe esvaziar".
+**A cada publish**, mude o save ou não, **publique e reinicie todos os servidores na hora**: Creator Hub → a
+experiência → **Restart servers** (o antigo "Migrate to latest update"; basta "só os desatualizados", **sem**
+bleed-off) ou **Shut down all servers**. Nunca "deixe esvaziar".
 
-Por quê: um servidor antigo que continua no ar não conhece os campos novos. Quem jogou num servidor novo e entra
-num antigo (pelo amigo, por um servidor que ainda não esvaziou) tem o save **e** o registro de títulos
-(`ProjectZ_Titles`) reescritos sem eles — no v7, os títulos novos e os contadores deles somem. Não é só um risco de
-rollback. Do v7 em diante o próprio código se defende (revisão de 97cd734, H1): um servidor que carrega um save mais
-novo que o dele não escreve nada daquele jogador e o manda entrar de novo ("This server is out of date. Rejoin to
-play."), e a lista de servidores do lobby só mostra servidores do mesmo build. Mas o servidor que já está no ar é o
-código **anterior**, e esse não sabe disso: só o reinício o tira do caminho. Detalhes: `docs/MULTIPLAYER.md` §6.7b,
-`docs/DESIGN_RULES.md` MON-05 ("Save v7").
+Por quê: um servidor antigo que continua no ar só conhece o que o código dele conhece. Quem jogou num servidor novo e
+entra num antigo (pelo amigo, por um servidor privado, por um que ainda não esvaziou) tem o save reescrito sem o que
+é novo: um campo novo some (no v7, os títulos novos e os contadores deles, no save **e** no `ProjectZ_Titles`), e
+cada lista é cortada ao tamanho das tabelas **dele** — uma arma, um traje, um título ou uma conquista acrescentados
+sem mudar o `SAVE_VERSION` se perdem, e a arma na mão com eles (revisão de b0174ed, M-1). Não é só um risco de
+rollback. Do código deste PR em diante o servidor se defende (revisões de 97cd734, H1, e b0174ed, M-1): um servidor
+que carrega um save de versão maior, ou da mesma versão com uma lista mais longa que a tabela dele, não escreve nada
+daquele jogador e o manda entrar de novo ("This server is out of date. Rejoin to play."), e a lista de servidores do
+lobby só mostra servidores do mesmo build (o filtro `pv` supõe exatamente este reinício). Mas o servidor que já está
+no ar é o código **anterior**, e esse não sabe disso: só o reinício o tira do caminho. Detalhes:
+`docs/MULTIPLAYER.md` §6.7b, `docs/DESIGN_RULES.md` MON-05 ("Save v7").
+
+O outro lado da mesma proteção (revisão de b0174ed, L-3):
+
+- **Rollback que desce o `SAVE_VERSION`:** todo mundo que jogou no build mais novo tem um save de versão maior que a
+  do código de volta — e esse código o recusa: **cada entrada** dessas pessoas é um kick com "This server is out of
+  date". Um rollback abaixo de um `SAVE_VERSION` já publicado só serve para o jogador que nunca entrou no build novo;
+  um defeito num build que subiu a versão se corrige **para frente**, com outro publish.
+- **No Studio:** o save de playtest fica no `ProjectZ_Save_v2_studio` (os `_studio` são separados dos de produção).
+  Um playtest numa branch com `SAVE_VERSION` maior grava ali um save que a `main` recusa: o desenvolvedor passa a
+  levar o kick no Studio da `main`. Para voltar, apague **só a chave de Studio** do seu UserId: no **Data Stores
+  Manager** (Configure → Data Stores Manager → `ProjectZ_Save_v2_studio` → a chave do seu UserId → Delete; o próprio
+  painel permite desfazer durante a espera), ou pela barra de comandos do Studio (View → Command Bar, com Game
+  Settings → Security → Enable Studio Access to API Services ligado):
+  `game:GetService("DataStoreService"):GetDataStore("ProjectZ_Save_v2_studio"):RemoveAsync("<seu UserId>")`.
+  **Nunca** `npm run cloud -- erase`: ele apaga também as chaves **de produção** do jogador.
 
 ### Leaderboard — **depois da F2**
 
@@ -510,9 +528,8 @@ O que foi conferido na documentação do Roblox (Context7, `/websites/create_rob
 4. **Server management**: decidir como será o "jogar sozinho".
 5. **Alerts**: ligar assim que tiver 100+ DAU (lista na §13 de `docs/ANALYTICS.md`).
 6. **Access settings**: manter privado até a F2 fechar.
-7. **Publish que muda o save** (sobe o `SAVE_VERSION`, como o do v7): publicar e logo **Restart servers** ou **Shut
-   down all servers** (seção "Publicar uma versão que muda o save"). Depois do próximo publish: conferir o **Ban
-   history** no painel de admin (bans ligados).
+7. **Todo publish**: publicar e logo **Restart servers** ou **Shut down all servers** (seção "Publicar"). Depois do
+   próximo publish: conferir o **Ban history** no painel de admin (bans ligados).
 8. **Open Cloud na CI**: a chave só de Assets (IP `0.0.0.0/0`, 90 dias) e os secrets `ROBLOX_API_KEY` +
    `ROBLOX_CREATOR_USER_ID` no GitHub; depois Actions → CI → Run workflow na `main` (seção acima). Trocou de conta:
    a experiência na conta nova, os dois secrets novos e Run workflow; a CI reenvia tudo como a conta nova

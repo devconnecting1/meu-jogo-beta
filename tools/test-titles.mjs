@@ -674,6 +674,36 @@ section("3b) M1: a edicao do admin que ajuda a run (item, nivel, pontos, moedas)
 			/function taken\([\s\S]{0,400}deps\.markAssisted\(player\)/.test(world),
 		"ligado no servidor: adminEdit marca a run assistida, e quem pega um item que o admin largou tambem (test:body 17, test:admin 22)",
 	);
+	// L-1 (review of b0174ed): an admin's drop is never walked into, and whoever takes it with E is told, in lang.ts's
+	// words, what the assisted run loses -- nothing more
+	const RULE = require(join(SRC, "shared/sim/pickupRule.ts"));
+	const { ItemKind } = require(join(SRC, "shared/data/kinds.ts"));
+	const { spawnGroundItem } = require(join(SRC, "shared/game/world.ts"));
+	const wworld = createWorld(2000, 2000);
+	const gift = spawnGroundItem(wworld, ItemKind.Etc, 0, 5, 1000, 1000);
+	gift.unpaid = true;
+	const street = spawnGroundItem(wworld, ItemKind.Etc, 0, 5, 1030, 1000);
+	const bare = SAVE.defaultSave();
+	check(
+		RULE.walkPickupTarget(wworld, 1000, 1000, bare, () => true) === undefined &&
+			RULE.walkPickupTarget(wworld, 1030, 1000, bare, () => true) === street,
+		"L-1: o walk-over passa por cima do item do admin (so o E o pega), e pega o da cidade ao lado",
+	);
+	const net = readFileSync(join(SRC, "client/net/netClient.ts"), "utf8");
+	const notice = readFileSync(join(SRC, "client/ui/titleNotice.ts"), "utf8");
+	// (read from the source: the module draws UI when it loads)
+	const ADMIN_ITEM_TEXT = notice.match(/export const ADMIN_ITEM_TEXT = "([^"]+)";/)?.[1] ?? "";
+	check(
+		/replicator\.adminItem\(slot\)/.test(world) &&
+			/e\.msg === AnnounceKind\.AdminItem[\s\S]{0,200}adminItemListeners/.test(net) &&
+			/netOnAdminItem\(\(\) => toast\(ctx, langGet\(ADMIN_ITEM_TEXT/.test(notice) &&
+			LANG.has(ADMIN_ITEM_TEXT) &&
+			/coins/.test(ADMIN_ITEM_TEXT) &&
+			/titles/.test(ADMIN_ITEM_TEXT) &&
+			/achievements/.test(ADMIN_ITEM_TEXT),
+		"L-1: quem pega o item do admin ouve o aviso da lang.ts, so ele: a run nao ganha mais moedas, titulos nem conquistas",
+		ADMIN_ITEM_TEXT,
+	);
 }
 
 // ---------------------------------------------------------------- 3c. the life's deaths reach the wardrobe

@@ -272,6 +272,8 @@ export const LANG_TABLE: Array<string> = [
 	"Disconnected for sending too many network messages",
 	// a server older than the player's save lets them go instead of writing it (server/save/newerSave.ts)
 	"This server is out of date. Rejoin to play.",
+	// an admin's drop picked up (client/ui/titleNotice.ts, §9.3): the run is assisted from then
+	"Admin item: this run no longer earns coins, titles or achievements.",
 	// an admin's save edit reaching the player (client/admin/patches.ts): nobody's name, just what happened
 	"Your progress was updated by an administrator",
 	"Your progress was reset by an administrator",
