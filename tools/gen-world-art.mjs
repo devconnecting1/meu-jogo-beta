@@ -30,7 +30,10 @@
  *            icon (+ its dimmed copy) and glyph, listed in the manifest's `cells` / `dim` and in the generated
  *            src/client/ui/itemIconAtlas.ts; client/ui/itemIcon.ts draws an icon as one ImageLabel of its cell.
  *            Uploaded like the rest; its id is only written while it belongs to the PNG on disk (assets.json's
- *            sha1), because a stale atlas would show the wrong icons: until the new one is up, the Frames draw them
+ *            sha1), because a stale atlas would show the wrong icons: until the new one is up, the Frames draw them.
+ *            The interiors' atlas (`furniture`, tools/furniture-art.mjs) is one too: every piece of furniture, the
+ *            floor decoration and the doorway and window frames, its cells in src/client/view/furnitureAtlas.ts
+ *            (client/view/interiorArt.ts), under the same sha1 rule: a stale one would put a bed where a shelf is
  *
  * Light: the baked form shading (canopy highlights, car roofs, parapet rims) is lit from the top left, the
  * convention of top-down pixel art; what really moves with the sun (drop shadows, which roof slope is lit,
@@ -47,11 +50,14 @@ import { drawText } from "./pixel-font.mjs";
 import { characterArt } from "./character-art.mjs";
 import { bossArt } from "./boss-art.mjs";
 import { buildIconAtlas, loadIconData } from "./icon-atlas.mjs";
+import { furnitureArt, furnitureAtlasModule, furnitureSheet } from "./furniture-art.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT_DIR = join(ROOT, "design", "world-art");
 const TS_OUT = join(ROOT, "src", "client", "view", "worldArtAssets.ts");
 const ICON_TS_OUT = join(ROOT, "src", "client", "ui", "itemIconAtlas.ts");
+const FURNITURE_TS_OUT = join(ROOT, "src", "client", "view", "furnitureAtlas.ts");
+const FURNITURE_SHEET = join(ROOT, "docs", "art", "furniture-sheet.png");
 const SHEET = join(ROOT, "docs", "art", "world-art-sheet.png");
 /** world units per texel */
 const WORLD_TEXEL = 4;
@@ -519,19 +525,28 @@ function fence(len, base, seed) {
 	return t;
 }
 
-/** wooden floor: boards along x (3 texels + a seam), staggered butt joints, grain */
+/**
+ * Wooden floor: boards along x (3 texels + a seam), each its own tone, its lit edge and the seam's shadow, butt
+ * joints staggered from board to board, and a grain streak along each board.
+ */
 function planks(size, base, seed) {
 	const t = new Tex(size, size, true);
 	const r = rng(seed);
 	for (let b = 0; b < size / 4; b++) {
 		const tone = (r() - 0.5) * 16;
 		const cut = Math.floor(r() * size);
+		const cut2 = (cut + size / 2) % size;
+		const grainY = b * 4 + 1 + Math.floor(r() * 2);
+		const g0 = Math.floor(r() * size);
+		const gl = 6 + Math.floor(r() * 10);
 		for (let y = b * 4; y < b * 4 + 4; y++) {
 			for (let x = 0; x < size; x++) {
-				let c = add(base, tone + (r() - 0.5) * 6);
+				let c = add(base, tone + (r() - 0.5) * 5);
 				if (y === b * 4 + 3) c = add(c, -26);
 				else if (y === b * 4) c = add(c, 6);
-				if (x === cut || x === (cut + size / 2) % size) c = add(c, -22);
+				if (y === grainY && (x - g0 + size) % size < gl) c = add(c, -7);
+				if (x === cut || x === cut2) c = add(base, tone - 24);
+				else if ((x === (cut + 1) % size || x === (cut2 + 1) % size) && y !== b * 4 + 3) c = add(c, 5);
 				t.set(x, y, c);
 			}
 		}
@@ -552,17 +567,51 @@ function carpet(size, base, seed) {
 	return t;
 }
 
-/** square floor tiles with grout; `checker` alternates two tones (hospital / pharmacy) */
-function floorTiles(size, tile, base, seed, checker) {
+/**
+ * Square floor tiles with grout; `checker` alternates two tones (a kitchen's, a hospital's). Tiles of 8 texels or
+ * more are bevelled like the town's slabs -- a lit top and left edge, a shaded bottom and right one, light from the
+ * top left (ART-02) -- and each one differs a little from its neighbours; `chips` flecks them (a shop's vinyl).
+ */
+function floorTiles(size, tile, base, seed, checker, { chips = 0 } = {}) {
 	const t = new Tex(size, size, true);
 	const r = rng(seed);
+	const n = size / tile;
+	const tones = [];
+	for (let i = 0; i < n * n; i++) tones.push((r() - 0.5) * (checker ? 5 : 8));
 	for (let y = 0; y < size; y++) {
 		for (let x = 0; x < size; x++) {
-			const odd = (Math.floor(x / tile) + Math.floor(y / tile)) % 2 === 1;
+			const tx = Math.floor(x / tile);
+			const ty = Math.floor(y / tile);
+			const odd = (tx + ty) % 2 === 1;
 			let c = checker ? add(base, odd ? -12 : 8) : add(base, odd ? -3 : 2);
-			c = add(c, (r() - 0.5) * 4);
-			if (x % tile === 0 || y % tile === 0) c = add(base, -24);
+			c = add(c, tones[ty * n + tx] + (r() - 0.5) * 4);
+			const u = x % tile;
+			const v = y % tile;
+			if (tile >= 8) {
+				if (u === 1 || v === 1) c = add(c, 6);
+				else if (u === tile - 1 || v === tile - 1) c = add(c, -6);
+			}
+			if (chips > 0 && r() < chips) c = add(c, r() < 0.5 ? 12 : -12);
+			if (u === 0 || v === 0) c = add(base, -24);
 			t.set(x, y, c);
+		}
+	}
+	return t;
+}
+
+/**
+ * The shadow at the foot of an interior wall (ART-12): a 9-slice drawn round every wall, its centre under the wall
+ * and its three-texel border on the floor, dark at the wall's foot and gone three texels out, the corners rounded.
+ */
+function wallShade() {
+	const n = 7;
+	const t = new Tex(n, n);
+	const alpha = [0.3, 0.26, 0.14, 0.06];
+	for (let y = 0; y < n; y++) {
+		for (let x = 0; x < n; x++) {
+			const k = Math.round(Math.hypot(x - 3, y - 3));
+			if (k > 3) continue;
+			t.set(x, y, BLACK, Math.round(255 * alpha[k]));
 		}
 	}
 	return t;
@@ -1147,86 +1196,6 @@ function crack(seed) {
 	return t;
 }
 
-// ================================================================ WINDOWS (DESIGN_RULES EDI-18)
-
-/** a window in its wall seen from above, along x: 20 x 5 texels = the 80 u gap in the 20 u wall (shared/game/interiors.ts) */
-const WINDOW_TX = 20;
-const WINDOW_TY = 5;
-
-/**
- * The frame on both faces of the wall (rows 0 and 4, the outer one lit: the light comes from the top left) and what
- * lies between them: an INTACT pane -- glass with a diagonal streak of reflection and a darker lower edge -- or a
- * BROKEN one: the bare sill with the jagged stubs of glass still in the frame at both ends.
- */
-function windowPane(broken) {
-	const t = new Tex(WINDOW_TX, WINDOW_TY);
-	const frame = C.windowFrame;
-	const glass = C.glassCold;
-	t.rect(0, 0, WINDOW_TX, 1, mix(frame, WHITE, 0.15));
-	t.rect(0, WINDOW_TY - 1, WINDOW_TX, 1, mix(frame, BLACK, 0.18));
-	// the jambs: the frame's ends against the wall
-	t.rect(0, 1, 1, WINDOW_TY - 2, mix(frame, BLACK, 0.08));
-	t.rect(WINDOW_TX - 1, 1, 1, WINDOW_TY - 2, mix(frame, BLACK, 0.22));
-	if (!broken) {
-		for (let y = 1; y < WINDOW_TY - 1; y++) {
-			for (let x = 1; x < WINDOW_TX - 1; x++) {
-				const low = y === WINDOW_TY - 2 ? 0.12 : 0;
-				t.set(x, y, mix(glass, BLACK, low), 225);
-			}
-		}
-		// the reflection: two short diagonal streaks a third of the way along (top left light), one bright, one faint
-		for (const [x0, k] of [
-			[5, 0.72],
-			[8, 0.4],
-		]) {
-			for (let d = 0; d < 3; d++) t.over(x0 + d, 3 - d, WHITE, 255 * k);
-		}
-		return t;
-	}
-	// the sill between the faces, dark: the room beyond seen through the empty frame
-	const sill = mix(C.carGlass, BLACK, 0.35);
-	t.rect(1, 1, WINDOW_TX - 2, WINDOW_TY - 2, sill);
-	// what is left of the glass: jagged stubs at both ends, lit on their broken edge
-	const stubs = [
-		[1, 1],
-		[1, 2],
-		[2, 2],
-		[1, 3],
-		[2, 3],
-		[3, 3],
-		[WINDOW_TX - 2, 1],
-		[WINDOW_TX - 3, 1],
-		[WINDOW_TX - 2, 2],
-		[WINDOW_TX - 2, 3],
-	];
-	for (const [x, y] of stubs) t.set(x, y, glass, 235);
-	t.set(3, 3, mix(glass, WHITE, 0.45), 235);
-	t.set(WINDOW_TX - 3, 1, mix(glass, WHITE, 0.45), 235);
-	return t;
-}
-
-/**
- * The glass on the ground under a broken window (a decal, COL-02): 16 x 8 texels (64 x 32 u) of sparse shards in the
- * glass's pale blue, each with a lit edge and its dark side, densest along the wall (the top rows) and thinning out.
- * Never white blobs and nothing round: it reads as broken glass, never as something to pick up (LEG-01, ART-04).
- */
-function glassShards(seed) {
-	const t = new Tex(16, 8);
-	const r = rng(seed);
-	const glass = C.glassCold;
-	for (let k = 0; k < 11; k++) {
-		const y = Math.min(7, Math.floor(r() * r() * 8));
-		const x = Math.floor(r() * 16);
-		t.set(x, y, mix(glass, BLACK, r() * 0.15), 215);
-		// a longer splinter now and then, lit on its upper-left end
-		if (r() < 0.45 && x + 1 < 16) {
-			t.set(x + 1, y, mix(glass, BLACK, 0.2), 200);
-			t.set(x, y, mix(glass, WHITE, 0.35), 225);
-		}
-	}
-	return t;
-}
-
 /** a cast-iron manhole cover */
 function manhole() {
 	const t = new Tex(8, 8);
@@ -1757,7 +1726,7 @@ function build() {
 	add_("fenceV", "tile", transpose(fence(16, C.fence, 38)), "board fence along y");
 	add_("floorWood", "tile", planks(32, C.floorWood, 41), "house floors: boards");
 	add_("floorTile", "tile", floorTiles(16, 8, C.floorTile, 42, true), "hospital / pharmacy floor: checker tiles");
-	add_("floorShop", "tile", floorTiles(32, 8, C.floorShop, 43, false), "shop floor: vinyl tiles");
+	add_("floorShop", "tile", floorTiles(32, 8, C.floorShop, 43, false, { chips: 0.05 }), "shop floor: vinyl tiles");
 	add_("wall", "tileTint", plaster(8, 44), "walls: plaster (tint: the wall colour)");
 	add_("roofShingleH", "tileTint", shingles(32, 51), "pitched roof shingles, courses along x (tint: roof colour)");
 	add_("roofShingleV", "tileTint", transpose(shingles(32, 51)), "pitched roof shingles, courses along y");
@@ -1843,17 +1812,9 @@ function build() {
 	add_("floorCarpet", "tile", carpet(16, C.floorCarpet, 47), "bedroom / office carpet: a low loop pile");
 	add_("floorKitchen", "tile", floorTiles(16, 8, C.floorKitchen, 45, true), "kitchen floor: checker tiles");
 	add_("floorBath", "tile", floorTiles(16, 4, C.floorBath, 46, false), "bathroom / cold room: small tiles");
-	// the windows' glass (EDI-18): intact with its reflection, broken with the stubs left in the frame, and the shards
-	// under a broken one -- each along x and along y (transposed: a window is never rotated, ART-08)
-	const paneH = windowPane(false);
-	const brokenH = windowPane(true);
-	const shardsH = glassShards(171);
-	add_("windowGlassH", "sprite", paneH, "a window with its glass in, wall along x: frame, pane, reflection");
-	add_("windowGlassV", "sprite", transpose(paneH), "a window with its glass in, wall along y");
-	add_("windowBrokenH", "sprite", brokenH, "a broken window, wall along x: frame, dark sill, glass stubs");
-	add_("windowBrokenV", "sprite", transpose(brokenH), "a broken window, wall along y");
-	add_("glassShardsH", "sprite", shardsH, "shards of a broken window on the ground, along a wall along x (decal)");
-	add_("glassShardsV", "sprite", transpose(shardsH), "shards of a broken window, along a wall along y (decal)");
+	add_("wallShade", "slice", wallShade(), "the shadow at the foot of an interior wall (round every wall)", {
+		slice: [3, 3, 4, 4],
+	});
 	// the survivors (arms baked per grip), their weapons, the horde and the pets (ART-08..ART-11)
 	for (const t of characterArt(Tex)) add_(t.name, t.kind, t.tex, t.description, { character: true });
 	// the four bosses, one sheet each (ART-14, tools/boss-art.mjs)
@@ -1868,6 +1829,18 @@ function build() {
 		`item icons: ${icons} icons, their dimmed copies and ${atlas.order.length - icons} glyphs (client/ui/itemIcon.ts)`,
 		{ atlas },
 	);
+	// the interiors (DESIGN_RULES ART-12): every piece of furniture, the floor decoration, the doorway and window frames
+	const furniture = furnitureArt({ C, ROOT });
+	add_(
+		"furniture",
+		"atlas",
+		furniture.atlas,
+		`interiors: ${Object.keys(furniture.cells).length} cells of furniture, decoration and frames (client/view/interiorArt.ts)`,
+		{ furniture },
+	);
+	if (furniture.report.generic.length > 0) {
+		console.log(`furniture: no drawer yet for ${furniture.report.generic.join(", ")} (painted as a plain cabinet)`);
+	}
 }
 
 // ---------------------------------------------------------------- output
@@ -2008,6 +1981,20 @@ function writeIconAtlasModule() {
 	console.log(`wrote ${ICON_TS_OUT} (${atlas.order.length} cells, atlas ${atlas.w} x ${atlas.h})`);
 }
 
+/** src/client/view/furnitureAtlas.ts and the interiors' page of docs/art (the furniture, magnified and labelled) */
+function writeFurnitureModule() {
+	const t = textures.find(x => x.furniture !== undefined);
+	writeFileSync(FURNITURE_TS_OUT, furnitureAtlasModule(t.furniture, t.name));
+	console.log(
+		`wrote ${FURNITURE_TS_OUT} (${Object.keys(t.furniture.cells).length} cells, atlas ${t.tex.w} x ${t.tex.h})`,
+	);
+	if (process.argv.includes("--no-sheet")) return;
+	const sheet = furnitureSheet(t.furniture, drawText);
+	mkdirSync(dirname(FURNITURE_SHEET), { recursive: true });
+	writeFileSync(FURNITURE_SHEET, encodePNG(sheet, true));
+	console.log(`wrote ${FURNITURE_SHEET} (${sheet.w}x${sheet.h})`);
+}
+
 /** every texture magnified on one page, labelled, tiles shown 2 x 2 so the seams can be checked */
 function contactSheet() {
 	const zoom = 4;
@@ -2016,7 +2003,7 @@ function contactSheet() {
 	const cols = 5;
 	// the characters' sheets are hundreds of texels wide: they have their own pages (docs/art/characters)
 	const cells = textures
-		.filter(t => !t.character && t.atlas === undefined)
+		.filter(t => !t.character && t.atlas === undefined && t.furniture === undefined)
 		.map(t => {
 			const reps = t.kind === "tile" || t.kind === "tileTint" ? 2 : 1;
 			let z = zoom;
@@ -2095,6 +2082,7 @@ if (!process.argv.includes("--assets")) {
 	for (const f of readdirSync(OUT_DIR)) if (f.endsWith(".png") && !names.has(f)) unlinkSync(join(OUT_DIR, f));
 	writeFileSync(join(OUT_DIR, "manifest.json"), manifestJson(manifest));
 	writeIconAtlasModule();
+	writeFurnitureModule();
 	console.log(`world-art: ${textures.length} textures in ${OUT_DIR} (${(bytes / 1024).toFixed(1)} kB)`);
 	if (!process.argv.includes("--no-sheet")) contactSheet();
 }

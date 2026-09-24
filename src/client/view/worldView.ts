@@ -624,6 +624,7 @@ export class WorldView {
 		const x1 = v.maxX + 140;
 		const y1 = v.maxY + 140;
 		queryTown(world, x0, y0, x1, y1, list);
+		this.interior.useWorld(world);
 		let open = false;
 		if (world !== this.shadesFor) {
 			this.roofShades.clear();
@@ -682,8 +683,11 @@ export class WorldView {
 			if (!overlaps(s.x - 16, s.y - 16, s.w + 32, s.h + 32, v)) continue;
 			const bt = home?.buildingType ?? 1;
 			const house = bt === 1 || bt === 2;
-			if (s.kind === "furniture") this.interior.drawFurniture(r, cam, s);
-			else if (!this.drawWallArt(r, cam, s, house)) this.interior.drawWall(r, cam, s, house);
+			if (s.kind === "furniture") {
+				this.interior.drawFurniture(r, cam, s, bt);
+			} else if (!this.interior.drawWallArt(r, cam, s, house) && !this.drawWallArt(r, cam, s, house)) {
+				this.interior.drawWall(r, cam, s, house);
+			}
 		}
 	}
 
@@ -767,7 +771,7 @@ export class WorldView {
 			drawClipped(r, cam, q.x, q.y, q.w, q.h, v, { color: FLOOR_FLAT[q.floor], zIndex: Z.floor });
 		}
 		this.interior.drawDecor(r, cam, s, v);
-		this.interior.drawOpenings(r, cam, s, v, art);
+		this.interior.drawOpenings(r, cam, s, v);
 	}
 
 	/** the old single doormat and eave, for a building record without openings (tests' plain boxes) */
@@ -823,7 +827,7 @@ export class WorldView {
 		// doormats outside every door, and the glass under every broken window (EDI-18): read with the roof closed
 		if (s.openings !== undefined) {
 			this.interior.drawDoormats(r, cam, s, v, undefined);
-			this.interior.drawWindowShards(r, cam, s, v, false);
+			this.interior.drawWindowShards(r, cam, s, v);
 		} else {
 			this.drawPlainEntrance(r, cam, s, -1, BLACK);
 		}
@@ -1804,7 +1808,7 @@ export class WorldView {
 		// read even with the roof closed
 		if (s.openings !== undefined) {
 			this.interior.drawDoormats(r, cam, s, v, STEP);
-			this.interior.drawWindowShards(r, cam, s, v, true);
+			this.interior.drawWindowShards(r, cam, s, v);
 		} else {
 			this.drawPlainEntrance(r, cam, s, -1, BLACK);
 		}

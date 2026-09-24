@@ -20,10 +20,11 @@
  *   - it carried an `en` column. English is the SOURCE, not a translation of English into English, and the
  *     docs are explicit that you fill Source and may leave the other columns blank.
  *
- * So only Source is written here. Key, Context and Example are left blank for a human, and Context is the one
- * worth filling before turning automatic translation on: most of our strings are one or two words with no
- * sentence around them, and a machine translating "Round", "Use", "Drop" or "Melt" in isolation cannot know
- * we mean a magazine, an item action, discarding and smelting.
+ * Key and Example are left blank for a human. Context is not: most of our strings are one or two words with
+ * no sentence around them, and a machine translating "Round", "Use", "Drop" or "Melt" in isolation cannot know
+ * we mean a magazine, an item action, discarding and smelting. tools/locale-context.mjs is the hand-kept
+ * Source -> Context map for every such string this file found; it fails the build if one of its entries is
+ * no longer in LANG_TABLE (see the check below), so it cannot silently drift from what the game actually shows.
  *
  * Entries are case-sensitive on their side: "hello" and "Hello" are two different strings -- so a label drawn in
  * capitals is its own entry in lang.ts ("START"), never an entry upper-cased in code.
@@ -38,6 +39,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { CONTEXT } from "./locale-context.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SRC = join(ROOT, "src/shared/data/lang.ts");
@@ -83,12 +85,37 @@ if (rows.length === 0) {
 	process.exit(1);
 }
 
+/*
+ * tools/locale-context.mjs is a hand-kept map, and a hand-kept map rots: a string renamed or removed in
+ * lang.ts leaves a Context entry that describes something that no longer exists. Fail loudly rather than
+ * silently drop it, so the fix (update or delete the entry) happens right where the rename did.
+ */
+const known = new Set(rows);
+const stale = Object.keys(CONTEXT).filter(src => !known.has(src));
+if (stale.length > 0) {
+	console.error(
+		`tools/locale-context.mjs tem ${stale.length} entrada(s) que não existem mais em LANG_TABLE:\n` +
+			stale.map(s => `  ${JSON.stringify(s)}`).join("\n") +
+			"\n\nAtualize ou remova essas entradas em tools/locale-context.mjs.",
+	);
+	process.exit(1);
+}
+const tooLong = Object.entries(CONTEXT).filter(([, ctx]) => ctx.length > 80);
+if (tooLong.length > 0) {
+	console.error(
+		`tools/locale-context.mjs tem ${tooLong.length} Context com mais de 80 caracteres:\n` +
+			tooLong.map(([s, ctx]) => `  ${JSON.stringify(s)}: ${ctx.length} chars`).join("\n"),
+	);
+	process.exit(1);
+}
+
 const lines = [HEADER.join(",")];
-for (const text of rows) lines.push(["", "", "", cell(text)].join(","));
+for (const text of rows) lines.push(["", cell(CONTEXT[text] ?? ""), "", cell(text)].join(","));
 
 if (!existsSync(OUT_DIR)) mkdirSync(OUT_DIR, { recursive: true });
 writeFileSync(OUT, lines.join("\n") + "\n", "utf8");
-console.log(`${rows.length} textos -> ${OUT}`);
+const withContext = rows.filter(text => CONTEXT[text] !== undefined).length;
+console.log(`${rows.length} textos (${withContext} com Context) -> ${OUT}`);
 
 /*
  * --split N writes the same table in chunks.
@@ -112,6 +139,6 @@ if (splitAt >= 0) {
 }
 
 console.log(
-	"\nantes de ligar a tradução automática: preencha a coluna Context das entradas de uma ou duas palavras.\n" +
-		'"Round" (carregador), "Use", "Drop", "Melt" e "Learn" não têm como ser traduzidos sem ela.',
+	"\nachou um texto ambíguo sem Context (uma palavra comum como nome de item, ou termo próprio do jogo)?\n" +
+		"adicione o par Source -> Context em tools/locale-context.mjs.",
 );

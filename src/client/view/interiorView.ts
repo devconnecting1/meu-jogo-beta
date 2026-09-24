@@ -3,8 +3,10 @@
  * of doorways and windows, and the marks that show a building's entrances and windows from outside with the roof
  * on. The plan itself is shared/game/interiors.ts; client/view/worldView.ts calls in here.
  *
- * Everything is drawn with plain Frames in the palette of shared/engine/colors.ts (ART colours, never UI tokens):
- * it looks right with no uploaded asset at all, next to the flat town or the textured one.
+ * Everything here is drawn with plain Frames in the palette of shared/engine/colors.ts (ART colours, never UI
+ * tokens): it looks right with no uploaded asset at all, next to the flat town or the textured one. With the
+ * interiors' atlas uploaded, each piece, decoration and frame is drawn by client/view/interiorArt.ts instead (the
+ * town's pixel art, ART-12), and falls back here on its own when its texture has no id (ART-01).
  *
  * Culling: an interior under a roof that is on is never drawn -- not its floors, walls, furniture, decoration or
  * frames (worldView asks `roofOpaque` first). A closed roof covers the whole footprint, so that costs nothing to
@@ -20,8 +22,7 @@ import type { Decor, FloorKind, Opening } from "shared/game/interiors";
 import { Solid, WorldData } from "shared/game/world";
 import { windowIntact } from "shared/game/windows";
 import { overlaps, SIDES } from "./drawKit";
-import { artId } from "./worldArt";
-import type { WorldArtName } from "./worldArtAssets";
+import { InteriorArt } from "./interiorArt";
 
 const BLACK = COLORS.shadow;
 const WHITE = COLORS.white;
@@ -57,10 +58,8 @@ const PANE_ALPHA = 0.62;
 const GLINT = COLORS.glassCold.Lerp(WHITE, 0.7);
 /** a broken window's mark on the roof's edge: the dark room seen through the empty frame, darker than glass */
 const HOLE_DARK = COLORS.carGlass.Lerp(BLACK, 0.55);
-/** the shards on the ground: this far out of the wall's face (their decal's middle), and the decal's size */
+/** the shards on the ground: this far out of the wall's face (their decal's middle) */
 const SHARD_OFF = 20;
-const SHARDS_LONG = 64;
-const SHARDS_WIDE = 32;
 /**
  * Their layer: the ground's own detail with the doormats, under the blood (Z.decal) and every item and body. Not
  * Z.decal itself: the town's sprites drawn after the fight's blood in that sub-pool would turn a blood decal's birth
@@ -126,6 +125,13 @@ export class InteriorView {
 	/** building records by id, for the walls and furniture that name their parent (built once per world) */
 	private readonly parents = new Map<number, Solid>();
 	private parentsFor?: WorldData;
+	/** the pixel-art drawing of all of it, used where its textures have ids (ART-01) */
+	readonly art = new InteriorArt();
+
+	/** the world the frame's interiors are drawn in (worldView, once per frame): the art's plans are per world */
+	useWorld(world: WorldData): void {
+		this.art.useWorld(world);
+	}
 
 	/** the building a wall, window or piece of furniture belongs to */
 	parentOf(world: WorldData, s: Solid): Solid | undefined {
@@ -153,8 +159,20 @@ export class InteriorView {
 		r.drawRect(cam, s.x + s.w / 2, s.y + s.h / 2, o);
 	}
 
-	/** one piece of furniture: a body and a detail or two, lit from the top left like the rest of the town */
-	drawFurniture(r: Renderer, cam: Camera, s: Solid): void {
+	/**
+	 * A building's wall in the town's pixel art -- outlined as one piece with the walls it joins, the shadow at its
+	 * foot -- or false when the `wall` texture has no id (then worldView draws it as before).
+	 */
+	drawWallArt(r: Renderer, cam: Camera, s: Solid, house: boolean): boolean {
+		return this.art.wall(r, cam, s, house);
+	}
+
+	/**
+	 * One piece of furniture in a building of type `bt`: its cell of the interiors' atlas when that is uploaded,
+	 * else a body and a detail or two in Frames, lit from the top left like the rest of the town.
+	 */
+	drawFurniture(r: Renderer, cam: Camera, s: Solid, bt = 1): void {
+		if (this.art.furniture(r, cam, s, bt)) return;
 		const t = s.tags;
 		const cx = s.x + s.w / 2;
 		const cy = s.y + s.h / 2;
@@ -476,7 +494,7 @@ export class InteriorView {
 		if (list === undefined) return;
 		for (const d of list) {
 			if (!overlaps(d.x, d.y, d.w, d.h, v)) continue;
-			this.drawOneDecor(r, cam, d);
+			if (!this.art.decor(r, cam, b, d)) this.drawOneDecor(r, cam, d);
 		}
 	}
 
@@ -542,23 +560,26 @@ export class InteriorView {
 
 	/**
 	 * The frames of the building's openings, seen from inside: a threshold under a doorway, a window with its glass in
-	 * or broken (EDI-18) and, under a broken one, the glass on the floor. `art`: the town is textured (the window's
-	 * pixel art, each texture falling back to these Frames on its own, ART-01).
+	 * or broken (EDI-18) and, under a broken one, the glass on the floor. Each is the interiors' atlas cell when that is
+	 * uploaded (client/view/interiorArt.ts: the pane or the empty frame, and the shards) and these Frames otherwise.
 	 */
-	drawOpenings(r: Renderer, cam: Camera, b: Solid, v: ViewRect, art = false): void {
+	drawOpenings(r: Renderer, cam: Camera, b: Solid, v: ViewRect): void {
 		const list = b.openings;
 		if (list === undefined) return;
 		for (const o of list) {
-			if (!overlaps(o.x - 40, o.y - 40, o.w + 80, o.h + 80, v)) continue;
-			this.drawOpening(r, cam, o, art);
+			// a window's shards lie up to ~40 u off its sill: the frame is culled with them
+			const m = o.kind === "window" ? 40 : 8;
+			if (!overlaps(o.x - m, o.y - m, o.w + 2 * m, o.h + 2 * m, v)) continue;
+			this.drawOpening(r, cam, o);
 		}
 	}
 
-	private drawOpening(r: Renderer, cam: Camera, o: Opening, art: boolean): void {
+	private drawOpening(r: Renderer, cam: Camera, o: Opening): void {
 		const cx = o.x + o.w / 2;
 		const cy = o.y + o.h / 2;
 		const along = o.w >= o.h;
 		if (o.kind !== "window") {
+			if (this.art.opening(r, cam, o)) return;
 			// a threshold strip across a doorway
 			const t = o.kind === "door" ? COLORS.furnDark : COLORS.furnWood;
 			const s = flat(along ? o.w : 6, along ? 6 : o.h, t, Z.floorDetail);
@@ -568,24 +589,9 @@ export class InteriorView {
 		}
 		const intact = paneIntact(o);
 		// the glass on the floor inside a broken one (outside it is drawn with the roof on too: `drawWindowShards`)
-		if (!intact) this.drawShards(r, cam, o, -1, art);
-		// the pixel art: the frame and the pane with its reflection, or the frame and what is left of the glass
-		const name: WorldArtName = intact
-			? along
-				? "windowGlassH"
-				: "windowGlassV"
-			: along
-				? "windowBrokenH"
-				: "windowBrokenV";
-		const id = art ? artId(name) : undefined;
-		if (id !== undefined) {
-			const s = flat(o.w, o.h, WHITE, Z.structure + 1);
-			s.color = undefined;
-			s.image = id;
-			s.pixelated = true;
-			r.drawRect(cam, cx, cy, s);
-			return;
-		}
+		if (!intact) this.drawShards(r, cam, o, -1);
+		// the atlas: the frame and the whole pane with its reflection, or the frame and what is left of the glass
+		if (this.art.opening(r, cam, o, intact)) return;
 		// a window: the frame on both faces of the wall, the sill between them, and the glass -- the pane with a streak of
 		// light on it, or what is left of it
 		const len = along ? o.w : o.h;
@@ -619,31 +625,24 @@ export class InteriorView {
 	 * in the street, and it is how a survivor reads from outside which windows are open frames. A decal (COL-02, ART-04):
 	 * a few pale shards, never white, nothing that reads as loot.
 	 */
-	drawWindowShards(r: Renderer, cam: Camera, b: Solid, v: ViewRect, art = false): void {
+	drawWindowShards(r: Renderer, cam: Camera, b: Solid, v: ViewRect): void {
 		const list = b.openings;
 		if (list === undefined) return;
 		for (const o of list) {
 			if (o.kind !== "window" || paneIntact(o)) continue;
 			if (!overlaps(o.x - 48, o.y - 48, o.w + 96, o.h + 96, v)) continue;
-			this.drawShards(r, cam, o, 1, art);
+			this.drawShards(r, cam, o, 1);
 		}
 	}
 
 	/** the shards of window `o` on the ground outside it (`sgn` 1) or on the floor inside (-1) */
-	private drawShards(r: Renderer, cam: Camera, o: Opening, sgn: number, art: boolean): void {
+	private drawShards(r: Renderer, cam: Camera, o: Opening, sgn: number): void {
 		const along = o.w >= o.h;
 		const off = sgn * ((along ? o.h : o.w) / 2 + SHARD_OFF);
 		const cx = o.x + o.w / 2 + normalX(o.side) * off;
 		const cy = o.y + o.h / 2 + normalY(o.side) * off;
-		const id = art ? artId(along ? "glassShardsH" : "glassShardsV") : undefined;
-		if (id !== undefined) {
-			const s = flat(along ? SHARDS_LONG : SHARDS_WIDE, along ? SHARDS_WIDE : SHARDS_LONG, WHITE, Z_SHARDS);
-			s.color = undefined;
-			s.image = id;
-			s.pixelated = true;
-			r.drawRect(cam, cx, cy, s);
-			return;
-		}
+		// the atlas's broken-glass cell (the decoration the plan used to scatter under a window)
+		if (this.art.shards(r, cam, o, sgn, cx, cy, Z_SHARDS)) return;
 		// flat: three chips along the sill, the broken-glass decal of the plan's old drawing
 		for (let q = 0; q < 3; q++) {
 			const s = flat(8, 5, COLORS.glassCold, Z_SHARDS);

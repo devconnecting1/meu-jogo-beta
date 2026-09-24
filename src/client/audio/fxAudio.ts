@@ -5,13 +5,15 @@
  * events into particles, camera shake and HUD messages; this module turns the same events into sound, so
  * audio needs no new plumbing in the systems.
  *
- * Two modes, because of WHERE the events can be read today:
- *  - "leftover" (default): `GameLoop.playFx` consumes and CLEARS `refs.fx` at the end of `update()`, so a
- *    reader outside the loop only ever sees events pushed after that point (crafting from the backpack,
- *    admin tools, interaction). In this mode only `debris` is played from the channel; shots, flesh hits,
- *    deaths and the player's own damage come from the state watcher in gameAudio.ts, which sees all of them.
- *  - "full": every event is played from the channel and gameAudio stops deriving them. Switch to this the
- *    day `GameLoop.playFx` calls `playFxEvent(e)` for each event (one line, see the report).
+ * The channel has ONE reader: client/view/fxView.ts `applySim` calls `playFxEvent(e)` for every event, in both of
+ * GameLoop's `playFx` (update and render), right before it clears the list. Nothing else may read `refs.fx` for sound:
+ * the run watcher used to drain it too, before render, and every event pushed between update and render (a door, an
+ * admin tool) was heard twice (DESIGN_RULES SND-04).
+ *
+ * Two modes for what the channel carries:
+ *  - "leftover" (default): only `sound` and `debris` are played from the channel; shots, flesh hits, deaths and the
+ *    player's own damage come from the state watcher in gameAudio.ts, which sees all of them.
+ *  - "full": every event is played from the channel and gameAudio stops deriving them.
  *
  * `message` is never played here: HUD messages always reach the client through `refs.onMessage`, which is
  * where gameAudio listens for the wave / dawn stingers. Playing them here too would double every stinger.
@@ -133,13 +135,4 @@ export function playFxEvent(e: FxEvent): void {
 		// shake is purely visual; a blast that deserves a sound already pushes its own debris/blood
 		if (e.player !== localSlot) return;
 	}
-}
-
-/**
- * Reads (without clearing) every event still queued in `refs.fx` and plays its sound. Call it once per
- * frame, right before `GameLoop.render()` — render's own `playFx` clears the list straight after, so no
- * event is ever heard twice.
- */
-export function drainFxAudio(fx: ReadonlyArray<FxEvent>): void {
-	for (const e of fx) playFxEvent(e);
 }
