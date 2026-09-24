@@ -200,9 +200,9 @@ export function snapToOpening(world: WorldData, def: PlaceableDef, r: PlaceRect)
 }
 
 /**
- * The opening whose gap starts exactly at (x, y), if any. A construction snapped into an opening travels in its
- * `SolidAdd` as a placeable, a position and a rotation -- not a size -- so a mirror of the world rebuilds its
- * rect with this (docs/MULTIPLAYER.md §4.5; the client does not materialise SolidAdd yet, MP_PHASE < 3).
+ * The doorway or window whose gap starts at (x, y), if any (within the wire's half unit). A construction snapped
+ * into one travels in its `SolidAdd` as a placeable, a position and a rotation -- not a size -- so the client's
+ * mirror of the world rebuilds its rect with this (client/net/worldMirror.ts; docs/MULTIPLAYER.md §4.5).
  */
 export function openingAt(world: WorldData, x: number, y: number): PlaceRect | undefined {
 	for (const s of querySolids(world, x - 1, y - 1, x + 1, y + 1)) {
