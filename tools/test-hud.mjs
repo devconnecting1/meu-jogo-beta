@@ -22,7 +22,9 @@
  *  4. the texts: "HP 88 / 100", "FOOD 58 / 100", "LV 3 · 30 / 120", the ammo chip -- and the sky (4b): the world's
  *     day, the countdown to nightfall ("Night in 2:14") and at night to daybreak, in real seconds, the sun / moon on
  *     its arc and the horde's pips, the red pulse of the last 30 s (still with Reduce Motion), and the life's day only
- *     when it differs from the world's (MP-13 / MP-20); no text carries a contour (UI-04); with Reduce Motion
+ *     when it differs from the world's (MP-13 / MP-20); the weather's pixel icon (LUZ-05: rain, storm, fog while there
+ *     is fog, nothing on a clear day), never on the sun's path, on the desktop and the touch sky, without churn; no
+ *     text carries a contour (UI-04); with Reduce Motion
  *     nothing throbs: low HP holds its fill lit, low food holds it red, the low-HP vignette holds one value;
  *  4c. a hit lights the HP bar's relief and the damage vignette -- in a server session (MP_PHASE 2) too, where the
  *     bite is the server's: its own self block, over the wire format, read back by the client's prediction;
@@ -886,6 +888,26 @@ console.log("\n4d) VIT-01: o HP brilha enquanto cura; um garfo na FOOD quando so
 	hud.update(state());
 }
 
+/** the hours (every quarter) at which the sky's weather icon overlaps the sun or the moon: "" = never (LUZ-05) */
+function weatherOnArc(groove) {
+	const box = f => {
+		const ax = f.AnchorPoint?.X ?? 0;
+		const ay = f.AnchorPoint?.Y ?? 0;
+		const x = f.Position.X.Scale - ax * f.Size.X.Scale;
+		const y = f.Position.Y.Scale - ay * f.Size.Y.Scale;
+		return [x, y, x + f.Size.X.Scale, y + f.Size.Y.Scale];
+	};
+	const icon = box(deep(groove(), "Weather"));
+	let hit = "";
+	for (let t = 0; t < 24; t += 0.25) {
+		hud.update(state({ dayTime: t, isNight: Clock.isNightAt(t), weather: 2 }));
+		const b = box(deep(groove(), "Body"));
+		if (b[0] < icon[2] && icon[0] < b[2] && b[1] < icon[3] && icon[1] < b[3]) hit += ` ${t}h`;
+	}
+	hud.update(state());
+	return hit;
+}
+
 // ---------------------------------------------------------------- 4b) the sky (the day clock, hudSky.ts)
 
 console.log("\n4b) o ceu: o relogio do dia virou uma secao do console (UI-09)\n");
@@ -1039,6 +1061,45 @@ const skyIdle = phase("60 quadros no mesmo segundo do relogio", () => {
 	for (let i = 0; i < 60; i++) hud.update(state({ dayTime: 12 }));
 });
 check("o ceu parado nao escreve nada", skyIdle.writes === 0 && zero(skyIdle), cost(skyIdle));
+
+// LUZ-05: the weather's pixel icon, in the groove's corner the arc never crosses
+{
+	const shown = () => {
+		const w = deep(sky(), "Weather");
+		if (w === undefined || !w.Visible) return "none";
+		for (const n of ["Rain", "Storm", "Fog"]) if (deep(w, n)?.Visible) return n;
+		return "?";
+	};
+	const seen = [];
+	for (const [weather, fog, dayTime] of [
+		[0, 0, 12],
+		[1, 0, 12],
+		[2, 0, 12],
+		[3, 1, 6],
+		[3, 0, 12],
+		[4, 0.7, 12],
+	]) {
+		hud.update(state({ dayTime, weather, fog }));
+		seen.push(shown());
+	}
+	check(
+		"o clima (LUZ-05): nada num dia limpo; nuvem com gotas na chuva, com raio na tempestade, faixas na neblina; a neblina da manha some quando levanta",
+		seen.join(" ") === "none Rain Storm Fog none Fog",
+		seen.join(" "),
+	);
+	// the icon never sits on the path of the sun or the moon, at any hour
+	const hit = weatherOnArc(sky);
+	check("o icone nunca fica debaixo do sol ou da lua, a qualquer hora", hit === "", hit || "livre o dia todo");
+	hud.update(state({ dayTime: 12, weather: 2 }));
+	const still = phase("600 quadros de tempestade", () => {
+		for (let i = 0; i < 600; i++) hud.update(state({ dayTime: 12, weather: 2 }));
+	});
+	check("a tempestade parada nao escreve nada no ceu", still.writes === 0 && zero(still), cost(still));
+	const cycle = phase("600 quadros trocando de clima", () => {
+		for (let i = 0; i < 600; i++) hud.update(state({ dayTime: 12, weather: i % 5, fog: i % 5 >= 3 ? 0.8 : 0 }));
+	});
+	check("trocar de clima so mostra e esconde: nenhuma Instance criada ou destruida", zero(cycle), cost(cycle));
+}
 hud.update(state());
 
 // UI-04: no contour on any text of the HUD
@@ -1369,6 +1430,11 @@ const touchMount = phase("monta a HUD (toque, 1120x630)", () => {
 	hud.update(state());
 });
 console.log(`  (montar no toque custa ${touchMount.created} Instances)`);
+{
+	const touchSky = () => deep(deep(hudRoot(), "SkyPlate"), "SkyWindow");
+	const hit = weatherOnArc(touchSky);
+	check("no toque, o icone do clima tambem nunca fica sob o sol ou a lua (LUZ-05)", hit === "", hit || "livre");
+}
 check(
 	"no toque: barras e hotbar so; Bag e Menu sao do toque (cantos de cima)",
 	consoleFrame() !== undefined &&

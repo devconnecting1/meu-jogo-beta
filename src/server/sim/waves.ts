@@ -19,11 +19,16 @@
  * `onWaveFill` and splits the very same promised total across the clusters, so the night's headcount is decided
  * here, in one place, whatever the group does.
  *
+ * The weather (docs/DESIGN_RULES.md LUZ-05) is decided HERE too, once per world day: a pure hash of the town's seed and
+ * the day (shared/sim/weather.ts `weatherOfDay`), injectable for a test, overridable by the admin, and sent to every
+ * client as the Clock delta's weather byte. What the hour does with it -- the fog of a morning, a lightning flash, a
+ * thunderclap -- is the same pure function on both sides; this clock exposes it to the horde (`fog`, `thunderMask`,
+ * and the flash inside `darkAlpha`) exactly as the client's clock exposes it to the screen.
+ *
  * Pure module: no Instances, no services, no os.clock, no RunService. The caller feeds `step(dt)` once per
- * simulation tick and drains the events; the only randomness is the daily rain roll, which is injectable.
+ * simulation tick and drains the events; nothing here is random: the weather is a hash, and a test can script it.
  */
 import { DESIGN } from "shared/engine/constants";
-import { chance } from "shared/engine/rng";
 import { getDayPopulation } from "shared/data/spawns";
 import { difficultyOfDay } from "shared/game/save";
 import { CLOCK_RESYNC_S } from "shared/net/mpConfig";
@@ -36,15 +41,23 @@ import {
 	WAVE_FILL_FROM,
 	advanceClock,
 	crossed,
-	darkAlphaAt,
 	inWaveFillWindow,
 	isNightAt,
 	normalizeClock,
-	rainPossible,
 	soundMattersAt,
 	waveActive,
 	waveFlagsAt,
 } from "shared/sim/clock";
+import {
+	Weather,
+	fogDensityAt,
+	isWeather,
+	stormFlashAt,
+	thunderMaskAt,
+	weatherDark,
+	weatherOfDay,
+	weatherRains,
+} from "shared/sim/weather";
 
 /** the night's promised headcount, the moment it is decided (§3.5 splits it per cluster) */
 export interface WaveFill {
@@ -71,8 +84,15 @@ export interface WorldClockOptions {
 	/** hour the server starts at; a run opens at 07:00 like the original */
 	dayTime?: number;
 	/**
-	 * Rain roll for a new day, injected so a test can script the weather. The default is the original's:
-	 * 10 % of days, never in the first four (`if day<=4 weather = 0`).
+	 * The town's seed: the day's weather is a hash of it and the day (shared/sim/weather.ts `weatherOfDay`), so the same
+	 * town has the same weather on the same day. DESIGN.TOWN_SEED when left out (every server opens that town).
+	 */
+	seed?: number;
+	/** the weather of a new day, injected so a test can script it (a `Weather` value); default `weatherOfDay` */
+	rollWeather?: (day: number) => number;
+	/**
+	 * The older script: rain or not. Used only when `rollWeather` is left out -- `() => false` is a world of clear days,
+	 * no fog, no storm, which is what the suites written before the weather mean by it.
 	 */
 	rollRain?: (day: number) => boolean;
 }
@@ -103,6 +123,16 @@ export class WorldClock implements AiClock {
 	darkAlpha = 0;
 	isNight = false;
 	isRaining = false;
+	/** the day's weather (shared/sim/weather.ts `Weather`); `isRaining` follows it */
+	weather: number = Weather.Clear;
+	/** fog density now (0..1): the horde's eyes shrink with it (LUZ-05) */
+	fog = 0;
+	/** what a noise carries now besides the rain: < 1 while a thunderclap rolls (LUZ-05) */
+	thunderMask = 1;
+	/** the lightning now (0..1), already inside `darkAlpha` */
+	flash = 0;
+	/** the seed the day's weather is rolled from (the town's, MP-22: a new town, new skies) */
+	weatherSeed: number = DESIGN.TOWN_SEED;
 	ambientTarget = 5;
 	ambientSpecialMax = 0;
 	waveQueues: Array<number> = [0, 0, 0];
@@ -135,32 +165,37 @@ export class WorldClock implements AiClock {
 	 */
 	onClockSet?: () => void;
 
-	private readonly rollRain: (day: number) => boolean;
+	private readonly rollWeather?: (day: number) => number;
 	/** the 18:00–18:30 fill happens once per night */
 	private fillDone = false;
 	/** seconds since the last Clock delta went out (§4.5: at least every CLOCK_RESYNC_S) */
 	private sinceSend = CLOCK_RESYNC_S;
 	/** what the last Clock delta said, so a change can be detected without re-encoding it */
 	private sentDay = -1;
-	private sentRain = false;
+	private sentWeather = -1;
 	private sentFlags = -1;
 	/** an admin moved something the change detection cannot see (the hour inside one segment) */
 	private forceSend = false;
 	private readonly pending = new Array<WorldAnnouncement>();
 
 	constructor(options: WorldClockOptions = {}) {
-		this.rollRain = options.rollRain ?? defaultRainRoll;
+		const rain = options.rollRain;
+		this.rollWeather =
+			options.rollWeather ??
+			(rain !== undefined ? (day: number) => (rain(day) ? Weather.Rain : Weather.Clear) : undefined);
+		if (options.seed !== undefined) this.weatherSeed = options.seed;
 		this.restart(options.day, options.dayTime);
 	}
 
 	/**
-	 * A clock as a new server opens it — day `day` (1) at `dayTime` (07:00), the day's rain rolled, no night
+	 * A clock as a new server opens it — day `day` (1) at `dayTime` (07:00), the day's weather rolled, no night
 	 * promised, nothing waiting to be announced — WITHOUT a new object: the horde, the simulation and the
 	 * replication all hold this one, and so do the `onNewDay` / `onWaveFill` subscriptions (MP-22: the world that
 	 * ended gives way to a new one on day 1; server/sim/worldReset.ts). The next Clock delta goes out at once, so
-	 * every client jumps to the new hour instead of easing towards it.
+	 * every client jumps to the new hour instead of easing towards it. `seed`: the new town's, whose skies it rolls.
 	 */
-	restart(day = 1, dayTime = 7): void {
+	restart(day = 1, dayTime = 7, seed?: number): void {
+		if (seed !== undefined) this.weatherSeed = seed;
 		this.day = math.max(1, math.floor(day));
 		this.dayTime = math.clamp(dayTime, 0, HOURS_PER_DAY - 1e-6);
 		for (let i = 0; i < 3; i++) {
@@ -171,8 +206,19 @@ export class WorldClock implements AiClock {
 		this.fillDone = false;
 		this.pending.clear();
 		this.forceSend = true;
-		this.isRaining = this.rollRain(this.day);
+		this.setDayWeather(this.rollDay(this.day));
 		this.refresh();
+	}
+
+	/**
+	 * The town's seed, from boot on (server/net/mpHost.ts: the first town may not be DESIGN.TOWN_SEED): today's weather
+	 * is rolled again from it. Only before anybody lives the day -- a boot, a new town (`restart` takes the seed then).
+	 */
+	reseedWeather(seed: number): void {
+		this.weatherSeed = seed;
+		this.setDayWeather(this.rollDay(this.day));
+		this.forceSend = true;
+		this.updateDark();
 	}
 
 	// ---------------------------------------------------------------- the tick (§3.1 step 2)
@@ -213,18 +259,21 @@ export class WorldClock implements AiClock {
 	// ---------------------------------------------------------------- replication (§4.5, §4.6)
 
 	/**
-	 * The Clock delta when one is due — a change of day, rain or wave flags, or CLOCK_RESYNC_S since the last
+	 * The Clock delta when one is due — a change of day, weather or wave flags, or CLOCK_RESYNC_S since the last
 	 * one — and undefined otherwise. Call it once per tick and queue whatever comes back for everyone.
 	 */
 	clockEvent(tick: number): WClock | undefined {
 		const flags = waveFlagsAt(this.dayTime);
 		const changed =
-			this.forceSend || this.day !== this.sentDay || this.isRaining !== this.sentRain || flags !== this.sentFlags;
+			this.forceSend ||
+			this.day !== this.sentDay ||
+			this.weather !== this.sentWeather ||
+			flags !== this.sentFlags;
 		if (!changed && this.sinceSend < CLOCK_RESYNC_S) return undefined;
 		this.forceSend = false;
 		this.sinceSend = 0;
 		this.sentDay = this.day;
-		this.sentRain = this.isRaining;
+		this.sentWeather = this.weather;
 		this.sentFlags = flags;
 		return this.clockEventNow(tick);
 	}
@@ -241,6 +290,7 @@ export class WorldClock implements AiClock {
 			dayTime: this.dayTime,
 			tick,
 			rain: this.isRaining,
+			weather: this.weather,
 			waveFlags: waveFlagsAt(this.dayTime),
 		};
 	}
@@ -281,7 +331,13 @@ export class WorldClock implements AiClock {
 	}
 
 	setRain(on: boolean): void {
-		this.isRaining = on;
+		this.setWeather(on ? Weather.Rain : Weather.Clear);
+	}
+
+	/** the admin's weather (§10): today's, until midnight rolls the next day's; the next Clock delta goes out at once */
+	setWeather(kind: number): void {
+		if (!isWeather(kind)) return;
+		this.setDayWeather(kind);
 		this.forceSend = true;
 		this.updateDark();
 	}
@@ -312,7 +368,7 @@ export class WorldClock implements AiClock {
 
 	// ---------------------------------------------------------------- internals
 
-	/** everything that is a pure function of (day, dayTime, rain), with no crossing detection */
+	/** everything that is a pure function of (day, dayTime, weather), with no crossing detection */
 	private refresh(): void {
 		this.isNight = isNightAt(this.dayTime);
 		this.refreshPopulation();
@@ -322,7 +378,7 @@ export class WorldClock implements AiClock {
 
 	/** midnight: a new world day, new weather and a new quota (§3.6 pays the survivors through onNewDay) */
 	private startDay(): void {
-		this.isRaining = this.rollRain(this.day);
+		this.setDayWeather(this.rollDay(this.day));
 		this.refreshPopulation();
 		if (this.onNewDay !== undefined) this.onNewDay(this.day);
 	}
@@ -351,19 +407,34 @@ export class WorldClock implements AiClock {
 		this.wave3Active = waveActive(3, this.dayTime);
 	}
 
+	/** the weather a new day `day` gets: the script's, or the town's own roll */
+	private rollDay(day: number): number {
+		const roll = this.rollWeather;
+		if (roll !== undefined) {
+			const kind = roll(day);
+			return isWeather(kind) ? kind : Weather.Clear;
+		}
+		return weatherOfDay(this.weatherSeed, day);
+	}
+
+	private setDayWeather(kind: number): void {
+		this.weather = kind;
+		this.isRaining = weatherRains(kind);
+	}
+
 	/**
-	 * The world's darkness, WITHOUT anybody's "Nocturnal" skill: on a server the night is one night. That
+	 * The world's darkness and weather, WITHOUT anybody's "Nocturnal" skill: on a server the night is one night. That
 	 * skill is per survivor, so it stays where it belongs — the client applies it to what it draws, and the
-	 * horde's perception applies it per survivor from that survivor's own save (§3.3).
+	 * horde's perception applies it per survivor from that survivor's own save (§3.3). The lightning is IN it: a flash
+	 * lights the town for the horde's eyes and for the §4.3 interest as it does on every screen (LUZ-05).
 	 */
 	private updateDark(): void {
-		this.darkAlpha = darkAlphaAt(this.dayTime, this.isRaining, false);
+		const kind = this.weather;
+		this.fog = fogDensityAt(kind, this.dayTime);
+		this.thunderMask = thunderMaskAt(kind, this.day, this.dayTime);
+		this.flash = stormFlashAt(kind, this.day, this.dayTime);
+		this.darkAlpha = weatherDark(kind, this.dayTime, false, this.flash);
 	}
-}
-
-/** original: 10 % rainy days, but never during the first four (`if day<=4 weather = 0`) */
-function defaultRainRoll(day: number): boolean {
-	return rainPossible(day) && chance(DESIGN.WEATHER_PERCENT);
 }
 
 /** CLOCK_ANNOUNCEMENTS carries the text; the wire carries an AnnounceKind and an argument (§4.5) */

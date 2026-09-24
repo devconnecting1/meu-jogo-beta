@@ -38,8 +38,8 @@
  *     is split into several packets (never truncated); an event that cannot fit alone is dropped and counted.
  *  8. WorldInit = World batches whose first event is InitBegin{mapHash, seed, tick0Time, simHz, chunk, chunks},
  *     followed by the ordinary SolidAdd/DoorSet/LightSet/ItemAdd/Clock deltas. Clock dayTime is hours × 2048
- *     (u16, < 24 h); rain is a boolean. Solid and item ids are u32; SolidAdd/ItemAdd/ItemRemove ids must be
- *     dynamic (≥ 1 000 000). Item velocity is i16 in 1/8 u/s. User ids are f64 (Roblox ids exceed 2^32 and
+ *     (u16, < 24 h); the weather is a u8 (note 21). Solid and item ids are u32; SolidAdd/ItemAdd/ItemRemove ids
+ *     must be dynamic (≥ 1 000 000). Item velocity is i16 in 1/8 u/s. User ids are f64 (Roblox ids exceed 2^32 and
  *     Studio test players are negative). Display names: u8 length, ≤ 80 bytes, cut on a UTF-8 boundary.
  *  9. Clock sync follows §4.6: the source of truth is workspace:GetServerTimeNow() with tick0Time from
  *     InitBegin/LoadAck (serverTickAt). TimePing/TimePong is an extra, optional probe (not in the doc) to
@@ -125,6 +125,13 @@
  *       - The survivor's own hands: the wallet's `bag` (shared/game/save.ts `BagMirror`) carries `holster` 0 / 1 next
  *         to `ack`, so the client's prediction is laid over the server's answer by the nonce, like every verb's
  *         (client/net/bagPrediction.ts `rebase`). `readBag` clamps it; a bag without it reads 0, drawn. Never saved.
+ * 21. (LUZ-05, the weather) No new message and no byte more: the Clock delta's rain boolean becomes the day's WEATHER,
+ *     a u8 in the same place -- 0 clear and 1 rain as before, 2 storm, 3 fog at dawn, 4 fog all day (shared/sim/weather.ts
+ *     `Weather`). The decoder refuses anything above WEATHER_MAX (a malformed delta, like a bool of 2 was), and derives
+ *     `rain` (rain or storm) for every reader of the old field. Everything the hour does with the weather -- the fog's
+ *     density, a lightning flash, a thunderclap -- is a pure function of (weather, worldDay, dayTime) that client and
+ *     server compute alike, so it costs nothing on the wire; the delta still goes out on a change (the weather changes at
+ *     midnight, or by the admin) and every CLOCK_RESYNC_S, as before.
  */
 import {
 	NetReader,
@@ -166,6 +173,7 @@ import { POWER_STATE_MASK, powerFlying } from "shared/data/power";
 import { TITLE_WIRE_MAX } from "shared/data/titles";
 import { SAVE_LIMITS } from "shared/game/save";
 import { rideKeyValid } from "shared/sim/rideKey";
+import { Weather, isWeather, weatherRains } from "shared/sim/weather";
 
 // ================================================================ remotes (§4.1)
 
@@ -1427,6 +1435,13 @@ export const ROT_MAX = 3;
 export const ITEM_VEL_SCALE = 8;
 /** Clock.dayTime: hours × 2048 */
 export const CLOCK_HOUR_SCALE = 2048;
+
+/** the Clock delta's weather byte (note 21): the weather, or for a caller that only knows the rain, 1 / 0 */
+function clockWeatherByte(e: WClock): number {
+	const w = e.weather;
+	if (w !== undefined && isWeather(w)) return w;
+	return e.rain ? Weather.Rain : Weather.Clear;
+}
 /** display name bytes (Roblox display names are ≤ 20 characters) */
 export const NAME_MAX_BYTES = 80;
 /** entries per SolidHp event */
@@ -1575,7 +1590,13 @@ export interface WClock {
 	dayTime: number;
 	/** tick (u16) at which the clock was sampled */
 	tick: number;
+	/** it rains (Rain or Storm): what the byte meant before the weather, kept for every reader of that day */
 	rain: boolean;
+	/**
+	 * The day's weather (shared/sim/weather.ts `Weather`, 0..WEATHER_MAX), in the byte that was the rain boolean
+	 * (note 21). The decoder always fills it; an encoder handed only `rain` writes 1 or 0 for it.
+	 */
+	weather?: number;
 	/** raw wave bits (F2) */
 	waveFlags: number;
 }
@@ -1776,7 +1797,7 @@ function writeWorldEvent(w: NetWriter, e: WorldEvent): void {
 			w.u16(clampInt(e.worldDay, 1, 65535));
 			w.u16(roundClamp(e.dayTime * CLOCK_HOUR_SCALE, 0, 24 * CLOCK_HOUR_SCALE - 1));
 			w.tick16(e.tick);
-			w.bool(e.rain);
+			w.u8(clockWeatherByte(e));
 			w.u8(e.waveFlags);
 			break;
 		case WorldEv.Announce:
@@ -1910,10 +1931,11 @@ function readWorldEvent(r: NetReader): WorldEvent | undefined {
 		const worldDay = r.u16();
 		const dayQ = r.u16();
 		const tick = r.u16();
-		const rain = r.bool();
+		const weather = r.u8();
 		const waveFlags = r.u8();
-		if (worldDay < 1 || dayQ >= 24 * CLOCK_HOUR_SCALE) return undefined;
-		return { t: WorldEv.Clock, worldDay, dayTime: dayQ / CLOCK_HOUR_SCALE, tick, rain, waveFlags };
+		if (worldDay < 1 || dayQ >= 24 * CLOCK_HOUR_SCALE || !isWeather(weather)) return undefined;
+		const rain = weatherRains(weather);
+		return { t: WorldEv.Clock, worldDay, dayTime: dayQ / CLOCK_HOUR_SCALE, tick, rain, weather, waveFlags };
 	} else if (t === WorldEv.Announce) {
 		const msg = r.u8();
 		const arg = r.u16();

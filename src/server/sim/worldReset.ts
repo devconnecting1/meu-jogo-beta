@@ -178,7 +178,7 @@ export function endWorld(
 	const mapHash = mapHashOf(world);
 	// everything that can fail comes first, and changes nothing until it has all succeeded (step 3): a throw from
 	// here out leaves the old world exactly as it was
-	parts.sim.restartWorld(world);
+	parts.sim.restartWorld(world, seed);
 	// COMMITTED: the simulation runs the new town. From here on nothing is built, only handed out, and no step may
 	// abandon the rest (review of de4ba1e, N2) — a reset stopped half-way left the host naming the old town, the
 	// clients never told, the fallen down and rule 6 disarmed. Each step is contained on its own; the host is told

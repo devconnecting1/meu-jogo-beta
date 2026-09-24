@@ -8,8 +8,8 @@
  *
  *   1. SHAPES     dot / "?" / "!" are different silhouettes, not only different colours, and each costs a few Frames;
  *   2. LEG-03     every mark reads on light pavers, asphalt, grass, every room floor (its flat colour, the darkest and
- *                 the lightest texel of its texture, the shadow at a wall's foot), every rug of the interiors' art and in
- *                 the dark: some part of its edge is ≥ 3:1 against the ground (WCAG 1.4.11), and the fill is ≥ 3:1
+ *                 the lightest texel of its texture, the shadow at a wall's foot), every rug of the interiors' art,
+ *                 under the thickest fog (LUZ-05: the marks sit above it) and in the dark: some part of its edge is ≥ 3:1 against the ground (WCAG 1.4.11), and the fill is ≥ 3:1
  *                 against its own outline;
  *   3. PLACEMENT  above the head, and never over a survivor: a zombie right under you slides its mark aside;
  *   4. WHO        the idle dot only near you; nothing for a zombie the dark hides; nothing under a closed roof;
@@ -203,6 +203,16 @@ const GROUNDS = {
 			const [x0, y0, w, h] = FURNITURE_CELLS[`rug:${n}:h`];
 			extremes(`rug ${n}`, img, (x, y) => x >= x0 && x < x0 + w && y >= y0 && y < y0 + h);
 		}
+	}
+}
+// the fog (LUZ-05): the marks sit ABOVE it, so the ground they read against is the fogged one -- the thickest fog the
+// screen ever draws (FOG_SCREEN_MAX, past FOG_FULL_R) over each ground; and the night below adds those at night too
+{
+	const WEATHER = join(SRC, "shared/sim/weather.ts");
+	if (existsSync(WEATHER) && COLORS.overlayFog !== undefined) {
+		const { FOG_SCREEN_MAX } = require(WEATHER);
+		for (const [name, g] of Object.entries({ ...GROUNDS }))
+			GROUNDS[`${name} in fog`] = mix(g, rgb(COLORS.overlayFog), FOG_SCREEN_MAX);
 	}
 }
 // the night: the deepest overlay the clock ever draws (clock.ts MAX_DARK), over each ground

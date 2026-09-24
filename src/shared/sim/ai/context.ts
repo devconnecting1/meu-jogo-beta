@@ -84,6 +84,12 @@ export interface AiClock {
 	darkAlpha: number;
 	isNight: boolean;
 	isRaining: boolean;
+	/** the day's weather (shared/sim/weather.ts `Weather`; the server's, mirrored by the client) */
+	weather: number;
+	/** fog density now, 0..1 (LUZ-05): it shortens the eyes like the rain (perception.ts) */
+	fog: number;
+	/** what a noise carries now besides the rain: THUNDER_HEARING while a thunderclap rolls, else 1 (LUZ-05) */
+	thunderMask: number;
 	/** +1 every time the clock passes 7:00: non-wave zombies lose the trail then */
 	morningCount: number;
 	/**

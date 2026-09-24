@@ -16,7 +16,8 @@
 		"pickup": -18,
 		"reward": -17,
 		"stinger": -16,
-		"heart": -18
+		"heart": -18,
+		"thunder": -16
 	},
 	"banks": [
 		{
@@ -46,8 +47,8 @@
 		{
 			"name": "cues",
 			"file": "banks/cues.wav",
-			"seconds": 21.525,
-			"sha1": "cf32467032f7dd746bd4279d1f097814cb6a0502"
+			"seconds": 34.055,
+			"sha1": "125312a4bf577d292b7b4fe0208e878182683e7b"
 		}
 	],
 	"sounds": {
@@ -1172,6 +1173,49 @@
 				}
 			]
 		},
+		"thunder": {
+			"bank": "cues",
+			"category": "thunder",
+			"target": -16,
+			"volume": 0.5,
+			"pitchMin": 0.92,
+			"pitchMax": 1.05,
+			"why": "A storm's thunderclap (LUZ-05): a close one tears (a chopped bright crack) and rolls; a far one only rumbles, darker and longer. While it rolls the horde hears less.",
+			"takes": [
+				{
+					"startAt": 13.33,
+					"maxPlay": 3.746
+				},
+				{
+					"startAt": 17.29,
+					"maxPlay": 4.087
+				},
+				{
+					"startAt": 21.59,
+					"maxPlay": 4.058
+				}
+			],
+			"metrics": [
+				{
+					"seconds": 3.705,
+					"lufs": -16,
+					"truePeak": -4.84,
+					"brightness": 0.013
+				},
+				{
+					"seconds": 4.047,
+					"lufs": -16,
+					"truePeak": -5.54,
+					"brightness": 0.003
+				},
+				{
+					"seconds": 4.017,
+					"lufs": -16,
+					"truePeak": -3.43,
+					"brightness": 0
+				}
+			]
+		},
 		"heartbeat1": {
 			"bank": "cues",
 			"category": "heart",
@@ -1182,7 +1226,7 @@
 			"why": "Below 35 % HP: lub-dub at 76 bpm, four beats, its tail folded onto its start so the loop point never clicks.",
 			"takes": [
 				{
-					"startAt": 13.33,
+					"startAt": 25.86,
 					"maxPlay": 3.198
 				}
 			],
@@ -1194,8 +1238,8 @@
 					"brightness": 0
 				}
 			],
-			"loopStart": 13.34,
-			"loopEnd": 16.497875
+			"loopStart": 25.87,
+			"loopEnd": 29.027875
 		},
 		"heartbeat2": {
 			"bank": "cues",
@@ -1207,7 +1251,7 @@
 			"why": "Below 22 %: 100 bpm. A real faster tempo instead of the same loop sped up (the pitch stays a heart's).",
 			"takes": [
 				{
-					"startAt": 16.74,
+					"startAt": 29.27,
 					"maxPlay": 2.44
 				}
 			],
@@ -1219,8 +1263,8 @@
 					"brightness": 0
 				}
 			],
-			"loopStart": 16.75,
-			"loopEnd": 19.15
+			"loopStart": 29.28,
+			"loopEnd": 31.68
 		},
 		"heartbeat3": {
 			"bank": "cues",
@@ -1232,7 +1276,7 @@
 			"why": "Below 10 %: 128 bpm, the beats almost on top of each other.",
 			"takes": [
 				{
-					"startAt": 19.389,
+					"startAt": 31.919,
 					"maxPlay": 1.915
 				}
 			],
@@ -1244,8 +1288,8 @@
 					"brightness": 0
 				}
 			],
-			"loopStart": 19.4,
-			"loopEnd": 21.275
+			"loopStart": 31.93,
+			"loopEnd": 33.805
 		}
 	}
 }

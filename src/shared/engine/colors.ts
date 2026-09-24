@@ -82,6 +82,18 @@ export const COLORS = {
 	/** the night seen through night vision (E2): the dark of a phosphor screen, green instead of blue */
 	overlayNightVision: Color3.fromRGB(4, 26, 10),
 	overlayDawn: Color3.fromRGB(180, 90, 50),
+	/**
+	 * The fog (LUZ-05, client/view/weatherView.ts): a cool pale grey that thickens with distance from the survivor, under
+	 * the night's overlay. Light, so the marks' near-black rims read on it (IA-05, LEG-03), and never white: a town at
+	 * dawn, not a blank page.
+	 */
+	overlayFog: Color3.fromRGB(176, 184, 190),
+	/** rain streaks: the grey-blue of water against the street, never bright enough to read as tracers */
+	rainStreak: Color3.fromRGB(170, 190, 208),
+	/** a puddle on the asphalt (wet dark slate), its sheen (the sky in it, lit from the upper left) and a drop's ring */
+	puddle: Color3.fromRGB(38, 46, 58),
+	puddleSheen: Color3.fromRGB(128, 148, 170),
+	puddleRipple: Color3.fromRGB(150, 172, 194),
 	door: Color3.fromRGB(150, 110, 70),
 	ironDoor: Color3.fromRGB(170, 175, 185),
 	barricade: Color3.fromRGB(130, 95, 60),
@@ -226,9 +238,9 @@ export const ICON_ART_ORDER = "k1234567890XgNBLRMEPACOFGISHqblmTerajJxoytQsndhif
 /**
  * Draw layers of the world (ZIndex inside the sprite layer; the HUD/dark overlay are separate
  * sibling layers above the whole world). Lowest → highest:
- * ground < road/sidewalk < static shadows < building floor < decals (blood, puddles) <
+ * ground < road/sidewalk < static shadows < rain puddles < building floor < decals (blood, acid) <
  * actor shadows < ground items < structures/walls < zombies < player < bosses < projectiles <
- * particles < actor markers ("!") < roof < tree canopy < effects < build ghost.
+ * particles < actor markers ("!") < roof < tree canopy < rain streaks < effects < build ghost.
  *
  * Decals sit ABOVE the building floor (not below it) so blood/acid inside a house stays visible;
  * static shadows (buildings, cars, trees) stay below the floor so a building never darkens its
@@ -241,6 +253,8 @@ export const Z = {
 	road: 4,
 	roadLine: 5,
 	shadow: 6,
+	/** puddles and their sheen (LUZ-05): the street's own water, over the static shadows, under a building's floor */
+	wet: 7,
 	floor: 8,
 	floorDetail: 9,
 	decal: 11,
@@ -255,6 +269,8 @@ export const Z = {
 	actorFx: 52,
 	roof: 60,
 	canopy: 70,
+	/** rain streaks (LUZ-05): over every roof and crown -- the rain falls on the town -- and under the effects */
+	rain: 75,
 	effect: 80,
 	outline: 85,
 	uiWorld: 90,

@@ -530,6 +530,9 @@ function pushHud(): void {
 		dayTime: dn.dayTime,
 		isNight: dn.isNight,
 		showClock,
+		// the sky's weather icon (LUZ-05): the server's weather as the clock mirrors it
+		weather: dn.weather,
+		fog: dn.fog,
 		// the hotbar's blue tile (the blade for a hand that chose nothing, -1); the tiles themselves are the list keys 1-5
 		// pick from (shared/game/weaponSlots.ts) -- and none while the weapon is put away (ITM-06)
 		weaponId: w.id,

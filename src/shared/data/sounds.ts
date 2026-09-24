@@ -1057,6 +1057,23 @@ export const SOUNDS = {
 		voices: 1,
 		priority: 10,
 	},
+	/**
+	 * A storm's thunderclap (LUZ-05, client/audio/gameAudio.ts): heard where the flash was (everywhere: it is the sky),
+	 * its delay after the flash the strike's distance and its level how close it fell. While it rolls it covers every
+	 * other noise for the horde (shared/sim/weather.ts THUNDER_MASK_S): the storm's tactical window. The library take is
+	 * the classic library's thunder the night stingers use; ours is synthesised (tools/gen-sfx.mjs `thunder`).
+	 */
+	thunder: {
+		id: RBX_THUNDER,
+		bus: "sfx",
+		category: "world",
+		volume: 0.42,
+		pitchMin: 0.92,
+		pitchMax: 1.05,
+		voices: 2,
+		priority: 7,
+		minGap: 2,
+	},
 	/** you made it to 7:00 */
 	stingerDawn: {
 		id: `${ENGINE}victory.wav`,

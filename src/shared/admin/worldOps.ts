@@ -8,6 +8,7 @@ import { circleBlocked } from "shared/game/physics";
 import { Solid, WorldData } from "shared/game/world";
 import { VehicleKind } from "shared/data/buildings";
 import { vehicleKindOfSolid } from "shared/sim/vehicle";
+import { WEATHER_MAX, isWeather, weatherName } from "shared/sim/weather";
 import { FREECAM_MAX_RANGE, MAX_BOSSES, MAX_ZOMBIES_ADMIN } from "shared/net/mpConfig";
 import { ItemGroup, isAmmoEtcId, itemGroupSize, itemMax } from "./ops";
 
@@ -163,6 +164,8 @@ export type AdminWorldOp =
 	| { op: "dawn" }
 	| { op: "wave" }
 	| { op: "rain"; on: boolean }
+	/** the day's weather (shared/sim/weather.ts `Weather`, 0..WEATHER_MAX), until midnight rolls the next day's */
+	| { op: "weather"; weather: number }
 	/** the caller or another survivor in the world */
 	| { op: "heal"; userId: number }
 	| { op: "god"; on: boolean }
@@ -189,6 +192,7 @@ const OP_NAMES = new Set<string>([
 	"dawn",
 	"wave",
 	"rain",
+	"weather",
 	"heal",
 	"god",
 	"noclip",
@@ -257,6 +261,10 @@ export function readWorldOp(raw: Record<string, unknown>): AdminWorldOp | string
 		if (!typeIs(raw.on, "boolean")) return "invalid options";
 		return { op, on: raw.on } as AdminWorldOp;
 	}
+	if (op === "weather") {
+		if (!isInt(raw.weather) || !isWeather(raw.weather)) return `weather: 0 to ${WEATHER_MAX}`;
+		return { op, weather: raw.weather };
+	}
 	if (op === "heal") {
 		if (!isInt(raw.userId) || raw.userId === 0 || math.abs(raw.userId) >= 1e15) return "invalid player";
 		return { op, userId: raw.userId };
@@ -310,6 +318,7 @@ export function describeWorldOp(o: AdminWorldOp): string {
 		return o.on ? "on" : "off";
 	}
 	if (o.op === "teleport") return `to ${at(o.x, o.y)}`;
+	if (o.op === "weather") return weatherName(o.weather);
 	if (o.op === "removeStructure") return `near ${at(o.x, o.y)}`;
 	if (o.op === "spawnItem") return `${o.group}[${o.index}] ×${o.count} at ${at(o.x, o.y)}`;
 	if (o.op === "spawnStructure") return `${structureInfo(o.structure)?.label ?? o.structure} at ${at(o.x, o.y)}`;

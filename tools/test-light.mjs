@@ -24,6 +24,10 @@
  *      holds one back for more than a frame or two.
  *   5. NO CHURN. 600 frames walking, and switching High → Low → High twice, create no Instance once both layouts
  *      exist; the gradient memo stays bounded.
+ *   7. THE WEATHER (LUZ-05). The fog is a second LightMap with one light, the survivor: walking through it at 1080p
+ *      costs a fraction of the night's rewrites on both tiers, creates no Instance, a still one writes nothing, and the
+ *      drawn fog is the rule's (`fogScreenAt`) at every pixel. A lightning strike lifts the night's own map for a few
+ *      rewrites (the Reduce Motion swell too) and the night after it is back where it was, writing nothing.
  *   6. AUTO'S HYSTERESIS. The governor (QualityGovernor) against scripted frame times: a steady 60 FPS never drops; a
  *      slow device drops after 3 s and stays; bursts, hitches and a borderline 50 FPS never switch; a device that is
  *      fast on Low but slow on High settles on Low after at most five switches (no flapping); one that cools down
@@ -630,6 +634,187 @@ const at = log => log.map(e => `${e.low ? "Low" : "High"}@${e.t.toFixed(0)}s`).j
 			Q.lowDetail(Q.GRAPHICS_HIGH) === false &&
 			Q.lowDetail(Q.GRAPHICS_LOW) === true,
 	);
+}
+
+// ================================================================ 7. the fog and the lightning (LUZ-05)
+
+console.log("\n7) o clima (LUZ-05): a neblina e o relampago pelo mesmo LightMap, no High e no Low, sem churn\n");
+{
+	const WV = require(join(SRC, "client/view/weatherView.ts"));
+	const Wx = require(join(SRC, "shared/sim/weather.ts"));
+
+	/**
+	 * A survivor walking through fog as the game moves them (250 u/s, a new heading every 1.5 s, a stop every 4.5 s)
+	 * with the camera following the way GameLoop does (`follow`, lerp dt·8): the fog's one "light" is the survivor,
+	 * who stays near the middle of the screen, so the map changes only as far as the camera lags.
+	 */
+	function fogWalk(W, H, low, density = 1) {
+		const view = new WV.WeatherView();
+		const parent = gui.make("Frame");
+		const cam = new Camera();
+		cam.setView(W, H);
+		const dt = 1 / 60;
+		let px = 1000;
+		let py = 1000;
+		cam.x = px;
+		cam.y = py;
+		const frame = f => {
+			const heading = Math.floor(f / 90) * 1.3;
+			const moving = f % 270 < 200;
+			if (moving) {
+				px += Math.cos(heading) * 250 * dt;
+				py += Math.sin(heading) * 250 * dt;
+			}
+			cam.follow(px, py, Math.min(1, dt * 8));
+			view.drawFog(parent, cam, density, px, py, low);
+		};
+		for (let f = 0; f < 5; f++) frame(f);
+		const c0 = gui.stats.created;
+		gradWrites = 0;
+		keypoints = 0;
+		sequences = 0;
+		let maxWrites = 0;
+		let prev = 0;
+		let grads = 0;
+		for (let f = 5; f < 605; f++) {
+			frame(f);
+			maxWrites = Math.max(maxWrites, gradWrites - prev);
+			prev = gradWrites;
+			grads += effects(view.fogLayer()).grads;
+		}
+		return {
+			view,
+			cam,
+			px,
+			py,
+			writes: gradWrites / 600,
+			maxWrites,
+			alloc: (keypoints + sequences) / 600,
+			created: gui.stats.created - c0,
+			strips: effects(view.fogLayer()).strips,
+			grads: grads / 600,
+		};
+	}
+	const hi = fogWalk(1920, 1080, false);
+	const lo = fogWalk(1920, 1080, true);
+	const night = now["1920x1080 walking high"];
+	console.log(
+		`    neblina a 1080p andando: HIGH ${f1(hi.writes)} reescritas/q (max ${hi.maxWrites}), ${f1(hi.alloc)} alocacoes/q, ` +
+			`${hi.grads.toFixed(0)} GuiEffects de ${hi.strips} tiras; LOW ${f1(lo.writes)}/q (max ${lo.maxWrites}), ` +
+			`${f1(lo.alloc)} alocacoes/q, ${lo.grads.toFixed(0)} de ${lo.strips} (a noite com lampioes: ${f1(night.writes)}/q)`,
+	);
+	check(
+		"a neblina andando custa menos que a noite andando: um quarto das reescritas de gradiente no High, e o Low menos que o High",
+		hi.writes <= night.writes * 0.25 && lo.writes <= hi.writes && lo.alloc <= hi.alloc + 0.01,
+		`${f1(hi.writes)} e ${f1(lo.writes)} contra ${f1(night.writes)}`,
+	);
+	check(
+		"...e nenhuma Instance depois do primeiro quadro, nos dois niveis (600 quadros)",
+		hi.created === 0 && lo.created === 0,
+		`${hi.created} e ${lo.created}`,
+	);
+	check(
+		"o Low da neblina e o Low da noite: tiras de 12 px a 1080p",
+		lo.strips === 90 && hi.strips === 135,
+		`${hi.strips} / ${lo.strips}`,
+	);
+	{
+		// a still survivor under a still camera: nothing at all
+		const w0 = gui.stats.writes;
+		keypoints = 0;
+		sequences = 0;
+		const parent = hi.view.fogLayer().layer.Parent;
+		for (let f = 0; f < 120; f++) hi.view.drawFog(parent, hi.cam, 1, hi.px, hi.py, false);
+		const w1 = gui.stats.writes;
+		check(
+			"parado, a neblina parada nao escreve nem aloca nada (120 quadros)",
+			w1 === w0 && keypoints + sequences === 0,
+			`${w1 - w0} escritas`,
+		);
+	}
+	{
+		// the drawn fog is the rule: FOG_SCREEN_MAX × density × (distance from the survivor), within the strips' error
+		const cam = new Camera();
+		cam.setView(1280, 720);
+		cam.x = 1000;
+		cam.y = 1000;
+		const view = new WV.WeatherView();
+		const host = gui.make("Frame");
+		view.drawFog(host, cam, 0.8, 1040, 990, false);
+		const drawn = alphaField(view.fogLayer(), 1280, 720);
+		let worst = 0;
+		let sum = 0;
+		for (let y = 0; y < 720; y++) {
+			for (let x = 0; x < 1280; x++) {
+				const d = Math.hypot(cam.x - 640 + x + 0.5 - 1040, cam.y - 360 + y + 0.5 - 990);
+				const e = Math.abs(drawn[y * 1280 + x] - Wx.fogScreenAt(0.8, d));
+				worst = Math.max(worst, e);
+				sum += e;
+			}
+		}
+		check(
+			"a neblina desenhada = fogScreenAt (a regra da LUZ-05) a cada pixel, dentro do erro das tiras",
+			worst <= 0.05 && sum / (1280 * 720) <= 0.01,
+			`max ${f4(worst)}, media ${f4(sum / (1280 * 720))}`,
+		);
+		// and a clear day hides the map (nothing drawn, nothing written)
+		const w0 = gui.stats.writes;
+		view.drawFog(host, cam, 0, 1040, 990, false);
+		const hidden = view.fogLayer().layer.Visible === false;
+		view.drawFog(host, cam, 0, 1040, 990, false);
+		check("sem neblina o mapa se esconde (e nao escreve mais nada)", hidden && gui.stats.writes - w0 <= 1);
+	}
+
+	// ---- the lightning: the night's own map lifted, a few rewrites per strike, and a still night after it costs nothing
+	{
+		const lm = makeMap(false);
+		const cam = new Camera();
+		cam.setView(1920, 1080);
+		cam.x = 1000;
+		cam.y = 1000;
+		const lights = [{ x: 1000, y: 1000, r: 250, inner: 0.4 }];
+		const day = Wx.STORM_FROM_DAY + 3;
+		const strike = Wx.strikesOfDay(day)[0];
+		const speed = require(join(SRC, "shared/sim/clock.ts")).clockSpeed(strike.hour);
+		const base = 0.85;
+		const run = gentle => {
+			lm.update(cam, base, lights);
+			const w0 = gradWrites;
+			const f0 = gui.stats.writes;
+			const a0 = keypoints + sequences;
+			let peakLift = 0;
+			for (let f = -10; f < 120; f++) {
+				const flash = Wx.stormFlashAt(Wx.Weather.Storm, day, strike.hour + (f / 60) * speed, gentle);
+				peakLift = Math.max(peakLift, flash);
+				lm.update(cam, base * (1 - Wx.FLASH_LIFT * flash), lights);
+			}
+			return {
+				grad: gradWrites - w0,
+				writes: gui.stats.writes - f0,
+				alloc: keypoints + sequences - a0,
+				peak: peakLift,
+			};
+		};
+		const real = run(false);
+		const gentle = run(true);
+		const far = alphaField(lm, 1920, 1080)[10];
+		const w0 = gui.stats.writes;
+		for (let f = 0; f < 120; f++) lm.update(cam, base, lights);
+		// a strike (~every 30 s) costs less than a third of a second of walking at night (the 1080p High walk above)
+		const budget = night.writes * 20;
+		check(
+			"um raio levanta a noite do proprio mapa (ate FLASH_LIFT) e custa menos que 1/3 s de noite andando; o de Reduzir Movimento tambem",
+			real.peak > 0.5 && real.grad <= budget && gentle.grad <= budget && real.alloc <= 2 * real.grad + 20,
+			`real: ${real.grad} reescritas de gradiente, ${real.writes} escritas em 2 s; suave: ${gentle.grad} / ` +
+				`${gentle.writes}; teto ${budget.toFixed(0)}`,
+		);
+		// what a strip shows stays within WRITE_EPS (2 steps) of the computed night, plus its own half step
+		check(
+			"...e depois dele a noite parada volta a nao escrever nada, a menos de WRITE_EPS da escuridao de antes",
+			gui.stats.writes === w0 && Math.abs(far - base) <= 2 / 64 + 1 / 64 + 1e-6,
+			`${gui.stats.writes - w0} escritas; canto ${f4(far)} (antes ${base})`,
+		);
+	}
 }
 
 console.log("");

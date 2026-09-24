@@ -36,6 +36,9 @@
  *      a fight's blood reuses its particle and decal records; GameLoop.shadowOffset answers in one scratch.
  *  11. THE CANOPY ASKS A GRID (L6). "Is a body under this crown?" answered from the cells under it, exactly as the
  *      walk over the whole horde answered it, with the grid's arrays kept from frame to frame.
+ *  14. THE WEATHER (LUZ-05). A storm on a wet street, the camera running along it: on the pool warmed with
+ *      poolWarmup's WEATHER no Instance and no ZIndex write; the streaks and the puddles fit that reservation; a rain
+ *      draws fewer streaks than a storm, the Low tier half and Reduce Motion none; the streets dry and stop drawing.
  *  12. THE HORDE'S ORDER (perf audit M2). The real SnapshotBuffer, with its netId table walked in Luau's order: a
  *      spawn under a recycled low netId moves no walker already drawn, and a death at the front moves one walker
  *      into its place (it used to move the whole horde: 280 sprites, 867 writes for 40 walkers).
@@ -684,6 +687,8 @@ section("6) warmFightPool: only behind the lobby and its menus, a few sprites a 
 	}
 	const ref = new Renderer(gui.make("Frame"), "Sprites");
 	PW.reserveFightPool(ref, 1920, 1080, false, false);
+	// and the weather a fight may happen in (LUZ-05, §14)
+	PW.reserveWeatherPool(ref, 1920, 1080);
 	while (ref.warm(1000) > 0);
 	check(
 		heartbeat.conns.size() === before && r.poolSize() === ref.poolSize(),
@@ -1383,6 +1388,117 @@ section("13) ground items (ITM-07): drops, a pile, the target and the glint -- n
 			RULE.groundTier(3, 12) === "supply",
 		"tiers: a boss's trophy or a golden weapon is rare, a weapon or equipment gear, the rest supplies",
 	);
+	WA.overrideWorldArt(undefined);
+}
+
+// ================================================================ 14. the weather (LUZ-05)
+
+section("14) the weather (LUZ-05): a storm's streaks and a wet street's puddles -- no Instance after the warm-up");
+{
+	WA.overrideWorldArt({});
+	const WV = require(join(SRC, "client/view/weatherView.ts"));
+	// the longest plain street of the town, walked along its length at a run's pace, in a storm
+	const road = [...world.roads]
+		.filter(r => !r.avenue)
+		.sort((a, b) => Math.max(b.w, b.h) - Math.max(a.w, a.h) || a.x - b.x || a.y - b.y)[0];
+	const run = ({ low = false, reduceMotion = false, frames = 600, storm = true } = {}) => {
+		const r = new Renderer(gui.make("Frame"), "Sprites");
+		const cam = new Camera();
+		cam.setView(1920, 1080);
+		r.setView(1920, 1080);
+		PW.reserveWeatherPool(r, 1920, 1080);
+		while (r.warm(1000) > 0);
+		const view = new WV.WeatherView();
+		const f = { clock: 0, reduceMotion, low };
+		let maxRain = 0;
+		let maxWet = 0;
+		const frame = i => {
+			const t = i / 60;
+			f.clock = t;
+			cam.x = road.vertical ? road.x + road.w / 2 : road.x + 300 + t * 250;
+			cam.y = road.vertical ? road.y + 300 + t * 250 : road.y + road.h / 2;
+			view.step(1 / 60, true, storm);
+			r.beginFrame();
+			const v = cam.viewRect(32);
+			view.drawPuddles(r, cam, v, world, f);
+			view.drawRain(r, cam, v, f);
+			r.endFrame();
+			let rain = 0;
+			let wet = 0;
+			for (const s of r.layer.GetChildren()) {
+				if (s.Visible === false) continue;
+				if (s.ZIndex === Z.rain) rain++;
+				else if (s.ZIndex === Z.wet) wet++;
+			}
+			maxRain = Math.max(maxRain, rain);
+			maxWet = Math.max(maxWet, wet);
+		};
+		const w = watch(() => {
+			for (let i = 0; i < frames; i++) frame(i);
+		});
+		return { w, maxRain, maxWet, r };
+	};
+	const storm = run();
+	const reserved = new Map(PW.WEATHER.map(([z, n]) => [z, n]));
+	check(
+		storm.w.created === 0 && storm.w.zWrites === 0,
+		"10 s of a storm on a wet street, the camera running along it: no Instance on the warmed pool, no ZIndex write",
+		`${storm.w.created} Instances; ${(storm.w.writes / 600).toFixed(1)} writes a frame (${top(storm.w.byProp, 600, 4)})`,
+	);
+	check(
+		storm.maxRain <= reserved.get(Z.rain) &&
+			storm.maxWet <= reserved.get(Z.wet) &&
+			storm.maxRain >= reserved.get(Z.rain) * 0.75 &&
+			storm.maxWet >= reserved.get(Z.wet) * 0.25,
+		"what it draws fits what the warm-up reserved, and the reservation is not far past it",
+		`streaks ${storm.maxRain} of ${reserved.get(Z.rain)}, puddle sprites up to ${storm.maxWet} of ${reserved.get(Z.wet)}`,
+	);
+	const rain = run({ storm: false });
+	const low = run({ low: true });
+	const calm = run({ reduceMotion: true });
+	check(
+		rain.maxRain < storm.maxRain && low.maxRain <= Math.ceil(storm.maxRain / 2) && calm.maxRain === 0,
+		"a rain draws fewer streaks than a storm, the Low tier half, and Reduce Motion none",
+		`storm ${storm.maxRain}, rain ${rain.maxRain}, Low ${low.maxRain}, Reduce Motion ${calm.maxRain}`,
+	);
+	check(
+		low.maxWet <= storm.maxWet / 2 + 1 && calm.maxWet < storm.maxWet && calm.maxWet > 0,
+		"Low draws the water without its sheen and rings; Reduce Motion keeps the puddles, drops the rings",
+		`puddle sprites: High ${storm.maxWet}, Low ${low.maxWet}, Reduce Motion ${calm.maxWet}`,
+	);
+	// the streets dry: after the rain the puddles fade and are gone, and nothing is drawn from then on
+	{
+		const r = new Renderer(gui.make("Frame"), "Sprites");
+		const cam = new Camera();
+		cam.setView(1280, 720);
+		r.setView(1280, 720);
+		const view = new WV.WeatherView();
+		const f = { clock: 0, reduceMotion: false, low: false };
+		// centred on a puddle of the town
+		const p = WV.puddlesOf(world)[0];
+		cam.x = p.x;
+		cam.y = p.y;
+		view.step(1 / 60, true, false);
+		let shown = 0;
+		const draw = () => {
+			r.beginFrame();
+			view.drawPuddles(r, cam, cam.viewRect(32), world, f);
+			view.drawRain(r, cam, cam.viewRect(32), f);
+			r.endFrame();
+			return r.layer.GetChildren().filter(s => s.Visible !== false).length;
+		};
+		shown = draw();
+		let dryAt = -1;
+		for (let i = 1; i <= 60 * 200; i++) {
+			view.step(1 / 60, false, false);
+			if (i % 60 === 0 && draw() === 0 && dryAt < 0) dryAt = i / 60;
+		}
+		check(
+			shown > 0 && view.rain === 0 && view.wet === 0 && dryAt > 60 && dryAt <= 160,
+			"after the rain: the streaks go at once (4 s), the puddles dry for a while (~2.5 min) and then nothing is drawn",
+			`${shown} sprites in the rain, dry after ${dryAt} s`,
+		);
+	}
 	WA.overrideWorldArt(undefined);
 }
 

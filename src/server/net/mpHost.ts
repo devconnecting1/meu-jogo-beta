@@ -298,6 +298,8 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	const hurtAt = new Map<number, number>();
 	const remotes = createMpRemotes();
 	const sim = new ServerSimulation({ world });
+	// the town's skies are the town's (LUZ-05): the day's weather is rolled from its seed, like its streets
+	sim.clock.reseedWeather(town.seed);
 	const links = new Map<Player, Link>();
 	const bySlot = new Map<number, Player>();
 	const tick0Time = Workspace.GetServerTimeNow();

@@ -705,6 +705,431 @@ section("5) below MP_PHASE 2 the client keeps its own clock (§11.1)");
 	);
 }
 
+// ================================================================ 6: the weather (LUZ-05)
+
+section("6) the weather: the server's, the same on every screen, and what it does to both sides (LUZ-05)");
+
+{
+	const W = require(join(SRC, "shared/sim/weather.ts"));
+	const P = require(join(SRC, "shared/net/protocol.ts"));
+	const S = require(join(SRC, "shared/sim/ai/perception.ts"));
+	const { LANG_TABLE } = require(join(SRC, "shared/data/lang.ts"));
+	globalThis.typeIs ??= (v, t) =>
+		t === "buffer" ? v !== null && typeof v === "object" && v.__buffer === true : typeof v === t;
+	const K = W.Weather;
+
+	// ---- a) the hash is exact integer maths: an independent BigInt version agrees on every input (no float rounding)
+	{
+		const M = 2147483647n;
+		const whole = v => BigInt(Math.floor(Math.abs(v))) % M;
+		const step = x => (x * 48271n) % M;
+		const sq = x => {
+			const v = (x * ((x % 65536n) + 1n)) % M;
+			return v === 0n ? 1n : v;
+		};
+		const big = (a, b, c) => {
+			let x = whole(a);
+			if (x === 0n) x = 1n;
+			x = sq(step(x));
+			x = (x + whole(b) * 16807n) % M;
+			if (x === 0n) x = 1n;
+			x = step(sq(step(x)));
+			x = (x + whole(c) * 69621n) % M;
+			if (x === 0n) x = 1n;
+			x = step(sq(step(sq(step(x)))));
+			return Number(x - 1n) / (2147483647 - 1);
+		};
+		let bad = 0;
+		for (let i = 0; i < 20000; i++) {
+			const a = Math.floor(between(0, 2147483646));
+			const b = Math.floor(between(0, 65535));
+			const c = Math.floor(between(0, 1000));
+			if (W.weatherHash(a, b, c) !== big(a, b, c)) bad += 1;
+		}
+		check(
+			"the weather's hash is exact (20 000 inputs = an independent BigInt version, bit for bit)",
+			bad === 0,
+			`${bad} differ`,
+		);
+		// and not linear: two salts of one day, and two days in a row, are unrelated (MINSTD alone is linear mod M)
+		const corr = (xs, ys) => {
+			const n = xs.length;
+			const mx = xs.reduce((a, b) => a + b, 0) / n;
+			const my = ys.reduce((a, b) => a + b, 0) / n;
+			let sxy = 0;
+			let sxx = 0;
+			let syy = 0;
+			for (let i = 0; i < n; i++) {
+				sxy += (xs[i] - mx) * (ys[i] - my);
+				sxx += (xs[i] - mx) ** 2;
+				syy += (ys[i] - my) ** 2;
+			}
+			return sxy / Math.sqrt(sxx * syy);
+		};
+		const salts = [[], []];
+		const days = [[], []];
+		const lowPair = [];
+		for (let d = 1; d <= 20000; d++) {
+			salts[0].push(W.weatherHash(7331, d, 101));
+			salts[1].push(W.weatherHash(7331, d, 211));
+			days[0].push(W.weatherHash(7331, d, 101));
+			days[1].push(W.weatherHash(7331, d + 1, 101));
+			if (salts[0][d - 1] < 0.1) lowPair.push(salts[1][d - 1]);
+		}
+		const lowMean = lowPair.reduce((a, b) => a + b, 0) / lowPair.length;
+		check(
+			"...and not linear: two salts of a day, and two days in a row, are unrelated (|r| < 0.03; a low roll says nothing of the other)",
+			Math.abs(corr(salts[0], salts[1])) < 0.03 &&
+				Math.abs(corr(days[0], days[1])) < 0.03 &&
+				Math.abs(lowMean - 0.5) < 0.05,
+			`r ${corr(salts[0], salts[1]).toFixed(4)} / ${corr(days[0], days[1]).toFixed(4)}; after a roll < 0.1 the other averages ${lowMean.toFixed(3)}`,
+		);
+	}
+
+	// ---- b) the roll: the original's rain rate, storms later, fog never on the first two days
+	{
+		const seeds = [DESIGN.TOWN_SEED, 1, 42, 99991, 2147483646];
+		const count = { rain5: 0, eligible5: 0, storm: 0, rainy8: 0, dawn: 0, eligible3: 0, fog: 0, eligible6: 0 };
+		let early = 0;
+		let stormEarly = 0;
+		let rainEarly = 0;
+		let fogEarly = 0;
+		let unstable = 0;
+		for (const seed of seeds) {
+			for (let day = 1; day <= 3000; day++) {
+				const k = W.weatherOfDay(seed, day);
+				if (W.weatherOfDay(seed, day) !== k) unstable += 1;
+				if (day <= 2 && k !== K.Clear) early += 1;
+				if (day <= 4 && W.weatherRains(k)) rainEarly += 1;
+				if (day < W.STORM_FROM_DAY && k === K.Storm) stormEarly += 1;
+				if (day < W.FOG_FROM_DAY && k === K.Fog) fogEarly += 1;
+				if (day >= 5) {
+					count.eligible5 += 1;
+					if (W.weatherRains(k)) count.rain5 += 1;
+				}
+				if (day >= W.STORM_FROM_DAY && W.weatherRains(k)) {
+					count.rainy8 += 1;
+					if (k === K.Storm) count.storm += 1;
+				}
+				if (day >= W.DAWN_FOG_FROM_DAY) {
+					count.eligible3 += 1;
+					if (k === K.DawnFog) count.dawn += 1;
+				}
+				if (day >= W.FOG_FROM_DAY) {
+					count.eligible6 += 1;
+					if (k === K.Fog) count.fog += 1;
+				}
+			}
+		}
+		const pct = (n, d) => (100 * n) / d;
+		check("a day's weather is a pure function of (seed, day): asked twice, the same answer", unstable === 0);
+		check("days 1-2 are always clear (no fog, no rain), days 1-4 never rain", early === 0 && rainEarly === 0);
+		check(
+			"rain (with storms) on the original's 10 % of the days from day 5",
+			Math.abs(pct(count.rain5, count.eligible5) - DESIGN.WEATHER_PERCENT) < 1.2,
+			`${pct(count.rain5, count.eligible5).toFixed(1)} %`,
+		);
+		check(
+			`storms only from day ${W.STORM_FROM_DAY}, about one rainy day in three`,
+			stormEarly === 0 && Math.abs(count.storm / count.rainy8 - 1 / 3) < 0.06,
+			`${((100 * count.storm) / count.rainy8).toFixed(1)} % of the rainy days`,
+		);
+		check(
+			`fog at dawn on ~${W.DAWN_FOG_PERCENT} % of the days from day ${W.DAWN_FOG_FROM_DAY}, all-day fog on ~${W.FOG_PERCENT} % from day ${W.FOG_FROM_DAY}`,
+			fogEarly === 0 &&
+				Math.abs(pct(count.dawn, count.eligible3) - W.DAWN_FOG_PERCENT) < 2 &&
+				Math.abs(pct(count.fog, count.eligible6) - W.FOG_PERCENT) < 1,
+			`${pct(count.dawn, count.eligible3).toFixed(1)} % and ${pct(count.fog, count.eligible6).toFixed(1)} %`,
+		);
+	}
+
+	// ---- c) the server decides, the wire carries one byte, and the client shows exactly what the server lives by
+	{
+		const clockOf = (weather, rain) => ({
+			t: P.WorldEv.Clock,
+			worldDay: 12,
+			dayTime: 5.5,
+			tick: 3,
+			rain,
+			weather,
+			waveFlags: 0,
+		});
+		const encodeClock = e => P.encodeWorld({ tick: 7, events: [e] }).packets[0];
+		const decodeClock = pkt => P.decodeWorld(pkt)?.events[0];
+		let wireOk = true;
+		for (let k = 0; k <= W.WEATHER_MAX; k++) {
+			const pkt = encodeClock(clockOf(k, W.weatherRains(k)));
+			const e = decodeClock(pkt);
+			if (e === undefined || e.weather !== k || e.rain !== W.weatherRains(k) || buffer.len(pkt) !== 5 + 9) {
+				wireOk = false;
+			}
+		}
+		check("every weather crosses the wire in the byte that was the rain boolean: 9 B, like before", wireOk);
+		const legacy = decodeClock(encodeClock(clockOf(undefined, true)));
+		check(
+			"a caller that only says `rain` still writes rain (1) or clear (0)",
+			legacy?.weather === K.Rain && legacy.rain === true,
+		);
+		const pkt = encodeClock(clockOf(K.Fog, false));
+		let refused = 0;
+		for (let v = W.WEATHER_MAX + 1; v < 256; v++) {
+			buffer.writeu8(pkt, 12, v);
+			if (decodeClock(pkt) === undefined) refused += 1;
+		}
+		check(
+			"a weather byte above WEATHER_MAX is a malformed delta: all 251 refused",
+			refused === 256 - W.WEATHER_MAX - 1,
+			`${refused}`,
+		);
+
+		for (const [label, kind, day] of [
+			["a storm day", K.Storm, 11],
+			["a dawn-fog day", K.DawnFog, 6],
+			["a fog day", K.Fog, 9],
+		]) {
+			const server = new WorldClock({ day, dayTime: 0, seed: 5150, rollWeather: () => kind });
+			const client = new DayNight(defaultSave());
+			client.applyClock(decodeClock(encodeClock(server.clockEvent(0))), 0);
+			let worst = 0;
+			let fields = "";
+			let flashes = 0;
+			let masked = 0;
+			let fogged = 0;
+			const ticks = Math.round(DAY_SECONDS / TICK_DT) - 120;
+			for (let i = 0; i < ticks; i++) {
+				server.step(TICK_DT);
+				client.update(TICK_DT);
+				const d = Math.max(
+					Math.abs(server.darkAlpha - client.darkAlpha),
+					Math.abs(server.fog - client.fog),
+					Math.abs(server.flash - client.flash),
+					Math.abs(server.thunderMask - client.thunderMask),
+				);
+				if (d > worst) {
+					worst = d;
+					fields = `${server.dayTime.toFixed(3)} h: dark ${server.darkAlpha.toFixed(3)}/${client.darkAlpha.toFixed(3)}`;
+				}
+				if (server.weather !== client.weather || server.isRaining !== client.isRaining) worst = Infinity;
+				if (server.flash > 0) flashes += 1;
+				if (server.thunderMask < 1) masked += 1;
+				if (server.fog > 0.5) fogged += 1;
+			}
+			check(
+				`${label}, a whole day tick by tick: the client's darkness, fog, lightning and thunder = the server's`,
+				worst < 1e-9,
+				`${worst === 0 ? "identical" : fields}; ${flashes} flash ticks, ${masked} masked, ${fogged} foggy`,
+			);
+		}
+	}
+
+	// ---- d) the fog: continuous, zero at midnight, and it cuts sight for BOTH sides alike
+	{
+		let jump = 0;
+		let midnight = 0;
+		for (const kind of [K.Clear, K.Rain, K.Storm, K.DawnFog, K.Fog]) {
+			midnight = Math.max(midnight, W.fogDensityAt(kind, 0), W.fogDensityAt(kind, 24 - 1e-9));
+			let prev = W.fogDensityAt(kind, 0);
+			for (let t = 0; t < 24; t += 1 / 2048) {
+				const v = W.fogDensityAt(kind, t);
+				jump = Math.max(jump, Math.abs(v - prev));
+				prev = v;
+			}
+		}
+		check("the fog never jumps (max step at the wire's 1/2048 h)", jump < 0.01, jump.toFixed(4));
+		check("...and is 0 at midnight for every weather: a new day's weather never pops the fog", midnight < 1e-6);
+		const dawn = h => W.fogDensityAt(K.DawnFog, h);
+		check(
+			"fog at dawn: nothing at 03:59, thick at 05:30, full at 06:00, gone at 09:00, none at noon",
+			dawn(3.99) === 0 && dawn(5.5) > 0.99 && dawn(6) === 1 && dawn(9) === 0 && dawn(12) === 0,
+			[3.99, 4.5, 5.5, 7.5, 8.5, 9].map(h => `${h}h ${dawn(h).toFixed(2)}`).join(", "),
+		);
+		const allDay = W.fogDensityAt(K.Fog, 13);
+		check(
+			"a fog day: thick all day (≥ 0.7 at 13:00), full at dawn",
+			allDay >= 0.7 && W.fogDensityAt(K.Fog, 6) === 1,
+			allDay.toFixed(2),
+		);
+		// both sides: the horde's eyes and the survivor's screen
+		const clear = S.senseRanges({ darkness: 0, night: false, raining: false, fog: 0 });
+		const thick = S.senseRanges({ darkness: 0, night: false, raining: false, fog: 1 });
+		check(
+			"the thickest fog halves the horde's eyes by day (520 → 260 u)",
+			Math.abs(thick.sight - S.SIGHT_DAY * (1 - W.FOG_SIGHT_CUT)) < 1e-9 && clear.sight === S.SIGHT_DAY,
+			`${clear.sight} → ${thick.sight}`,
+		);
+		const seeMe = W.fogScreenAt(1, thick.sight);
+		const clearDay = W.fogScreenAt(1, S.SIGHT_DAY);
+		check(
+			"...and the survivor's screen alike: what can see you is clear on it (≤ 5 % fog), what a clear day showed is fogged",
+			W.fogScreenAt(1, W.FOG_CLEAR_R) === 0 &&
+				seeMe <= 0.05 &&
+				clearDay >= 0.45 &&
+				Math.abs(W.fogScreenAt(1, W.FOG_FULL_R) - W.FOG_SCREEN_MAX) < 1e-9,
+			`${thick.sight} u ${(seeMe * 100).toFixed(1)} %, ${S.SIGHT_DAY} u ${(clearDay * 100).toFixed(0)} %, ` +
+				`${W.FOG_FULL_R} u ${(W.FOG_SCREEN_MAX * 100).toFixed(0)} %`,
+		);
+		check(
+			"fog never masks a sound (the thunder does)",
+			W.thunderMaskAt(K.Fog, 9, 6) === 1 && W.thunderMaskAt(K.DawnFog, 9, 6) === 1,
+		);
+	}
+
+	// ---- e) the storm: the schedule, the photosensitivity cap, Reduce Motion, and the thunder's window
+	{
+		let strikes = 0;
+		let days = 0;
+		let minGap = Infinity;
+		let late = 0;
+		let perSecondMax = 0;
+		let lift = 0;
+		let gentleBumps = 0;
+		let gentlePeak = 0;
+		let gentleSlope = 0;
+		let heard = 0;
+		let windowOk = true;
+		for (let day = W.STORM_FROM_DAY; day < W.STORM_FROM_DAY + 120; day++) {
+			const list = W.strikesOfDay(day);
+			days += 1;
+			strikes += list.length;
+			for (let i = 1; i < list.length; i++) {
+				minGap = Math.min(minGap, CLOCK.secondsUntilHour(list[i - 1].hour, list[i].hour));
+			}
+			for (const s of list) if (s.hour > 23) late += 1;
+			// the day at 60 real frames a second: every flicker (a rise of ≥ 0.1) and the gentle shape's swells
+			let t = 0;
+			let prev = 0;
+			let prevG = 0;
+			let rising = false;
+			let gRising = false;
+			const edges = [];
+			while (t < 24) {
+				const v = W.stormFlashAt(K.Storm, day, t);
+				const g = W.stormFlashAt(K.Storm, day, t, true);
+				if (v - prev >= 0.1 && !rising) edges.push(t);
+				rising = v > prev;
+				if (g > prevG && !gRising && prevG > 0) gentleBumps += 1;
+				gRising = g > prevG;
+				gentleSlope = Math.max(gentleSlope, Math.abs(g - prevG));
+				gentlePeak = Math.max(gentlePeak, g);
+				lift = Math.max(lift, v);
+				prev = v;
+				prevG = g;
+				const next = CLOCK.advanceClock(t, 1 / 60);
+				if (W.thunderBetween(K.Storm, day, t, Math.min(next, 24)) > 0) heard += 1;
+				t = next;
+			}
+			for (let i = 0; i < edges.length; i++) {
+				let n = 1;
+				for (let j = i + 1; j < edges.length && CLOCK.secondsUntilHour(edges[i], edges[j]) < 1; j++) n += 1;
+				perSecondMax = Math.max(perSecondMax, n);
+			}
+			// the thunder: after each strike's delay the horde hears THUNDER_HEARING for THUNDER_MASK_S, all of it before
+			for (const s of list) {
+				const speed = CLOCK.clockSpeed(s.hour);
+				const onset = s.hour + s.delay * speed;
+				const before = W.thunderMaskAt(K.Storm, day, onset - 0.2 * speed);
+				const after = W.thunderMaskAt(K.Storm, day, onset + 0.5 * speed);
+				const gone = W.thunderMaskAt(K.Storm, day, onset + (W.THUNDER_MASK_S + 0.2) * speed);
+				if (before !== 1 || after !== W.THUNDER_HEARING || gone !== 1) windowOk = false;
+			}
+		}
+		check(
+			`a storm day has ~${Math.round(W.STRIKE_CHANCE * W.STRIKE_SLOTS)} strikes, none after 23:00 (nothing crosses midnight)`,
+			Math.abs(strikes / days - W.STRIKE_CHANCE * W.STRIKE_SLOTS) < 2.5 && late === 0,
+			`${(strikes / days).toFixed(1)} a day over ${days} days`,
+		);
+		check(
+			"two strikes are never closer than 10 real seconds",
+			minGap >= 10,
+			`${minGap.toFixed(1)} s at the closest`,
+		);
+		check(
+			"photosensitivity: at most 2 flickers in any second (WCAG 2.3.1 allows 3), and the flash never lifts more than FLASH_LIFT",
+			perSecondMax <= 2 && lift <= 1 && lift > 0.9,
+			`${perSecondMax} a second at most; peak ${lift} × ${W.FLASH_LIFT}`,
+		);
+		check(
+			"Reduce Motion: one slow swell per strike, never a flicker, at most FLASH_GENTLE_PEAK, ≤ 0.04 a frame",
+			gentleBumps === 0 && gentlePeak <= W.FLASH_GENTLE_PEAK + 1e-9 && gentleSlope <= 0.04,
+			`peak ${gentlePeak.toFixed(3)}, steepest ${gentleSlope.toFixed(4)} a frame`,
+		);
+		check(
+			"the thunder: 100 % before the clap, THUNDER_HEARING for THUNDER_MASK_S after it, 100 % again",
+			windowOk,
+			`${W.THUNDER_HEARING * 100} % for ${W.THUNDER_MASK_S} s`,
+		);
+		check(
+			"every strike's clap is heard exactly once by a client stepping 60 frames a second",
+			heard === strikes,
+			`${heard} claps, ${strikes} strikes`,
+		);
+		const dark = W.weatherDark(K.Storm, 12, false, 0);
+		check(
+			"a storm's day is darker than a rain's, and still lit for the horde (ambient ≥ 0.4)",
+			dark === W.STORM_DARK && W.weatherDark(K.Rain, 12, false, 0) === 0.5 && 1 - dark >= 0.4,
+			`storm ${dark}, rain ${W.weatherDark(K.Rain, 12, false, 0)}`,
+		);
+		check(
+			"no storm, no lightning and no thunder",
+			W.stormFlashAt(K.Rain, 11, 12) === 0 && W.thunderMaskAt(K.Rain, 11, 12) === 1,
+		);
+	}
+
+	// ---- f) the feed and the admin
+	{
+		const server = newClock({ day: 9, dayTime: 12 });
+		server.clockEvent(0);
+		server.setWeather(K.Fog);
+		const e1 = server.clockEvent(1);
+		server.setRain(true);
+		const e2 = server.clockEvent(2);
+		server.setWeather(9);
+		const e3 = server.clockEvent(3);
+		check(
+			"the admin's weather goes out at once; setRain is rain; an unknown weather changes nothing",
+			e1?.weather === K.Fog &&
+				e2?.weather === K.Rain &&
+				e2.rain === true &&
+				e3 === undefined &&
+				server.weather === K.Rain,
+		);
+		const client = new DayNight(defaultSave());
+		const said = [];
+		client.onAnnounce = text => said.push(text);
+		const at = (worldDay, dayTime, weather) => ({
+			worldDay,
+			dayTime,
+			rain: W.weatherRains(weather),
+			weather,
+			waveFlags: 0,
+		});
+		client.applyClock(at(9, 12, K.Rain), 0);
+		const first = said.length;
+		client.applyClock(at(9, 12, K.Storm), 0);
+		client.applyClock(at(10, 0.1, K.Clear), 0);
+		client.applyClock(at(10, 0.2, K.DawnFog), 0);
+		check(
+			"the first delta is not news; a weather change lived on screen is said in the feed, a clear sky is not",
+			first === 0 &&
+				said.length === 2 &&
+				said[0] === W.weatherAnnouncement(K.Storm) &&
+				said[1] === W.weatherAnnouncement(K.DawnFog),
+			said.join(" | "),
+		);
+		const texts = [K.Rain, K.Storm, K.DawnFog, K.Fog].map(k => W.weatherAnnouncement(k));
+		check(
+			"every weather's text is in lang.ts (Roblox translates it)",
+			texts.every(t => LANG_TABLE.includes(t)),
+			texts.join(" | "),
+		);
+		const offline = new DayNight(defaultSave(), 5150);
+		check(
+			"offline, the client rolls the very hash the server rolls, from the town's seed",
+			offline.weather === W.weatherOfDay(5150, offline.day),
+		);
+	}
+}
+
 /** re-require a module with the current MP_PHASE baked into its module-level reads */
 function requireFresh(rel) {
 	const file = join(SRC, rel);

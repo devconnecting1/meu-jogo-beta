@@ -407,6 +407,10 @@ const PAIRS = [
 	["THEME.mutedForeground", "SURFACE.groove", MIN_TEXT, 'ceu: "Life day N" e o HH:MM do relogio (o item)'],
 	["GAME.sun", "SURFACE.groove", MIN_UI, "ceu: o sol de pixel no arco"],
 	["GAME.moon", "SURFACE.groove", MIN_UI, "ceu: a lua de pixel no arco"],
+	// the weather's pixel icon in the groove's corner (LUZ-05)
+	["GAME.weatherCloud", "SURFACE.groove", MIN_UI, "ceu: a nuvem e as faixas da neblina (o clima, LUZ-05)"],
+	["GAME.weatherRain", "SURFACE.groove", MIN_UI, "ceu: as gotas da chuva"],
+	["GAME.weatherBolt", "SURFACE.groove", MIN_UI, "ceu: o raio da tempestade"],
 	["SURFACE.line", "SURFACE.groove", MIN_UI, "ceu: o horizonte e os pontos do caminho que falta"],
 	["SURFACE.section", "SURFACE.groove", MIN_RELIEF, "ceu: os pontos do caminho ja feito (apagados, mas ainda la)"],
 	["STAT.penalty", "SURFACE.groove", MIN_UI, "ceu: o pip vermelho da horda (anoitecer; as tres ondas)"],

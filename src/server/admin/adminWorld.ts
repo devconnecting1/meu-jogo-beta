@@ -7,6 +7,7 @@ import { GroundItem, removeSolid, spawnGroundItem } from "shared/game/world";
 import { MAX_BUILDS_PER_PLAYER, MAX_BUILDS_PER_SERVER, SLOT_NONE } from "shared/net/mpConfig";
 import * as Mind from "shared/sim/ai/memory";
 import { spawnAlpha } from "shared/sim/ai/zombieBrain";
+import { weatherName } from "shared/sim/weather";
 import type { AdminEvent, AdminResponse } from "shared/admin/protocol";
 import * as W from "shared/admin/worldOps";
 import type { MpHost } from "../net/mpHost";
@@ -385,6 +386,10 @@ export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 		if (op.op === "rain") {
 			clock.setRain(op.on);
 			return done(caller, op, op.on ? "Rain on" : "Rain off", false, "all");
+		} else if (op.op === "weather") {
+			// any of the five (LUZ-05), today's until midnight rolls the next day's; like the rain, it assists nobody
+			clock.setWeather(op.weather);
+			return done(caller, op, `Weather: ${weatherName(op.weather)}`, false, "all");
 		} else if (op.op === "clock") {
 			// the hands move and nothing else: the hours skipped are nobody's (§3.6, `setClock` pays and announces none)
 			clock.setClock(op.hour);
@@ -683,7 +688,14 @@ export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 		if (op.op === "state") return { res: { ok: true, data: data(caller, false) } };
 		if (op.op === "spawn") return spawn(caller, s, op);
 		if (op.op === "killAll") return killAll(caller, s, op);
-		if (op.op === "clock" || op.op === "night" || op.op === "dawn" || op.op === "wave" || op.op === "rain") {
+		if (
+			op.op === "clock" ||
+			op.op === "night" ||
+			op.op === "dawn" ||
+			op.op === "wave" ||
+			op.op === "rain" ||
+			op.op === "weather"
+		) {
 			return clockTool(caller, host, op);
 		}
 		if (op.op === "heal") return heal(caller, host, op);

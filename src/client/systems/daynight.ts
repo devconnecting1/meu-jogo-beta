@@ -1,5 +1,4 @@
 import { DESIGN } from "shared/engine/constants";
-import { chance } from "shared/engine/rng";
 import { difficultyOfDay, PlayerSaveData, PROGRESS_SERVER_PHASE, SAVE_LIMITS } from "shared/game/save";
 import { getDayPopulation } from "shared/data/spawns";
 import { MP_PHASE } from "shared/net/mpConfig";
@@ -8,20 +7,29 @@ import {
 	CLOCK_ANNOUNCEMENTS,
 	clockSpeed,
 	crossed,
-	darkAlphaAt,
 	DAY_BREAK_HOUR,
 	gameHours,
 	HOURS_PER_DAY,
 	inWaveFillWindow,
 	isNightAt,
 	normalizeClock,
-	rainPossible,
 	secondsUntilHour,
 	soundMattersAt,
 	WAVE_FILL_FROM,
 	waveActive,
 	waveActiveInFlags,
 } from "shared/sim/clock";
+import {
+	fogDensityAt,
+	isWeather,
+	stormFlashAt,
+	thunderMaskAt,
+	Weather,
+	weatherAnnouncement,
+	weatherDark,
+	weatherOfDay,
+	weatherRains,
+} from "shared/sim/weather";
 
 /**
  * The run's clock, weather and night-wave queues. The clock rules themselves are pure and shared
@@ -30,7 +38,7 @@ import {
  * It runs in one of two modes, and the public surface is the same in both — everything that reads the clock
  * (the HUD, the shadows, the horde, the coach, the audio) never has to know which one is on:
  *
- *   local (MP_PHASE < 2)   the clock is this client's own: it advances it, rolls the rain and fills the
+ *   local (MP_PHASE < 2)   the clock is this client's own: it advances it, rolls the weather and fills the
  *                          night's queues. That is the single-player game, unchanged.
  *   server-driven (≥ 2)    the server owns the hour, the weather and the waves (server/sim/waves.ts) and
  *                          sends them as WorldEv.Clock. `applyClock` takes that truth; `update` REPLAYS it
@@ -56,6 +64,8 @@ export interface ClockUpdate {
 	worldDay: number;
 	dayTime: number;
 	rain: boolean;
+	/** the day's weather (shared/sim/weather.ts `Weather`); left out, `rain` decides (Rain or Clear) */
+	weather?: number;
 	/** raw wave bits (shared/sim/clock.ts WAVE_FLAG_*) */
 	waveFlags: number;
 }
@@ -67,6 +77,17 @@ export class DayNight {
 	darkAlpha = 0;
 	isNight = false;
 	isRaining = false;
+	/** the day's weather (shared/sim/weather.ts `Weather`): the server's byte, or this client's own roll offline */
+	weather: number = Weather.Clear;
+	/** fog density now, 0..1: the screen's fog (client/view/weatherView.ts) and the local horde's eyes */
+	fog = 0;
+	/** what a noise carries now besides the rain (< 1 while a thunderclap rolls) */
+	thunderMask = 1;
+	/** the lightning now, 0..1 (inside `darkAlpha`), and its Reduce Motion shape (for the screen only) */
+	flash = 0;
+	gentleFlash = 0;
+	/** the darkness without the lightning: the screen applies the flash of its own choosing (Reduce Motion) */
+	darkBase = 0;
 	ambientTarget = 5;
 	ambientSpecialMax = 0;
 	waveQueues: Array<number> = [0, 0, 0];
@@ -79,6 +100,8 @@ export class DayNight {
 	onAnnounce: (msg: string) => void = () => {};
 
 	private save: PlayerSaveData;
+	/** the town's seed: offline, the day's weather is rolled from it exactly as the server rolls it */
+	private readonly seed: number;
 	private fillDone = false;
 	/** a Clock delta has been accepted: the server owns the hour from now on */
 	private driven = false;
@@ -92,21 +115,45 @@ export class DayNight {
 	private lastAnnounce = "";
 	private lastAnnounceAt = -ANNOUNCE_DEDUPE_S - 1;
 
-	constructor(save: PlayerSaveData) {
+	constructor(save: PlayerSaveData, seed: number = DESIGN.TOWN_SEED) {
 		this.save = save;
+		this.seed = seed;
 		// `day` is the WORLD's day (§6.2, MP-13). Alone in your own world the two are the same number, which
 		// is why the survivor's own day seeds it; on a shared server the first Clock delta (or `adoptWorld`)
 		// replaces it at once, because nothing a single survivor does may decide what day the town is on.
 		this.day = save.day;
 		this.dayTime = 7;
 		this.difficulty = difficultyOfDay(this.day);
-		this.isRaining = this.rollRain();
+		this.setWeather(weatherOfDay(this.seed, this.day));
 		this.refreshPopulation();
 	}
 
-	/** original: 10% rainy days, but never during the first four days (`if day<=4 weather = 0`) */
-	private rollRain(): boolean {
-		return rainPossible(this.day) && chance(DESIGN.WEATHER_PERCENT);
+	/**
+	 * The admin's weather on a world this client runs itself (client/admin/world.ts; a server-owned world's comes back
+	 * in the Clock delta instead): today's, until midnight rolls the next day's.
+	 */
+	forceWeather(kind: number): void {
+		if (!isWeather(kind)) return;
+		this.setWeather(kind);
+		this.updateDark();
+	}
+
+	/** the day's weather, and the rain that follows from it */
+	private setWeather(kind: number): void {
+		this.weather = kind;
+		this.isRaining = weatherRains(kind);
+	}
+
+	/**
+	 * A new weather for the day (a midnight, the admin): told in the feed with what it does (LUZ-05). The first delta of
+	 * a session and a run taking the world over are not news -- only a change lived on this screen is.
+	 */
+	private changeWeather(kind: number, news: boolean): void {
+		if (kind === this.weather) return;
+		this.setWeather(kind);
+		if (!news) return;
+		const text = weatherAnnouncement(kind);
+		if (text !== "") this.announce(text);
 	}
 
 	/**
@@ -150,7 +197,7 @@ export class DayNight {
 		this.srvFlags = previous.srvFlags;
 		this.day = previous.day;
 		this.dayTime = previous.dayTime;
-		this.isRaining = previous.isRaining;
+		this.setWeather(previous.weather);
 		this.morningCount = previous.morningCount;
 		// the hours between the two runs were lived by the town, not by this survivor: they announce nothing
 		this.snapped = true;
@@ -176,7 +223,9 @@ export class DayNight {
 		this.srvDay = aged.day;
 		this.srvDayTime = aged.dayTime;
 		this.srvFlags = c.waveFlags;
-		this.isRaining = c.rain;
+		const kind =
+			c.weather !== undefined && isWeather(c.weather) ? c.weather : c.rain ? Weather.Rain : Weather.Clear;
+		this.changeWeather(kind, this.driven);
 		const drift = gameHours(aged.day, aged.dayTime) - gameHours(this.day, this.dayTime);
 		if (!this.driven || math.abs(drift) > CLOCK_SNAP_H) {
 			this.driven = true;
@@ -254,8 +303,16 @@ export class DayNight {
 		// deepest night is capped (the renderer punches light holes around the player and lamps/campfires into
 		// it); "Nocturnal" keeps the original 0.05 advantage. This stays a CLIENT decision even when the hour
 		// comes from the server: the skill belongs to this survivor, and the server's own darkness (the one
-		// the horde sees) is the plain one, with nobody's skill in it.
-		this.darkAlpha = darkAlphaAt(this.dayTime, this.isRaining, this.save.skillLevels[16] > 0);
+		// the horde sees) is the plain one, with nobody's skill in it. The weather is the server's (LUZ-05): the
+		// fog, the thunder and the lightning are the same pure functions of (weather, day, hour) it evaluates.
+		const kind = this.weather;
+		const nocturnal = this.save.skillLevels[16] > 0;
+		this.fog = fogDensityAt(kind, this.dayTime);
+		this.thunderMask = thunderMaskAt(kind, this.day, this.dayTime);
+		this.flash = stormFlashAt(kind, this.day, this.dayTime);
+		this.gentleFlash = kind === Weather.Storm ? stormFlashAt(kind, this.day, this.dayTime, true) : 0;
+		this.darkBase = weatherDark(kind, this.dayTime, nocturnal, 0);
+		this.darkAlpha = this.flash > 0 ? weatherDark(kind, this.dayTime, nocturnal, this.flash) : this.darkBase;
 	}
 
 	// ---------------------------------------------------------------- the frame
@@ -274,7 +331,7 @@ export class DayNight {
 			this.dayTime -= HOURS_PER_DAY;
 			this.day += 1;
 			this.save.day = this.day;
-			this.isRaining = this.rollRain();
+			this.changeWeather(weatherOfDay(this.seed, this.day), true);
 			this.refreshPopulation();
 		}
 		this.detectAnnounce(prev, this.dayTime);
@@ -313,7 +370,7 @@ export class DayNight {
 		const norm = normalizeClock(this.day, advanced);
 		if (norm.day !== this.day) {
 			this.day = norm.day;
-			// no rain roll here: the weather is the server's (§3.6). `save.day` is NOT the world's day, it is
+			// no weather roll here: the weather is the server's (§3.6, LUZ-05). `save.day` is NOT the world's day, it is
 			// this survivor's own (§6.2, MP-13), so it does not follow `this.day`. From PROGRESS_SERVER_PHASE the
 			// server's midnight decides it -- and may refuse it: dead, absent, AFK -- and the pushed wallet brings
 			// it here (shared/game/save.ts `applyWallet`). Bumping it here as well counted that midnight twice

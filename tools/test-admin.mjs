@@ -710,6 +710,7 @@ function everyTool(t) {
 		{ op: "dawn" },
 		{ op: "wave" },
 		{ op: "rain", on: true },
+		{ op: "weather", weather: 2 },
 		{ op: "heal", userId: t.bob.UserId },
 		{ op: "god", on: true },
 		{ op: "noclip", on: true },
@@ -739,6 +740,7 @@ function worldPrint(t) {
 		day: c.day,
 		hour: c.dayTime.toFixed(3),
 		rain: c.isRaining,
+		weather: c.weather,
 		items: t.s.sim.world.items.length,
 		solids: t.s.sim.world.solids.length,
 		bodies,
@@ -864,6 +866,9 @@ section("2) malformed world tools are refused with a reason, and change nothing"
 		[{ op: "clock", hour: -0.1 }, "hour"],
 		[{ op: "clock", hour: "12" }, "hour"],
 		[{ op: "rain", on: "true" }, "invalid options"],
+		[{ op: "weather", weather: 5 }, "weather"],
+		[{ op: "weather", weather: 1.5 }, "weather"],
+		[{ op: "weather", weather: "fog" }, "weather"],
 		[{ op: "god", on: 1 }, "invalid options"],
 		[{ op: "noclip" }, "invalid options"],
 		[{ op: "heal", userId: 0 }, "invalid player"],
@@ -1085,6 +1090,17 @@ section("5) the clock tools move the SERVER's clock for everybody, pay no skippe
 	verify("...and rain assists nobody", t.pays(t.admin) && t.pays(t.bob));
 	res = t.tool(t.admin, { op: "rain", on: false });
 	verify("rain off", res.ok && c.isRaining === false);
+	// LUZ-05: any of the five weathers, for everyone at once (the next Clock delta), assisting nobody like the rain
+	res = t.tool(t.admin, { op: "weather", weather: 4 });
+	verify(
+		"weather fog: the server's clock has the day's fog, and it assists nobody",
+		res.ok && c.weather === 4 && c.isRaining === false && t.pays(t.admin) && t.pays(t.bob),
+		res.message,
+	);
+	res = t.tool(t.admin, { op: "weather", weather: 2 });
+	verify("weather storm: a storm rains", res.ok && c.weather === 2 && c.isRaining === true, res.message);
+	res = t.tool(t.admin, { op: "weather", weather: 0 });
+	verify("weather clear", res.ok && c.weather === 0 && c.isRaining === false);
 	res = t.tool(t.admin, { op: "clock", hour: 13.5 });
 	verify(
 		"clock 13:30: the server's clock is at 13:30",

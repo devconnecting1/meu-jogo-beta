@@ -107,6 +107,9 @@ export interface HudState {
 	isNight: boolean;
 	/** a watch/sundial is equipped: show HH:MM (as in the original, the time is an item perk) */
 	showClock: boolean;
+	/** the day's weather (shared/sim/weather.ts `Weather`) and the fog's density now: the sky's icon (LUZ-05) */
+	weather?: number;
+	fog?: number;
 	/** the weapon in hand (PlayerState.weapon.pointer): the blue tile of the hotbar */
 	weaponId: number;
 	/** (ITM-06) that weapon is put away: empty hands, no blue tile, and the column says so */

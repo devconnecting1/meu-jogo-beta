@@ -10,6 +10,7 @@ import type { GameContext } from "shared/game/context";
 import type { ItemGroup } from "shared/admin/ops";
 import * as WO from "shared/admin/worldOps";
 import type { SpawnKind, StructureKind } from "shared/admin/worldOps";
+import { Weather, isWeather, weatherName } from "shared/sim/weather";
 import { PLACEABLES } from "../systems/build";
 import { debugFlowField } from "../systems/zombieAI";
 import type { GameRefs } from "../systems/types";
@@ -62,6 +63,8 @@ export interface ClockState {
 	hour: number;
 	night: boolean;
 	raining: boolean;
+	/** the day's weather (shared/sim/weather.ts `Weather`) */
+	weather: number;
 	/** active night wave 1..3 (0 = none) */
 	wave: number;
 }
@@ -122,6 +125,8 @@ export interface AdminWorld {
 	skipToDawn(): ActionResult;
 	forceWave(): ActionResult;
 	setRain(on: boolean): ActionResult;
+	/** any of the five weathers (LUZ-05), today's until midnight rolls the next day's */
+	setWeather(kind: number): ActionResult;
 
 	// population
 	killAll(): ActionResult;
@@ -416,7 +421,7 @@ export class LocalAdminWorld implements AdminWorld {
 		if (dn.wave3Active) wave = 3;
 		else if (dn.wave2Active) wave = 2;
 		else if (dn.wave1Active) wave = 1;
-		return { day: dn.day, hour: dn.dayTime, night: dn.isNight, raining: dn.isRaining, wave };
+		return { day: dn.day, hour: dn.dayTime, night: dn.isNight, raining: dn.isRaining, weather: dn.weather, wave };
 	}
 
 	setClock(hour: number): void {
@@ -503,10 +508,19 @@ export class LocalAdminWorld implements AdminWorld {
 
 	setRain(on: boolean): ActionResult {
 		const dn = this.refs().daynight;
-		dn.isRaining = on;
+		dn.forceWeather(on ? Weather.Rain : Weather.Clear);
 		dn.update(0);
 		this.onAssist("weather");
 		return { ok: true, message: on ? "Rain on" : "Rain off" };
+	}
+
+	setWeather(kind: number): ActionResult {
+		if (!isWeather(kind)) return { ok: false, message: "Unknown weather" };
+		const dn = this.refs().daynight;
+		dn.forceWeather(kind);
+		dn.update(0);
+		this.onAssist("weather");
+		return { ok: true, message: `Weather: ${weatherName(kind)}` };
 	}
 
 	// ------------------------------------------------------------ population

@@ -1307,15 +1307,19 @@ function randWorldEvent(kind = rint(1, 19)) {
 			return { t: kind, id: dynId() };
 		case P.WorldEv.LootFlag:
 			return { t: kind, buildingId: rint(0, 65535), hasLoot: rbool() };
-		case P.WorldEv.Clock:
+		case P.WorldEv.Clock: {
+			// LUZ-05: the day's weather in the byte that was the rain (0 clear, 1 rain, 2 storm, 3 dawn fog, 4 fog)
+			const weather = rint(0, 4);
 			return {
 				t: kind,
 				worldDay: rint(1, 400),
 				dayTime: rfloat(0, 23.99),
 				tick: rint(0, 65535),
-				rain: rbool(),
+				rain: weather === 1 || weather === 2,
+				weather,
 				waveFlags: rint(0, 255),
 			};
+		}
 		case P.WorldEv.Announce: {
 			// MON-05: a TitleUnlocked names a title that exists; every other kind carries any u16
 			const msg = rint(1, P.AnnounceKind.TitleUnlocked);
@@ -1428,6 +1432,7 @@ function compareWorldEvent(a, b) {
 			near("dayTime", b.dayTime, a.dayTime, 1 / P.CLOCK_HOUR_SCALE + 1e-9);
 			eq("clock tick", b.tick, a.tick);
 			eq("rain", b.rain, a.rain);
+			eq("weather", b.weather, a.weather);
 			eq("waveFlags", b.waveFlags, a.waveFlags);
 			break;
 		case P.WorldEv.Announce:
@@ -1509,7 +1514,11 @@ test("World: round trip of every delta", () => {
 	sizes.push(["World DoorSet", `${one(P.WorldEv.DoorSet)} B`, "id + open (§4.5)"]);
 	sizes.push(["World ItemAdd", `${one(P.WorldEv.ItemAdd)} B`, "id, kind, itemId, count, x, y, vx, vy (§4.5)"]);
 	sizes.push(["World ZombieDied", `${one(P.WorldEv.ZombieDied)} B`, "netId, x, y, cause (§4.4)"]);
-	sizes.push(["World Clock", `${one(P.WorldEv.Clock)} B`, "worldDay, dayTime, tick, rain, waveFlags (§4.5)"]);
+	sizes.push([
+		"World Clock",
+		`${one(P.WorldEv.Clock)} B`,
+		"worldDay, dayTime, tick, weather, waveFlags (§4.5, LUZ-05)",
+	]);
 	sizes.push([
 		"World PlayerProfile",
 		`${one(P.WorldEv.PlayerProfile)} B`,
@@ -1805,6 +1814,12 @@ test("World: malformed deltas are refused", () => {
 	day0[6] = 0;
 	day0[7] = 0;
 	eq("world day 0", P.decodeWorld(bufOf(day0)), undefined);
+	// LUZ-05: the weather byte (the old rain boolean's place) knows five weathers; a sixth is malformed
+	for (const w of [5, 9, 128, 255]) {
+		const badWeather = clock.slice();
+		badWeather[12] = w;
+		eq(`weather ${w}`, P.decodeWorld(bufOf(badWeather)), undefined);
+	}
 });
 
 // ---------------------------------------------------------------- 7. clock sync

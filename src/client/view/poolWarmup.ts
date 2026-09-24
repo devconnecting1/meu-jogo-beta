@@ -59,6 +59,17 @@ export const SURVIVORS_ART: ReadonlyArray<PoolLayer> = [
 	[Z.player + 1, 4, 0, 0, 4],
 ];
 
+/**
+ * The weather (LUZ-05, client/view/weatherView.ts), which a fight can happen in: a storm's streaks at 1080p, and the
+ * puddles of a wet street in view (at most 7 in any 1080p view of a town) -- water, satellite, sheen and a drop's ring
+ * each, all rounded and all outlined (a ring lands on whichever slot its puddle's turn gives it). Reserved apart from
+ * the fight (`reserveWeatherPool`), so the fight's profile stays the fight's (tools/test-pool.mjs §5, §14).
+ */
+export const WEATHER: ReadonlyArray<PoolLayer> = [
+	[Z.rain, 96, 0, 0],
+	[Z.wet, 32, 32, 32],
+];
+
 /** sprites (each with its modifiers) created per frame while warming: a 1080p fight in ~15 frames of the lobby */
 export const WARM_PER_FRAME = 32;
 
@@ -93,6 +104,14 @@ export function reserveFightPool(
 	add(survivorArt ? SURVIVORS_ART : SURVIVORS_FLAT);
 }
 
+/** the weather's sprites on a `viewW` x `viewH` screen: the 1080p counts, down to half on a small screen */
+export function reserveWeatherPool(r: Renderer, viewW: number, viewH: number): void {
+	const k = math.clamp((viewW * viewH) / REF_AREA, 0.5, 1);
+	for (const [z, n, corners, strokes] of WEATHER) {
+		r.reserve(z, math.ceil(n * k), math.ceil(corners * k), math.ceil(strokes * k), 0);
+	}
+}
+
 /** the phases in which the world renderer draws nothing: the boot logo is left alone, a run draws the world */
 function idle(ctx: GameContext): boolean {
 	const p = ctx.phase;
@@ -112,6 +131,8 @@ export function warmFightPool(ctx: GameContext): RBXScriptConnection {
 		if (!reserved) {
 			reserved = true;
 			reserveFightPool(ctx.renderer, ctx.viewW, ctx.viewH, zombieArtLive(), survivorArtLive());
+			// a storm's first frame must not build its streaks and puddles either (LUZ-05)
+			reserveWeatherPool(ctx.renderer, ctx.viewW, ctx.viewH);
 		}
 		if (ctx.renderer.warm(WARM_PER_FRAME) === 0) conn.Disconnect();
 	});

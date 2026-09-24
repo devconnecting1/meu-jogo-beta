@@ -54,6 +54,9 @@
  *   K.  UPLOAD         `npm run cloud -- upload-audio`: the dry run reads no key; against tools/fake-open-cloud.mjs,
  *                      Audio assets in audio/wav, only new or changed banks, ids and hashes written, a stale id left
  *                      out of the module, a bank refused by moderation kept out.
+ *   L.  THUNDER        (LUZ-05) a storm plays one thunderclap per clap of the schedule the server masks the horde's ears
+ *                      with, at the strike's level; none in a plain rain or a clear day; a clock that jumps plays none;
+ *                      the library's thunder without the bank's id, our three takes with it.
  *
  * Pure Node (>= 18) + the project's TypeScript on the shared shims (tools/ui-shim.mjs).
  */
@@ -1822,6 +1825,118 @@ section(
 			);
 		} finally {
 			rmSync(tmp, { recursive: true, force: true });
+		}
+	},
+);
+
+// ================================================================ L. the thunder (LUZ-05)
+
+section(
+	"L. o trovao (LUZ-05): um por estrondo da agenda da tempestade, alto se o raio caiu perto; nada fora dela; um relogio que pula nao toca",
+	() => {
+		const W = require(join(SRC, "shared/sim/weather.ts"));
+		const CLOCK = require(join(SRC, "shared/sim/clock.ts"));
+		banks(false);
+		const lib = S.soundDef("thunder");
+		check(
+			lib === S.librarySoundDef("thunder") &&
+				lib.id === S.SOUNDS.stingerWave1.id &&
+				lib.bus === "sfx" &&
+				lib.spatial !== true &&
+				lib.volume <= 0.6 &&
+				(lib.minGap ?? 0) >= 1,
+			"sem id: o trovao da biblioteca (o mesmo das vinhetas), no SFX, plano (e o ceu), volume <= 0,6, um por vez",
+			`${lib.id}, ${lib.bus}, vol ${lib.volume}`,
+		);
+		// H3 left this session's `cues` id dropped (a bank that failed to load): a fresh upload of it, a new id
+		banks(true);
+		AA.AUDIO_BANK_IDS.cues = "rbxassetid://7105";
+		S.refreshSounds();
+		const ours = S.soundDef("thunder");
+		check(
+			ours.id === "rbxassetid://7105" &&
+				ours.source === "synth" &&
+				ours.takes?.length === 3 &&
+				ours.bus === lib.bus,
+			"com o banco no ar: os nossos 3 takes no banco `cues`, com o papel da biblioteca",
+			`${ours.id}, ${ours.source}, ${ours.takes?.length} takes`,
+		);
+		banks(false);
+
+		// the spy above keeps names; this one keeps the level each clap was asked at
+		const levels = [];
+		const spied = audio.play;
+		audio.play = (name, opts) => {
+			if (name === "thunder") levels.push(opts?.scale ?? 1);
+			spied(name, opts);
+		};
+		try {
+			const listen = (kind, day, from, hours, jumpAt) => {
+				const ga = new GameAudio();
+				const refs = runRefs();
+				const dn = { isNight: false, day, dayTime: from, weather: kind };
+				refs.daynight = dn;
+				ga.startRun(refs);
+				runFrame(ga, refs);
+				levels.length = 0;
+				const c0 = created;
+				let jumped = false;
+				while (dn.dayTime < from + hours) {
+					if (jumpAt !== undefined && !jumped && dn.dayTime >= jumpAt) {
+						// an admin moving the clock an hour on: the claps it flew over are not played
+						dn.dayTime += 1;
+						jumped = true;
+					}
+					dn.dayTime = CLOCK.advanceClock(dn.dayTime, 1 / 60);
+					runFrame(ga, refs);
+				}
+				const made = created - c0;
+				ga.stopRun();
+				advance(0.5);
+				const out = [...levels];
+				out.made = made;
+				return out;
+			};
+			const day = W.STORM_FROM_DAY + 5;
+			const from = 8;
+			const hours = 3;
+			const claps = W.strikesOfDay(day).filter(s => {
+				const onset = s.hour + s.delay * CLOCK.clockSpeed(s.hour);
+				return onset > from && onset <= from + hours;
+			});
+			// a first storm builds the thunder's voices (the mixer's pool); the next one creates nothing
+			listen(W.Weather.Storm, day, from, hours);
+			const heard = listen(W.Weather.Storm, day, from, hours);
+			check(
+				heard.length === claps.length && claps.length >= 2,
+				"3 horas de tempestade a 60 quadros por segundo: um trovao por estrondo da agenda (a mesma do servidor)",
+				`${heard.length} trovoes, ${claps.length} estrondos`,
+			);
+			check(
+				heard.every((v, i) => Math.abs(v - claps[i].power) < 1e-9) && Math.min(...heard) >= 0.5,
+				"...cada um no nivel da distancia do raio (1 perto, 0,5 longe)",
+				heard.map(v => v.toFixed(2)).join(" "),
+			);
+			check(
+				heard.made === 0,
+				"...e uma segunda tempestade nao cria Instance nenhuma (as vozes do pool)",
+				`${heard.made}`,
+			);
+			const rain = listen(W.Weather.Rain, day, from, hours);
+			const clear = listen(W.Weather.Clear, day, from, hours);
+			check(rain.length === 0 && clear.length === 0, "chuva sem tempestade e dia limpo: nenhum trovao");
+			const jump = listen(W.Weather.Storm, day, from, hours, from + 0.5);
+			const skipped = claps.filter(s => {
+				const onset = s.hour + s.delay * CLOCK.clockSpeed(s.hour);
+				return onset > from + 0.5 && onset <= from + 1.5;
+			}).length;
+			check(
+				jump.length <= claps.length - skipped,
+				"um relogio que pula uma hora nao toca os trovoes que pulou",
+				`${jump.length} de ${claps.length} (${skipped} pulados)`,
+			);
+		} finally {
+			audio.play = spied;
 		}
 	},
 );

@@ -2,6 +2,7 @@
 import { angleDiff } from "shared/engine/vec2";
 import { isBlocking, Solid } from "shared/game/world";
 import * as Light from "shared/sim/survivorLight";
+import { fogSight } from "shared/sim/weather";
 
 /*
  * Zombie senses (docs/DESIGN_RULES.md IA-01, docs/MULTIPLAYER.md §3.4, P2 "melhor que o original").
@@ -14,11 +15,11 @@ import * as Light from "shared/sim/survivorLight";
  * There is no cone, no line of sight and no way at all to break contact once seen.
  *
  * Here every zombie has the same three senses, day and night:
- *   - EYES: a range, a cone around the way the body faces and a clear line through the world's walls. Darkness
- *     and rain shorten the range; the survivor's OWN light works the other way — a lit body in a dark street is
- *     seen from further than an unlit one, and a flashlight further still (it is a beacon: the light that lets
- *     you see is the light that gives you away). A zombie standing in a flashlight's beam sees the light
- *     whatever way it faces.
+ *   - EYES: a range, a cone around the way the body faces and a clear line through the world's walls. Darkness,
+ *     rain and fog shorten the range (fog the survivor's screen too: shared/sim/weather.ts, LUZ-05); the
+ *     survivor's OWN light works the other way — a lit body in a dark street is seen from further than an unlit
+ *     one, and a flashlight further still (it is a beacon: the light that lets you see is the light that gives you
+ *     away). A zombie standing in a flashlight's beam sees the light whatever way it faces.
  *   - EARS: noise rings (shared/sim/ai/noise.ts): shots by weapon class, construction, breaking things, steps.
  *   - TOUCH: this close it notices you whatever it faces and whatever is in between.
  * The original's night/rain "smell" (a blanket alert over the whole map) is gone: the night waves still hunt
@@ -39,6 +40,8 @@ export interface SenseConditions {
 	darkness: number;
 	night: boolean;
 	raining: boolean;
+	/** fog density 0..1 (shared/sim/weather.ts `fogDensityAt`); left out = no fog */
+	fog?: number;
 }
 
 /**
@@ -105,7 +108,10 @@ export const BEACON_FROM = 0.2;
 export const BEACON_FULL = 0.5;
 /** a survivor standing in a lamp's or a fire's light is seen as in daylight */
 export const LAMP_SIGHT = SIGHT_DAY;
-/** noises carry this much in the rain (the brain's `emitSound` applies it to every ring) */
+/**
+ * Noises carry this much in the rain (the brain's `emitSound` applies it to every ring), and a thunderclap masks them
+ * further for a few seconds (shared/sim/weather.ts `thunderMaskAt`, the clock's `thunderMask`). Fog never does.
+ */
 export const RAIN_HEARING = 0.6;
 
 /**
@@ -119,13 +125,15 @@ export function senseRanges(c: SenseConditions, beacon?: Beacon, stealthy = fals
 		const k = math.clamp((dark - BEACON_FROM) / (BEACON_FULL - BEACON_FROM), 0, 1);
 		sight += (beacon.range - sight) * k;
 	}
-	if (c.raining) sight *= RAIN_SIGHT;
+	// the weather shortens every range, the light's too: rain, and fog (which blinds the survivor's screen alike)
+	const weather = (c.raining ? RAIN_SIGHT : 1) * fogSight(c.fog ?? 0);
+	sight *= weather;
 	sight = math.max(SIGHT_MIN, sight) * (stealthy ? STEALTH_SIGHT : 1);
 	const lit = beacon !== undefined && beacon.beam > 0 && dark > BEACON_FROM;
 	const r = out ?? { sight: 0, cone: 0, beam: 0, beamAngle: 0 };
 	r.sight = sight;
 	r.cone = SIGHT_CONE;
-	r.beam = lit ? beacon.beam * (c.raining ? RAIN_SIGHT : 1) : 0;
+	r.beam = lit ? beacon.beam * weather : 0;
 	r.beamAngle = beacon?.beamAngle ?? 0;
 	return r;
 }
