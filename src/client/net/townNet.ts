@@ -36,7 +36,7 @@ function remotesNow(): TownRemotes | undefined {
 		const msg = raw as Record<string, unknown>;
 		const why = readRefusal(msg.why);
 		if (msg.k !== "joinFailed" || why === undefined) return;
-		for (const fn of joinFailedListeners) task.spawn(fn, why);
+		noticeJoinFailed(why);
 	});
 	return found;
 }
@@ -71,6 +71,14 @@ export function townRequestAsync(req: TownRequest, done: (res: TownResponse) => 
 /** tests: answer every request with `fn` (undefined: the real remote again) */
 export function setTownRequester(fn: TownRequester | undefined): void {
 	requester = fn ?? remoteRequester;
+}
+
+/**
+ * The server's TownNotice "joinFailed", read: every listener hears why (the remote's handler calls it; a test does too,
+ * to put the notice before or after the join's own answer -- it can come before, review of 0b44458 L5)
+ */
+export function noticeJoinFailed(why: TownRefusal): void {
+	for (const fn of joinFailedListeners) fn(why);
 }
 
 /** a join that failed after the server sent it (TeleportInitFailed): `fn` hears why. Returns the unsubscribe */

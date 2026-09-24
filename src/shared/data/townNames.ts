@@ -1,5 +1,5 @@
 /*
- * A town's NAME, from its seed (docs/DESIGN_RULES.md MP-26): "Millbrook", "Cedarford", "Wrenvale".
+ * A town's NAME, from its seed (docs/DESIGN_RULES.md MP-26): "Brackenmere", "Ploverstead", "Wrenvale".
  *
  * The seed is the town (the server's, MP-26), so the name is too: every client and the server derive the same one from
  * the seed they already have -- the home screen's Town section, the match scoreboard, the world-end message, the Servers
@@ -7,86 +7,109 @@
  * stream (shared/game/world.ts TownRng): naming a town can never change its streets. `npm run test:seed` checks the
  * name across seeds, under the same poisoned clocks and random as the town itself.
  *
- * What a name may be (CON-02, and the owner's "generic small town"): a prefix of trees, birds, stones and trades and
- * a suffix of the old English place words, joined. No brand, no real city anyone would know: the combinations that
- * spell one (a film studio, a famous suburb or resort) are in TOWN_NAME_BLOCKLIST and skipped, as are the ones that
- * double a letter at the join ("Ashhaven").
+ * What a name may be (CON-02, and the owner's "generic small town"): a prefix and a suffix of the old English place
+ * words, joined. The prefixes are the less common words of a hedgerow, a farmyard and a workshop (Bracken, Plover,
+ * Tallow...), not the trees and stones every real town is named after (Oak, Pine, Stone, Willow...): far fewer of
+ * the combinations are a real place (review of 0b44458, L6). No brand, no real town anyone would know: the combinations
+ * that spell one are in TOWN_NAME_BLOCKLIST and are hashed again, as are the ones that double a letter at the join
+ * ("Quillley").
  *
  * A proper noun: never translated (UI-03), and every label that shows one turns AutoLocalize off.
  */
 
 export const TOWN_PREFIXES: ReadonlyArray<string> = [
-	"Alder",
 	"Amber",
-	"Ash",
-	"Aspen",
 	"Barley",
-	"Bell",
-	"Birch",
+	"Bracken",
 	"Bramble",
 	"Briar",
-	"Cedar",
-	"Clay",
-	"Copper",
-	"Crow",
-	"Elm",
-	"Fern",
-	"Flint",
-	"Hawk",
-	"Hazel",
+	"Cinder",
+	"Clover",
+	"Cobble",
+	"Dapple",
+	"Ember",
+	"Fallow",
+	"Fennel",
+	"Flax",
+	"Gorse",
 	"Heron",
-	"Holly",
-	"Iron",
+	"Hollin",
+	"Juniper",
+	"Kestrel",
 	"Kettle",
-	"Linden",
-	"Maple",
-	"Marsh",
-	"Mill",
-	"Moss",
-	"Oak",
-	"Otter",
-	"Pine",
-	"Raven",
-	"Rowan",
-	"Sage",
-	"Stone",
-	"Thorn",
-	"Willow",
+	"Lantern",
+	"Linnet",
+	"Mallow",
+	"Marrow",
+	"Nettle",
+	"Pewter",
+	"Plover",
+	"Quill",
+	"Rook",
+	"Russet",
+	"Saffron",
+	"Sedge",
+	"Sorrel",
+	"Sparrow",
+	"Tallow",
+	"Tansy",
+	"Teasel",
+	"Thistle",
+	"Thrush",
+	"Umber",
+	"Wicker",
 	"Wren",
+	"Yarrow",
 ];
 
 export const TOWN_SUFFIXES: ReadonlyArray<string> = [
+	"bank",
 	"brook",
 	"bury",
-	"crest",
+	"combe",
 	"croft",
 	"dale",
-	"field",
+	"fold",
 	"ford",
 	"gate",
-	"glen",
-	"grove",
-	"haven",
-	"hollow",
-	"hurst",
+	"hithe",
+	"holt",
+	"ley",
 	"mere",
 	"moor",
-	"ridge",
 	"stead",
+	"thorpe",
 	"vale",
-	"ville",
-	"water",
 	"well",
 	"wick",
-	"wood",
 	"worth",
 ];
 
 /**
- * Combinations that spell a real place people know, or a brand (CON-02), or read badly: never a town's name. Exactly
- * as the join spells them.
+ * Names that are never a town's: the real places these lists can spell, and -- whatever the lists become -- every real
+ * town or brand a review flagged. Exactly as the join spells them.
  */
 export const TOWN_NAME_BLOCKLIST: ReadonlyArray<string> = [
+	"Ambergate",
+	"Amberley",
+	"Barleythorpe",
+	"Brackenbury",
+	"Cinderford",
+	"Flaxley",
+	"Flaxmere",
+	"Hollinwell",
+	"Kettlebrook",
+	"Kettlethorpe",
+	"Kettlewell",
+	"Nettlecombe",
+	"Nettlestead",
+	"Rookley",
+	"Sedgebrook",
+	"Sedgeford",
+	"Sedgemoor",
+	"Wrenbury",
+	"Wrenthorpe",
+	"Yarrowford",
 	"Ashbury",
 	"Ashfield",
 	"Ashford",
@@ -95,30 +118,37 @@ export const TOWN_NAME_BLOCKLIST: ReadonlyArray<string> = [
 	"Elmhurst",
 	"Elmwood",
 	"Ferndale",
+	"Hawkhurst",
 	"Hazelwood",
-	"Hollyhollow",
 	"Hollywood",
+	"Ironwood",
 	"Mapleridge",
 	"Maplewood",
 	"Oakbrook",
 	"Oakdale",
+	"Oakhurst",
 	"Oakridge",
 	"Oakville",
+	"Pinecrest",
 	"Pinehurst",
 	"Pineridge",
 	"Pinewood",
+	"Stonegate",
 	"Stonehaven",
 	"Thornbury",
 	"Willowbrook",
+	"Willowdale",
 ];
 
 /** MINSTD's multiplier and modulus (the town's own TownRng uses them too; this is a separate, one-step hash) */
 const HASH_MUL = 48271;
 const HASH_MOD = 2147483647;
 
-/** may `prefix` + `suffix` name a town: no letter doubled at the join, nothing on the blocklist */
+/** may `prefix` + `suffix` name a town: no letter doubled at the join, no "-leley", nothing on the blocklist */
 export function townNameAllowed(prefix: string, suffix: string): boolean {
 	if (prefix.sub(-1) === suffix.sub(1, 1)) return false;
+	// "Nettleley", "Barleyley": a "-ley" after "-le" or "-y" does not read as a town
+	if (suffix === "ley" && (prefix.sub(-2) === "le" || prefix.sub(-1) === "y")) return false;
 	return !TOWN_NAME_BLOCKLIST.includes(prefix + suffix);
 }
 

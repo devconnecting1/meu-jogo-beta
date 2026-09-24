@@ -110,6 +110,9 @@ class Inst {
 	constructor(className) {
 		this.ClassName = className;
 	}
+	SetTeleportData(data) {
+		this.teleportData = data;
+	}
 }
 globalThis.Instance = Inst;
 globalThis.Enum = {
@@ -191,6 +194,8 @@ class FakeSortedMap {
 }
 
 const SL = require(join(SRC, "server/match/serverList.ts"));
+/** the place every fake server of this suite runs (game.PlaceId) */
+const PLACE = 5555;
 const TN = require(join(SRC, "shared/net/townNet.ts"));
 const Names = require(join(SRC, "shared/data/townNames.ts"));
 
@@ -229,7 +234,6 @@ function makeServer(map, opts = {}) {
 		capacity: opts.capacity ?? 6,
 		teleports: [],
 		teleportFails: 0,
-		joins: [],
 		warns: [],
 	};
 	const teleport =
@@ -245,8 +249,9 @@ function makeServer(map, opts = {}) {
 	server.list = new SL.ServerList({
 		kind: opts.kind ?? "public",
 		jobId: server.jobId,
+		placeId: opts.placeId ?? PLACE,
 		store: opts.store === false ? undefined : portOf(map),
-		teleport,
+		teleport: opts.teleportHook !== undefined ? (p, id) => opts.teleportHook(server, p, id) : teleport,
 		clock: () => clockNow,
 		now: () => Math.floor(1_700_000_000 + clockNow),
 		wait: s => {
@@ -259,7 +264,6 @@ function makeServer(map, opts = {}) {
 		loading: p => server.loadingSet.has(p),
 		connected: p => server.players.has(p) && !server.gone.has(p),
 		bestDay: p => server.best.get(p),
-		joined: (p, row) => server.joins.push({ p, row }),
 		log: () => {},
 		warn: (what, detail) => server.warns.push(`${what} | ${detail}`),
 	});
@@ -430,25 +434,25 @@ section(
 		map.SetAsync("job-junk", { v: 99, seed: 5 }, 60, 0);
 		map.SetAsync(
 			"not a job id!",
-			{ v: 1, kind: "public", seed: 5, day: 1, n: 1, max: 6, t: 1_700_000_000 + clockNow },
+			{ v: 1, kind: "public", place: PLACE, seed: 5, day: 1, n: 1, max: 6, t: 1_700_000_000 + clockNow },
 			60,
 			0,
 		);
 		map.SetAsync(
 			"job-private",
-			{ v: 1, kind: "private", seed: 5, day: 1, n: 1, max: 6, t: 1_700_000_000 + clockNow },
+			{ v: 1, kind: "private", place: PLACE, seed: 5, day: 1, n: 1, max: 6, t: 1_700_000_000 + clockNow },
 			60,
 			0,
 		);
 		map.SetAsync(
 			"job-overfull",
-			{ v: 1, kind: "public", seed: 5, day: 1, n: 9, max: 6, t: 1_700_000_000 + clockNow },
+			{ v: 1, kind: "public", place: PLACE, seed: 5, day: 1, n: 9, max: 6, t: 1_700_000_000 + clockNow },
 			60,
 			0,
 		);
 		map.SetAsync(
 			"job-stale",
-			{ v: 1, kind: "public", seed: 5, day: 1, n: 1, max: 6, t: 1_700_000_000 + clockNow - 500 },
+			{ v: 1, kind: "public", place: PLACE, seed: 5, day: 1, n: 1, max: 6, t: 1_700_000_000 + clockNow - 500 },
 			600,
 			0,
 		);
@@ -559,19 +563,19 @@ section("4) entrar: o servidor le a entrada de novo e decide; depois TeleportAsy
 	// an entry that is still in the map but stale (its server stopped writing and the clock moved on)
 	map.SetAsync(
 		"job-old",
-		{ v: 1, kind: "public", seed: 5, day: 1, n: 1, max: 6, t: 1_700_000_000 + clockNow - 1000 },
+		{ v: 1, kind: "public", place: PLACE, seed: 5, day: 1, n: 1, max: 6, t: 1_700_000_000 + clockNow - 1000 },
 		600,
 		0,
 	);
 	cases.push(["uma entrada velha (o servidor parou de publicar)", reason(join(here, me, "job-old")), "gone"]);
 	map.SetAsync(
 		"job-priv",
-		{ v: 1, kind: "private", seed: 5, day: 1, n: 1, max: 6, t: 1_700_000_000 + clockNow },
+		{ v: 1, kind: "private", place: PLACE, seed: 5, day: 1, n: 1, max: 6, t: 1_700_000_000 + clockNow },
 		60,
 		0,
 	);
 	cases.push(["uma entrada que nao e publica", reason(join(here, me, "job-priv")), "gone"]);
-	map.SetAsync("job-bad", { v: 1, kind: "public", seed: "x", day: 1, n: 1, max: 6, t: 1 }, 60, 0);
+	map.SetAsync("job-bad", { v: 1, kind: "public", place: PLACE, seed: "x", day: 1, n: 1, max: 6, t: 1 }, 60, 0);
 	cases.push(["uma entrada malformada", reason(join(here, me, "job-bad")), "gone"]);
 	const wrong = cases.filter(([, got, want]) => got !== want);
 	check(
@@ -579,15 +583,24 @@ section("4) entrar: o servidor le a entrada de novo e decide; depois TeleportAsy
 		wrong.length === 0 && here.teleports.length === 0,
 		wrong.map(([what, got]) => `${what}: ${got}`).join("; ") || `${cases.length} casos, nenhum teleporte`,
 	);
+	// another place of the experience: never listed, never joined (review of 0b44458, L6)
+	map.SetAsync(
+		"job-otherplace",
+		{ v: 1, kind: "public", place: PLACE + 1, seed: 5, day: 1, n: 1, max: 6, t: 1_700_000_000 + clockNow },
+		60,
+		0,
+	);
+	const other = here.list.join(me, "job-otherplace");
+	clockNow += SL.JOIN_GAP_S;
+	check(
+		"uma entrada de OUTRO place da experiencia: gone, nenhum teleporte (e a lista nunca a mostra)",
+		!other.ok && other.reason === "gone" && here.teleports.length === 0,
+		JSON.stringify(other),
+	);
 	const ok = here.list.join(me, there.jobId);
 	check(
-		"uma cidade aberta: TeleportAsync para ESSE servidor, e o JoinedFromList com o dia e a lotacao que o servidor leu",
-		ok.ok &&
-			here.teleports.length === 1 &&
-			here.teleports[0].jobId === there.jobId &&
-			here.joins.length === 1 &&
-			here.joins[0].row.day === 9 &&
-			here.joins[0].row.players === 3,
+		"uma cidade aberta: TeleportAsync para ESSE servidor (o JoinedFromList e contado na chegada, no destino)",
+		ok.ok && here.teleports.length === 1 && here.teleports[0].jobId === there.jobId,
 		JSON.stringify(ok),
 	);
 	// while it is under way the host keeps them out of the city (server/net/mpHost.ts `mayEnter`), and never for longer
@@ -856,7 +869,6 @@ section("7) o lado Roblox: startServerList com as chamadas como a API as pede", 
 		loading: () => false,
 		connected: p => players.has(p),
 		bestDay: () => 4,
-		joined: () => {},
 		log: () => {},
 		warn: () => {},
 	};
@@ -888,7 +900,7 @@ section("7) o lado Roblox: startServerList com as chamadas como a API as pede", 
 	// another server's entry, then a read and a join through the real adapters
 	map.SetAsync(
 		"other-job",
-		{ v: 1, kind: "public", seed: 7, day: 4, n: 2, max: 6, t: 1_700_000_000 + clockNow },
+		{ v: 1, kind: "public", place: PLACE, seed: 7, day: 4, n: 2, max: 6, t: 1_700_000_000 + clockNow },
 		60,
 		0,
 	);
@@ -913,6 +925,11 @@ section("7) o lado Roblox: startServerList com as chamadas como a API as pede", 
 			call.options.ServerInstanceId === "other-job",
 		JSON.stringify({ ok: j.ok, placeId: call?.placeId, id: call?.options?.ServerInstanceId }),
 	);
+	check(
+		"...carregando SERVER_LIST_TELEPORT_DATA (SetTeleportData): o destino conta a entrada quando ela CHEGA (L5)",
+		JSON.stringify(call.options.teleportData) === JSON.stringify(SL.SERVER_LIST_TELEPORT_DATA),
+		JSON.stringify(call.options.teleportData),
+	);
 	ts.TeleportInitFailed.Fire(player, { Name: "GameFull" }, "The game is full", 5555, call.options);
 	check(
 		"TeleportInitFailed: o jogador ouve o motivo (TownNotice joinFailed, full)",
@@ -920,6 +937,29 @@ section("7) o lado Roblox: startServerList com as chamadas como a API as pede", 
 	);
 	for (const fn of closers) fn();
 	check("BindToClose: RemoveAsync(JobId) -- a entrada sai na hora", !map.items.has("live-job-1"));
+	// a tick that throws (a host callback, a store past its own pcall) is warned and never ends the loop (L4)
+	closers.length = 0;
+	makeGame({ studio: false, jobId: "live-job-2" });
+	const warns = [];
+	const badSide = {
+		...gameSide,
+		town: () => {
+			throw new Error("the host is gone");
+		},
+		warn: (what, detail) => warns.push(`${what} | ${detail}`),
+	};
+	let threw = false;
+	try {
+		SL.startServerList(badSide, () => {});
+	} catch {
+		threw = true;
+	}
+	check(
+		"um tique que lanca: avisado numa frase fixa, o laco segue (nunca derruba o servidor)",
+		!threw && warns.some(w => w.startsWith("the server list tick failed | ")),
+		warns.join("; "),
+	);
+	for (const fn of closers) fn();
 	// a private server: reads and joins, never publishes
 	const writes0 = map.calls.set;
 	closers.length = 0;
@@ -953,6 +993,96 @@ section("8) a fiacao (o que o Node nao roda): nenhum teleporte tira alguem de um
 		"o remote conta o flood primeiro, depois o balde por jogador, e so entao le o pedido",
 	);
 });
+
+// ================================================================ 9. the review of 0b44458
+
+section(
+	"9) a revisao de 0b44458: outro place, o fechamento contra uma escrita no ar, a falha que chega antes da resposta",
+	() => {
+		// L6: an entry of another place of the experience is never listed
+		{
+			const map = new FakeSortedMap();
+			const here = makeServer(map);
+			const there = makeServer(map, { seed: 77, day: 3 });
+			const elsewhere = makeServer(map, { seed: 88, day: 3, placeId: PLACE + 7 });
+			here.add(1);
+			there.add(2);
+			elsewhere.add(2);
+			for (const x of [here, there, elsewhere]) x.list.tick();
+			const rows = here.list.list([...here.players][0]).servers ?? [];
+			check(
+				"L6: a lista mostra a cidade deste place e nunca a de outro place da experiencia",
+				rows.some(r => r.jobId === there.jobId) && !rows.some(r => r.jobId === elsewhere.jobId),
+				rows.map(r => r.jobId).join(", "),
+			);
+		}
+		// L4: the shutdown lands while a write is in flight (SetAsync yields): the entry is gone after both, and nothing
+		// is written after
+		{
+			const map = new FakeSortedMap();
+			const s = makeServer(map);
+			s.add(2);
+			const realSet = map.SetAsync.bind(map);
+			map.SetAsync = (...a) => {
+				// BindToClose runs while this request is in flight
+				s.list.withdraw();
+				return realSet(...a);
+			};
+			s.list.tick();
+			map.SetAsync = realSet;
+			const goneAfter = !map.items.has(s.jobId);
+			clockNow += SL.PUBLISH_EVERY_S;
+			s.list.tick();
+			check(
+				"L4: o fechamento chega com uma escrita no ar -- a entrada sai mesmo assim, e nada e escrito depois",
+				goneAfter && !map.items.has(s.jobId),
+				`${map.calls.set} escrita(s), ${map.calls.remove} remocao(oes)`,
+			);
+		}
+		// L5: TeleportInitFailed comes while TeleportAsync still yields: the answer is that failure, never "sent"
+		{
+			const map = new FakeSortedMap();
+			const here = makeServer(map, {
+				teleportHook: (server, p) => {
+					server.teleports.push({ p });
+					server.list.initFailed(p, "GameFull");
+				},
+			});
+			const there = makeServer(map, { seed: 5, day: 2 });
+			here.add(1);
+			there.add(2);
+			there.list.tick();
+			const [me] = here.add(1);
+			const res = here.list.join(me, there.jobId);
+			check(
+				"L5: a falha do TeleportInitFailed chega antes de o TeleportAsync voltar: a resposta e essa falha (full), nada fica a caminho",
+				!res.ok && res.reason === "full" && !here.list.joining(me) && here.teleports.length === 1,
+				JSON.stringify(res),
+			);
+		}
+		// L5: the join is counted where it lands -- the destination reads the flag, from this very place only
+		{
+			const data = SL.SERVER_LIST_TELEPORT_DATA;
+			const cases = [
+				[{ SourcePlaceId: PLACE, TeleportData: data }, true],
+				[{ SourcePlaceId: PLACE, TeleportData: { pz: "servers", extra: 1 } }, true],
+				[{ SourcePlaceId: PLACE + 1, TeleportData: data }, false],
+				[{ TeleportData: data }, false],
+				[{ SourcePlaceId: PLACE, TeleportData: { pz: "solo" } }, false],
+				[{ SourcePlaceId: PLACE, TeleportData: "servers" }, false],
+				[{ SourcePlaceId: PLACE }, false],
+				[undefined, false],
+				["x", false],
+			];
+			const wrong = cases.filter(([jd, want]) => SL.arrivedFromList(jd, PLACE) !== want);
+			check(
+				"L5: arrivedFromList -- so o sinal da lista, e so vindo deste mesmo place (a doc: conferir SourcePlaceId)",
+				wrong.length === 0,
+				wrong.map(([jd]) => JSON.stringify(jd)).join("; "),
+			);
+		}
+	},
+);
 
 // ================================================================ verdict
 

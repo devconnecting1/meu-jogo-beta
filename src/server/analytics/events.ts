@@ -173,7 +173,7 @@ export const EVENT = {
 	SessionEnded: "SessionEnded",
 	/** a session's killing blows with one kind of weapon (one per kind used, on leaving) */
 	WeaponKills: "WeaponKills",
-	/** MP-26: the lobby's Servers list sent this player to another public town (server/match/serverList.ts) */
+	/** MP-26: a player ARRIVED from another public server's Servers list (server/match/townServices.ts) */
 	JoinedFromList: "JoinedFromList",
 } as const;
 
@@ -460,6 +460,8 @@ export class ServerAnalytics {
 	private readonly playerCount?: () => number;
 	private readonly entries = new Map<Player, Entry>();
 	private readonly bySave = new Map<PlayerSaveData, Entry>();
+	/** MP-26: who arrived from another server's list and has no loaded save yet (`arrivedFromList`) */
+	private readonly arrivals = new Map<Player, { day: number; players: number }>();
 	/** send times of the current window, a ring as large as the largest cap */
 	private readonly ring = new Array<number>();
 	private ringHead = 0;
@@ -714,6 +716,12 @@ export class ServerAnalytics {
 		};
 		this.entries.set(player, e);
 		this.bySave.set(save, e);
+		// MP-26: they arrived from another server's Servers list before their save was here (`arrivedFromList`)
+		const arrival = this.arrivals.get(player);
+		if (arrival !== undefined) {
+			this.arrivals.delete(player);
+			this.logArrival(e, arrival.day, arrival.players);
+		}
 		if (fresh) {
 			this.onboardingStep(e, 1, arm !== undefined ? { CustomField01: arm } : undefined);
 			// freshSave's gift: a brand-new save holds nothing else yet
@@ -739,6 +747,7 @@ export class ServerAnalytics {
 
 	/** the player left the server: the session's aggregates, once (Players.PlayerRemoving, BindToClose) */
 	playerLeft(player: Player): void {
+		this.arrivals.delete(player);
 		const e = this.entries.get(player);
 		if (e === undefined) return;
 		if (e.leftAt === undefined) e.leftAt = this.clock();
@@ -1158,14 +1167,24 @@ export class ServerAnalytics {
 	}
 
 	/**
-	 * MP-26: the lobby's Servers list sent this player to another public town -- TeleportAsync went through
-	 * (server/match/serverList.ts `join`; at most one a JOIN_GAP_S per player there). The value is the destination's
-	 * world day; the fields are what the choice was made on: how full it was, how old, and this player's best day
-	 * (the list sorts by the day closest to it). All of it the server's: the list entry it checked, and the save.
+	 * MP-26: this player ARRIVED here from another public server's Servers list (server/match/townServices.ts: the
+	 * join data carries the list's flag, from this very place) -- a join is counted where it lands, not when it was
+	 * sent (review of 0b44458, L5). The value is this town's world day; the fields are what the player chose: how full
+	 * it was when they came, how old, and their best day (the list sorts by the day closest to it). The save is not
+	 * loaded yet when they join: the event waits for `sessionLoaded`, once per session. The flag passes through the
+	 * client -- it moves this one event and nothing else.
 	 */
-	joinedFromList(player: Player, day: number, players: number): void {
+	arrivedFromList(player: Player, day: number, players: number): void {
 		const e = this.entries.get(player);
-		if (e === undefined || e.leftAt !== undefined) return;
+		if (e === undefined) {
+			this.arrivals.set(player, { day, players });
+			return;
+		}
+		this.logArrival(e, day, players);
+	}
+
+	private logArrival(e: Entry, day: number, players: number): void {
+		if (e.leftAt !== undefined) return;
 		this.custom(e, EVENT.JoinedFromList, math.max(1, math.floor(day)), {
 			CustomField01: players <= 1 ? "Players - 1" : players <= 3 ? "Players - 2-3" : "Players - 4+",
 			CustomField02: `World day - ${dayBucket(day)}`,
@@ -1381,8 +1400,9 @@ export function worldEnded(report: WipeReport, outcome: WorldEnd): void {
 }
 
 /** server/match/serverList.ts: the Servers list sent `player` to another public town (MP-26) */
-export function joinedFromList(player: Player, day: number, players: number): void {
-	guard(c => c.joinedFromList(player, day, players));
+/** server/match/townServices.ts: `player` arrived from another server's Servers list (MP-26), logged on arrival */
+export function arrivedFromList(player: Player, day: number, players: number): void {
+	guard(c => c.arrivedFromList(player, day, players));
 }
 
 /** server/main.server.ts `sim.onBackpack`: a craft, a use, an equip the server applied */

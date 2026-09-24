@@ -6,9 +6,10 @@
  * WHEN is not decided here: server/sim/life.ts rule 6 fires `onWorldWiped` once, after the last living survivor fell
  * and nobody paid a Rebirth in WIPE_DECISION_S (or everybody declined sooner). server/net/mpHost.ts answers that
  * hook with `endWorld`, and server/main.server.ts keeps the record (server/save/worldLog.ts). The one other caller is
- * the keeper's restart (MP-26: a private server's owner, or an admin; server/match/townRestart.ts), which hands the
- * host a report of reason "restart" -- the same end of the world, run through the same steps, with the survivors
- * still standing moved into the new town with their lives (`LifeKeeper.restartWorld`).
+ * the keeper's restart (MP-26: a private server's owner, or an admin on it; server/match/townRestart.ts), which hands
+ * the host a report of reason "restart" -- the same end of the world, run through the same steps, and for EVERY
+ * survivor of the town: standing or down, each starts a new life on day 1 in the new one (`LifeKeeper.survivorsNow`,
+ * read at the commit, and `restartWorld` with `everyone`). Its record stays in this server's memory.
  *
  * WHAT happens, in this order — the order is the contract:
  *
@@ -63,7 +64,8 @@ export interface EndedWorld {
 	endedAt: number;
 	/**
 	 * WipeReport.reason: "timeout" (nobody paid in the window), "declined" (every dead survivor chose not to) or
-	 * "restart" (its keeper asked for a new town, MP-26 -- server/match/townRestart.ts)
+	 * "restart" (its keeper asked for a new town, MP-26 -- server/match/townRestart.ts). A restart is kept in this
+	 * server's memory only, never in the shared document (review of 0b44458, M4): the stored list is MP-22's
 	 */
 	reason: string;
 	/** survivors who fell with it (the ones the window waited on) */
@@ -193,6 +195,11 @@ export function endWorld(
 	const world = generateTown(seed, options.pace);
 	const generateMs = clock !== undefined ? math.floor((clock() - t0) * 1000 + 0.5) : 0;
 	const mapHash = mapHashOf(world);
+	const restart = report.reason === "restart";
+	// MP-26: a keeper's restart ends EVERY life of the town -- read at the commit, not when it was asked: the new town
+	// takes frames to generate, and whoever entered, left or paid a Rebirth meanwhile is judged as the town ends
+	// (review of 0b44458, L1; a Rebirth is refused while a world is ending, server/main.server.ts)
+	if (restart) ended.days = math.max(1, math.floor(parts.sim.clock.day));
 	// everything that can fail comes first, and changes nothing until it has all succeeded (step 3): a throw from
 	// here out leaves the old world exactly as it was
 	parts.sim.restartWorld(world);
@@ -210,9 +217,13 @@ export function endWorld(
 	contain("closeTown", () => parts.replicator?.closeTown());
 	let fallen = new Array<number>();
 	contain("fallenOf", () => {
+		if (restart) {
+			report.dead = parts.lives.survivorsNow();
+			ended.fallen = report.dead.size();
+		}
 		fallen = parts.lives.fallenOf(report.dead, options.saveOf);
 	});
-	if (!contain("lives", () => parts.lives.restartWorld(fallen, options.saveOf))) {
+	if (!contain("lives", () => parts.lives.restartWorld(fallen, options.saveOf, restart))) {
 		// whatever it got done, nobody who fell stays down in a town nobody else can end the window of
 		contain("lives (fallback)", () => parts.lives.settleFallen(fallen, options.saveOf));
 	}
@@ -249,7 +260,7 @@ export function readEndedWorld(v: unknown): EndedWorld | undefined {
 		days: r.days,
 		startedAt: r.startedAt,
 		endedAt: r.endedAt,
-		reason: r.reason === "declined" || r.reason === "restart" ? r.reason : "timeout",
+		reason: r.reason === "declined" ? "declined" : "timeout",
 		fallen: wholeIn(r.fallen, 0, 1000) ? r.fallen : 0,
 		job: typeIs(r.job, "string") && r.job.size() <= JOB_MAX ? r.job : "",
 	};

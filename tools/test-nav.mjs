@@ -103,7 +103,7 @@ const Fly = require(join(SRC, "client/view/townFlyover.ts"));
 const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
 const { GAME_NAME } = require(join(SRC, "shared/module.ts"));
 const TOWNS = require(join(SRC, "shared/data/townNames.ts"));
-const { showServers, askRestartTown } = require(join(SRC, "client/ui/servers.ts"));
+const { showServers, askRestartTown, TRAVEL_TIMEOUT_S } = require(join(SRC, "client/ui/servers.ts"));
 const TownNet = require(join(SRC, "client/net/townNet.ts"));
 const { THEME } = require(join(SRC, "client/ui/theme.ts"));
 flush();
@@ -458,6 +458,66 @@ for (const sc of SCREENS) {
 		hiddenForGuest && shownForKeeper && popupUp && onCancel && dismissed && asked === "restart",
 		JSON.stringify({ hiddenForGuest, shownForKeeper, popupUp, onCancel, dismissed, asked }),
 	);
+
+	// review of 0b44458, L5: a trip that neither leaves nor fails gives the list back after TRAVEL_TIMEOUT_S; and a
+	// TeleportInitFailed that comes BEFORE the join's own answer is the last word, never overwritten by "Travelling"
+	const delays = [];
+	const realDelay = task.delay;
+	task.delay = (sec, fn) => delays.push({ sec, fn });
+	const statusOf = () => findIn(layer.FindFirstChild("Servers"), "Status")?.Text ?? "";
+	const pickFirstAndJoin = () => {
+		const root = layer.FindFirstChild("Servers");
+		findIn(root, "Row0", "TextButton")?.Activated.Fire();
+		flush();
+		findIn(root, "Join", "TextButton")?.Activated.Fire();
+		flush();
+	};
+	try {
+		TownNet.setTownRequester(req => (req.kind === "servers" ? { ok: true, servers: SERVER_ROWS } : { ok: true }));
+		const w1 = showServers(ctx);
+		flush();
+		pickFirstAndJoin();
+		const travelling = statusOf().startsWith("Travelling to");
+		const timer = delays.find(d => d.sec === TRAVEL_TIMEOUT_S);
+		timer?.fn();
+		flush();
+		const join1 = findIn(layer.FindFirstChild("Servers"), "Join", "TextButton");
+		const back = statusOf() === "The trip did not start. Try again" && join1?.Interactable === true;
+		w1.close();
+		flush();
+		check(
+			`Servers: uma viagem que nao sai nem falha em ${TRAVEL_TIMEOUT_S} s devolve a lista, dizendo por que (Join de novo)`,
+			travelling && timer !== undefined && back,
+			JSON.stringify({ travelling, timer: timer !== undefined, status: statusOf(), back }),
+		);
+		// the notice first, the answer after
+		TownNet.setTownRequester(req => {
+			if (req.kind === "servers") return { ok: true, servers: SERVER_ROWS };
+			TownNet.noticeJoinFailed("full");
+			return { ok: true };
+		});
+		delays.length = 0;
+		const w2 = showServers(ctx);
+		flush();
+		pickFirstAndJoin();
+		const saysFull = statusOf() === "That town is full";
+		const join2 = findIn(layer.FindFirstChild("Servers"), "Join", "TextButton");
+		const noTimer = delays.length === 0;
+		w2.close();
+		flush();
+		check(
+			"Servers: o TeleportInitFailed que chega ANTES da resposta e a ultima palavra ('full'), nunca coberto por 'Travelling'",
+			saysFull && join2?.Interactable === true && noTimer,
+			JSON.stringify({ saysFull, noTimer }),
+		);
+	} finally {
+		task.delay = realDelay;
+		TownNet.setTownRequester(req => {
+			townRequests.push(req);
+			if (req.kind === "servers") return { ok: true, servers: SERVER_ROWS };
+			return { ok: true };
+		});
+	}
 }
 
 // the "?" of every window: a pad player who opens the help lands on its Close -- not on the "?" left behind the

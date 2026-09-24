@@ -582,46 +582,77 @@ A mochila é do servidor a partir de `WORLD_SERVER_PHASE` (`shared/net/mpConfig.
 
 As três recomendações de §4.9 que o dono aprovou ("Pode fazer"). Cada uma fica no seu módulo; `main.client.ts` e `netClient.ts`, perto do limite de 200 locais, ganharam só uma chamada.
 
-**1. O nome da cidade, da semente.** `shared/data/townNames.ts` `townNameOf(seed)`: 37 prefixos (árvores, aves, pedras, ofícios) × 24 sufixos de lugar do inglês antigo; um passo MINSTD da semente (48271 × semente mod 2³¹ − 1, exato num double) escolhe a combinação, e uma combinação proibida é hasheada de novo. Uma combinação é proibida quando está na lista de bloqueio (cidades conhecidas e marcas, CON-02: Hollywood, Oakville, Ashford, Stonehaven…) ou dobra a letra da junção. Servidor e cliente chamam a **mesma** função compartilhada, e o fio não muda: o nome não é mandado, é derivado. A função não toca no `TownRng` do gerador. Onde aparece: o título da seção Town do lobby (nome próprio, `AutoLocalize` desligado; "Town", traduzível, até a semente chegar), o título do placar ("Millbrook · Survivors · 3 / 6"), a notícia do fim do mundo (`client/boot/serverTown.ts` `townEndText`: "Millbrook fell on day 4. Cedarford rises: day 1"), a lista Servers e o log do servidor. `npm run test:seed` §5 confere o nome sob relógio, sorteio e serviços envenenados, que servidor e cliente usam a mesma função, que o nome não mexe na cidade, e 20 000 sementes (todo nome das listas, nenhum bloqueado, espalhados). `test:nav` trata os nomes como nomes próprios.
+**1. O nome da cidade, da semente.** `shared/data/townNames.ts` `townNameOf(seed)`: 42 prefixos × 20 sufixos de lugar do inglês antigo. Os prefixos são as palavras menos comuns da sebe, do quintal e da oficina (Bracken, Plover, Tallow…), **não** as árvores e pedras de que toda cidade real é feita (Oak, Pine, Stone, Willow): bem menos combinações dão um lugar real (revisão de 0b44458, L6). Um passo MINSTD da semente (48271 × semente mod 2³¹ − 1, exato num double) escolhe a combinação, e uma combinação proibida é hasheada de novo. Uma combinação é proibida quando:
 
-**2. Restart town (o dono do VIP recomeça a cidade)** (`server/match/townRestart.ts` e `townServices.ts`, `MpHost.restartTown`):
+- está na lista de bloqueio — os lugares reais que as listas soletram (Cinderford, Kettlewell, Sedgemoor…) e, em qualquer lista futura, os que a revisão apontou (Stonegate, Pinecrest, Oakhurst, Willowdale, Hawkhurst, Ironwood) e os das listas antigas;
+- dobra a letra da junção;
+- faz "-leley".
 
-- **Quem pode.** O dono do servidor privado (`game.PrivateServerOwnerId`, no servidor dele) e os admins (`shared/admin/config.ts`), em qualquer servidor. O servidor marca quem pode com o atributo `pz_town_keeper` no Player, e só essa pessoa vê o botão. Um cliente que force o atributo em si mesmo ganha um botão que o servidor recusa. Recusado: um amigo no VIP do dono, qualquer jogador de servidor público, o servidor reservado do Play solo (dono 0).
-- **O caminho.** Um RemoteFunction próprio: `ReplicatedStorage/PZTownNet/TownRequest` `{kind: "restart"}`, sem nenhum outro campo lido. Ele passa pela contabilidade de flood do host (§8.2), por um balde por jogador (6 de uma vez, 1/s) e pela regra de quem pode. Depois vêm o limite de 1 por 120 s por servidor (`RestartGate`) e o `restartTown` do host, que diz "busy" se uma cidade nova já está sendo feita.
-- **O que acontece.** O mesmo `endWorld` da MP-22, com `WipeReport{reason: "restart", by, dead: lives.downNow()}`:
-    - uma semente nova, sorteada por dentro;
-    - quem estava caído ganha vida nova;
-    - quem estava de pé continua a vida e é levado a um ponto seguro da cidade nova (`LifeKeeper.restartWorld` já cobria esse ramo);
-    - o `WorldReset` vai a todos com a causa **Restarted**. É um byte a mais no protocolo, a nota 21 de `shared/net/protocol.ts`, para o cliente não dizer "fell";
-    - o `onWorldWiped` de sempre grava o registro do mundo (`reason: "restart"`) e o `ProjectZ_PrivateTowns`, com a semente nova e o dia 1, na hora.
-- **Auditoria.** Todo pedido que passa do balde entra no log de admin por UserId: `town:restart`, alvo "own town". Os permitidos são gravados no DataStore; as recusas ficam em memória e no output.
-- **A UI.** O lobby pergunta antes ("Restart town?", o destrutivo à esquerda, o controle cai no Cancel, o B fecha sem pedir nada). O resultado chega como qualquer fim de mundo.
-- **Testes.** `npm run test:reset` §21 (pelo servidor real e pelo remote), `test:nav`, `test:lobby`.
+Servidor e cliente chamam a **mesma** função compartilhada, e o fio não muda: o nome não é mandado, é derivado. A função não toca no `TownRng` do gerador. Onde aparece: o título da seção Town do lobby (nome próprio, `AutoLocalize` desligado; "Town", traduzível, até a semente chegar), o título do placar ("Brackenmere · Survivors · 3 / 6"), a notícia do fim do mundo (`client/boot/serverTown.ts` `townEndText`: "Brackenmere fell on day 4. Ploverstead rises: day 1"), a lista Servers e o log do servidor. `npm run test:seed` §5 confere o nome sob relógio, sorteio e serviços envenenados, que servidor e cliente usam a mesma função, que o nome não mexe na cidade, 20 000 sementes (todo nome das listas, nenhum bloqueado, espalhados), nenhuma marca e os nomes apontados pela revisão. `test:nav` trata os nomes como nomes próprios.
+
+**2. Restart town (o dono do VIP recomeça a cidade)** (`server/match/townRestart.ts` e `townServices.ts`, `MpHost.restartTown`). As decisões do orquestrador na revisão de 0b44458 (M1–M4, L1–L3) estão incorporadas.
+
+- **Quem pode.** **Só num servidor privado com dono** (`PrivateServerId` ≠ "" e `PrivateServerOwnerId` ≠ 0, do DataModel):
+    - pode o dono dele, ou um admin (`shared/admin/config.ts`) **que esteja nele**;
+    - não pode ninguém num servidor público — admins inclusive, porque a cidade pública é de todos (M3);
+    - não pode ninguém no reservado do Play solo (dono 0);
+    - não pode um amigo no VIP do dono.
+
+  O servidor marca quem pode com o atributo `pz_town_keeper` no Player, e só essa pessoa vê o botão. Num servidor público ninguém é marcado, logo o lobby não mostra o botão. Um cliente que force o atributo em si mesmo ganha um botão que o servidor recusa.
+- **O caminho.** Um RemoteFunction próprio: `ReplicatedStorage/PZTownNet/TownRequest` `{kind: "restart"}`, sem nenhum outro campo lido. O pedido passa, em ordem:
+    - pela contabilidade de flood do host (§8.2). Um payload malformado de **qualquer** forma conta, inclusive uma tabela no formato errado (L6);
+    - por um balde por jogador (6 de uma vez, 1/s);
+    - pela regra de quem pode;
+    - pelo limite de 1 por 120 s por servidor (`RestartGate`);
+    - pelo `restartTown` do host, que diz "busy" se uma cidade nova já está sendo feita.
+- **O que acontece (M1 + M2): um fim de mundo inteiro, para todos.** O mesmo `endWorld` da MP-22, com `WipeReport{reason: "restart", by}`:
+    - uma semente nova, sorteada por dentro, no dia 1;
+    - **toda vida da cidade acaba**: todo sobrevivente que pisou nela — de pé, caído, no lobby, ou fora há menos de 5 min (a vida devida, `newLifeOwed`) — começa um New game no dia 1 na cidade nova (`LifeKeeper.survivorsNow` e `restartWorld` com `everyone`);
+    - a lista é lida **na hora em que a cidade nova entra**, não quando o pedido chegou (L1);
+    - nível, skills, moedas e pacotes ficam, como em todo New game (MP-20);
+    - **nada é pago** pelo restart: nem moeda, nem título, nem recorde;
+    - quem nunca pisou nesta cidade não tem vida nela para acabar;
+    - o `WorldReset` vai a todos com a causa **Restarted** (um byte a mais no protocolo, nota 21 de `shared/net/protocol.ts`), para o cliente não dizer "fell";
+    - o `ProjectZ_PrivateTowns` recebe a semente nova e o dia 1 na hora.
+
+  Assim o restart nunca é um jeito de repetir os primeiros dias fáceis com uma vida que continua, nem de acabar só a vida dos amigos caídos.
+- **Nenhuma moeda por uma vida que acaba (L1).** Enquanto um fim de mundo está em andamento (`MpHost.worldEnding`: a cidade nova sendo gerada, seja a MP-22 ou um restart), o servidor não vende Rebirth nem New game. Ele responde `invalid`, que o cliente já lê como "vem aí uma vida nova".
+- **Registros (M4, L2, L3).**
+    - O restart de um **admin** é ação de admin, gravada no log de auditoria como as outras.
+    - O do **dono** e toda **recusa** ficam só na memória e na saída do servidor, **nunca** nas chaves gravadas do `ProjectZ_AdminLog`, então não empurram linhas de admin nem de `auto:flood` para fora.
+    - Uma recusa é registrada uma vez por UserId a cada 60 s.
+    - O alvo é "own town" (agora em `PLACE_TARGETS`).
+    - A cidade que acabou fica na memória deste servidor (`WorldLog.remember`), nunca no documento compartilhado `ended` dos mundos da MP-22.
+- **A UI.** O lobby pergunta antes: "Restart town?", com o texto dizendo com todas as letras que a vida de todo mundo acaba. O controle cai no Cancel e o B fecha sem pedir nada. O resultado chega como qualquer fim de mundo.
+- **Testes.** `npm run test:reset` §21 (pelo servidor real e pelo remote, incluindo o Rebirth recusado com a cidade nova no meio da geração e as chaves gravadas da auditoria), `test:nav`, `test:lobby`.
 
 **3. A lista Servers** (`server/match/serverList.ts`, `client/ui/servers.ts`):
 
 - **Publicar.** Só um servidor **público e ao vivo** publica: nunca um privado, um reservado ou o Studio (`JobId` vazio).
-    - A entrada vai para um `MemoryStoreSortedMap` `ProjectZ_Servers`, com a chave = `JobId` e o valor `{v, kind, seed, day, n, max, t}`. Nenhum UserId, nenhum nome.
+    - A entrada vai para um `MemoryStoreSortedMap` `ProjectZ_Servers`, com a chave = `JobId` e o valor `{v, kind, place, seed, day, n, max, t}`. Nenhum UserId, nenhum nome.
     - A chave de ordem é 0 aberto ou 1 cheio, então uma leitura traz os abertos primeiro.
     - O TTL é de 90 s: um servidor que morre sai sozinho.
     - O servidor escreve quando algo muda, no máximo a cada 15 s, e a cada 30 s de qualquer jogo. Uma tentativa que falha também conta, para não martelar uma loja com problema.
-    - O servidor remove a entrada quando esvazia e no `BindToClose`.
+    - Cada tique roda em `pcall`: um tique que lança é avisado e o laço segue (L4).
+    - O servidor remove a entrada quando esvazia e no `BindToClose`. O fechamento **ganha de uma escrita ainda no ar**: ela, ao voltar, vê o servidor fechando e remove a entrada de novo; depois do fechamento nada é escrito (L4).
 - **Ler.** A leitura é preguiçosa: só quando um jogador abre a lista.
     - Ela faz `GetRangeAsync(Ascending, 50)` e serve o servidor inteiro por 30 s, inclusive uma leitura que falhou.
-    - Ficam de fora: o próprio servidor, entradas velhas (mais de 90 s), malformadas ou não públicas.
+    - Ficam de fora: o próprio servidor, entradas velhas (mais de 90 s), malformadas, não públicas ou de **outro place** da experiência (L6).
     - Ordem: abertos primeiro, depois o dia mais perto do recorde do jogador, depois o mais cheio. São no máximo 20 linhas.
 - **Entrar.** A decisão é do servidor.
     - Pré-condições: o jogador está no lobby (nunca dentro da cidade), com o save carregado, sem outro teleporte a caminho, e no máximo uma entrada a cada 5 s.
     - O servidor lê de novo a entrada (`GetAsync`, nunca o cache nem a palavra do cliente) e recusa:
-        - `gone`: sumiu, está velha, não é pública ou está malformada;
+        - `gone`: sumiu, está velha, não é pública, é de outro place ou está malformada;
         - `full`: está cheia;
         - `same`: é o próprio servidor;
         - `invalid`: um `JobId` que não é GUID.
     - Aceita, a entrada segue o SafeTeleport da documentação: `TeleportAsync(game.PlaceId, {player}, TeleportOptions{ServerInstanceId = jobId})` em `pcall`, até 3 tentativas a 1 s. A cada tentativa o servidor pergunta de novo se o jogador ainda está no lobby.
-    - Um `TeleportInitFailed` depois disso vira o `TownNotice{k: "joinFailed", why}`: `GameFull` dá `full`, `GameEnded` dá `gone`, `Flooded` dá `rate`. A janela o mostra, e o jogador fica onde está.
+    - Um `TeleportInitFailed` vira o `TownNotice{k: "joinFailed", why}`: `GameFull` dá `full`, `GameEnded` dá `gone`, `Flooded` dá `rate`. A janela o mostra, e o jogador fica onde está.
+    - O `TeleportInitFailed` pode chegar **antes** de o `TeleportAsync` voltar. Nesse caso a resposta do servidor é essa falha, nunca "sent", e a janela nunca a cobre com "Travelling" (L5).
+    - Uma viagem que nem sai nem falha em 30 s devolve a lista, dizendo "The trip did not start. Try again".
     - Enquanto o teleporte está a caminho (no máximo 30 s), o host não põe o jogador na cidade (`MpHostOptions.mayEnter` ← `joining`): nunca um teleporte no meio de uma luta.
     - A trava de sessão do save é a de sempre: o `PlayerRemoving` da origem grava e solta, e o destino espera até `LOCK_WAIT` (15 s).
-    - O evento `JoinedFromList` (docs/ANALYTICS.md §5) sai quando o teleporte é aceito.
+    - **A entrada é contada onde chega** (L5): o teleporte leva `SetTeleportData({pz: "servers"})`. O destino confere no `Player:GetJoinData()` o `SourcePlaceId` (este mesmo place, como a documentação recomenda) e o sinal, e registra o `JoinedFromList` (docs/ANALYTICS.md §5) quando o save dele carrega, uma vez por sessão. Os `TeleportData` passam pelo cliente, então são usados para essa contagem e para nada mais.
 - **Ping e região: não.** O `Player:GetNetworkPing()` é o RTT do jogador para o servidor **em que ele está**, e nenhuma API do motor diz a região de um servidor (só as APIs de Open Cloud, fora do jogo). A janela mostra só o que o servidor publicou.
 - **Studio.** O `TeleportService` não funciona em playtest do Studio, e o MemoryStore do Studio é separado do jogo ao vivo. O servidor nem pede os dois serviços (`serverKindOf` → "studio"), e a janela diz "The server list works in the published game, not in Studio".
 
@@ -638,6 +669,7 @@ As três recomendações de §4.9 que o dono aprovou ("Pode fazer"). Cada uma fi
 - Studio: os dados do MemoryStore ficam isolados do jogo ao vivo, e a cota por usuário é bem menor ("Test and debug in Studio").
 - `TeleportService:TeleportAsync(placeId, players, teleportOptions)`: só no servidor (projects/teleporting).
 - `TeleportOptions.ServerInstanceId`: leva a um servidor público específico (projects/teleport, "Teleport to specific servers").
+- `TeleportOptions:SetTeleportData(data)` e `Player:GetJoinData()` (`TeleportData`, `SourcePlaceId`): os dados passam pelo cliente — a documentação manda conferir o `SourcePlaceId` antes de usar (reference/engine/classes/Player, "Retrieve Server TeleportData"; projects/teleporting, "Send and retrieve teleport data").
 - `TeleportService.TeleportInitFailed(player, teleportResult, errorMessage, placeId, teleportOptions)`: um teleporte que falha ao começar deixa o jogador no servidor, e as opções servem para tentar de novo (projects/teleporting, "Handle failed teleports").
 - `DataModel.JobId`, `PrivateServerId` e `PrivateServerOwnerId`, pelas tipagens.
 - O motor não tem API da região de um servidor. O que existe é `GET /server-management/v1/…/game-servers` do Open Cloud, fora do jogo.
@@ -663,8 +695,9 @@ As três recomendações de §4.9 que o dono aprovou ("Pode fazer"). Cada uma fi
 3. `GameFull` numa corrida pela última vaga volta como aviso.
 4. O `BindToClose` tira a entrada.
 5. A latência do `GetRangeAsync` com a janela aberta.
-6. No VIP, com a conta do dono: Restart town aparece só para o dono e troca a cidade de todos, inclusive de quem está no lobby. A próxima sessão abre na cidade nova.
-7. No Studio: a janela diz que a lista é do jogo publicado, e um admin consegue o Restart town para testar.
+6. No VIP, com a conta do dono: Restart town aparece só para o dono (nunca num servidor público), o aviso diz que a vida de todo mundo acaba, e todos — de pé, caídos e no lobby — começam o dia 1 na cidade nova. A próxima sessão abre nela.
+7. No Studio: a janela diz que a lista é do jogo publicado, e o Restart town não aparece (o Studio não é um servidor privado; para testá-lo, um VIP do place publicado).
+8. O `JoinedFromList` aparece no painel de analytics do destino (os `TeleportData` chegam no `GetJoinData` do servidor).
 
 ---
 

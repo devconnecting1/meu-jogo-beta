@@ -4,8 +4,8 @@
  *   ┌─────────────────────────── Servers ──────────────────────────── X ┐
  *   │ ┌ Public towns ───────────────────────────────────────────────────┐ │
  *   │ │ Town                          Day      Players      Status      │ │
- *   │ │ Millbrook                       6        3 / 6      Open        │ │
- *   │ │ Cedarford                      11        2 / 6      Open        │ │
+ *   │ │ Brackenmere                     6        3 / 6      Open        │ │
+ *   │ │ Ploverstead                    11        2 / 6      Open        │ │
  *   │ │ Wrenvale                        4        6 / 6      Full        │ │
  *   │ └─────────────────────────────────────────────────────────────────┘ │
  *   │ 3 towns open                                  [Refresh]  [ Join ]  │
@@ -39,6 +39,8 @@ const ROWS_SHOWN = 6;
 const TABLE_H = TABLE_PAD * 2 + HEADER_H + TABLE_GAP + ROWS_SHOWN * ROW_H + (ROWS_SHOWN - 1) * TABLE_GAP;
 const FOOT_H = 44;
 const JOIN_W = 150;
+/** a trip that has neither left nor failed this long after the server sent it gives the list back (s) */
+export const TRAVEL_TIMEOUT_S = 30;
 const REFRESH_W = 140;
 
 /** what the window says for each refusal (shared/net/townNet.ts TownRefusal) */
@@ -80,6 +82,8 @@ export function showServers(ctx: GameContext): ServersWindow {
 	let closed = false;
 	let loading = false;
 	let joining = false;
+	/** the join under way (a number bumped by every start and end: late answers of an older one are ignored) */
+	let trip = 0;
 	let rows: Array<ServerRow> = [];
 	let unsubscribe: (() => void) | undefined;
 	// assigned below, once the table and the buttons they touch exist (the callbacks only run after that)
@@ -217,34 +221,44 @@ export function showServers(ctx: GameContext): ServersWindow {
 		});
 	};
 
+	/** the window's answer to a join that is over without the player leaving: back to the list, with why */
+	const joinOver = (text: string): void => {
+		joining = false;
+		trip += 1;
+		setButtonEnabled(refreshButton, true);
+		setStatus(text, true);
+		updateJoin();
+	};
 	doJoin = (): void => {
 		const r = towns.selectedItem();
 		if (closed || loading || joining || r === undefined || full(r)) return;
 		joining = true;
+		// every join is a trip of its own: an answer, a notice or a timeout of an older one moves nothing
+		trip += 1;
+		const mine = trip;
 		const name = townNameOf(r.seed);
 		setStatus(`${tr("Joining")} ${name}...`);
 		setButtonEnabled(refreshButton, false);
 		updateJoin();
 		townRequestAsync({ kind: "join", jobId: r.jobId }, res => {
-			if (closed) return;
-			if (res.ok) {
-				// the platform is moving this player: nothing to press meanwhile (a refusal after this is a notice)
-				setStatus(`${tr("Travelling to")} ${name}...`);
+			// a TeleportInitFailed can come BEFORE this answer (review of 0b44458, L5): that trip is already over
+			if (closed || mine !== trip) return;
+			if (!res.ok) {
+				joinOver(tr(refusalText(res.reason)));
 				return;
 			}
-			joining = false;
-			setButtonEnabled(refreshButton, true);
-			setStatus(tr(refusalText(res.reason)), true);
-			updateJoin();
+			// the platform is moving this player: nothing to press meanwhile. A refusal after this is a notice; and a
+			// trip that neither lands nor fails within TRAVEL_TIMEOUT_S gives the list back, saying so
+			setStatus(`${tr("Travelling to")} ${name}...`);
+			task.delay(TRAVEL_TIMEOUT_S, () => {
+				if (!closed && mine === trip && joining) joinOver(tr("The trip did not start. Try again"));
+			});
 		});
 	};
 
 	unsubscribe = onJoinFailed(why => {
-		if (closed) return;
-		joining = false;
-		setButtonEnabled(refreshButton, true);
-		setStatus(tr(refusalText(why)), true);
-		updateJoin();
+		if (closed || !joining) return;
+		joinOver(tr(refusalText(why)));
 	});
 
 	updateJoin();
@@ -265,8 +279,10 @@ export function showServers(ctx: GameContext): ServersWindow {
 export function askRestartTown(ctx: GameContext, seed: number | undefined): void {
 	const lang = ctx.save.settings.langType;
 	const tr = (k: string): string => langGet(k, lang);
+	// the orchestrator's decision on the review of 0b44458 (M1 + M2): a restart ends EVERY life of the town -- said
+	// plainly, before anything is sent
 	const warning = tr(
-		"Everyone here moves to a new town on day 1. Survivors who are down start a new life; everyone standing keeps theirs. This town is gone for good.",
+		"Everyone's current life ends: everybody who played in this town, standing or down, starts a new game on day 1 in a new town. Levels, skills, coins and packs are kept. This town is gone for good.",
 	);
 	popup(ctx, tr("Restart town?"), seed !== undefined ? `${townNameOf(seed)}\n${warning}` : warning, [
 		{

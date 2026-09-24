@@ -508,7 +508,7 @@ export const LANG_TABLE: Array<string> = [
 	"Already at full health",
 	"Back on your feet",
 	// MP-22: nobody was left alive, the world ended and a new town begins at day 1 (the day it fell on follows). MP-26:
-	// the towns are named ("Millbrook fell on day 4. Cedarford rises: day 1", client/boot/serverTown.ts townEndText),
+	// the towns are named ("Brackenmere fell on day 4. Ploverstead rises: day 1", client/boot/serverTown.ts townEndText),
 	// and a town its keeper restarted "was restarted" -- it did not fall
 	"The town fell on day",
 	"fell on day",
@@ -710,7 +710,8 @@ export const LANG_TABLE: Array<string> = [
 	"Restart town",
 	"Restart town?",
 	"Restart",
-	"Everyone here moves to a new town on day 1. Survivors who are down start a new life; everyone standing keeps theirs. This town is gone for good.",
+	"Everyone's current life ends: everybody who played in this town, standing or down, starts a new game on day 1 in a new town. Levels, skills, coins and packs are kept. This town is gone for good.",
+	"The trip did not start. Try again",
 	"A new town is being made...",
 	"The town was restarted a moment ago. Try again later",
 	"A new town is already being made",

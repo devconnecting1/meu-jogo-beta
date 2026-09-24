@@ -673,11 +673,28 @@ section("5) o nome da cidade (MP-26): da semente, o mesmo no servidor e em todo 
 		"nike",
 		"ford",
 		"apple",
+		"tinder",
+		"starling",
 	];
 	check(
 		"nenhum prefixo nem nome inteiro e uma marca (CON-02)",
 		TN.TOWN_PREFIXES.every(p => !BRANDS.includes(p.toLowerCase())) &&
 			[...counts.keys()].every(n => !BRANDS.includes(n.toLowerCase())),
+	);
+	// the review of 0b44458 (L6): real towns flagged are never a name, whatever the lists become
+	const FLAGGED = [
+		"Stonegate",
+		"Pinecrest",
+		"Oakhurst",
+		"Willowdale",
+		"Hawkhurst",
+		"Ironwood",
+		"Cinderford",
+		"Kettlewell",
+	];
+	check(
+		"os nomes reais apontados pela revisao estao na lista de bloqueio e nunca saem (Stonegate, Pinecrest, Oakhurst...)",
+		FLAGGED.every(n => TN.TOWN_NAME_BLOCKLIST.includes(n)) && FLAGGED.every(n => !counts.has(n)),
 	);
 	// what is not a seed still gets a name (a label never shows nothing), and it is seed 1's
 	const odd = [0, -5, 1.5, Number.NaN, Infinity, CFG.TOWN_SEED_MAX + 10];

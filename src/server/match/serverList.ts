@@ -8,8 +8,10 @@
  *   publish   `tick` (every TICK_S, from the wiring's loop) writes this server's entry when it changed -- at most once
  *             per PUBLISH_MIN_GAP_S -- and at least every PUBLISH_EVERY_S, with a TTL of ENTRY_TTL_S: a server that
  *             stops (a crash, a shutdown that could not say so) drops off the list on its own. A server with nobody
- *             on it removes its entry; so does the shutdown (`withdraw`). Only a public, live server publishes: a
- *             private or reserved server is not anybody's to join from a list, and Studio has no JobId.
+ *             on it removes its entry; so does the shutdown (`withdraw`), which also wins over a write still in
+ *             flight. Only a public, live server publishes: a private or reserved server is not anybody's to join
+ *             from a list, and Studio has no JobId. The entry names its place: another place of the experience is
+ *             never listed nor joined.
  *   list      `list(player)`: GetRangeAsync over the map, at most READ_COUNT entries, cached READ_CACHE_S for the
  *             whole server (every lobby on it shares one read), and read only when somebody asks. The rows skip this
  *             server and anything stale or malformed, and come sorted: not full first, then the day closest to the
@@ -19,7 +21,9 @@
  *             entry again (GetAsync) and refuses one that is gone, stale, full, not public or this very server, then
  *             TeleportAsync with ServerInstanceId -- retried TELEPORT_TRIES times a second apart while the player is
  *             still in the lobby (the docs' SafeTeleport). A failure after that arrives as TeleportInitFailed
- *             (`initFailed`): the player is told, and stays.
+ *             (`initFailed`): the player is told, and stays -- even when it comes while TeleportAsync still yields.
+ *             The join is counted where it LANDS: the teleport carries SERVER_LIST_TELEPORT_DATA, and the destination
+ *             logs JoinedFromList (`arrivedFromList`, server/match/townServices.ts).
  *
  * THE QUOTA (memory-stores index.md "Limits and quotas": 1000 + 120 × concurrent users request units a minute for the
  * whole experience; GetRangeAsync costs one unit per item returned, a write or a GetAsync one). Per server, at most:
@@ -91,6 +95,8 @@ export interface ServerListHost {
 	kind: ServerKind;
 	/** this server's JobId */
 	jobId: string;
+	/** game.PlaceId: an entry of another place of the experience is never listed nor joined (review of 0b44458, L6) */
+	placeId: number;
 	/** undefined: MemoryStoreService could not be had */
 	store: ListStore | undefined;
 	/** undefined: TeleportService could not be had */
@@ -114,8 +120,6 @@ export interface ServerListHost {
 	connected: (player: Player) => boolean;
 	/** the player's best day (the list sorts by the day closest to it); undefined while unknown */
 	bestDay: (player: Player) => number | undefined;
-	/** TeleportAsync went through (analytics' JoinedFromList) */
-	joined: (player: Player, row: ServerRow) => void;
 	/** a line for the server log (ids only) */
 	log: (line: string) => void;
 	/** a fixed sentence for the Error Report, the detail in the log line after it (docs/ANALYTICS.md §10) */
@@ -126,6 +130,8 @@ export interface ServerListHost {
 interface Entry {
 	v: number;
 	kind: string;
+	/** the place it runs (game.PlaceId) */
+	place: number;
 	seed: number;
 	day: number;
 	n: number;
@@ -142,10 +148,10 @@ function wholeIn(v: unknown, min: number, max: number): v is number {
 export function readEntry(v: unknown): Entry | undefined {
 	if (!typeIs(v, "table")) return undefined;
 	const r = v as Record<string, unknown>;
-	if (r.v !== ENTRY_VERSION || !typeIs(r.kind, "string")) return undefined;
+	if (r.v !== ENTRY_VERSION || !typeIs(r.kind, "string") || !wholeIn(r.place, 0, 1e15)) return undefined;
 	if (!wholeIn(r.seed, 1, 2147483646) || !wholeIn(r.day, 1, 1e6)) return undefined;
 	if (!wholeIn(r.max, 1, 100) || !wholeIn(r.n, 0, r.max) || !wholeIn(r.t, 0, 1e12)) return undefined;
-	return { v: r.v, kind: r.kind, seed: r.seed, day: r.day, n: r.n, max: r.max, t: r.t };
+	return { v: r.v, kind: r.kind, place: r.place, seed: r.seed, day: r.day, n: r.n, max: r.max, t: r.t };
 }
 
 /** request units one minute can cost this server at most, with `players` on it (the header's arithmetic) */
@@ -171,6 +177,8 @@ interface Join {
 	jobId: string;
 	row: ServerRow;
 	at: number;
+	/** a TeleportInitFailed already came for it -- maybe while TeleportAsync was still yielding (review of 0b44458, L5) */
+	failed?: TownRefusal;
 }
 
 export class ServerList {
@@ -184,6 +192,8 @@ export class ServerList {
 	private cacheAt = -math.huge;
 	private cacheOk = false;
 	private reading = false;
+	/** the server is shutting down (`withdraw`): nothing more is published */
+	private closed = false;
 	private readonly joins = new Map<Player, Join>();
 	private readonly lastJoin = new Map<Player, number>();
 
@@ -204,6 +214,7 @@ export class ServerList {
 		return {
 			v: ENTRY_VERSION,
 			kind: "public",
+			place: h.placeId,
 			seed: town.seed,
 			day: math.max(1, math.floor(town.day)),
 			n: math.clamp(math.floor(h.players()), 0, max),
@@ -214,7 +225,7 @@ export class ServerList {
 
 	/** every TICK_S: writes the entry when it is due (changed and PUBLISH_MIN_GAP_S old, or PUBLISH_EVERY_S old) */
 	tick(): void {
-		if (!this.publishes()) return;
+		if (!this.publishes() || this.closed) return;
 		const h = this.host;
 		const store = h.store!;
 		const entry = this.entryNow();
@@ -236,6 +247,12 @@ export class ServerList {
 		this.publishedAt = h.clock();
 		this.stats.writes += 1;
 		const [ok, err] = pcall(() => store.set(h.jobId, entry, ENTRY_TTL_S, entry.n >= entry.max ? 1 : 0));
+		if (this.closed) {
+			// the server began shutting down while this write was in flight (SetAsync yields): whatever order the two
+			// requests land in, the entry must not outlive the server by a TTL -- it goes again, now
+			if (ok) this.remove(store);
+			return;
+		}
 		if (ok) {
 			this.published = entry;
 		} else {
@@ -252,9 +269,15 @@ export class ServerList {
 		if (!ok) h.warn("the server list entry could not be removed", tostring(err));
 	}
 
-	/** the server is shutting down: its entry goes at once (the TTL would take ENTRY_TTL_S) */
+	/**
+	 * The server is shutting down: its entry goes at once (the TTL would take ENTRY_TTL_S), and nothing is written
+	 * after this -- a write already in flight removes it again when it returns (`tick`).
+	 */
 	withdraw(): void {
-		if (!this.publishes() || this.published === undefined) return;
+		if (!this.publishes()) return;
+		const inFlight = this.closed;
+		this.closed = true;
+		if (this.published === undefined && !inFlight) return;
 		this.remove(this.host.store!);
 	}
 
@@ -302,7 +325,8 @@ export class ServerList {
 		const best = h.bestDay(player) ?? 1;
 		const rows = new Array<ServerRow>();
 		for (const { jobId, entry } of entries) {
-			if (jobId === h.jobId || entry.kind !== "public" || now - entry.t > ENTRY_STALE_S) continue;
+			if (jobId === h.jobId || entry.kind !== "public" || entry.place !== h.placeId) continue;
+			if (now - entry.t > ENTRY_STALE_S) continue;
 			rows.push({ jobId, seed: entry.seed, day: entry.day, players: entry.n, max: entry.max });
 		}
 		rows.sort((a, b) => {
@@ -352,7 +376,12 @@ export class ServerList {
 			return { ok: false, reason: "unavailable" };
 		}
 		const entry = readEntry(value);
-		if (entry === undefined || entry.kind !== "public" || h.now() - entry.t > ENTRY_STALE_S) {
+		if (
+			entry === undefined ||
+			entry.kind !== "public" ||
+			entry.place !== h.placeId ||
+			h.now() - entry.t > ENTRY_STALE_S
+		) {
 			return { ok: false, reason: "gone" };
 		}
 		if (entry.n >= entry.max) return { ok: false, reason: "full" };
@@ -368,10 +397,13 @@ export class ServerList {
 			}
 			this.stats.teleports += 1;
 			const [sent, err] = pcall(() => h.teleport!(player, jobId));
+			// the platform may already have said no while TeleportAsync yielded (TeleportInitFailed, `initFailed`): the
+			// player stays, and the answer is that failure, never "sent"
+			if (join.failed !== undefined) return { ok: false, reason: join.failed };
 			if (sent) {
 				join.at = h.clock();
-				h.log(`[server list] ${player.UserId} -> ${jobId} (seed ${entry.seed}, day ${entry.day})`);
-				h.joined(player, row);
+				// the join is COUNTED where it lands (analytics' JoinedFromList, on the destination: `arrivedFromList`)
+				h.log(`[server list] ${player.UserId} -> ${jobId} (seed ${entry.seed}, day ${entry.day}): sent`);
 				return { ok: true };
 			}
 			lastErr = err;
@@ -391,10 +423,12 @@ export class ServerList {
 		if (join === undefined) return undefined;
 		this.joins.delete(player);
 		this.host.log(`[server list] ${player.UserId} -> ${join.jobId}: ${result}`);
-		if (result === "GameFull") return "full";
-		if (result === "GameEnded" || result === "GameNotFound") return "gone";
-		if (result === "Flooded") return "rate";
-		return "failed";
+		let why: TownRefusal = "failed";
+		if (result === "GameFull") why = "full";
+		else if (result === "GameEnded" || result === "GameNotFound") why = "gone";
+		else if (result === "Flooded") why = "rate";
+		join.failed = why;
+		return why;
 	}
 
 	/** the player left the server (the teleport worked, or they quit): nothing of theirs is kept */
@@ -417,7 +451,25 @@ export class ServerList {
 // ---------------------------------------------------------------- the Roblox side
 
 /** the host's pieces that are not a Roblox service (server/match/townServices.ts hands them over) */
-export type ServerListGame = Omit<ServerListHost, "kind" | "jobId" | "store" | "teleport" | "clock" | "now" | "wait">;
+export type ServerListGame = Omit<
+	ServerListHost,
+	"kind" | "jobId" | "placeId" | "store" | "teleport" | "clock" | "now" | "wait"
+>;
+
+/**
+ * What a join from the list carries to the destination (TeleportOptions:SetTeleportData): a flag, and nothing else. It
+ * passes through the client, so the destination trusts it for one thing only -- counting the join where it lands
+ * (analytics' JoinedFromList) -- and only from this very place (`arrivedFromList`). Review of 0b44458, L5.
+ */
+export const SERVER_LIST_TELEPORT_DATA = { pz: "servers" };
+
+/** Player:GetJoinData() of a player the Servers list of this place sent here (the docs: check SourcePlaceId first) */
+export function arrivedFromList(joinData: unknown, placeId: number): boolean {
+	if (!typeIs(joinData, "table")) return false;
+	const d = joinData as Record<string, unknown>;
+	if (d.SourcePlaceId !== placeId || !typeIs(d.TeleportData, "table")) return false;
+	return (d.TeleportData as Record<string, unknown>).pz === SERVER_LIST_TELEPORT_DATA.pz;
+}
 
 /**
  * The real services plugged in: MemoryStoreService's sorted map and TeleportService, each got in pcall (a place where
@@ -455,6 +507,7 @@ export function startServerList(game_: ServerListGame, notify: (player: Player, 
 			teleport = (player, jobId) => {
 				const options = new Instance("TeleportOptions");
 				options.ServerInstanceId = jobId;
+				options.SetTeleportData(SERVER_LIST_TELEPORT_DATA);
 				ts.TeleportAsync(game.PlaceId, [player], options);
 			};
 		}
@@ -463,6 +516,7 @@ export function startServerList(game_: ServerListGame, notify: (player: Player, 
 		...game_,
 		kind,
 		jobId: game.JobId,
+		placeId: game.PlaceId,
 		store,
 		teleport,
 		clock: () => os.clock(),
@@ -487,7 +541,9 @@ export function startServerList(game_: ServerListGame, notify: (player: Player, 
 		});
 		task.spawn(() => {
 			while (!closing) {
-				list.tick();
+				// one bad tick (a store that throws past its own pcall, a host callback) never ends the loop (L4)
+				const [ok, err] = pcall(() => list.tick());
+				if (!ok) game_.warn("the server list tick failed", tostring(err));
 				task.wait(TICK_S);
 			}
 		});

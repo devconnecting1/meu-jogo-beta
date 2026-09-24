@@ -1260,6 +1260,10 @@ function handleAction(player: Player, raw: unknown): ShopActionResult {
 		const due = req.kind === "rebirth" && mpHost !== undefined && mpHost.lives.daybreakDue(player.UserId, save);
 		const refusal = runActionRefusal(req.kind, save, req.runRev, dead, due);
 		if (refusal !== undefined) return fail(refusal, s);
+		// a world is ending (MP-22, or a keeper's restart, MP-26): the life this would buy is about to be replaced by
+		// the new town's, so nothing is sold meanwhile -- "invalid" is what the client already reads as "a new life is
+		// on its way" (review of f851ad2, L1/L2; review of 0b44458, L1: no coins for a life that then ends)
+		if (mpHost !== undefined && mpHost.worldEnding()) return fail("invalid", s);
 		const host = mpHost;
 		if (req.kind === "rebirth") {
 			// what the sale changes, to take back if the body does not stand (F5). Nothing yields in here, so nobody
@@ -1725,7 +1729,10 @@ if (MP_PHASE >= 1) {
 		// host has already built a new town on day 1 (server/sim/worldReset.ts). What is left for the session layer
 		// is the record of the world that ended — persisted off this thread, the reset never waits for it
 		onWorldWiped: (report, outcome) => {
-			worldLog.record(outcome.ended);
+			// MP-22's worlds go to the shared record; a keeper's restart (MP-26) is this server's business only, kept in
+			// its memory -- it must never push MP-22's records out of the shared list (review of 0b44458, M4)
+			if (report.reason === "restart") worldLog.remember(outcome.ended);
+			else worldLog.record(outcome.ended);
 			// the next session of a private server opens on the NEW town, day 1
 			keptTown?.note({ seed: outcome.seed, day: 1, startedAt: outcome.startedAt });
 		},
@@ -1800,7 +1807,8 @@ if (MP_PHASE >= 1) {
 			const s = sessions.get(player);
 			return s !== undefined && s.loaded ? s.save.bestDay : undefined;
 		},
-		joined: (player, row) => Analytics.joinedFromList(player, row.day, row.players),
+		// MP-26: a join from another server's list is counted where it lands (review of 0b44458, L5)
+		arrived: player => Analytics.arrivedFromList(player, host.simulation.clock.day, Players.GetPlayers().size()),
 		log: line => print(`[${GAME_NAME}] ${line}`),
 		warn: (what, detail) => {
 			// a fixed sentence for the Error Report, the error text in the line after it (docs/ANALYTICS.md §10)
@@ -1808,8 +1816,8 @@ if (MP_PHASE >= 1) {
 			print(`[${GAME_NAME}] ${what}: ${detail}`);
 		},
 		restart: by => host.restartTown(by),
-		audit: (userId, ok, details, persist) => {
-			if (admin !== undefined) admin.townAudit(userId, ok, details, persist);
+		audit: (userId, ok, details, byAdmin) => {
+			if (admin !== undefined) admin.townAudit(userId, ok, details, byAdmin);
 			else print(`[${GAME_NAME}] town restart by ${userId}: ${ok ? "OK" : "REFUSED"} (${details})`);
 		},
 		noteRemote: (player, malformed) => floodDrop(player, malformed),

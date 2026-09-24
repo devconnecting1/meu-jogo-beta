@@ -3,7 +3,7 @@
  * window vocabulary of UI-07 -- the survivor (name, and the title under it in its colour, MON-05), level, the day of
  * THIS life, the zombies put down, and whether they are up, down, or dead until dawn (MP-21).
  *
- *   ┌──────────── Millbrook · Survivors · 3 / 6 ───────── X ┐
+ *   ┌──────────── Brackenmere · Survivors · 3 / 6 ───────── X ┐
  *   │ Sort by              [Life day][Level][Put down][Name] │   <- pad and touch; the mouse clicks a header
  *   │ ┌ Survivor ─────── Lv ─ Life day ─ Put down ─ Status ┐ │
  *   │ │ Marta              12         9        137   Alive │ │
@@ -630,7 +630,7 @@ export class Scoreboard {
 			if (n !== this.shownCount) this.chipCount.Text = tostring(n);
 			this.shownCount = n;
 			this.shownSeed = seed;
-			// "Millbrook · Survivors · 3 / 6": the town's name (a proper noun) and who is in it
+			// "Brackenmere · Survivors · 3 / 6": the town's name (a proper noun) and who is in it
 			if (this.title !== undefined) {
 				this.title.Text = `${townNameOf(seed)} · ${this.tr("Survivors")} · ${n} / ${MAX_PLAYERS}`;
 			}

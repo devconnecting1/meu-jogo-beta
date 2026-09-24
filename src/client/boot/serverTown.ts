@@ -77,7 +77,7 @@ export function startServerTown(): void {
 
 /**
  * The news of a world that ended (MP-22) or was restarted by its keeper (MP-26), with the towns' NAMES
- * (shared/data/townNames.ts): "Millbrook fell on day 4. Cedarford rises: day 1". `oldSeed` is the town the run stood in
+ * (shared/data/townNames.ts): "Brackenmere fell on day 4. Ploverstead rises: day 1". `oldSeed` is the town the run stood in
  * when the client knows it (a run in the street); without it the old town is "The town". The new one is always the
  * notice's seed -- the server's.
  */

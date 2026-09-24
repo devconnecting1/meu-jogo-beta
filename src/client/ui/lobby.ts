@@ -45,7 +45,7 @@ export type { RunState } from "./survivor";
  *   │    Continue this run      │   │   the survivor, outfit and pet     │
  *   └───────────────────────────┘   │                                    │
  *   [🛍 Shop      Packs & costumes]   └────────────────────────────────────┘
- *   [👕 Wardrobe             2 / 9]   ┌ Millbrook ─── [Restart town] [Servers] ┐
+ *   [👕 Wardrobe             2 / 9]   ┌ Brackenmere ─ [Restart town] [Servers] ┐
  *   [🏆 Achievements        3 / 18]   │ [☀ Day 7   ] [👤 2 / 6  ] [✝ Day 12]      │
  *   [▮ Records         Best day 12]   │   Afternoon    in town     last fell      │
  *   [? How to play               ]   └──────────────────────────────────────────┘

@@ -229,13 +229,19 @@ export interface MpHost {
 	metrics(): SimMetrics;
 	/**
 	 * MP-26: the town's keeper asked for a new town -- server/match/townRestart.ts has already decided they may (a
-	 * private server's owner, or an admin) and let the request through its rate limit. The same end of the world as
-	 * MP-22's (server/sim/worldReset.ts), of reason "restart": a new seed on day 1, the survivors down in the town given
-	 * a new life, everybody standing moved into the new town with theirs, every client told (WorldReset, cause
-	 * Restarted), the record kept and `onWorldWiped` fired. Answers at once: "started" (the new town is generated a
-	 * slice per frame in its own thread) or "busy" (a reset is already under way, or the host has stopped).
+	 * private server's owner, or an admin on it) and let the request through its rate limit. The same end of the world
+	 * as MP-22's (server/sim/worldReset.ts), of reason "restart", for EVERYBODY: a new seed on day 1, every survivor of
+	 * the town -- standing or down -- given a new life in it, every client told (WorldReset, cause Restarted) and
+	 * `onWorldWiped` fired. Answers at once: "started" (the new town is generated a slice per frame in its own thread)
+	 * or "busy" (a reset is already under way, or the host has stopped).
 	 */
 	restartTown: (by: number) => "started" | "busy";
+	/**
+	 * A world end is under way (MP-22's, or a keeper's restart): its new town is being generated and nothing has
+	 * changed yet. Every life of it is about to be replaced, so server/main.server.ts sells no Rebirth and no New game
+	 * meanwhile -- no coins for a life that then ends (review of 0b44458, L1).
+	 */
+	worldEnding: () => boolean;
 	/** stops the simulation and banks every body into its save (§7.2 "Servidor desligando") */
 	stop(): void;
 }
@@ -855,6 +861,7 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		lives,
 		// replaced below, once the reset it starts is defined
 		restartTown: () => "busy",
+		worldEnding: () => false,
 		playerOf(player) {
 			const link = links.get(player);
 			return link !== undefined && link.slot !== undefined ? sim.get(link.slot) : undefined;
@@ -981,7 +988,7 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		if (report.reason === "restart") {
 			print(
 				`[${GAME_NAME}] ${townNameOf(town.seed)} (seed ${town.seed}) is restarted on day ${report.day} by ` +
-					`${report.by ?? 0}: ${report.dead.size()} survivor(s) down start a new life`,
+					`${report.by ?? 0}: every life of it ends (${report.dead.size()} survivor(s) when asked)`,
 			);
 		} else {
 			print(
@@ -1069,12 +1076,15 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	lives.onWorldWiped = report => {
 		beginReset(report);
 	};
-	// MP-26: the keeper's restart. Whoever is down right now falls with the town (a new life, as MP-22 gives); everybody
-	// standing keeps theirs and is moved into the new one (LifeKeeper.restartWorld)
+	// MP-26: the keeper's restart ends EVERY life of the town (review of 0b44458, M1 + M2): standing or down, each
+	// survivor starts a new life on day 1 in the new one. The list is read again at the commit (worldReset.ts, L1)
 	host.restartTown = by => {
-		const report: WipeReport = { day: sim.clock.day, reason: "restart", dead: lives.downNow(), by };
+		const report: WipeReport = { day: sim.clock.day, reason: "restart", dead: lives.survivorsNow(), by };
 		return beginReset(report) ? "started" : "busy";
 	};
+	// a world is ending (MP-22 or a restart): until the new town stands, a Rebirth or a New game would buy a life that
+	// the end is about to replace -- server/main.server.ts refuses them meanwhile (review of 0b44458, L1)
+	host.worldEnding = () => resetting;
 
 	active = host;
 	return host;

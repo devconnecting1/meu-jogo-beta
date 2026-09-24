@@ -39,6 +39,11 @@ const SHUTDOWN_DELAYS = [0.5];
 export interface WorldLog {
 	/** keep this world's record: in memory now, in the DataStore as soon as a write goes through */
 	record(entry: EndedWorld): void;
+	/**
+	 * keep it in this server's memory only (the admin panel's list): a keeper's restart (MP-26), which is not a world
+	 * the players lost and must not push MP-22's records out of the shared document (review of 0b44458, M4)
+	 */
+	remember(entry: EndedWorld): void;
 	/** the worlds this server saw end, oldest first (at most WORLD_LOG_MEMORY) */
 	recent(): ReadonlyArray<EndedWorld>;
 	/** "ok", "unavailable (…)" or "write failed (…)" — for the admin panel */
@@ -105,6 +110,9 @@ export function startWorldLog(): WorldLog {
 			while (unsaved.size() > WORLD_LOG_KEEP) unsaved.remove(0);
 			// never on the caller's thread: the world has already moved on, and a DataStore call yields
 			task.spawn(() => flush(RETRY_DELAYS));
+		},
+		remember(entry) {
+			appendEnded(recent, entry, WORLD_LOG_MEMORY);
 		},
 		recent() {
 			return recent;
