@@ -49,7 +49,15 @@ import {
 } from "shared/game/world";
 import { drawBuildingSign, drawPriceSign } from "./buildingSigns";
 import { drawParkedVehicle } from "./vehicleView";
-import { drawBankRoof, drawPortico, drawTownGround, drawTownProp, drawVaultDoor, vaultDoorSolid } from "./townView";
+import {
+	drawBankRoof,
+	drawPortico,
+	drawTownCanopy,
+	drawTownGround,
+	drawTownProp,
+	drawVaultDoor,
+	vaultDoorSolid,
+} from "./townView";
 import { circleInView, overlaps, part, SIDES } from "./drawKit";
 import { FLOOR_FLAT, InteriorView } from "./interiorView";
 import { artId, artSize, artSlice } from "./worldArt";
@@ -650,7 +658,7 @@ export class WorldView {
 				// a gas station's canopy (EDI-16): culled on its own (its shadow reaches further than its rect); the
 				// bank's portico and the everyday town's other roofs on posts: ./townView.ts
 				if (s.tags === "portico") drawPortico(r, cam, s, v, this.shadow, this.clock);
-				else this.drawCanopy(r, cam, s, v);
+				else if (!drawTownCanopy(r, cam, s, v, this.shadow)) this.drawCanopy(r, cam, s, v);
 			} else if (s.tags === "gas_sign") {
 				// its footing, and the price pylon standing on it (upright: it reaches past the footing's rect)
 				this.drawGasSign(r, cam, s, v);

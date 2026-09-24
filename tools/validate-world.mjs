@@ -927,6 +927,231 @@ const ESSENTIAL = [
 	["school", [3]],
 ];
 
+/** the everyday town's fixtures (shared/game/townLots.ts), by where they belong */
+const STREET_TAGS = ["streetlight", "hydrant", "mailbox", "postbox", "busstop"];
+const PLAY_TAGS = ["swings", "slide", "climber", "springer"];
+const YARD_THING_TAGS = ["shed", "pool", "trampoline", "grill"];
+const MARKET_TAGS = ["stall", "crates", "foodtruck"];
+const SITE_TAGS = ["fence", "studs", "scaffold", "pile", "portapotty", "mixer", "dumpster"];
+
+/**
+ * EDI-20 (the street market), EDI-21 (a house going up), MOB-04 (the street furniture, CID-02/CID-03 for it), MOB-05
+ * (the parks' playgrounds and courts, the public parking lot), MOB-06 (the backyards), and EDI-11 outdoors for every
+ * one of these fixtures: between two standing things there is no slot one body fits in and two do not -- unless a third
+ * thing fills that gap right across (townLots.ts `pinches`, `gapBetween`, `cutAcross`: the generator's own rule).
+ * Every searchable fixture is a container of a known table, with a static id the LootFlag's u16 carries.
+ */
+function everydayChecks(w, buildings, reach, fail) {
+	if (TL === undefined || TL.pinches === undefined) return undefined;
+	const S = w.solids;
+	const stats = { markets: 0, stalls: 0, stocked: 0, sites: 0, piles: 0, street: 0, playgrounds: 0, courts: 0 };
+	stats.parking = 0;
+	stats.yard = 0;
+	stats.sheds = 0;
+	const lotOf = s => w.lots.find(l => cx(s) >= l.x && cx(s) < l.x + l.w && cy(s) >= l.y && cy(s) < l.y + l.h);
+	const standing = s =>
+		s.removed !== true &&
+		s.kind !== "canopy" &&
+		s.kind !== "window" &&
+		s.parentId === undefined &&
+		(s.kind === "building" || s.passable !== true);
+	const campusLots = new Set(buildings.filter(b => isCampus(b.buildingType)).map(b => lotOf(b)));
+	const parks = w.lots.filter(l => l.kind === "park");
+	const mine = S.filter(
+		s =>
+			s.kind === "prop" &&
+			s.bankId === undefined &&
+			!campusLots.has(lotOf(s)) &&
+			[
+				...STREET_TAGS,
+				...PLAY_TAGS,
+				...YARD_THING_TAGS,
+				...MARKET_TAGS,
+				...SITE_TAGS,
+				"bench",
+				"hoop",
+				"picnic",
+			].includes(s.tags),
+	);
+	const mineSet = new Set(mine);
+	// --- EDI-11 outdoors
+	for (const p of mine) {
+		const near = W.querySolids(w, p.x - 88, p.y - 88, p.x + p.w + 88, p.y + p.h + 88).filter(
+			s => s !== p && standing(s),
+		);
+		for (const s of near) {
+			if (mineSet.has(s) && s.id < p.id) continue;
+			if (!TL.pinches(p, s)) continue;
+			const g = TL.gapBetween(p, s);
+			const alongY = Math.max(0, s.x - (p.x + p.w), p.x - (s.x + s.w)) > 0;
+			if (g !== undefined && near.some(o => o !== s && TL.cutAcross(g, o, alongY))) continue;
+			const gap = Math.max(
+				Math.max(0, s.x - (p.x + p.w), p.x - (s.x + s.w)),
+				Math.max(0, s.y - (p.y + p.h), p.y - (s.y + s.h)),
+			);
+			fail(
+				"EDI-11",
+				`${p.tags} #${p.id} and ${s.kind}/${s.tags} #${s.id}: a ${fmt(gap)} u slot outdoors`,
+				cx(p),
+				cy(p),
+			);
+		}
+	}
+	// --- containers: a known table, a small static id
+	for (const s of S) {
+		if (s.kind !== "prop" || s.lootSlots === undefined) continue;
+		const key = s.tags === "vault" ? undefined : SPAWNS.yardLootKey(s.tags, s.variant);
+		const rows = s.tags === "vault" ? SPAWNS.VAULT_LOOT : SPAWNS.YARD_LOOT[key];
+		if (!(SPAWNS.YARD_TAGS ?? []).includes(s.tags) || rows === undefined || rows.length === 0) {
+			fail("EDI-03", `${s.tags} #${s.id}: a container with no table (${key})`, cx(s), cy(s));
+		}
+		if (s.id >= 65536) fail("EDI-03", `${s.tags} #${s.id}: its id does not fit the LootFlag's u16`, cx(s), cy(s));
+	}
+	/** is some point just round the rect, on the side it faces (or any side), reached on foot? */
+	const reachable = s => {
+		const n = s.face !== undefined ? NORMAL[s.face] : undefined;
+		const pts = [];
+		if (n !== undefined) pts.push([cx(s) + n[0] * (s.w / 2 + 26), cy(s) + n[1] * (s.h / 2 + 26)]);
+		for (const m of Object.values(NORMAL)) pts.push([cx(s) + m[0] * (s.w / 2 + 26), cy(s) + m[1] * (s.h / 2 + 26)]);
+		return pts.some(([x, y]) => reach.at(x, y).reached);
+	};
+	// --- EDI-20: the street market
+	const markets = w.lots.filter(l => l.program === "market");
+	stats.markets = markets.length;
+	if (markets.length > 1)
+		fail("EDI-20", `${markets.length} street markets in one town (one)`, cx(markets[1]), cy(markets[1]));
+	for (const lot of markets) {
+		const inLot = s => lotOf(s) === lot;
+		const stalls = mine.filter(s => s.tags === "stall" && inLot(s));
+		const stocked = stalls.filter(s => s.lootSlots !== undefined);
+		const tents = S.filter(s => s.kind === "canopy" && s.tags === "tent" && inLot(s));
+		const trucks = mine.filter(s => s.tags === "foodtruck" && inLot(s));
+		stats.stalls += stalls.length;
+		stats.stocked += stocked.length;
+		if (buildings.some(b => overlap(b, lot.yard)))
+			fail("EDI-20", "a building on the market's block", cx(lot), cy(lot));
+		if (stalls.length < 8) fail("EDI-20", `the market has ${stalls.length} stalls (8 at least)`, cx(lot), cy(lot));
+		if (stocked.length === 0 || stocked.length > (TL.MARKET_STOCKED_MAX ?? 8)) {
+			fail(
+				"EDI-20",
+				`${stocked.length} of ${stalls.length} stalls hold something (1 to ${TL.MARKET_STOCKED_MAX ?? 8})`,
+				cx(lot),
+				cy(lot),
+			);
+		}
+		for (const s of stalls) {
+			if (!tents.some(t => cx(s) >= t.x && cx(s) <= t.x + t.w && cy(s) >= t.y && cy(s) <= t.y + t.h)) {
+				fail("EDI-20", `stall #${s.id} has no tent over it`, cx(s), cy(s));
+			}
+		}
+		if (trucks.length !== 1) fail("EDI-20", `${trucks.length} food trucks at the market (one)`, cx(lot), cy(lot));
+		for (const c of [...stocked, ...trucks]) {
+			if (!reachable(c)) fail("EDI-20", `${c.tags} #${c.id} cannot be reached on foot`, cx(c), cy(c));
+		}
+	}
+	// --- EDI-21: a house going up
+	const sites = w.lots.filter(l => l.program === "construction");
+	stats.sites = sites.length;
+	if (sites.length > 1)
+		fail("EDI-21", `${sites.length} building sites in one town (one)`, cx(sites[1]), cy(sites[1]));
+	for (const lot of sites) {
+		const inLot = s => lotOf(s) === lot;
+		const fences = mine.filter(s => s.tags === "fence" && inLot(s));
+		const piles = mine.filter(s => s.tags === "pile" && inLot(s));
+		const pad = (lot.ground ?? []).find(g => g.kind === "pad");
+		stats.piles += piles.length;
+		if (fences.length < 4) fail("EDI-21", `the site's fence has ${fences.length} runs`, cx(lot), cy(lot));
+		if (piles.length === 0 || piles.some(p => p.lootSlots === undefined)) {
+			fail("EDI-21", "the site has no pile of material to search", cx(lot), cy(lot));
+		}
+		if (pad === undefined) fail("EDI-21", "the site has no slab", cx(lot), cy(lot));
+		else if (!reach.at(cx(pad), cy(pad)).reached)
+			fail("EDI-21", "the slab cannot be reached on foot", cx(pad), cy(pad));
+		for (const p of piles)
+			if (!reachable(p)) fail("EDI-21", `pile #${p.id} cannot be reached on foot`, cx(p), cy(p));
+	}
+	// --- MOB-04: the street furniture, in the service strip (CID-02), off every cut, a car's length from a corner (CID-03)
+	const street = [
+		...mine.filter(s => STREET_TAGS.includes(s.tags)),
+		...mine.filter(s => s.tags === "bench" && lotOf(s)?.kind !== "park"),
+	];
+	stats.street = street.length;
+	for (const s of street) {
+		const lot = lotOf(s);
+		const edges = lot === undefined ? [] : lotEdges(w, lot);
+		const e = edges.find(q => inside(s, edgeRect(q, q.a, q.b, 0, VERGE), 1));
+		if (e === undefined) {
+			fail("MOB-04", `${s.tags} #${s.id} outside the sidewalk's service strip`, cx(s), cy(s));
+			continue;
+		}
+		const cuts = (lot.ground ?? []).filter(
+			g => (g.kind === "walk" || g.kind === "drive") && overlap(g, edgeRect(e, e.a, e.b, 0, SW)),
+		);
+		if (cuts.some(g => overlap(g, s)))
+			fail("MOB-04", `${s.tags} #${s.id} on a footpath or a driveway`, cx(s), cy(s));
+		const u0 = alongX(e.side) ? s.x : s.y;
+		const u1 = u0 + (alongX(e.side) ? s.w : s.h);
+		if ((e.cornerA && u0 < e.a + TOWN.CORNER_CLEAR) || (e.cornerB && u1 > e.b - TOWN.CORNER_CLEAR)) {
+			fail("CID-03", `${s.tags} #${s.id} within a car length of a street corner`, cx(s), cy(s));
+		}
+	}
+	for (const sh of S.filter(s => s.kind === "canopy" && s.tags === "shelter")) {
+		const lot = lotOf(sh);
+		const ok = lot !== undefined && lotEdges(w, lot).some(q => inside(sh, edgeRect(q, q.a, q.b, 0, SW), 1));
+		if (!ok || sh.passable !== true) fail("MOB-04", `bus shelter #${sh.id} off its sidewalk`, cx(sh), cy(sh));
+	}
+	// --- MOB-05: the parks' playgrounds and courts; the public parking lot
+	for (const lot of parks) {
+		const sand = (lot.ground ?? []).filter(g => g.kind === "sandbox");
+		if (sand.length === 0) {
+			fail("MOB-05", "a park without a playground", cx(lot), cy(lot));
+			continue;
+		}
+		stats.playgrounds += sand.length;
+		for (const g of sand) {
+			const kit = mine.filter(s => PLAY_TAGS.includes(s.tags) && inside(s, g, 1));
+			if (kit.length < 3)
+				fail("MOB-05", `a playground with ${kit.length} pieces of equipment (3 at least)`, cx(g), cy(g));
+		}
+		for (const g of (lot.ground ?? []).filter(q => q.kind === "court")) {
+			stats.courts++;
+			if (!mine.some(s => s.tags === "hoop" && inside(s, g, 1)))
+				fail("MOB-05", "a court without a hoop", cx(g), cy(g));
+		}
+	}
+	const parking = w.lots.filter(l => l.program === "parking");
+	stats.parking = parking.length;
+	if (parking.length > 1)
+		fail("MOB-05", `${parking.length} public parking lots (one)`, cx(parking[1]), cy(parking[1]));
+	for (const lot of parking) {
+		if (!(lot.ground ?? []).some(g => g.kind === "parking"))
+			fail("MOB-05", "a public parking lot with no stalls", cx(lot), cy(lot));
+		if (buildings.some(b => overlap(b, lot.yard)))
+			fail("MOB-05", "a building on the public parking lot", cx(lot), cy(lot));
+	}
+	// --- MOB-06: the backyards
+	const yardThings = mine.filter(
+		s => YARD_THING_TAGS.includes(s.tags) || (s.tags === "swings" && lotOf(s)?.kind !== "park"),
+	);
+	stats.yard = yardThings.length;
+	for (const s of yardThings) {
+		const lot = lotOf(s);
+		if (lot === undefined || lot.kind !== "block" || lot.zone !== "residential" || !inside(s, lot.yard, 1)) {
+			fail("MOB-06", `${s.tags} #${s.id} outside a residential block's yards`, cx(s), cy(s));
+			continue;
+		}
+		const b = buildings.find(q => rectDist(q, s) < 96 - 1);
+		if (b !== undefined)
+			fail("MOB-06", `${s.tags} #${s.id} ${fmt(rectDist(b, s))} u from ${b.tags} #${b.id} (96)`, cx(s), cy(s));
+		if (s.tags === "shed") {
+			stats.sheds++;
+			if (s.lootSlots === undefined) fail("MOB-06", `shed #${s.id} holds nothing to search`, cx(s), cy(s));
+			else if (!reachable(s)) fail("MOB-06", `shed #${s.id} cannot be reached on foot`, cx(s), cy(s));
+		}
+	}
+	return stats;
+}
+
 /**
  * The body-of-18 floor of one building's box (8 u cells), flooded from just outside its main door with the doors as
  * they are: which points a survivor walking in could reach. EDI-23 asks it with the vault door shut.
@@ -966,7 +1191,12 @@ function reachInside(w, b) {
 		const k = queue[h];
 		const i = k % cols;
 		const j = (k - i) / cols;
-		for (const m of [i > 0 ? k - 1 : -1, i < cols - 1 ? k + 1 : -1, j > 0 ? k - cols : -1, j < rows - 1 ? k + cols : -1]) {
+		for (const m of [
+			i > 0 ? k - 1 : -1,
+			i < cols - 1 ? k + 1 : -1,
+			j > 0 ? k - cols : -1,
+			j < rows - 1 ? k + cols : -1,
+		]) {
 			if (m < 0 || seen[m] || blocked[m]) continue;
 			seen[m] = 1;
 			queue.push(m);
@@ -991,7 +1221,8 @@ function bankChecks(w, buildings, fail) {
 	const S = w.solids;
 	const banks = buildings.filter(b => b.buildingType === 22);
 	const most = W.BANKS ?? 1;
-	if (banks.length > most) fail("EDI-23", `${banks.length} banks in one town (at most ${most})`, cx(banks[0]), cy(banks[0]));
+	if (banks.length > most)
+		fail("EDI-23", `${banks.length} banks in one town (at most ${most})`, cx(banks[0]), cy(banks[0]));
 	for (const e of SPAWNS.VAULT_LOOT ?? []) {
 		if (e.kind === 1 || (e.kind === 4 && e.index >= 44 && e.index <= 47)) {
 			fail("EDI-23", `the vault's boxes hold a gun or rounds (${e.kind}/${e.index})`, 0, 0);
@@ -1002,7 +1233,8 @@ function bankChecks(w, buildings, fail) {
 	for (const b of banks) {
 		const where = `bank #${b.id}`;
 		const lot = w.lots.find(l => cx(b) >= l.x && cx(b) < l.x + l.w && cy(b) >= l.y && cy(b) < l.y + l.h);
-		if (lot?.zone !== "commercial") fail("EDI-23", `${where}: not on a downtown block (${lot?.zone})`, cx(b), cy(b));
+		if (lot?.zone !== "commercial")
+			fail("EDI-23", `${where}: not on a downtown block (${lot?.zone})`, cx(b), cy(b));
 		// the street in front of the main door is an avenue
 		const n = NORMAL[b.doorSide];
 		let road;
@@ -1011,11 +1243,13 @@ function bankChecks(w, buildings, fail) {
 			const py = b.doorY + n[1] * d;
 			road = w.roads.find(r => px >= r.x && px < r.x + r.w && py >= r.y && py < r.y + r.h);
 		}
-		if (road === undefined || !road.avenue) fail("EDI-23", `${where}: its door does not face an avenue`, b.doorX, b.doorY);
+		if (road === undefined || !road.avenue)
+			fail("EDI-23", `${where}: its door does not face an avenue`, b.doorX, b.doorY);
 		// the steps, the portico and its columns
 		const ax = alongX(b.doorSide);
 		const steps = (lot?.ground ?? []).filter(g => g.kind === "steps" && rectDist(g, b) < 1);
-		if (steps.length !== 1) fail("EDI-23", `${where}: ${steps.length} flights of steps before it`, b.doorX, b.doorY);
+		if (steps.length !== 1)
+			fail("EDI-23", `${where}: ${steps.length} flights of steps before it`, b.doorX, b.doorY);
 		else if (Math.abs((ax ? steps[0].w : steps[0].h) - (ax ? b.w : b.h)) > 1) {
 			fail("EDI-23", `${where}: the steps do not span the facade`, b.doorX, b.doorY);
 		}
@@ -1026,11 +1260,17 @@ function bankChecks(w, buildings, fail) {
 		cols.sort((p, q) => (ax ? p.x - q.x : p.y - q.y));
 		for (let i = 0; i < cols.length; i++) {
 			const c = cols[i];
-			if (portico !== undefined && !overlap(c, portico)) fail("EDI-23", `${where}: a column outside the portico`, cx(c), cy(c));
+			if (portico !== undefined && !overlap(c, portico))
+				fail("EDI-23", `${where}: a column outside the portico`, cx(c), cy(c));
 			if (rectDist(c, b) >= SEALED) fail("EDI-23", `${where}: a body fits behind a column`, cx(c), cy(c));
 			const next = cols[i + 1];
 			if (next !== undefined && rectDist(c, next) < PATH) {
-				fail("EDI-23", `${where}: ${fmt(rectDist(c, next))} u between two columns (two bodies: ${PATH})`, cx(c), cy(c));
+				fail(
+					"EDI-23",
+					`${where}: ${fmt(rectDist(c, next))} u between two columns (two bodies: ${PATH})`,
+					cx(c),
+					cy(c),
+				);
 			}
 		}
 		// the vault: one room, one opening, the door in it, the boxes inside
@@ -1043,24 +1283,35 @@ function bankChecks(w, buildings, fail) {
 		const opens = (b.openings ?? []).filter(o => vault.some(r => overlap(grown(o), r)));
 		const doors = S.filter(s => s.kind === "iron_door" && s.tags === "vault" && s.bankId === b.id);
 		if (opens.length !== 1 || opens[0].kind !== "inner") {
-			fail("EDI-23", `${where}: the vault has ${opens.length} openings (one doorway, the vault door's)`, cx(vault[0]), cy(vault[0]));
+			fail(
+				"EDI-23",
+				`${where}: the vault has ${opens.length} openings (one doorway, the vault door's)`,
+				cx(vault[0]),
+				cy(vault[0]),
+			);
 		}
 		if (doors.length !== 1) fail("EDI-23", `${where}: ${doors.length} vault doors`, cx(vault[0]), cy(vault[0]));
 		for (const d of doors) {
 			if (d.open === true) fail("EDI-23", `${where}: the vault door stands open in a new town`, cx(d), cy(d));
-			if (d.parentId !== undefined) fail("EDI-23", `${where}: the vault door is a part of the bank (E cannot reach it)`, cx(d), cy(d));
-			if (!opens.some(o => overlap(o, d))) fail("EDI-23", `${where}: the vault door is not in the vault's doorway`, cx(d), cy(d));
+			if (d.parentId !== undefined)
+				fail("EDI-23", `${where}: the vault door is a part of the bank (E cannot reach it)`, cx(d), cy(d));
+			if (!opens.some(o => overlap(o, d)))
+				fail("EDI-23", `${where}: the vault door is not in the vault's doorway`, cx(d), cy(d));
 		}
 		const boxes = S.filter(s => s.kind === "prop" && s.tags === "vault" && s.bankId === b.id);
-		if (boxes.length !== 1) fail("EDI-23", `${where}: ${boxes.length} walls of deposit boxes`, cx(vault[0]), cy(vault[0]));
+		if (boxes.length !== 1)
+			fail("EDI-23", `${where}: ${boxes.length} walls of deposit boxes`, cx(vault[0]), cy(vault[0]));
 		for (const x of boxes) {
-			if (!vault.some(r => inside(x, r, 1))) fail("EDI-23", `${where}: the deposit boxes stand outside the vault`, cx(x), cy(x));
-			if (x.lootSlots === undefined || x.lootItems === undefined) fail("EDI-23", `${where}: the boxes are no container`, cx(x), cy(x));
+			if (!vault.some(r => inside(x, r, 1)))
+				fail("EDI-23", `${where}: the deposit boxes stand outside the vault`, cx(x), cy(x));
+			if (x.lootSlots === undefined || x.lootItems === undefined)
+				fail("EDI-23", `${where}: the boxes are no container`, cx(x), cy(x));
 		}
 		// sealed: with the door shut, nobody walks into the vault
 		const reached = reachInside(w, b);
 		for (const r of vault) {
-			if (reached(cx(r), cy(r))) fail("EDI-23", `${where}: the vault can be walked into with its door shut`, cx(r), cy(r));
+			if (reached(cx(r), cy(r)))
+				fail("EDI-23", `${where}: the vault can be walked into with its door shut`, cx(r), cy(r));
 		}
 	}
 	return banks.length;
@@ -1703,7 +1954,12 @@ function validate(seed) {
 		// the bank stands back behind its broad stone steps (EDI-23)
 		const steps = TL?.BANK_STEPS ?? 96;
 		if (t === 22 && Math.abs(front - steps) > 8) {
-			fail("EDI-02", `bank #${b.id}: ${fmt(front)} u behind the sidewalk (its steps are ${steps})`, b.doorX, b.doorY);
+			fail(
+				"EDI-02",
+				`bank #${b.id}: ${fmt(front)} u behind the sidewalk (its steps are ${steps})`,
+				b.doorX,
+				b.doorY,
+			);
 		}
 		// the church keeps a front lawn like the houses beside it (EDI-18)
 		if (t === 23 && (front < TOWN.SETBACK_HOUSE_MIN - 8 || front > TOWN.SETBACK_HOUSE_MAX + 8)) {
@@ -1984,6 +2240,9 @@ function validate(seed) {
 	// --- EDI-17: the college campus
 	const campus = {};
 	campusChecks(w, buildings, reach, fail, campus);
+
+	// --- EDI-20, EDI-21, MOB-04..MOB-06: the market, the building site, the streets, the parks, the backyards
+	const everyday = everydayChecks(w, buildings, reach, fail);
 
 	// --- VEG-01 (rest): trunk on a carriageway, in front of a door or on a driveway
 	for (const s of trees) {
@@ -2297,6 +2556,7 @@ function validate(seed) {
 		mix,
 		campus,
 		bank,
+		everyday,
 	};
 	return { fails, stats };
 }
@@ -2332,6 +2592,14 @@ for (const seed of seeds) {
 	}
 	CAMPUS_RUN.towns++;
 	if (stats.campus?.present) CAMPUS_RUN.campus++;
+	const ev = stats.everyday;
+	if (ev !== undefined) {
+		console.log(
+			`  everyday: bank ${stats.bank ?? 0} | market ${ev.markets} (${ev.stalls} stalls, ${ev.stocked} stocked) | ` +
+				`site ${ev.sites} (${ev.piles} piles) | public parking ${ev.parking} | playgrounds ${ev.playgrounds}, courts ${ev.courts} | ` +
+				`street furniture ${ev.street} | backyard things ${ev.yard} (${ev.sheds} sheds)`,
+		);
+	}
 	const it = stats.interior;
 	console.log(
 		`  interiors: ${it.compound}/${stats.buildings} footprints not a box | worst walker reach ${it.worstReach.toFixed(1)} s (${it.worstRoom}) | doors/windows per building: ` +

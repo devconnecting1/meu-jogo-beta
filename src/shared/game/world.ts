@@ -235,18 +235,20 @@ export type GroundKind =
 	| "court"
 	/** a playground's sand pit */
 	| "sandbox"
-	/** a construction site's poured slab (EDI-21) */
+	/** a construction site's poured slab (EDI-21), and the churned earth round it inside the fence */
 	| "pad"
+	| "site"
 	/** a backyard vegetable bed */
 	| "garden"
 	/** the bank's broad stone steps, from the sidewalk up to its portico (EDI-23) */
 	| "steps";
 
 /**
- * What a whole lot was given to besides its buildings (the everyday town, shared/game/townLots.ts): the street market
- * (EDI-20) or a public parking lot (MOB-05). A lot without one is the ordinary block its zone says.
+ * What a lot was given to besides its buildings (the everyday town, shared/game/townLots.ts): the street market
+ * (EDI-20), a public parking lot (MOB-05) or, on a residential block, a house going up among the others (EDI-21; the
+ * campus never takes a block with a program). A lot without one is the ordinary block its zone says.
  */
-export type LotProgram = "market" | "parking";
+export type LotProgram = "market" | "parking" | "construction";
 
 export interface GroundRect extends Rect {
 	kind: GroundKind;
@@ -287,7 +289,7 @@ export interface Lot extends Rect {
 	edges: Array<LotEdge>;
 	/** verges, tree pits, footpaths, driveways, forecourts, parking lots, playgrounds, ramps */
 	ground: Array<GroundRect>;
-	/** a special lot's program (the street market, a parking lot, the civic centre); undefined: an ordinary block */
+	/** a special lot's program (the street market, a parking lot, a construction site); undefined: an ordinary block */
 	program?: LotProgram;
 }
 
@@ -1916,10 +1918,13 @@ function townKit(g: Gen): TL.TownKit {
 		placedOn: lot => {
 			const out: Array<TL.PlacedBuilding> = [];
 			for (const p of g.placed.get(lot) ?? []) {
+				if (p.solid.removed === true) continue;
 				out.push({ solid: p.solid, edge: p.edge, doorU: p.doorU, type: p.def.type });
 			}
 			return out;
 		},
+		solidsIn: (x, y, w, h) => querySolids(g.w, x, y, x + w, y + h),
+		treeLattice: road => ({ pitch: g.pitch[road], phase: g.phase[road] }),
 	};
 }
 
@@ -2015,6 +2020,8 @@ function placeCampus(g: Gen): void {
 	const eligible: Array<{ lot: Lot; ring: number }> = [];
 	for (const lot of w.lots) {
 		if (lot.kind !== "block" || lot.zone !== "residential" || lot.edges.size() !== 4) continue;
+		// a block given to something (a house going up, EDI-21) keeps it
+		if (lot.program !== undefined) continue;
 		let ok = true;
 		for (const e of lot.edges) if (w.roads[e.road].avenue) ok = false;
 		for (const p of g.placed.get(lot) ?? []) if (p.def.type !== 1 && p.def.type !== 2) ok = false;
@@ -2713,6 +2720,21 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 		while (bankLots.size() > BANK_LOTS) bankLots.pop();
 	}
 	let banks = 0;
+	// the everyday town's special lots (townLots.ts): the street market and a public parking lot on downtown blocks
+	// (never a bank's or a station's, two blocks apart), a house going up on a residential street
+	const specialOk = (l: Lot) =>
+		l.kind === "block" && l.zone === "commercial" && !gasLots.includes(l) && !bankLots.includes(l);
+	const marketLots = pickLots(1, l => specialOk(l) && l.edges.size() >= 3, 1, []);
+	for (const l of marketLots) l.program = "market";
+	for (const l of pickLots(1, l => specialOk(l) && l.program === undefined, 2, marketLots)) l.program = "parking";
+	const siteLots = pickLots(
+		1,
+		l => residentialFree(l) && !onAvenue(l) && !churches.includes(l) && !fireLots.includes(l),
+		1,
+		[],
+	);
+	for (const l of siteLots) l.program = "construction";
+	const kit = townKit(g);
 
 	// --- parks: dirt paths (kept free of trees) ---
 	for (const lot of w.lots) {
@@ -2731,10 +2753,11 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 			const c = isAlongX(e.side) ? px + pathW / 2 : py + pathW / 2;
 			cutsOf(g, e).push({ a: c - pathW / 2, b: c + pathW / 2, kind: "walk" });
 		}
+		// the playground, a court, benches and a picnic table, before the park's trees grow round them (MOB-05)
+		TL.furnishPark(kit, lot);
 	}
 
 	// --- buildings, by lot program ---
-	const kit = townKit(g);
 	stockShops(g);
 	const houseOpts: PackOpts = {
 		setMin: TOWN.SETBACK_HOUSE_MIN,
@@ -2790,7 +2813,11 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 				g.shopsPlaced.push({ type: GAS_DEF.type, lot });
 			}
 		}
-		if (lot.zone === "commercial") {
+		// the street market (EDI-20) and the public parking lot (MOB-05) take their whole block; one that does not fit
+		// leaves an ordinary block of Main Street
+		if (lot.program === "market" && !TL.placeMarket(kit, lot)) lot.program = undefined;
+		if (lot.program === "parking" && !TL.placePublicParking(kit, lot)) lot.program = undefined;
+		if (lot.zone === "commercial" && lot.program === undefined) {
 			// Main Street (EDI-18, EDI-19): the stock's next kinds that may stand on this block, a few a block
 			let budget = SHOPS_PER_BLOCK;
 			// the bank first, on its avenue, at the end of the face towards the crossing (EDI-23)
@@ -2833,6 +2860,15 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 					if (w.roads[e.road].avenue) continue;
 					if (TL.placeChurch(kit, lot, e)) break;
 				}
+			}
+			// a house going up in the middle of a residential street's face (EDI-21)
+			if (lot.program === "construction") {
+				let site = false;
+				for (const e of edges) {
+					if (site || w.roads[e.road].avenue) continue;
+					site = TL.placeConstruction(kit, lot, e);
+				}
+				if (!site) lot.program = undefined;
 			}
 			for (const e of edges) {
 				// the avenue side of a residential lot may open a corner shop, from Main Street's stock (EDI-19)
@@ -2935,6 +2971,12 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 
 	// --- the college campus, last: one block's houses give way to it, and nothing else in the town moves ---
 	placeCampus(g);
+
+	// --- the backyards and the street furniture, once everything else stands (MOB-04, MOB-06) ---
+	for (const lot of w.lots) {
+		if (lot.kind === "block" && lot.zone === "residential") TL.furnishBackyards(kit, lot);
+	}
+	for (const lot of w.lots) TL.furnishStreets(kit, lot);
 
 	// --- the inside of every building, now that nothing else will be placed ---
 	planInteriors(g);
