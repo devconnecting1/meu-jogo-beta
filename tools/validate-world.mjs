@@ -151,6 +151,9 @@ const TUNING = require(join(SRC, "shared/sim/ai/zombieTuning.ts"));
 const { USABLES } = require(join(SRC, "shared/data/usables.ts"));
 const { ETC_ITEMS } = require(join(SRC, "shared/data/etcItems.ts"));
 const TREES = require(join(SRC, "shared/data/trees.ts"));
+/** the downtown squares (MOB-07): their constants, when this checkout has them */
+const TSQ_FILE = join(SRC, "shared/game/townSquares.ts");
+const TSQ = existsSync(TSQ_FILE) ? require(TSQ_FILE) : undefined;
 /** the campus (EDI-17): its planner, when this checkout has one (an older one, through PZ_SRC, has no campus) */
 const CAMPUS_MODULE = join(SRC, "shared/game/campus.ts");
 const CAMPUS = existsSync(CAMPUS_MODULE) ? require(CAMPUS_MODULE) : undefined;
@@ -1017,6 +1020,14 @@ const PLAY_TAGS = ["swings", "slide", "climber", "springer"];
 const YARD_THING_TAGS = ["shed", "pool", "trampoline", "grill"];
 const MARKET_TAGS = ["stall", "crates", "foodtruck", "trestle", "handcart"];
 const SITE_TAGS = ["fence", "studs", "scaffold", "pile", "portapotty", "mixer", "dumpster"];
+/** what a downtown square adds (MOB-07; its benches, bins and trees are the town's own) */
+const SQUARE_TAGS = ["planter", "lamppost", "noticeboard", "kiosk", "cafe", "rubble", "barrier", "fountain", "statue"];
+/** a square's floor (MOB-07): its paving's pattern, and what lies on it */
+const SQUARE_PATTERN = ["medallion", "bed", "waste", "terrace"];
+const SQUARE_FLOOR = ["drain", "cracked", "weeds", "leaves", "paper", "bag", "chalk", "vigil"];
+/** the squares of a town, each with its lot */
+const squaresOf = w => w.lots.flatMap(l => (l.squares ?? []).map(q => ({ q, lot: l })));
+const inSquare = (w, s) => squaresOf(w).some(({ q }) => inside(s, q, 1));
 
 /**
  * EDI-21 (the street market), EDI-22 (a house going up), MOB-04 (the street furniture, CID-02/CID-03 for it), MOB-05
@@ -1063,6 +1074,7 @@ function everydayChecks(w, buildings, reach, fail) {
 				...YARD_THING_TAGS,
 				...MARKET_TAGS,
 				...SITE_TAGS,
+				...SQUARE_TAGS,
 				"bench",
 				"hoop",
 				"picnic",
@@ -1181,7 +1193,7 @@ function everydayChecks(w, buildings, reach, fail) {
 	// --- MOB-04: the street furniture, in the service strip (CID-02), off every cut, a car's length from a corner (CID-03)
 	const street = [
 		...mine.filter(s => STREET_TAGS.includes(s.tags)),
-		...mine.filter(s => s.tags === "bench" && lotOf(s)?.kind !== "park"),
+		...mine.filter(s => s.tags === "bench" && lotOf(s)?.kind !== "park" && !inSquare(w, s)),
 	];
 	stats.street = street.length;
 	for (const s of street) {
@@ -1257,7 +1269,174 @@ function everydayChecks(w, buildings, reach, fail) {
 			else if (!reachable(s)) fail("MOB-06", `shed #${s.id} cannot be reached on foot`, cx(s), cy(s));
 		}
 	}
+	// --- MOB-07: the downtown squares
+	if (TSQ !== undefined) stats.squares = squareChecks(w, buildings, standing, reach, fail);
 	return stats;
+}
+
+/** the programs a downtown square may have (world.ts SquareProgram), and what each one must hold */
+const SQUARE_NEEDS = {
+	fountain: q => q.tags.fountain >= 1,
+	memorial: q => q.tags.statue >= 1 && q.floor.vigil >= 1,
+	garden: q => q.pattern.bed >= 1 && q.trees >= 1,
+	grove: q => q.trees >= 2,
+	cafe: q => q.tags.cafe >= 3 && q.pattern.terrace >= 1,
+	kiosk: q => q.tags.kiosk >= 1,
+	cleared: q => q.pattern.waste >= 1 && q.tags.rubble >= 1,
+};
+
+/**
+ * MOB-07: every downtown square has a program (a known one, under its cap in the town, never twice with the same look)
+ * and holds what that program says (a fountain, the memorial and its vigil, a bed and its trees...), at least
+ * SQUARE_PIECES_MIN standing pieces, every one inside it and SQUARE_CLEAR from every building; its floor has its
+ * pattern (the mosaic, a bed, a deck, bare earth or the grates of its trees) and at least three things lying on it,
+ * none under a solid. And no downtown block is left with a stretch of empty paving a square would have taken (the
+ * validator's own raster: a building by its box and 96 u, anything else standing by 32, the lot's ground by 16).
+ */
+function squareChecks(w, buildings, standing, reach, fail) {
+	const out = { count: 0, programs: {}, pieces: 0, left: 0 };
+	const all = squaresOf(w);
+	const seen = new Set();
+	const S = w.solids;
+	for (const { q, lot } of all) {
+		out.count++;
+		out.programs[q.program] = (out.programs[q.program] ?? 0) + 1;
+		const where = `a ${q.program} square at (${fmt(q.x)},${fmt(q.y)})`;
+		if (SQUARE_NEEDS[q.program] === undefined) {
+			fail("MOB-07", `${where}: no such program`, cx(q), cy(q));
+			continue;
+		}
+		if (lot.kind !== "block" || lot.zone !== "commercial" || lot.program !== undefined || !inside(q, lot.yard))
+			fail("MOB-07", `${where}: not on a downtown block's own paving`, cx(q), cy(q));
+		const key = `${q.program}:${q.look}`;
+		if (seen.has(key))
+			fail("MOB-07", `${where}: a second ${q.program} of look ${q.look} in one town`, cx(q), cy(q));
+		seen.add(key);
+		const pieces = W.querySolids(w, q.x, q.y, q.x + q.w, q.y + q.h).filter(
+			s => standing(s) && s.kind !== "building" && inside(s, q, 1),
+		);
+		out.pieces += pieces.length;
+		if (pieces.length < TSQ.SQUARE_PIECES_MIN)
+			fail("MOB-07", `${where}: ${pieces.length} pieces (${TSQ.SQUARE_PIECES_MIN} at least)`, cx(q), cy(q));
+		for (const p of pieces) {
+			const b = buildings.find(o => rectDist(o, p) < TSQ.SQUARE_CLEAR - 1);
+			if (b !== undefined)
+				fail("MOB-07", `${p.tags} #${p.id} ${fmt(rectDist(b, p))} u from ${b.tags} #${b.id}`, cx(p), cy(p));
+		}
+		// what stands across its edge belongs to it or to nothing: no piece of a square half out of it
+		for (const s of W.querySolids(w, q.x, q.y, q.x + q.w, q.y + q.h)) {
+			if (s.kind === "prop" && SQUARE_TAGS.includes(s.tags) && overlap(s, q) && !inside(s, q, 1))
+				fail("MOB-07", `${s.tags} #${s.id} straddles ${where}'s edge`, cx(s), cy(s));
+		}
+		const ground = lot.ground.filter(g => inside(g, q, 1));
+		const pattern = {};
+		const floor = {};
+		for (const g of ground) {
+			if (SQUARE_PATTERN.includes(g.kind)) pattern[g.kind] = (pattern[g.kind] ?? 0) + 1;
+			if (SQUARE_FLOOR.includes(g.kind)) {
+				floor[g.kind] = (floor[g.kind] ?? 0) + 1;
+				const under = W.querySolids(w, g.x, g.y, g.x + g.w, g.y + g.h).find(s => standing(s) && overlap(s, g));
+				if (under !== undefined)
+					fail("MOB-07", `${g.kind} of ${where} under ${under.tags} #${under.id}`, cx(g), cy(g));
+			}
+		}
+		const pits = ground.filter(g => g.kind === "pit").length;
+		if (Object.keys(pattern).length === 0 && pits < 2)
+			fail("MOB-07", `${where}: its paving has no pattern (mosaic, bed, deck, earth, tree grates)`, cx(q), cy(q));
+		const lying = Object.values(floor).reduce((a, b) => a + b, 0);
+		const floorMin = TSQ.FLOOR_MIN ?? 3;
+		if (lying < floorMin)
+			fail("MOB-07", `${where}: ${lying} things lie on its floor (${floorMin} at least)`, cx(q), cy(q));
+		const tags = {};
+		for (const p of pieces) tags[p.tags] = (tags[p.tags] ?? 0) + 1;
+		const trees = pieces.filter(p => p.kind === "tree").length;
+		if (
+			!SQUARE_NEEDS[q.program]({
+				tags: new Proxy(tags, { get: (t, k) => t[k] ?? 0 }),
+				floor: new Proxy(floor, { get: (t, k) => t[k] ?? 0 }),
+				pattern: new Proxy(pattern, { get: (t, k) => t[k] ?? 0 }),
+				trees,
+			})
+		)
+			fail(
+				"MOB-07",
+				`${where}: not what a ${q.program} holds (${pieces.map(p => p.tags).join(",")})`,
+				cx(q),
+				cy(q),
+			);
+		// on foot: a point just round some piece of it (CID-05 samples every lot; this is the square's own)
+		const round = pieces.flatMap(p =>
+			Object.values(NORMAL).map(n => [cx(p) + n[0] * (p.w / 2 + 26), cy(p) + n[1] * (p.h / 2 + 26)]),
+		);
+		if (!round.some(([x, y]) => reach.at(x, y).reached))
+			fail("MOB-07", `${where} cannot be reached on foot`, cx(q), cy(q));
+	}
+	for (const [p, n] of Object.entries(out.programs)) {
+		const cap = TSQ.SQUARE_CAP?.[p];
+		if (cap !== undefined && n > cap) fail("MOB-07", `${n} ${p} squares in one town (${cap} at most)`, 0, 0);
+	}
+	// the leftover: no stretch of empty paving a square would have taken
+	for (const lot of w.lots) {
+		if (lot.kind !== "block" || lot.zone !== "commercial" || lot.program !== undefined) continue;
+		const r = emptyStretch(
+			w,
+			lot,
+			all.filter(e => e.lot === lot).map(e => e.q),
+		);
+		if (r === undefined) continue;
+		out.left++;
+		fail(
+			"MOB-07",
+			`${fmt(r.w)}x${fmt(r.h)} u of empty paving at (${fmt(r.x)},${fmt(r.y)}) with no program`,
+			cx(r),
+			cy(r),
+		);
+	}
+	return out;
+}
+
+/**
+ * The largest rectangle of a downtown block's yard (32 u cells) that no building comes within 96 u of, nothing else
+ * standing within 32, none of the lot's ground rects within 16 and no square within 88 -- when both its sides are
+ * at least a square's shortest (townSquares.ts SQUARE_MIN); undefined otherwise
+ */
+function emptyStretch(w, lot, squares) {
+	const C = 32;
+	const y = lot.yard;
+	const cols = Math.floor(y.w / C);
+	const rows = Math.floor(y.h / C);
+	const free = new Uint8Array(cols * rows).fill(1);
+	const block = (ax, ay, bx, by) => {
+		const i0 = Math.max(0, Math.floor((ax - y.x) / C));
+		const i1 = Math.min(cols - 1, Math.ceil((bx - y.x) / C) - 1);
+		const j0 = Math.max(0, Math.floor((ay - y.y) / C));
+		const j1 = Math.min(rows - 1, Math.ceil((by - y.y) / C) - 1);
+		for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) free[j * cols + i] = 0;
+	};
+	for (const s of W.querySolids(w, y.x - 128, y.y - 128, y.x + y.w + 128, y.y + y.h + 128)) {
+		if (s.parentId !== undefined || s.tags === "border") continue;
+		const p = s.kind === "building" ? 96 : 32;
+		block(s.x - p, s.y - p, s.x + s.w + p, s.y + s.h + p);
+	}
+	for (const g of lot.ground) block(g.x - 16, g.y - 16, g.x + g.w + 16, g.y + g.h + 16);
+	for (const q of squares) block(q.x - 88, q.y - 88, q.x + q.w + 88, q.y + q.h + 88);
+	const n = Math.ceil(TSQ.SQUARE_MIN / C);
+	const hgt = new Array(cols).fill(0);
+	let best;
+	for (let j = 0; j < rows; j++) {
+		for (let i = 0; i < cols; i++) hgt[i] = free[j * cols + i] ? hgt[i] + 1 : 0;
+		for (let i = 0; i < cols; i++) {
+			let h = Infinity;
+			for (let k = i; k < cols; k++) {
+				h = Math.min(h, hgt[k]);
+				if (h < n) break;
+				const wc = k - i + 1;
+				if (wc < n || (best !== undefined && wc * h <= best.a)) continue;
+				best = { a: wc * h, x: y.x + i * C, y: y.y + (j - h + 1) * C, w: wc * C, h: h * C };
+			}
+		}
+	}
+	return best;
 }
 
 /**
@@ -2732,6 +2911,8 @@ function validate(seed) {
 				if (!overlap(s, doorWall)) ok = true;
 			}
 		}
+		// (c) in a downtown square, by its benches (MOB-07)
+		if (!ok && inSquare(w, s)) ok = true;
 		if (!ok) {
 			fail("MOB-01", `bin #${s.id} neither at the curb near an entrance nor behind a building`, cx(s), cy(s));
 		}
@@ -2819,6 +3000,8 @@ function validate(seed) {
 
 /** EDI-17 over the run: towns with a campus */
 const CAMPUS_RUN = { towns: 0, campus: 0 };
+/** the downtown squares over the run (MOB-07): how many a town, of each program, and their pieces */
+const SQUARE_RUN = { towns: 0, counts: [], pieces: 0, programs: {}, towns_with: {} };
 let seedState = 12345;
 Math.random = () => (seedState = (seedState * 48271) % 2147483647) / 2147483647;
 const all = [];
@@ -2858,6 +3041,20 @@ for (const seed of seeds) {
 				`site ${ev.sites} (${ev.piles} piles) | public parking ${ev.parking} | playgrounds ${ev.playgrounds}, courts ${ev.courts} | ` +
 				`street furniture ${ev.street} | backyard things ${ev.yard} (${ev.sheds} sheds)`,
 		);
+		const sq = ev.squares;
+		if (sq !== undefined) {
+			const progs = Object.entries(sq.programs)
+				.map(([k, n]) => `${k} ${n}`)
+				.join(", ");
+			console.log(`  squares (MOB-07): ${sq.count} (${progs}) | ${sq.pieces} pieces standing in them`);
+			SQUARE_RUN.towns++;
+			SQUARE_RUN.counts.push(sq.count);
+			SQUARE_RUN.pieces += sq.pieces;
+			for (const [k, n] of Object.entries(sq.programs)) {
+				SQUARE_RUN.programs[k] = (SQUARE_RUN.programs[k] ?? 0) + n;
+				SQUARE_RUN.towns_with[k] = (SQUARE_RUN.towns_with[k] ?? 0) + 1;
+			}
+		}
 	}
 	const it = stats.interior;
 	console.log(
@@ -2921,6 +3118,17 @@ console.log(`  doors over the run (EDI-09, >= ${DOOR_SHARE * 100}% with all thei
 	);
 }
 if (CAMPUS !== undefined) console.log(`  campus (EDI-17): in ${CAMPUS_RUN.campus} of ${CAMPUS_RUN.towns} towns`);
+if (SQUARE_RUN.towns > 0) {
+	const c = SQUARE_RUN.counts;
+	const n = SQUARE_RUN.towns;
+	const total = c.reduce((a, b) => a + b, 0);
+	const per = Object.entries(SQUARE_RUN.programs)
+		.map(([k, m]) => `${k} ${(m / n).toFixed(2)} (in ${SQUARE_RUN.towns_with[k]} towns)`)
+		.join(", ");
+	console.log(
+		`  squares over the run (MOB-07): ${Math.min(...c)}-${Math.max(...c)} a town, mean ${(total / n).toFixed(1)}; per town ${per}; ${(SQUARE_RUN.pieces / Math.max(1, total)).toFixed(1)} pieces a square`,
+	);
+}
 if (MARKS_FILE) writeFileSync(MARKS_FILE, JSON.stringify(all));
 console.log(
 	`${total === 0 ? "PASS" : "FAIL"}: ${seeds.length} seed(s), ${total} failure(s), ${fmt(performance.now() - t0)} ms`,

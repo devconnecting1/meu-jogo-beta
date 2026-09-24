@@ -128,7 +128,7 @@ const { COLORS, Z } = require(join(SRC, "shared/engine/colors.ts"));
 const { Camera } = require(join(SRC, "shared/engine/camera.ts"));
 const { Renderer } = require(join(SRC, "shared/engine/renderer.ts"));
 const { DESIGN } = require(join(SRC, "shared/engine/constants.ts"));
-const { generateTown, buildingAt, pointInSolid, hash01 } = require(join(SRC, "shared/game/world.ts"));
+const { generateTown, buildingAt, pointInSolid, hash01, removeSolid } = require(join(SRC, "shared/game/world.ts"));
 const WV = require(join(SRC, "client/view/worldView.ts"));
 const { WorldView } = WV;
 const ART_MODULE = join(SRC, "client/view/worldArt.ts");
@@ -147,6 +147,27 @@ function section(title) {
 }
 
 const world = generateTown(DESIGN.TOWN_SEED);
+/**
+ * The same town without its downtown squares (MOB-07, shared/game/townSquares.ts). They are laid last, from their own
+ * streams, and every solid and ground rect of theirs lies inside its square (the ground they were laid on was empty):
+ * taken out newest first -- each cell of the grid gives back its tail -- they leave the very town they were laid in,
+ * and a digest of it is the golden before them, call for call (`noSquares`). A checkout without squares: the town.
+ */
+function withoutSquares(w) {
+	const squares = w.lots.flatMap(l => l.squares ?? []);
+	const inSq = r => squares.some(q => r.x >= q.x && r.y >= q.y && r.x + r.w <= q.x + q.w && r.y + r.h <= q.y + q.h);
+	const gone = w.solids
+		.filter(s => s.kind !== "building" && s.parentId === undefined && inSq(s))
+		.sort((a, b) => b.id - a.id);
+	for (const s of gone) removeSolid(w, s);
+	for (const l of w.lots) {
+		if (l.squares === undefined) continue;
+		l.ground = l.ground.filter(g => !inSq(g));
+		delete l.squares;
+	}
+	return w;
+}
+const bareWorld = withoutSquares(generateTown(DESIGN.TOWN_SEED));
 
 /** a stage: a renderer over the fake tree and a camera on `rect` at `zoom` */
 function stage(w, h, zoom = 1) {
@@ -177,13 +198,13 @@ function shadowFn(night, lx = 0, ly = 0) {
 	};
 }
 
-function drawTown(st, view, cx, cy) {
+function drawTown(st, view, cx, cy, w = world) {
 	st.cam.x = cx;
 	st.cam.y = cy;
 	const v = st.cam.viewRect(32);
 	st.r.beginFrame();
-	view.drawGround(st.r, st.cam, v, world);
-	view.drawSolids(st.r, st.cam, v, world);
+	view.drawGround(st.r, st.cam, v, w);
+	view.drawSolids(st.r, st.cam, v, w);
 	st.r.endFrame();
 }
 
@@ -306,7 +327,7 @@ function withoutTrees(view) {
 	return view;
 }
 
-function digestOf(scene, noSigns = false, noTrees = false) {
+function digestOf(scene, noSigns = false, noTrees = false, w = world) {
 	const st = stage(Math.round(scene.w * scene.zoom), Math.round(scene.h * scene.zoom), scene.zoom);
 	const cx = scene.x + scene.w / 2;
 	const cy = scene.y + scene.h / 2;
@@ -315,9 +336,9 @@ function digestOf(scene, noSigns = false, noTrees = false) {
 	if (noTrees) withoutTrees(view);
 	calls.length = 0;
 	capturing = true;
-	drawTown(st, view, cx, cy);
+	drawTown(st, view, cx, cy, w);
 	// a short pan: clipping at the view's edges changes every frame
-	for (let f = 1; f <= 12; f++) drawTown(st, view, cx + f * 37, cy + f * 11);
+	for (let f = 1; f <= 12; f++) drawTown(st, view, cx + f * 37, cy + f * 11, w);
 	capturing = false;
 	const json = JSON.stringify(calls);
 	return { count: calls.length, sha1: createHash("sha1").update(json).digest("hex"), layer: st.r.layer };
@@ -405,7 +426,10 @@ function interiorBuildings(w) {
 	}
 	return out;
 }
-function interiorDigest(b, noTrees = false) {
+/** building `b` as the town without its squares has it (the same id: the squares take none of the town's) */
+const bareOf = b => bareWorld.solids.find(s => s.id === b.id) ?? b;
+function interiorDigest(b0, noTrees = false, w = world) {
+	const b = w === world ? b0 : bareOf(b0);
 	const st = stage(1920, 1080, 1);
 	const view = new WorldView(shadowFn(false));
 	if (noTrees) withoutTrees(view);
@@ -414,8 +438,8 @@ function interiorDigest(b, noTrees = false) {
 	capturing = true;
 	const cx = b.x + b.w / 2;
 	const cy = b.y + b.h / 2;
-	drawTown(st, view, cx, cy);
-	for (let f = 1; f <= 6; f++) drawTown(st, view, cx + f * 29, cy + f * 13);
+	drawTown(st, view, cx, cy, w);
+	for (let f = 1; f <= 6; f++) drawTown(st, view, cx + f * 29, cy + f * 13, w);
 	capturing = false;
 	b.roofAlpha = undefined;
 	return { count: calls.length, sha1: createHash("sha1").update(JSON.stringify(calls)).digest("hex") };
@@ -425,7 +449,8 @@ if (process.argv.includes("--golden-interiors")) {
 	const scenes = {};
 	for (const b of interiorBuildings(world)) {
 		const d = interiorDigest(b);
-		const t = interiorDigest(b, true);
+		const t = interiorDigest(b, true, bareWorld);
+		const q = interiorDigest(b, false, bareWorld);
 		scenes[`type${b.buildingType}`] = {
 			building: b.id,
 			x: b.x,
@@ -433,10 +458,11 @@ if (process.argv.includes("--golden-interiors")) {
 			count: d.count,
 			sha1: d.sha1,
 			noTrees: { count: t.count, sha1: t.sha1 },
+			noSquares: { count: q.count, sha1: q.sha1 },
 		};
 	}
 	const out = {
-		note: "draw-call digests of each building type's first building seen from inside with no world art (tools/test-world-art.mjs --golden-interiors); noTrees: the same with the trees' drawing stubbed out (the town round the building, VEG-06)",
+		note: "draw-call digests of each building type's first building seen from inside with no world art (tools/test-world-art.mjs --golden-interiors); noTrees: the same with the trees' drawing stubbed out (the town round the building, VEG-06), in the town without its downtown squares; noSquares: the town without its downtown squares (MOB-07), drawn whole",
 		recordedFrom: process.env.PZ_GOLDEN_FROM ?? "the src it was run on",
 		scenes,
 	};
@@ -534,21 +560,25 @@ setArt({});
 const flatDigests = {};
 const bareDigests = {};
 const treelessDigests = {};
+const squarelessDigests = {};
 for (const sc of SCENES) {
 	flatDigests[sc.name] = digestOf(sc);
-	bareDigests[sc.name] = digestOf(sc, true);
-	treelessDigests[sc.name] = digestOf(sc, false, true);
+	// the signs' and the trees' proofs keep proving what they proved: on the town the squares were laid in (MOB-07)
+	bareDigests[sc.name] = digestOf(sc, true, false, bareWorld);
+	treelessDigests[sc.name] = digestOf(sc, false, true, bareWorld);
+	squarelessDigests[sc.name] = digestOf(sc, false, false, bareWorld);
 }
 if (GOLDEN_MODE) {
 	mkdirSync(join(ROOT, "tools", "golden"), { recursive: true });
 	const out = {
-		note: "draw-call digests of WorldView.drawGround + drawSolids with no world art (tools/test-world-art.mjs --golden); noSigns: the same with the building-signage hook stubbed out; noTrees: the same with the trees' drawing stubbed out (VEG-06)",
+		note: "draw-call digests of WorldView.drawGround + drawSolids with no world art (tools/test-world-art.mjs --golden); noSigns: the same with the building-signage hook stubbed out; noTrees: the same with the trees' drawing stubbed out (VEG-06); both in the town without its downtown squares, and noSquares: that town drawn whole (MOB-07)",
 		recordedFrom: process.env.PZ_GOLDEN_FROM ?? "the src it was run on",
 		scenes: Object.fromEntries(
 			SCENES.map(sc => {
 				const d = flatDigests[sc.name];
 				const b = bareDigests[sc.name];
 				const t = treelessDigests[sc.name];
+				const q = squarelessDigests[sc.name];
 				return [
 					sc.name,
 					{
@@ -556,6 +586,7 @@ if (GOLDEN_MODE) {
 						sha1: d.sha1,
 						noSigns: { count: b.count, sha1: b.sha1 },
 						noTrees: { count: t.count, sha1: t.sha1 },
+						noSquares: { count: q.count, sha1: q.sha1 },
 					},
 				];
 			}),
@@ -601,6 +632,20 @@ for (const sc of SCENES) {
 	check(
 		off.length === 0,
 		"and without the trees every scene is the same town (VEG-06 changed only the trees)",
+		off.map(sc => sc.name).join(", "),
+	);
+}
+{
+	// MOB-07 (the downtown squares) added the squares and nothing else: the town without them is, scene by scene, the
+	// golden before them call for call (recorded as noSquares with the squares, compared with the golden before)
+	const off = SCENES.filter(sc => {
+		const q = squarelessDigests[sc.name];
+		const g = golden[sc.name]?.noSquares;
+		return g === undefined || q.count !== g.count || q.sha1 !== g.sha1;
+	});
+	check(
+		off.length === 0,
+		"and without the downtown squares every scene is the same town (MOB-07 added only the squares)",
 		off.map(sc => sc.name).join(", "),
 	);
 }
@@ -1083,6 +1128,52 @@ function silhouette(ground, withBody) {
 		worstSurvivorChars >= 35,
 		"with the characters' art, the survivor still clears the bar on the worst ground",
 		`${worstSurvivorChars.toFixed(1)} ΔE`,
+	);
+}
+{
+	// MOB-07: on a downtown square's floor -- its mosaic in each look the town laid, a cafe's deck, a pocket park's bed
+	// -- a walker and the survivor clear the open ground's bars (the mosaic's stones sit a step either side of the paving)
+	const seen = new Set();
+	for (const lot of world.lots) {
+		for (const g of lot.ground) {
+			if (!["medallion", "terrace", "bed"].includes(g.kind)) continue;
+			const key =
+				g.kind === "medallion" ? `mosaic look ${g.variant ?? 0}` : g.kind === "terrace" ? "cafe deck" : "bed";
+			if (seen.has(key)) continue;
+			// a spot on it a body's width clear of anything standing (on the mosaic's disc, not its rect's corners)
+			let p;
+			const mx = g.x + g.w / 2;
+			const my = g.y + g.h / 2;
+			for (let y = g.y + 40; y < g.y + g.h - 40 && p === undefined; y += 8) {
+				for (let x = g.x + 40; x < g.x + g.w - 40 && p === undefined; x += 8) {
+					if (g.kind === "medallion" && Math.hypot(x - mx, y - my) > g.w / 2 - 28) continue;
+					if (pointInSolid(world, x, y, 44) === undefined) p = { x, y };
+				}
+			}
+			if (p === undefined) continue;
+			seen.add(key);
+			const res = {};
+			for (const actor of ["zombie", "survivor"]) {
+				for (const look of ["flat", "town", "chars"]) {
+					const base = shot(p, actor === "zombie" ? "zombieShadow" : "none", look);
+					res[`${actor}.${look}`] = silhouette(base, shot(p, actor, look));
+				}
+			}
+			const f = (actor, look) => res[`${actor}.${look}`].toFixed(1);
+			check(
+				res["zombie.town"] >= 25 &&
+					res["survivor.town"] >= 30 &&
+					res["zombie.chars"] >= 40 &&
+					res["survivor.chars"] >= 35,
+				`on a square's ${key.padEnd(13)} (MOB-07): both clear the open ground's bars`,
+				`walker ${f("zombie", "flat")} -> ${f("zombie", "town")} -> art ${f("zombie", "chars")}, survivor ${f("survivor", "flat")} -> ${f("survivor", "town")} -> art ${f("survivor", "chars")} ΔE`,
+			);
+		}
+	}
+	check(
+		seen.has("cafe deck") && seen.has("bed") && [...seen].filter(k => k.startsWith("mosaic")).length >= 2,
+		"a square's mosaic (two looks at least), a cafe's deck and a bed were measured",
+		[...seen].join(", "),
 	);
 }
 {
@@ -2193,6 +2284,10 @@ section("9) the nameplate (UI-04 clarification): every voice with its pixel shad
 		["school yard (dirt)", "playground"],
 		["park path", "path"],
 		["curb ramp (tactile)", "ramp"],
+		// a downtown square's floor (MOB-07): its mosaic and a pocket park's bed (a cafe's deck is the wood floor's boards,
+		// tinted: "floor: wood" below; the bodies on it, section 5)
+		["square's mosaic", "medallion"],
+		["square's bed", "bed"],
 	].map(([label, kind]) => [label, groundPixels(kind)]);
 	for (const floor of ["floorWood", "floorTile", "floorShop"]) {
 		const img = localImage(ALL.ids[floor]);
@@ -2887,13 +2982,22 @@ section("11b) the interiors' pixel art: no id no change, every piece in the atla
 			g === undefined ? "no golden" : `${d.count} calls, ${d.sha1.slice(0, 10)} vs ${g.sha1.slice(0, 10)}`,
 		);
 		// and the town round it, without its trees, is the golden's before the trees' kinds (VEG-06)
-		const t = interiorDigest(b, true);
+		const t = interiorDigest(b, true, bareWorld);
 		check(
 			g?.noTrees !== undefined && t.count === g.noTrees.count && t.sha1 === g.noTrees.sha1,
 			"  ...and without the trees round it, the same calls as before VEG-06",
 			g?.noTrees === undefined
 				? "no golden"
 				: `${t.count} calls, ${t.sha1.slice(0, 10)} vs ${g.noTrees.sha1.slice(0, 10)}`,
+		);
+		// and without the downtown squares round it (MOB-07), the golden's before them
+		const q = interiorDigest(b, false, bareWorld);
+		check(
+			g?.noSquares !== undefined && q.count === g.noSquares.count && q.sha1 === g.noSquares.sha1,
+			"  ...and without the squares round it, the same calls as before MOB-07",
+			g?.noSquares === undefined
+				? "no golden"
+				: `${q.count} calls, ${q.sha1.slice(0, 10)} vs ${g.noSquares.sha1.slice(0, 10)}`,
 		);
 	}
 	if (existsSync(IA_MODULE)) {
@@ -3013,6 +3117,8 @@ section("11b) the interiors' pixel art: no id no change, every piece in the atla
 // ================================================================ 11c. the town's fixtures (ART-16)
 
 section("11c) the town's fixtures' pixel art (ART-16): every fixture and its ground in the atlas, on its own rect");
+/** what lies on the ground as a decorative extra: the market's litter and a square's floor (MOB-07), art only */
+const FLOOR_EXTRAS = ["spill", "paper", "bag", "drain", "cracked", "weeds", "leaves", "vigil", "chalk"];
 {
 	const TPA_MODULE = join(SRC, "client/view/townPropArt.ts");
 	if (existsSync(TPA_MODULE)) {
@@ -3040,12 +3146,13 @@ section("11c) the town's fixtures' pixel art (ART-16): every fixture and its gro
 			const TV = require(join(SRC, "client/view/townView.ts"));
 			const { WorldView } = require(join(SRC, "client/view/worldView.ts"));
 			const view = new WorldView(noShadow);
-			const LIMIT = { foodtruck: 3, tent: 6, shelter: 2, column: 4, bank: 0 };
+			const LIMIT = { foodtruck: 3, tent: 6, shelter: 2, column: 4, bank: 0, kiosk: 3, parasol: 3 };
 			const v = { minX: -1e9, minY: -1e9, maxX: 1e9, maxY: 1e9 };
 			const most = {};
 			let over = [];
 			for (const s of world.solids) {
-				const canopy = s.kind === "canopy" && (s.tags === "tent" || s.tags === "shelter");
+				const canopy =
+					s.kind === "canopy" && (s.tags === "tent" || s.tags === "shelter" || s.tags === "parasol");
 				if (s.kind !== "prop" && !canopy) continue;
 				calls.length = 0;
 				let drawn = canopy
@@ -3064,7 +3171,7 @@ section("11c) the town's fixtures' pixel art (ART-16): every fixture and its gro
 			let litter = 0;
 			for (const l of world.lots) {
 				for (const g of l.ground) {
-					if (g.kind !== "spill" && g.kind !== "paper" && g.kind !== "bag") continue;
+					if (!FLOOR_EXTRAS.includes(g.kind)) continue;
 					calls.length = 0;
 					TV.drawTownGround(rec, cam, g, v);
 					litter += calls.length;
@@ -3080,7 +3187,7 @@ section("11c) the town's fixtures' pixel art (ART-16): every fixture and its gro
 			);
 			check(
 				litter === 0,
-				"no id: the market's litter is the pixel art's only (a decorative extra, ART-04)",
+				"no id: the market's litter and what lies on a square's floor are the pixel art's only (decorative extras, ART-04)",
 				`${litter} calls`,
 			);
 		}
@@ -3101,8 +3208,13 @@ section("11c) the town's fixtures' pixel art (ART-16): every fixture and its gro
 				"fence",
 				"studs",
 			],
+			// the downtown squares (MOB-07)
+			...["planter", "lamppost", "noticeboard", "kiosk", "cafe", "rubble", "barrier"],
 		]);
-		const GROUND = new Set(["court", "sandbox", "garden", "steps", "site", "pad", "spill", "paper", "bag"]);
+		const GROUND = new Set([
+			...["court", "sandbox", "garden", "steps", "site", "pad", "spill", "paper", "bag"],
+			...["medallion", "drain", "cracked", "weeds", "leaves", "vigil", "chalk"],
+		]);
 		const seeds = [DESIGN.TOWN_SEED, 1, 42, 99991, 123456];
 		const stat = { fixtures: 0, roofs: 0, ground: 0, missing: [], off: [] };
 		const tags = new Set();
@@ -3129,7 +3241,8 @@ section("11c) the town's fixtures' pixel art (ART-16): every fixture and its gro
 			const things = [];
 			for (const s of w.solids) {
 				if (s.kind === "prop" && TOWN.has(s.tags)) things.push(["prop", s]);
-				else if (s.kind === "canopy" && (s.tags === "tent" || s.tags === "shelter")) things.push(["roof", s]);
+				else if (s.kind === "canopy" && ["tent", "shelter", "parasol"].includes(s.tags))
+					things.push(["roof", s]);
 			}
 			for (const l of w.lots) for (const g of l.ground) if (GROUND.has(g.kind)) things.push(["ground", g]);
 			for (const [kind, s] of things) {

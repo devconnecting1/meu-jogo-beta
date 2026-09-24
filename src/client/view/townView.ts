@@ -20,7 +20,7 @@ import { CRATE_STACKED, CRATE_TIPPED, TENT_DOWN, TENT_SAGGING, TENT_TORN } from 
 import type { GroundRect, Rect, Solid, WorldData } from "shared/game/world";
 import { isPortico, isVaultBox, isVaultDoor } from "shared/sim/vault";
 import { overlaps } from "./drawKit";
-import { drawCanopyArt, drawGroundArt, drawPropArt, ShadowFn } from "./townPropArt";
+import { BOARD_UP, drawCanopyArt, drawGroundArt, drawPropArt, LANTERN_UP, ShadowFn } from "./townPropArt";
 
 const WHITE = COLORS.white;
 const BLACK = COLORS.shadow;
@@ -60,6 +60,25 @@ const KEY_DEEP = 112;
 /** a building site's bare earth, and the ruts the trucks left */
 const EARTH = Color3.fromRGB(128, 100, 72);
 const EARTH_RUT = Color3.fromRGB(104, 80, 58);
+/**
+ * A downtown square's mosaic, flat (MOB-07): a disc of lighter stone in a darker ring on the plaza's paving (the flat
+ * plaza is COLORS.sidewalk a tenth to white; the stones a step either side of it: LEG-03)
+ */
+const MOSAIC = COLORS.sidewalk.Lerp(WHITE, 0.2);
+const MOSAIC_RING = COLORS.sidewalk.Lerp(BLACK, 0.12);
+
+/** what lies on a square's floor (MOB-07): decorative extras, the pixel art's only (ART-04, like the market's litter) */
+const FLOOR_EXTRAS: Record<string, boolean> = {
+	spill: true,
+	paper: true,
+	bag: true,
+	drain: true,
+	cracked: true,
+	weeds: true,
+	leaves: true,
+	vigil: true,
+	chalk: true,
+};
 
 // ------------------------------------------------------------------ ground
 
@@ -72,10 +91,22 @@ const STEP = 24;
  */
 export function drawTownGround(r: Renderer, cam: Camera, g: GroundRect, v: ViewRect): boolean {
 	const k = g.kind;
-	// the market's litter -- dropped produce, paper, a bag (EDI-21) -- is a decorative extra: the pixel art draws it,
-	// the flat fallback does not (ART-04, like the drains and the dried blood; the review of e9b0fbb, L5)
-	if (k === "spill" || k === "paper" || k === "bag") {
+	// the market's litter -- dropped produce, paper, a bag (EDI-21) -- and what lies on a square's floor (a drain, a
+	// crack, weeds, leaves, a vigil, a hopscotch: MOB-07) are decorative extras: the pixel art draws them, the flat
+	// fallback does not (ART-04, like the drains and the dried blood; the review of e9b0fbb, L5)
+	if (FLOOR_EXTRAS[k] === true) {
 		if (overlaps(g.x, g.y, g.w, g.h, v)) drawGroundArt(r, cam, g);
+		return true;
+	}
+	if (k === "medallion") {
+		// a square's mosaic: its pixel art, or one disc of lighter stone in its darker ring
+		if (!overlaps(g.x, g.y, g.w, g.h, v) || drawGroundArt(r, cam, g)) return true;
+		r.drawCircle(cam, g.x + g.w / 2, g.y + g.h / 2, g.w, {
+			color: MOSAIC,
+			stroke: MOSAIC_RING,
+			strokeThickness: 3,
+			zIndex: Z.ground + 3,
+		});
 		return true;
 	}
 	if (k !== "steps" && k !== "court" && k !== "sandbox" && k !== "pad" && k !== "garden" && k !== "site") {
@@ -554,6 +585,20 @@ const SHED_ROOF = Color3.fromRGB(96, 104, 96);
 const WATER = Color3.fromRGB(64, 152, 196);
 const COPING = Color3.fromRGB(220, 216, 204);
 const PAD_BLUE = Color3.fromRGB(56, 110, 180);
+/**
+ * The downtown squares (MOB-07): a planter's concrete and its green, a lamp post's lantern, a notice board's cork, the
+ * newsstand's green roof, a cafe's rattan and its table top, the rubble's slab, the road barrier's orange
+ */
+const CONCRETE = Color3.fromRGB(176, 172, 164);
+const PLANTED = Color3.fromRGB(66, 108, 60);
+const LANTERN = Color3.fromRGB(58, 62, 70);
+const CORK = Color3.fromRGB(150, 118, 74);
+const KIOSK_ROOF = Color3.fromRGB(62, 98, 76);
+const KIOSK_AWNING = Color3.fromRGB(62, 130, 82);
+const RATTAN = Color3.fromRGB(156, 116, 72);
+const TABLE_TOP = Color3.fromRGB(192, 186, 172);
+const RUBBLE = Color3.fromRGB(150, 148, 140);
+const BARRIER = Color3.fromRGB(222, 112, 40);
 
 /** what the tent over each market stall is (a stall's table and crates show only while their tent is lifted) */
 let tentsFor: WorldData | undefined;
@@ -996,6 +1041,91 @@ export function drawTownProp(r: Renderer, cam: Camera, s: Solid, world: WorldDat
 		r.drawCircle(cam, cx, cy, s.w, { color: RUBBER, stroke: INK, strokeThickness: 2, zIndex: Z.structure });
 		return true;
 	}
+	return drawSquareProp(r, cam, s, shadow);
+}
+
+/**
+ * A downtown square's fixture, flat (MOB-07; the pixel art is ART-16's): at most two Frames each, the kiosk three with
+ * its shadow -- a planter's box and its green, a lamp post's foot and its lantern up on it, a notice board's posts and
+ * the board up on them, the newsstand's roof and its awning, a cafe table's chairs and its top, a heap of rubble, a
+ * road barrier and its stripe. False for anything else.
+ */
+function drawSquareProp(r: Renderer, cam: Camera, s: Solid, shadow: ShadowFn): boolean {
+	const t = s.tags;
+	const cx = s.x + s.w / 2;
+	const cy = s.y + s.h / 2;
+	const wide = s.w >= s.h;
+	if (t === "planter") {
+		box(r, cam, s, CONCRETE, undefined, 0, shadow);
+		r.drawCircle(cam, cx, cy, s.w - 16, { color: PLANTED, zIndex: Z.structure + 1 });
+		return true;
+	}
+	if (t === "lamppost") {
+		r.drawCircle(cam, cx, cy, s.w, { color: INK, zIndex: Z.structure });
+		r.drawRect(cam, cx, cy - LANTERN_UP, { w: 16, h: 24, color: LANTERN, cornerRadius: 4, zIndex: Z.roof - 1 });
+		return true;
+	}
+	if (t === "noticeboard") {
+		r.drawRect(cam, cx, cy, { w: s.w, h: s.h, color: WOOD_SHADE, zIndex: Z.structure });
+		r.drawRect(cam, cx, cy - BOARD_UP, {
+			w: 64,
+			h: 44,
+			color: CORK,
+			stroke: WOOD_SHADE,
+			strokeThickness: 3,
+			zIndex: Z.roof - 1,
+		});
+		return true;
+	}
+	if (t === "kiosk") {
+		// its shadow and green roof, and the awning along the front it faces
+		box(r, cam, s, KIOSK_ROOF, undefined, 18, shadow, 2);
+		const n = sideN(s.face);
+		const across = n.x !== 0;
+		r.drawRect(cam, cx + n.x * (s.w / 2 - 6), cy + n.y * (s.h / 2 - 6), {
+			w: across ? 12 : s.w,
+			h: across ? s.h : 12,
+			color: KIOSK_AWNING,
+			zIndex: Z.structure + 2,
+		});
+		return true;
+	}
+	if (t === "cafe") {
+		// the chairs round it as one square of rattan, the round top in the middle (knocked over: on its side)
+		r.drawRect(cam, cx, cy, {
+			w: s.w - 8,
+			h: s.h - 8,
+			color: RATTAN,
+			rotation: (s.variant ?? 0) === 2 ? 0.3 : 0,
+			stroke: INK,
+			strokeThickness: 1,
+			strokeAlpha: 0.6,
+			zIndex: Z.structure,
+		});
+		r.drawCircle(cam, cx, cy, 38, { color: TABLE_TOP, stroke: INK, strokeThickness: 1, zIndex: Z.structure + 1 });
+		return true;
+	}
+	if (t === "rubble") {
+		box(r, cam, s, RUBBLE, undefined, 0, shadow, 10);
+		r.drawRect(cam, cx - 6, cy - 4, {
+			w: wide ? s.w * 0.45 : s.w * 0.55,
+			h: wide ? s.h * 0.55 : s.h * 0.45,
+			rotation: 0.35,
+			color: BRICK,
+			zIndex: Z.structure + 1,
+		});
+		return true;
+	}
+	if (t === "barrier") {
+		box(r, cam, s, BARRIER, undefined, 0, shadow);
+		r.drawRect(cam, cx, cy, {
+			w: wide ? s.w * 0.3 : s.w - 6,
+			h: wide ? s.h - 6 : s.h * 0.3,
+			color: WHITE,
+			zIndex: Z.structure + 1,
+		});
+		return true;
+	}
 	return false;
 }
 
@@ -1006,7 +1136,7 @@ export function drawTownProp(r: Renderer, cam: Camera, s: Solid, world: WorldDat
  */
 export function drawTownCanopy(r: Renderer, cam: Camera, s: Solid, v: ViewRect, shadow: ShadowFn): boolean {
 	const t = s.tags;
-	if (t !== "tent" && t !== "shelter") return false;
+	if (t !== "tent" && t !== "shelter" && t !== "parasol") return false;
 	if (!overlaps(s.x - 40, s.y - 40, s.w + 80, s.h + 80, v) || drawCanopyArt(r, cam, s, shadow)) return true;
 	const cx = s.x + s.w / 2;
 	const cy = s.y + s.h / 2;
@@ -1030,6 +1160,16 @@ export function drawTownCanopy(r: Renderer, cam: Camera, s: Solid, v: ViewRect, 
 		});
 		return true;
 	}
+	// a cafe's parasol (MOB-07): the canvas round, in the cafe's stripe, the cream band round its middle
+	r.drawCircle(cam, cx, cy, s.w, {
+		color: TENT_STRIPES[(s.variant ?? 0) % 3],
+		alpha: a,
+		stroke: INK,
+		strokeThickness: 2,
+		strokeAlpha: 0.8 * a,
+		zIndex: Z.roof,
+	});
+	r.drawCircle(cam, cx, cy, s.w * 0.5, { color: CANVAS, alpha: a, zIndex: Z.roof + 1 });
 	return true;
 }
 
