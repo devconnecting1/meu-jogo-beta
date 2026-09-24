@@ -69,7 +69,11 @@
  * (alpha <= 0.1, a snap that starts a fade-in) or both ends are off the screen.
  *   (h) 90 s exploring by day with the REAL population (spawns, recycling, relocations), 1920 x 1080, clean and WAN;
  *   (i) the same at night with the waves; (j) a re-entry in the near and the mid ring (the wire skips six samples);
- *   (k) the server moving a body 670 u under the same netId (the client's own guard).
+ *   (k) the server moving a body 670 u under the same netId (the client's own guard);
+ *   (l) the review of 577c729, M1: loss bursts of 350 and 400 ms on the Snap stream, strict (no allowance for the end of
+ *       an extrapolation): no body blinks (alpha >= 0.8), none restarts, none jumps. Before: every track restarted at
+ *       alpha 0 (the horde blinked to 0.05); dropping only the history jumped 43 u in one frame, keeping it snapped 29.5 u.
+ *   (h) also checks L4: a moved body's rewind history (combat.history) goes with its old identity.
  * Root cause: the population put a wave walker or a special left behind back on the survivor's ring under the SAME
  * netId (shared/sim/ai/population.ts `cleanup`), and every screen that still had it interpolated it across the town.
  * Before (PZ_SRC at c72aa6c): (h) clean 126 frames, the worst 726 u in one frame (43 591 u/s, 194x its own speed), 40
@@ -119,6 +123,8 @@ const numArg = (name, fallback) => {
 	return i >= 0 && args[i + 1] !== undefined ? Number(args[i + 1]) : fallback;
 };
 const SEED = numArg("--seed", 7);
+/** `--only hl`: run just these scenarios (a quicker loop while working on one; the full run is the verdict) */
+const ONLY = args.includes("--only") ? (args[args.indexOf("--only") + 1] ?? "") : undefined;
 
 let failures = 0;
 function check(name, ok, detail) {
@@ -164,9 +170,12 @@ class Link {
 		this.jitter = opts.jitter ?? 0;
 		this.loss = opts.loss ?? 0;
 		this.random = opts.random;
+		/** (l) windows [from, to) of absolute time in which everything sent is lost: a loss burst */
+		this.bursts = opts.bursts ?? [];
 		this.queue = [];
 	}
 	send(now, payload) {
+		for (const [from, to] of this.bursts) if (now >= from && now < to) return;
 		if (this.loss > 0 && this.random() < this.loss) return;
 		this.queue.push({ at: now + this.oneWay + (this.random() - 0.5) * 2 * this.jitter, payload });
 	}
@@ -274,10 +283,16 @@ function run(scn, profileName) {
 	if (scn.population !== true) horde.population.update = () => {};
 	/** (h) the population's relocations (shared/sim/ai/population.ts `cleanup`), through its own hook when there is one */
 	let relocations = 0;
+	/** (h) review of 577c729, L4: a moved body whose rewind history (by entity id) survived the move */
+	let historyKept = 0;
 	const moved = horde.refs.onZombieMoved;
 	horde.refs.onZombieMoved = z => {
 		relocations += 1;
+		// the body had a past where it stood (combat records every living zombie every tick)...
+		const had = sim.combat?.history?.has?.(z.id) === true;
 		moved?.(z);
+		// ...which a shot at the old drawing must not be rewound into
+		if (had && sim.combat.history.has(z.id)) historyKept += 1;
 	};
 	/** (j) the part filter's own memory, fresh for every run */
 	const filterState = {};
@@ -415,7 +430,13 @@ function run(scn, profileName) {
 	const locked = new Camera();
 	locked.setView(cam.viewW, cam.viewH);
 
-	const down = new Link({ oneWay: prof.oneWay, jitter: prof.jitter, loss: prof.loss, random });
+	const down = new Link({
+		oneWay: prof.oneWay,
+		jitter: prof.jitter,
+		loss: prof.loss,
+		random,
+		bursts: (scn.lossBursts ?? []).map(([at, len]) => [T0 + at, T0 + at + len]),
+	});
 	const up = new Link({ oneWay: prof.oneWay, jitter: prof.jitter, loss: prof.loss, random: randomUp });
 	const rel = new Reliable(prof.oneWay);
 	// the TimeSync RemoteEvent both ways (reliable): a probe a second, answered with the server's clock and tick
@@ -666,11 +687,13 @@ function run(scn, profileName) {
 		teleports,
 		lives,
 		relocations,
+		historyKept,
 		spawns,
 		spawnsInView,
 		relocLanded,
 		relocInView,
 		restarts: cl.snapshots.stats().restarts ?? 0,
+		bridged: cl.snapshots.stats().bridged ?? 0,
 		viewW,
 		viewH,
 		zombiesEnd: horde.zombies.length,
@@ -991,10 +1014,12 @@ const EXTRAPOLATE_S = CFG.EXTRAPOLATE_MAX_S ?? 0.1;
 const SPEED_SLACK_U = 4;
 const FADE_SNAP_ALPHA = 0.1;
 const SCREEN_MARGIN = 40;
+/** (l): the alpha a body that had fully appeared may dip to in a loss burst (M1: no blink) */
+const ALPHA_FLOOR = 0.8;
 /** (h): at most this share of the relocated bodies may land on the 1920 x 1080 screen (§3.5 "Limpeza") */
 const SPAWN_IN_VIEW_MAX_PCT = 10;
 
-function drawnSpeed(res) {
+function drawnSpeed(res, strict = false) {
 	const out = { frames: 0, fast: 0, worstRatio: 0, worstStep: 0, worstUps: 0, samples: [] };
 	const onScreen = f =>
 		f.px >= -SCREEN_MARGIN &&
@@ -1025,7 +1050,8 @@ function drawnSpeed(res) {
 			// the guess could be off: the body going the other way at its top speed. A charger stopping mid-rush is the
 			// case (40 u in one frame at 750 u/s) -- a correction of a few frames' walk, never a run across the map
 			const ending = a.stale === true || frames[i - 2]?.stale === true;
-			const catchUp = ending ? 2 * vmax * EXTRAPOLATE_S : 0;
+			// (l) is strict: a stream that went silent is caught up smoothly, never in one frame (M1)
+			const catchUp = ending && !strict ? 2 * vmax * EXTRAPOLATE_S : 0;
 			const allowed = vmax * b.dt * SPEED_MARGIN + SPEED_SLACK_U + catchUp;
 			if (vmax > 0) out.worstRatio = Math.max(out.worstRatio, d / (vmax * b.dt));
 			if (d > out.worstStep) {
@@ -1277,6 +1303,37 @@ const SCENARIOS = {
 	 * The client's own guard: the SERVER moves a body 670 u under the same netId, on screen (nothing does since the
 	 * population gives a relocation a new identity; this stands for whatever could). 670 u in 50 ms is not a walk.
 	 */
+	/*
+	 * (l) The review of 577c729, M1: a loss burst on the Snap stream -- 350 ms, and later 400 ms, nothing arrives at all
+	 * -- longer than the near ring's 0.3 s despawn timeout. It is a gap in the WHOLE stream, not in one track: no body
+	 * left, so none may blink (fade out and back in) and none may jump. Before the fix every track came back through a
+	 * restart at alpha 0; before that one, every one faded towards 0 after 0.3 s of silence and back up after it.
+	 */
+	l: {
+		title: "(l) rajadas de perda de 350 e 400 ms no Snap com seis andadores na tela (nada pisca, nada salta)",
+		seconds: 9,
+		warmup: 1,
+		viewW: 1920,
+		viewH: 1080,
+		profiles: ["clean", "wan"],
+		ownVerdict: true,
+		speedCheck: true,
+		alphaCheck: true,
+		strictSpeed: true,
+		lossBursts: [
+			[3, 0.35],
+			[6, 0.4],
+		],
+		setup: ({ sx, sy }) => {
+			const out = [];
+			for (let i = 0; i < 6; i++) {
+				const a = (i / 6) * TAU + 0.3;
+				out.push(hunter(1, sx + Math.cos(a) * 600, sy + Math.sin(a) * 420, sx, sy));
+			}
+			return out;
+		},
+		input: still,
+	},
 	k: {
 		title: "(k) o servidor move um corpo 670 u sem trocar o netId (a guarda do cliente)",
 		seconds: 6,
@@ -1330,6 +1387,7 @@ const pauses = {};
 /** (h)–(k): the max drawn speed of each run */
 const speeds = {};
 for (const key of Object.keys(SCENARIOS).sort()) {
+	if (ONLY !== undefined && !ONLY.includes(key)) continue;
 	const scn = SCENARIOS[key];
 	console.log("\n" + scn.title);
 	results[key] = {};
@@ -1339,7 +1397,7 @@ for (const key of Object.keys(SCENARIOS).sort()) {
 		results[key][prof] = s;
 		printRow(prof, s, res);
 		if (scn.speedCheck === true) {
-			const sp = drawnSpeed(res);
+			const sp = drawnSpeed(res, scn.strictSpeed === true);
 			speeds[`(${key}) ${prof}`] = { sp, res, scn };
 			console.log(
 				`           velocidade desenhada: ${sp.fast} quadros mais rapidos que o proprio zumbi, em ${sp.frames} quadros ` +
@@ -1409,7 +1467,7 @@ for (const key of Object.keys(results)) {
 }
 
 console.log(" o servidor (o caminho de cada zumbi, tick a tick)");
-{
+if (results.b !== undefined && results.d !== undefined) {
 	const b = results.b.clean;
 	check(
 		"(b) a roda de andadores assenta: trancos do servidor por zumbi-segundo <= 0,3",
@@ -1425,7 +1483,7 @@ console.log(" o servidor (o caminho de cada zumbi, tick a tick)");
 }
 
 console.log(" o atraso (o 'meio lagado')");
-{
+if (results.a !== undefined) {
 	const st = results.a.studio;
 	check(
 		"(a) studio: o desenho tem no maximo 170 ms (p95) e nunca passa do servidor",
@@ -1472,7 +1530,8 @@ console.log(" a velocidade desenhada (h-k): nenhum zumbi cruza a tela mais rapid
 for (const [tag, { sp, res, scn }] of Object.entries(speeds)) {
 	check(
 		`${tag}: nenhum zumbi na tela desenhado mais rapido que a velocidade real dele (${SPEED_MARGIN}x + ` +
-			`${SPEED_SLACK_U} u por quadro; um salto so com alfa <= ${FADE_SNAP_ALPHA} ou fora da tela)`,
+			`${SPEED_SLACK_U} u por quadro${scn.strictSpeed === true ? ", sem folga para o fim de uma extrapolacao" : ""}; ` +
+			`um salto so com alfa <= ${FADE_SNAP_ALPHA} ou fora da tela)`,
 		sp.fast === 0,
 		`${sp.fast} quadros em ${sp.frames}; pior ${sp.worstRatio.toFixed(2)}x, ${sp.worstUps.toFixed(0)} u/s`,
 	);
@@ -1481,6 +1540,31 @@ for (const [tag, { sp, res, scn }] of Object.entries(speeds)) {
 			`${tag}: nenhum netId pula de lugar no servidor (a realocacao da populacao e um corpo novo, com outro netId)`,
 			res.teleports.length === 0,
 			`${res.teleports.length} saltos, ${res.relocations} realocacoes`,
+		);
+	}
+	if (scn.alphaCheck === true) {
+		// every body that had faded fully in, from then on: its lowest alpha (a blink is a dip and a rise)
+		let lowest = 1;
+		let who = "";
+		for (const [netId, frames] of res.rec) {
+			let seenFull = false;
+			for (const f of frames) {
+				if (f.alpha >= 0.999) seenFull = true;
+				else if (seenFull && f.alpha < lowest) {
+					lowest = f.alpha;
+					who = `#${netId} t=${f.t.toFixed(2)} s`;
+				}
+			}
+		}
+		check(
+			`${tag}: nenhum corpo pisca na rajada: o alfa de quem ja apareceu nao cai abaixo de ${ALPHA_FLOOR}`,
+			lowest >= ALPHA_FLOOR,
+			`menor alfa ${lowest.toFixed(2)}${who !== "" ? ` (${who})` : ""}`,
+		);
+		check(
+			`${tag}: nenhuma trilha recomeca (a lacuna e do fluxo inteiro, nao de um corpo)`,
+			res.restarts === 0 && res.bridged > 0,
+			`${res.restarts} recomecos, ${res.bridged} trilhas mantidas como uma caminhada`,
 		);
 	}
 	if (scn.restartExpected !== undefined) {
@@ -1496,6 +1580,12 @@ for (const [tag, { sp, res, scn }] of Object.entries(speeds)) {
 	if (h !== undefined) {
 		// the walk has to exercise what it is about, or the checks above prove nothing
 		check("(h) clean: o passeio faz a populacao realocar zumbis", h.relocations >= 5, `${h.relocations}`);
+		// L4: the rewind of a shot at the old drawing finds no past for the moved body (it is judged where it is now)
+		check(
+			"(h) clean: um zumbi realocado perde o historico de rebobinagem do tiro (combat.history)",
+			h.historyKept === 0,
+			`${h.historyKept} de ${h.relocations} ainda com historico`,
+		);
 		// a new body fades in wherever the ring puts it, as always (the waves' pacing depends on the ring); a MOVED one is a
 		// body the player already saw, and lands off the screen
 		const pct = (100 * h.relocInView) / Math.max(1, h.relocLanded);

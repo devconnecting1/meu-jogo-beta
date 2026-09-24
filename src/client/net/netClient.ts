@@ -1269,6 +1269,7 @@ function viewOf(state: RemoteState, entry: RosterEntry): RemotePlayerView {
 		title: entry.title,
 		x: state.x,
 		y: state.y,
+		alpha: state.alpha,
 		angle: state.aim,
 		// §4.2 carries another survivor's health as a fraction of THEIR own maximum (`hp% u8`), never the raw
 		// number: the view only ever needs the ratio, and the ratio is all the wire can honestly give

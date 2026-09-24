@@ -21,6 +21,7 @@
  *   3. the delay stays inside INTERP_MIN_S..INTERP_MAX_S and follows the measured interval;
  *   4. a turn is rounded, not cut: the path never leaves the corridor the server actually walked;
  *   5. the mid ring (10 Hz, the rate a FAR ally is sent at) is the honest worst case, and is reported.
+ *  10. an ally put 2000 u away (a stand-up at daybreak, a Rebirth) appears there fading in, never sliding (N3).
  *   9. an ally who puts the weapon away (DESIGN_RULES ITM-06, protocol decision 20) arrives as the reserved weapon
  *      byte, discrete (never a blend, never a flicker back), with the walk untouched, and is drawn empty-handed.
  *
@@ -264,7 +265,9 @@ function run({
 			const tick = clock !== undefined ? clock.update(frameDt, EPOCH + nextFrame) : nextFrame / SIM_DT;
 			buf.advance(frameDt, tick, now);
 			const states = buf.states();
-			if (states.length > 0) drawn.push({ t: nextFrame, dt: frameDt, x: states[0].x, y: states[0].y });
+			if (states.length > 0) {
+				drawn.push({ t: nextFrame, dt: frameDt, x: states[0].x, y: states[0].y, alpha: states[0].alpha ?? 1 });
+			}
 			nextFrame += hitch !== undefined ? hitch(nextFrame) : FRAME_DT;
 		}
 	}
@@ -602,6 +605,59 @@ console.log("8) depois de um reset, o atraso trava na mediana das primeiras cheg
 		"o atraso nao carrega os 150 ms a mais da primeira chegada",
 		buf.delay() <= 0.05 + CFG.INTERP_MIN_S + 0.03,
 		`${(buf.delay() * 1000).toFixed(0)} ms`,
+	);
+}
+
+// ---------------------------------------------------------------- 10: an ally put somewhere new (N3)
+
+console.log(
+	"\n10) um aliado posto em outro lugar (levantou ao amanhecer, Rebirth): aparece la, sem deslizar pela cidade",
+);
+{
+	/*
+	 * The review of 577c729, N3: a survivor stood up at daybreak or by a Rebirth at a safe spot 2000 u from where they
+	 * fell. Interpolated, the ally slid across the town between the two samples. Now the track starts again at the new
+	 * spot and the body fades in there (client/net/snapshotBuffer.ts `allyJumped`, client/view/playersView.ts).
+	 */
+	const jump = t => (t < 3 ? { x: 1000 + WALK * t, y: 1000 } : { x: 3000 + WALK * (t - 3), y: 2400 });
+	const res = run({ seconds: 5, rtt: 0.08, jitter: 0.005, path: jump });
+	let fast = 0;
+	let worst = 0;
+	let dip = 1;
+	let back = -1;
+	for (let i = 31; i < res.drawn.length; i++) {
+		const a = res.drawn[i - 1];
+		const b = res.drawn[i];
+		const d = Math.hypot(b.x - a.x, b.y - a.y);
+		dip = Math.min(dip, b.alpha);
+		if (b.alpha < 1) back = b.t;
+		// a step drawn visibly (alpha over 0.1) is at most the walk, with the §5.1 margin
+		if (b.alpha > 0.1) {
+			worst = Math.max(worst, d);
+			if (d > WALK * b.dt * 1.25 + 4) fast += 1;
+		}
+	}
+	const jumps = res.stats.allyJumps ?? 0;
+	console.log(
+		`   o salto: ${jumps} trilha(s) recomecada(s), alfa minimo ${dip.toFixed(2)}, de volta a 1 aos ${back.toFixed(2)} s; ` +
+			`pior passo desenhado ${worst.toFixed(1)} u`,
+	);
+	check(
+		"o aliado nunca e desenhado deslizando de um lugar ao outro (nenhum passo visivel alem da caminhada)",
+		fast === 0,
+		`${fast} quadros`,
+	);
+	check(
+		"a trilha recomeca no lugar novo e o corpo aparece aos poucos (alfa de 0 a 1 em menos de meio segundo)",
+		jumps === 1 && dip <= 0.1 && back > 3 && back < 3.6,
+		`${jumps} recomeco(s), alfa minimo ${dip.toFixed(2)}, de volta aos ${back.toFixed(2)} s`,
+	);
+	// and a plain walk never trips it
+	const plain = run({ seconds: 5, rtt: 0.08, jitter: 0.02, loss: 0.1, path: straight });
+	check(
+		"uma caminhada com jitter e 10 % de perda nunca recomeca a trilha",
+		(plain.stats.allyJumps ?? 0) === 0,
+		`${plain.stats.allyJumps ?? 0}`,
 	);
 }
 

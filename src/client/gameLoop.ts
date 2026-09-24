@@ -517,7 +517,19 @@ export class GameLoop {
 		this.interaction.update(refs, dt);
 		// the camera eases after the survivor -- except onto the server's spot at the end of the entry hold, and after a
 		// teleport (a daybreak or Rebirth stand-up, an admin): cut there, not panned across the town
-		if (this.entry.frame(dt, netActive() && netPlaced(), netSnaps())) {
+		const cam = ctx.cam;
+		const zoom = math.max(cam.zoom, 0.01);
+		if (
+			this.entry.frame(
+				dt,
+				netActive() && netPlaced(),
+				netSnaps(),
+				p.x - cam.x,
+				p.y - cam.y,
+				cam.viewW / 2 / zoom,
+				cam.viewH / 2 / zoom,
+			)
+		) {
 			// (the admin's free camera stays where the admin put it: `follow` ignores it too)
 			if (!ctx.cam.detached) {
 				ctx.cam.x = p.x;
@@ -765,9 +777,11 @@ export class GameLoop {
 		debug.profilebegin("pz.world");
 		renderer.beginFrame();
 		if (this.entry.holding()) {
-			// the server has not placed the survivor yet (client/net/entryHold.ts): the canvas's backdrop, not a guess
+			// the server has not placed the survivor yet (client/net/entryHold.ts): the canvas's backdrop, not a guess --
+			// and none of what is drawn over the world either, from this run or the one before it (review of 577c729, L7)
 			renderer.endFrame();
 			debug.profileend();
+			this.hideOverlays();
 			return;
 		}
 		const view = cam.viewRect(32);
@@ -813,6 +827,21 @@ export class GameLoop {
 		this.drawNameplate(cam);
 		this.drawAllyPlates(cam, view, allies);
 		this.drawChatBubbles(cam, view, allies);
+	}
+
+	/**
+	 * Everything drawn over the world outside the renderer's pool -- the night's light map, the zombies' marks, the
+	 * plates and the chat bubbles -- put away while the entry hold draws nothing (client/net/entryHold.ts, L7): the
+	 * light map and the marks of the last frame drawn (the lobby's run, the previous town) would stand over the backdrop.
+	 * Each hides only if it exists and writes only what changes.
+	 */
+	private hideOverlays(): void {
+		this.lightMap?.hide();
+		this.awareness?.hide();
+		this.chat?.hide();
+		this.playersView.hide();
+		const ctx = getCtx();
+		this.nameplate?.update(0, 0, ctx.save.level, false, titleWireOf(ctx.save));
 	}
 
 	/** the zombies' awareness marks (IA-05), over the night overlay and never over a survivor */

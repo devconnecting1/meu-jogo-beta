@@ -1157,6 +1157,14 @@ export class ServerAnalytics {
 				if (first !== undefined) break;
 			}
 		}
+		// the fallen all left the server (a world its dead walked out of ends only with somebody connected, MP-22 and the
+		// review of 577c729, L1): the world is still one event, on whoever is here -- in the lobby, or just connected
+		if (first === undefined) {
+			for (const [, e] of this.entries) {
+				if (e.leftAt !== undefined) continue;
+				if (first === undefined || (first.ephemeral && !e.ephemeral)) first = e;
+			}
+		}
 		if (first === undefined) return;
 		const fallen = outcome.ended.fallen;
 		this.custom(first, EVENT.WorldEnded, outcome.ended.days, {

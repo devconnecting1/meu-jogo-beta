@@ -2183,13 +2183,19 @@ section("18) an owed new life is not lost when the load step that grants it thro
  *       wipe: an empty world is not a lost one. (On Roblox an empty server closes a moment later, and the next player
  *       gets a new server -- a new process, whose first town is DESIGN.TOWN_SEED on day 1: the "fresh world".)
  *   d2  everybody dies, then everybody leaves inside the 30 s window: leaving the server is declining (MP-22), so the
- *       world ends at the last departure; a newcomer finds the new town on day 1, and the dead who come back within the
- *       5 min are owed the new life. Before: the last dead walking out closed the window as if the world were merely
- *       empty, and a newcomer entered the LOST world on its old day, with its dead coming back dead into it.
+ *       world is lost -- and it ends only with somebody connected to see the next one (review of 577c729, L1): with a
+ *       player in the lobby, at the last departure; with nobody left on the server it stays lost, and ends the moment the
+ *       next player's save loads, before they can enter it. The dead who come back within the 5 min are owed the new
+ *       life. Before 1cb2bd1: the last dead walking out closed the window as if the world were merely empty, and a
+ *       newcomer entered the LOST world on its old day, with its dead coming back dead into it.
  *   d3  the dead leave while somebody still stands, then that one leaves standing: the world was never lost, it goes on.
  *   d4  the first player leaves standing while the only other one is dead: nobody alive is left in the world, so the
  *       window opens and the world ends (the one who left is no survivor of it any more) -- the same as if the first had
  *       died: nobody is the host.
+ *   d5  (L2) a dead survivor who left while somebody still stood is only a departure: when the last one falls later,
+ *       the world's fallen are the ones who fell with it -- the one who walked away earlier is not counted, nor owed.
+ *   d6  (L3) the last one standing dies and leaves in the same heartbeat: the fall is decided at the departure, so the
+ *       world ends (with somebody in the lobby) instead of looking merely empty and going on lost.
  */
 section("19) nobody is the host: the world ends when nobody is left alive, never because the first player left", () => {
 	// d1: everybody leaves standing
@@ -2247,10 +2253,11 @@ section("19) nobody is the host: the world ends when nobody is left alive, never
 			back !== undefined ? `${f1(Math.hypot(back.state.x - kept.x, back.state.y - kept.y))} u off` : "no body",
 		);
 	}
-	// d2: everybody dies, then everybody leaves inside the window
+	// d2: everybody dies, then everybody leaves inside the window -- with a player in the lobby, then with nobody
 	{
 		const s = bootServer();
 		const wipes = s.wipes();
+		const lobby = s.join(newUser(), "lobby");
 		const a = s.join(newUser(), "first");
 		const b = s.join(newUser(), "second");
 		s.enter(a);
@@ -2271,7 +2278,7 @@ section("19) nobody is the host: the world ends when nobody is left alive, never
 		s.run(1);
 		check(
 			wipes.length === 1 && wipes[0].reason === "declined" && s.host.seed !== seed && s.sim.clock.day === 1,
-			"(d2) the last of the dead walks out: everybody declined, the world ends at once (MP-22) -- a new town on day 1",
+			"(d2) the last of the dead walks out, a player in the lobby: everybody declined, the world ends at once (MP-22)",
 			`wipes ${wipes.length} (${wipes[0]?.reason}), seed ${s.host.seed === seed ? "same" : "new"}, day ${s.sim.clock.day}`,
 		);
 		check(
@@ -2279,12 +2286,11 @@ section("19) nobody is the host: the world ends when nobody is left alive, never
 			"(d2) …and both are counted among its fallen",
 			JSON.stringify(wipes[0]?.dead),
 		);
-		const c = s.join(newUser(), "newcomer");
-		const spC = s.enter(c);
+		const spL = s.enter(lobby);
 		check(
-			spC !== undefined && !spC.state.dead && s.sim.clock.day === 1,
-			"(d2) a newcomer walks into the NEW town, standing, on day 1",
-			`dead ${spC?.state.dead}, day ${s.sim.clock.day}`,
+			spL !== undefined && !spL.state.dead && s.sim.clock.day === 1,
+			"(d2) the player from the lobby walks into the NEW town, standing, on day 1",
+			`dead ${spL?.state.dead}, day ${s.sim.clock.day}`,
 		);
 		const a2 = s.join(a.UserId, "first");
 		s.run(0.5);
@@ -2294,6 +2300,48 @@ section("19) nobody is the host: the world ends when nobody is left alive, never
 			back !== undefined && !back.state.dead && save?.day === 1 && save?.runOver === false,
 			"(d2) the first player, back within the 5 min, gets the new life the world owed them (standing, life day 1)",
 			`dead ${back?.state.dead}, life day ${save?.day}, runOver ${save?.runOver}`,
+		);
+	}
+	{
+		const s = bootServer();
+		const wipes = s.wipes();
+		const a = s.join(newUser(), "first");
+		const b = s.join(newUser(), "second");
+		s.enter(a);
+		s.enter(b);
+		s.sim.clock.setClock(12, 4);
+		const seed = s.host.seed;
+		s.kill(a);
+		s.kill(b);
+		s.quit(a);
+		s.quit(b);
+		s.run(40, 0.25);
+		check(
+			wipes.length === 0 && s.host.seed === seed && s.sim.clock.day === 4,
+			"(d2) the last of the dead walks out and nobody is left on the server: the lost world waits, no town is built " +
+				"for nobody (L1)",
+			`wipes ${wipes.length}, seed ${s.host.seed === seed ? "same" : "new"}, day ${s.sim.clock.day}`,
+		);
+		const c = s.join(newUser(), "newcomer");
+		s.run(0.1);
+		check(
+			wipes.length === 1 && wipes[0].reason === "declined" && s.host.seed !== seed && s.sim.clock.day === 1,
+			"(d2) …the next player's save loads: the world ends at once, before they can enter it",
+			`wipes ${wipes.length} (${wipes[0]?.reason}), seed ${s.host.seed === seed ? "same" : "new"}, day ${s.sim.clock.day}`,
+		);
+		const spC = s.enter(c);
+		check(
+			spC !== undefined && !spC.state.dead && s.sim.clock.day === 1,
+			"(d2) …and the newcomer walks into the NEW town, standing, on day 1",
+			`dead ${spC?.state.dead}, day ${s.sim.clock.day}`,
+		);
+		const b2 = s.join(b.UserId, "second");
+		s.run(0.5);
+		const back = s.enter(b2);
+		check(
+			back !== undefined && !back.state.dead && s.save(b2)?.day === 1,
+			"(d2) …and the second, back within the 5 min, gets the new life the world owed them",
+			`dead ${back?.state.dead}, life day ${s.save(b2)?.day}`,
 		);
 	}
 	// d3: the dead leave while somebody stands, then that one leaves standing
@@ -2344,6 +2392,57 @@ section("19) nobody is the host: the world ends when nobody is left alive, never
 			wipes.length === 1 && wipes[0].reason === "timeout" && spB !== undefined && !spB.state.dead,
 			"(d4) …and 30 s later the world ends as MP-22 says, the one left in it standing again in the new town",
 			`wipes ${wipes.length} (${wipes[0]?.reason}), dead ${spB?.state.dead}, day ${s.sim.clock.day}`,
+		);
+	}
+	// d5 (L2): a death that walked away while somebody stood is not one of the fallen of a later fall
+	{
+		const s = bootServer();
+		const wipes = s.wipes();
+		const a = s.join(newUser(), "gone early");
+		const b = s.join(newUser(), "last");
+		s.enter(a);
+		s.enter(b);
+		s.sim.clock.setClock(12, 4);
+		s.kill(a);
+		s.run(0.5);
+		s.quit(a);
+		s.run(2);
+		check(!s.host.lives.wipeWindowOpen(), "(d5) the first died and left while the second stood: no window");
+		s.kill(b);
+		check(s.host.lives.wipeWindowOpen(), "(d5) then the last one falls: the window opens (the case being tested)");
+		s.run(31, 0.25);
+		check(
+			wipes.length === 1 && wipes[0].dead.length === 1 && wipes[0].dead[0] === b.UserId,
+			"(d5) the world ends with ONE fallen: the one who walked away while somebody still stood is only a departure",
+			JSON.stringify(wipes[0]?.dead.map(id => (id === a.UserId ? "gone early" : id === b.UserId ? "last" : id))),
+		);
+	}
+	// d6 (L3): the last one standing dies and walks out in the same heartbeat, with a player in the lobby
+	{
+		const s = bootServer();
+		const wipes = s.wipes();
+		const lobby = s.join(newUser(), "lobby");
+		const a = s.join(newUser(), "last");
+		s.enter(a);
+		s.sim.clock.setClock(12, 4);
+		const seed = s.host.seed;
+		// the fatal blow lands and the player leaves before any tick processed it: leaving counts it as a death (§7.2)
+		const sp = s.body(a);
+		sp.state.godMode = false;
+		s.sim.combat.damageActor(sp.slot, sp.state, sp.save, sp.state.hpMax * 10, true);
+		s.quit(a);
+		s.run(1);
+		check(
+			wipes.length === 1 && wipes[0].dead.includes(a.UserId) && s.host.seed !== seed && s.sim.clock.day === 1,
+			"(d6) died and left in one heartbeat: the fall is decided at the departure, and the world ends (L3)",
+			`wipes ${wipes.length}, dead ${JSON.stringify(wipes[0]?.dead)}, seed ${s.host.seed === seed ? "same" : "new"}, ` +
+				`day ${s.sim.clock.day}`,
+		);
+		const spL = s.enter(lobby);
+		check(
+			spL !== undefined && !spL.state.dead && s.sim.clock.day === 1,
+			"(d6) …and the one in the lobby walks into the new town",
+			`dead ${spL?.state.dead}, day ${s.sim.clock.day}`,
 		);
 	}
 });

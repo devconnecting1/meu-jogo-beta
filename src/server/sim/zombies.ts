@@ -92,6 +92,12 @@ export class ZombieWorld {
 	/** xp from a kill at (x, y); F2-2C attributes it to the killer and the assists (§3.6) */
 	onExp?: (amount: number, x: number, y: number) => void;
 	/**
+	 * The population moved this zombie across the map (it still stands where it was): server/sim/simulation.ts forgets
+	 * its rewind history (server/sim/history.ts), so a shot at the body a client drew before the move -- whose identity
+	 * has just been retired -- is judged where the body is now, never at the spot it left (the review of 577c729, L4).
+	 */
+	onMoved?: (z: ZombieState) => void;
+	/**
 	 * Milliseconds clock for the §12.2 breakdown ("os.clock() por etapa"), injected so this module stays
 	 * pure. Leave it undefined and the tick measures nothing at all.
 	 */
@@ -162,7 +168,10 @@ export class ZombieWorld {
 			onZombieGone: (z, killed) => this.retire(z, killed),
 			// moved across the map by the population: the old identity leaves in silence where the body stands now, and
 			// the end of this tick hands it a new one (`trackEntities`) -- a new body to every client, never a walk
-			onZombieMoved: z => this.retire(z, false),
+			onZombieMoved: z => {
+				this.retire(z, false);
+				this.onMoved?.(z);
+			},
 			puddles: [],
 			sounds: [],
 			explosions: [],

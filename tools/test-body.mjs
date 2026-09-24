@@ -84,7 +84,9 @@
  *                           a few ms later appears in another") the client pieces netClient.ts runs, on the packets the
  *                           real server sent: nothing is drawn until the first self block, then the first 30 frames are
  *                           all at the server's spot, the survivor and the camera -- a fresh body, a kept one, a corpse;
- *                           and a daybreak stand-up cuts the camera instead of panning it (client/net/entryHold.ts).
+ *                           and a daybreak stand-up cuts the camera instead of panning it (client/net/entryHold.ts);
+ *                           the review of 577c729: only a real teleport cuts (L5), the server's spot after a give-up is
+ *                           cut to once (L6), and the hold draws no overlay either (L7).
  *  34. NOBODY IS THE HOST    the first player (slot 0, a private server's owner) leaving, dying and going Home, or being
  *                           replaced by a newcomer in the same slot: the tick, the clock, the town, the snapshots, the
  *                           horde and the night's wave around the others, the roster and the scoreboard all go on.
@@ -3945,7 +3947,8 @@ function entryClient(s, p, guess, { hold = true, oneWay = 0.04 } = {}) {
 			const placed = active && (c.prediction.placed?.() ?? true);
 			const snaps = c.prediction.snapCount?.() ?? 0;
 			if (gate !== undefined) {
-				if (gate.frame(dt, placed, snaps)) {
+				// client/gameLoop.ts: the offset to the camera before it moves, and half its 1920 x 1080 screen
+				if (gate.frame(dt, placed, snaps, player.x - cam.x, player.y - cam.y, 960, 540)) {
 					cam.x = player.x;
 					cam.y = player.y;
 				} else if (!gate.holding()) cam.follow(player.x, player.y, Math.min(1, dt * 8));
@@ -4154,6 +4157,61 @@ section("33) the first frame of a run is drawn where the server put the survivor
 			between(cw) <= 64,
 			"(d) the camera is cut from the corpse to the new spot, never drawn panning across the town in between",
 			`${f1(between(cw))} u off both spots at worst`,
+		);
+	}
+
+	// the review of 577c729, L5 and L6, on the hold itself (client/net/entryHold.ts)
+	{
+		const EH = require(join(SRC, "client/net/entryHold.ts"));
+		const dt = 1 / 60;
+		// L5: a snap is a teleport only off the screen or TELEPORT_CUT_U away; nearer, the camera keeps easing
+		const g = new EH.EntryHold();
+		g.begin(true, 0);
+		g.frame(dt, true, 0);
+		const near = g.frame(dt, true, 1, 150, -90, 960, 540);
+		const far = g.frame(dt, true, 2, 620, 0, 960, 540);
+		const offScreen = g.frame(dt, true, 3, 0, 560, 960, 540);
+		const same = g.frame(dt, true, 3, 900, 0, 960, 540);
+		check(
+			!near && far && offScreen && !same,
+			"(L5) a snap 175 u away, on screen, is eased; 620 u away, or off the screen, is cut; no new snap, no cut",
+			`near ${near}, far ${far}, off screen ${offScreen}, no snap ${same}`,
+		);
+		// L6: the hold gave up (3 s without the server): when the server's spot does come, the camera is cut there once
+		const h = new EH.EntryHold();
+		h.begin(true, 0);
+		let gaveUp = false;
+		for (let t = 0; t < EH.ENTRY_HOLD_MAX_S + 0.1 && !gaveUp; t += dt) gaveUp = h.frame(dt, false, 0);
+		const quiet = h.frame(dt, false, 0);
+		const placedCut = h.frame(dt, true, 0, 300, 0, 960, 540);
+		const onlyOnce = h.frame(dt, true, 0, 300, 0, 960, 540);
+		check(
+			gaveUp && h.lastHold().gaveUp && !h.holding() && !quiet && placedCut && !onlyOnce,
+			"(L6) after the 3 s give-up, the first position from the server cuts the camera there, once",
+			`gave up ${gaveUp}, then ${quiet} / placed ${placedCut} / after ${onlyOnce}`,
+		);
+	}
+	// L7: nothing of the run is drawn while it holds -- the world, and every overlay the loop draws after it
+	{
+		const { readFileSync } = require("node:fs");
+		const loop = readFileSync(join(SRC, "client/gameLoop.ts"), "utf8");
+		const render = loop.slice(loop.indexOf("\trender(): void {"), loop.indexOf("\tprivate drawAwareness("));
+		const hold = render.slice(render.indexOf("if (this.entry.holding())"), render.indexOf("return;") + 7);
+		const hides = loop.slice(loop.indexOf("private hideOverlays(): void {"));
+		const body = hides.slice(0, hides.indexOf("\n\t}\n"));
+		const put = [
+			"lightMap?.hide()",
+			"awareness?.hide()",
+			"chat?.hide()",
+			"playersView.hide()",
+			"nameplate?.update(",
+		];
+		check(
+			hold.includes("renderer.endFrame()") &&
+				hold.includes("this.hideOverlays()") &&
+				put.every(x => body.includes(x)),
+			"(L7) while the hold draws nothing, the light map, the zombies' marks, the chat, the plates and the nameplate go too",
+			put.filter(x => !body.includes(x)).join(", ") || "all five",
 		);
 	}
 });

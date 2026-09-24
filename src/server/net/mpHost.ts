@@ -991,6 +991,14 @@ export function startMpHost(options: MpHostOptions): MpHost {
 	}
 	// rule 6 counts only survivors whose save is really here (server/sim/life.ts `liveSave`)
 	lives.liveSave = userId => saveOfUser(userId);
+	// ...and a world its dead walked out of ends only with somebody connected to see the next one (`connected`, L1):
+	// somebody whose save has loaded, so the end reaches their client as a WorldReset and analytics has a player to
+	// log the WorldEnded on (an entry exists from the load on, server/analytics/events.ts)
+	lives.connected = () => {
+		let n = 0;
+		for (const [player] of links) if (options.saveOf(player) !== undefined) n += 1;
+		return n;
+	};
 
 	function worldWiped(report: WipeReport): void {
 		// rule 6: the single point where "nobody alive, nobody paying" is known — and MP-22 (the owner's decision of

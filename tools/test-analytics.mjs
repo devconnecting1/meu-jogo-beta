@@ -22,7 +22,8 @@
  *   4. THE ECONOMY BALANCES  every coin the server moved (welcome gift, day, boss, pack, costume, Rebirth) is one
  *                            economy event whose amounts add up to the change in `money`, balance after balance.
  *   5. LIVES AND WORLDS      Died with its fields, LifeEnded on New game and on a world's end (a New game that never
- *                            stood is not a second life), WorldEnded once per world.
+ *                            stood is not a second life), WorldEnded once per world -- 5b: also for a world its dead
+ *                            walked out of, on whoever is here, and never on an empty server (review of 577c729, L1).
  *   6. NO PER-KILL SPAM      6 survivors x 400 killing blows: the kills are one SessionKills each, on leaving.
  *   7. THE BACKPACK AND ADMIN  crafts, cooks and uses are session counts; an admin's coins balance, and an admin's
  *                            level is not a level reached.
@@ -53,7 +54,10 @@ function check(ok, what, detail) {
 	return ok;
 }
 const info = msg => console.log(`        ${msg}`);
+/** PZ_ANALYTICS_ONLY=5b runs only the sections whose title starts with it (a quicker loop while working on one) */
+const ONLY = process.env.PZ_ANALYTICS_ONLY;
 function section(title, fn) {
+	if (ONLY !== undefined && !title.startsWith(ONLY)) return;
 	console.log(`\n${title}`);
 	try {
 		fn();
@@ -1092,6 +1096,78 @@ section("5) Died, LifeEnded (New game, the world's end) and WorldEnded, once eac
 		"…with the world's own WorldEnded (Reason - Declined)",
 		JSON.stringify(cWorld.map(x => x.fields.CustomField01)),
 	);
+});
+
+// ================================================================ 5b: a world its dead walked out of
+
+/*
+ * MP-22 and the review of 577c729, L1: every survivor dies and every one of them leaves the server during the window.
+ * Leaving is declining, so the world is lost -- and it ends only with somebody connected (with a loaded save) to see
+ * the next one: in the lobby at that moment, or the next player to connect. The fallen have all left, so the world's
+ * one WorldEnded goes on whoever is here; it used to be dropped (it looked for a fallen survivor still connected).
+ */
+section("5b) the world its dead walked out of: it ends with somebody here, and WorldEnded is still logged", () => {
+	// (a) somebody sits in the lobby while the two in the city die and walk out
+	{
+		const s = bootServer();
+		const A = s.A;
+		const lobby = s.join(newUser(), "lobby");
+		const a = s.join(newUser(), "a");
+		const b = s.join(newUser(), "b");
+		s.enter(a);
+		s.enter(b);
+		s.run(1.2);
+		const wipes = s.wipes();
+		s.kill(a);
+		s.kill(b);
+		s.quit(a);
+		s.quit(b);
+		s.run(1);
+		const worlds = s.log.filter(x => x.kind === "custom" && x.name === A.EVENT.WorldEnded);
+		check(
+			wipes.length === 1 && wipes[0].reason === "declined",
+			"(a) the last of the dead walks out with a player in the lobby: the world ends at once (declined)",
+			`wipes ${wipes.length} (${wipes[0]?.reason})`,
+		);
+		check(
+			worlds.length === 1 &&
+				worlds[0].userId === lobby.UserId &&
+				worlds[0].fields.CustomField01 === "Reason - Declined" &&
+				worlds[0].fields.CustomField02 === "Fallen - 2",
+			"(a) …and its WorldEnded is logged once, on the player who is here (the fallen are gone)",
+			JSON.stringify(worlds.map(x => [x.userId === lobby.UserId ? "lobby" : x.userId, x.fields])),
+		);
+	}
+	// (b) nobody is left on the server: the world stays lost until the next player's save loads, then ends
+	{
+		const s = bootServer();
+		const A = s.A;
+		const a = s.join(newUser(), "a");
+		const b = s.join(newUser(), "b");
+		s.enter(a);
+		s.enter(b);
+		s.run(1.2);
+		const wipes = s.wipes();
+		s.kill(a);
+		s.kill(b);
+		s.quit(a);
+		s.quit(b);
+		s.run(40, 0.25);
+		const quiet = s.log.filter(x => x.kind === "custom" && x.name === A.EVENT.WorldEnded).length;
+		check(
+			wipes.length === 0 && quiet === 0,
+			"(b) everybody gone: the lost world does not end on an empty server (nobody to see it, no WorldEnded)",
+			`wipes ${wipes.length}, WorldEnded ${quiet}`,
+		);
+		const c = s.join(newUser(), "next");
+		s.run(0.5);
+		const worlds = s.log.filter(x => x.kind === "custom" && x.name === A.EVENT.WorldEnded);
+		check(
+			wipes.length === 1 && worlds.length === 1 && worlds[0].userId === c.UserId,
+			"(b) the next player's save loads: the world ends before they can enter it, its WorldEnded on them",
+			`wipes ${wipes.length}, WorldEnded ${JSON.stringify(worlds.map(x => (x.userId === c.UserId ? "next" : x.userId)))}`,
+		);
+	}
 });
 
 // ================================================================ 6: kills and the backpack
