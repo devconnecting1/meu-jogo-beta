@@ -45,8 +45,7 @@ import { LobbyHandle, LobbyPage, LobbyStatus, RunState, showLobby } from "./ui/l
 import * as Flyover from "./view/townFlyover";
 import { actionErrorText, showShop } from "./ui/shop";
 import { showWardrobe } from "./ui/wardrobe";
-import { startTitleNotices } from "./ui/titleNotice";
-import { startAchievementNotices } from "./ui/achievementNotice";
+import { startServerNotices } from "./ui/serverNotices";
 import * as PackNotice from "./ui/packNotice";
 import { showSettings } from "./ui/settings";
 import { showCredits } from "./ui/credits";
@@ -68,6 +67,8 @@ import { AdminHooks, startAdmin } from "./admin/adminClient";
  * - after a game over the run can only continue with a paid Rebirth (server) or restart at day 1 (New game)
  * - progress is reported to the server every 60 s, on a new day, on a boss kill, on death and when
  *   leaving the run; nothing is reported before the server's LoadAck was adopted
+ * - saving is automatic only (DESIGN_RULES SAV-01): there is no Save button, and a report is never a write -- the
+ *   server writes on its own schedule and tells the corner indicator (client/ui/saveIndicator.ts)
  */
 
 const RunService = game.GetService("RunService");
@@ -239,22 +240,16 @@ net.onLoad(info => {
 	if (ctx.phase !== "boot") goLobby(lobbyNav.handle !== undefined ? lobbyNav.page : "menu");
 });
 
-net.onSaveAck((ack, manual) => {
+net.onSaveAck(ack => {
 	if (ack.ok) {
 		if (ack.earned > 0) {
 			const parts: Array<string> = [];
 			if (ack.earnedDays > 0) parts.push(`${tr("Day survived")} ×${ack.earnedDays}`);
 			if (ack.earnedBosses > 0) parts.push(`${tr("Boss defeated")} ×${ack.earnedBosses}`);
-			toast(ctx, `+${fmtInt(ack.earned)} $   ${parts.join("  ·  ")}`, "coin");
-		}
-		if (manual) {
-			if (net.savingPersistent()) toast(ctx, tr("Progress saved"), "success");
-			else toast(ctx, tr("Saving is unavailable in this environment"), "error");
+			toast(ctx, `+${fmtInt(ack.earned)} ${tr("coins")}   ${parts.join("  ·  ")}`, "coin");
 		}
 	} else if (ack.reason === "readonly" || ack.reason === "stale") {
 		toast(ctx, `${tr("Could not save")}: ${tr("Progress not loaded")}`, "error");
-	} else if (manual) {
-		toast(ctx, tr("Could not save"), "error");
 	}
 });
 
@@ -540,6 +535,8 @@ function pushHud(): void {
 		reloadRatio,
 		ammoPool: weaponReserve(save, w),
 		hitFlash: p.hitFlash ?? 0,
+		// VIT-01: the wait before healing, for the vitals' cue (the HP glow, the fork on FOOD)
+		sinceHurt: p.sinceHurt,
 	});
 	// the compass or the GPS in hand (E2): the needle to the camp, or the map of the streets around you
 	hud.updateNav(refs.world, p.x, p.y, save);
@@ -574,10 +571,6 @@ function openPause(): void {
 		0,
 		{
 			onResume: closePause,
-			onSave: () => {
-				if (net.requestSave("manual")) toast(ctx, tr("Saving..."));
-				else toast(ctx, offlineNote() ?? tr("Could not save"), "error");
-			},
 			onHome: goLobby,
 			onShop: () => {
 				stopGame();
@@ -603,7 +596,7 @@ function openDeath(): void {
 	closeDawnWait();
 	ctx.save.runOver = true;
 	net.requestSave("death");
-	const summary = newLifeWaiting && endedLife !== undefined ? endedLife : runSummary(ctx, ctx.save.deathCount <= 1);
+	const summary = newLifeWaiting && endedLife !== undefined ? endedLife : runSummary(ctx);
 	// `serverDriven` is the one honest test for "somebody out there will stand me back up": the hour on this
 	// screen comes from the server's clock, which is the same server that runs the revive. Without it (a
 	// session that never completed its handshake) the wait would only end when the grace timer below gave up
@@ -626,7 +619,7 @@ function openDeath(): void {
 		);
 		return;
 	}
-	// what the player KEEPS comes before what a new run costs (client/onboarding/gameOver.ts)
+	// nobody to stand this survivor up: the death screen's "over" state (client/onboarding/gameOver.ts, UI-13)
 	pauseCleanup = showRunSummary(ctx, summary, {
 		onRebirth: doRebirth,
 		onNewRun: doNewRun,
@@ -682,7 +675,8 @@ function updateDawnWait(dt: number): void {
 	// is the same capped wait the server armed, and it is what answers a death in broad daylight.
 	dawnBudget = math.max(0, dawnBudget - math.max(0, dt));
 	const left = math.min(refs.daynight.secondsUntilDayBreak(), dawnBudget);
-	wait.setRemaining(left);
+	// by night the wait ends at daybreak; a death in daylight waits one whole night and wakes in daylight (UI-13)
+	wait.setRemaining(left, refs.daynight.isNight);
 	if (left > 0) {
 		dawnOverdue = 0;
 		return;
@@ -693,7 +687,7 @@ function updateDawnWait(dt: number): void {
 	if (netActive()) return;
 	closeDawnWait();
 	warn("[PZ] daybreak passed without a revive and the session is gone; falling back to the end-of-run choice");
-	pauseCleanup = showRunSummary(ctx, runSummary(ctx, ctx.save.deathCount <= 1), {
+	pauseCleanup = showRunSummary(ctx, runSummary(ctx), {
 		onRebirth: doRebirth,
 		onNewRun: newLifeWaiting ? undefined : doNewRun,
 		onHome: goLobby,
@@ -888,11 +882,9 @@ function onTown(notice: TownNotice): void {
 
 netOnTown(onTown);
 // MON-05: "Title unlocked: [Survivor]" the moment the server grants one; CON-04: "Achievement unlocked" the moment
-// the server's counter reaches its goal
-startTitleNotices(ctx);
-startAchievementNotices(ctx);
-// MON-03: "Delivered" when the server's wallet says the packs were opened -- into a living body, never at a dead entry
-PackNotice.startPackNotices(ctx);
+// the server's counter reaches its goal; SAV-01: "Saving..." / "Saved" in the corner when the server writes the save;
+// MON-03: "Delivered" when the server's wallet says the packs were opened (into a living body, never at a dead entry)
+startServerNotices(ctx);
 
 function resumeRun(): void {
 	clearScreen();
@@ -1039,7 +1031,7 @@ function doNewRun(): void {
 			return;
 		}
 	}
-	if (hosted) endedLife = runSummary(ctx, ctx.save.deathCount <= 1);
+	if (hosted) endedLife = runSummary(ctx);
 	// same reset as the server (offline: local only, nothing is saved anyway)
 	resetRun(ctx.save);
 	if (hosted) {

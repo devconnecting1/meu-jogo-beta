@@ -35,8 +35,8 @@ const ContentProvider = game.GetService("ContentProvider");
 /** the order the sound buses are fetched in: what the lobby plays, what a fight plays, what the night plays */
 const SOUND_ORDER: ReadonlyArray<SoundBus> = ["ui", "sfx", "bgm"];
 
-/** the characters' sheets (client/view/charSheets.ts): the lobby's walkers and a run's bodies, after the town */
-const SHEET_PREFIXES: ReadonlyArray<string> = ["survivors", "zombies", "dogs", "birds", "weapons"];
+/** the characters' sheets (client/view/charSheets.ts): the lobby's walkers and a run's bodies (the bosses too), after the town */
+const SHEET_PREFIXES: ReadonlyArray<string> = ["survivors", "zombies", "dogs", "birds", "weapons", "boss"];
 
 /** step 2 rather than 1: a character sheet (a few big images the lobby's town does not need at a glance) */
 export function laterArt(name: string): boolean {

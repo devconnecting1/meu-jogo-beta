@@ -25,7 +25,12 @@ export type SolidKind =
 	/** a building's furniture (tags: the piece, shared/game/interiors.ts): blocks bodies; `low` ones let bullets by */
 	| "furniture"
 	/** a window's gap (passable, tags "window"): bodies climb through slowly, the horde's field prices it (EDI-10) */
-	| "window";
+	| "window"
+	/**
+	 * A gas station's canopy over its pump islands (tags "canopy", EDI-16): aerial like a tree's crown (COL-02),
+	 * passable, drawn over the actors and see-through while a body is under it (`canopyAlpha`, the crown's fade).
+	 */
+	| "canopy";
 
 export type DoorSide = "top" | "bottom" | "left" | "right";
 
@@ -86,11 +91,16 @@ export interface Solid {
 	inner?: boolean;
 	/** furniture: bullets fly over it (a table, a bed); a tall piece stops them (a shelf, a wardrobe) */
 	low?: boolean;
-	/** furniture: the side facing into the room, and a small number the drawing uses */
+	/**
+	 * furniture: the side facing into the room, and a small number the drawing uses. A pump island: the side its
+	 * street is on (where a car pulls up). A car at a pump (`placeGas`): PUMP_CAR_PARKED, or PUMP_CAR_FILLING when it
+	 * was abandoned mid-fill (the hose in its tank, the driver's door open).
+	 */
 	face?: DoorSide;
 	variant?: number;
-	/** tree only: visual canopy radius and the renderer-eased canopy opacity */
+	/** tree only: visual canopy radius */
 	canopyR?: number;
+	/** tree, a gas station's canopy and its price sign: the renderer-eased opacity (see-through with a body under it) */
 	canopyAlpha?: number;
 	/** visual tint picked at generation (car paint, tree foliage) */
 	tint?: Color3;
@@ -142,6 +152,12 @@ export interface GroundItem {
 	vy: number;
 	/** server only: the simulation time (s) it appeared at, for its lifetime (server/sim/items.ts) */
 	born?: number;
+	/**
+	 * An admin dropped it (server/admin/adminWorld.ts, §10): whoever picks it up gets the item and nothing else -- no
+	 * collector credit (`creditTaken`) -- and the pickup is logged. Server-side only; never on the wire. It is litter
+	 * like any other ground item (the lifetime and the cap of server/sim/items.ts apply to it too).
+	 */
+	unpaid?: boolean;
 }
 
 /**
@@ -516,6 +532,51 @@ const HOSPITAL_DEF: BuildingDef = { type: 4, w: 1064, h: 812, slots: 4, name: "h
 const SCHOOLS = 3;
 const HOSPITALS = 3;
 const GAS_STATIONS = 5;
+/**
+ * Every town has at least this many gas stations (EDI-16): the pumps are where the motorcycle and the oil generator
+ * get their fuel. The lot picker has always placed all five on every seed the CI walks; if a picked lot ever turns one
+ * down, one of GAS_SPARE more lots (picked by the same shuffle, after the five) takes it -- only then, so a town that
+ * needs none is exactly the town it always was.
+ */
+export const GAS_MIN = 2;
+const GAS_SPARE = 4;
+
+// ---- the forecourt of a gas station (placeGas), along its street edge e1: `u` from the street corner, `v` from the
+// curb (the sidewalk is v 0..SIDEWALK, the shop's front wall at SIDEWALK + FORECOURT)
+
+/** a pump island: a raised concrete curb parallel to the street, two dispensers on it, the canopy's column between */
+export const PUMP_ISLAND_L = 150;
+export const PUMP_ISLAND_D = 40;
+/** where each island starts, from the corner */
+const PUMP_ISLAND_AT: ReadonlyArray<number> = [70, 300];
+/** each dispenser's centre, from the island's centre, as a share of its length */
+export const PUMP_DISPENSER_AT = 0.25;
+/** a car at a pump: on the island's street side, this far from its curb */
+export const PUMP_CAR_GAP = 12;
+/** `Solid.variant` of a car at a pump: parked there, or abandoned mid-fill (EDI-16) */
+export const PUMP_CAR_PARKED = 1;
+export const PUMP_CAR_FILLING = 2;
+/** share of the islands with a car at them, and of those cars left mid-fill (a hash of the island: every client) */
+const PUMP_CAR_SHARE = 0.55;
+const PUMP_FILLING_SHARE = 0.5;
+/**
+ * The canopy over both islands: its `u` span from the corner, and its depth from the islands' middle -- towards the
+ * street only to the eave over a pump car's flank (12 u of its 100: a car cut in half by a closed roof reads as a
+ * box), towards the shop over the lane where a survivor stands to drain the pump. It stops 88 u short of the shop's
+ * front wall: the shop's doors and windows are planned where the ground outside is really free (planInteriors), and a
+ * canopy touching that ground would change them. 452 x 116 u: the texture of its roof is 113 x 29 texels
+ * (tools/gen-world-art.mjs `gasCanopy`).
+ */
+const PUMP_CANOPY_U0 = 34;
+const PUMP_CANOPY_U1 = 486;
+export const PUMP_CANOPY_L = PUMP_CANOPY_U1 - PUMP_CANOPY_U0;
+const PUMP_CANOPY_STREET = PUMP_ISLAND_D / 2 + PUMP_CAR_GAP + 12;
+const PUMP_CANOPY_SHOP = 72;
+export const PUMP_CANOPY_D = PUMP_CANOPY_STREET + PUMP_CANOPY_SHOP;
+/** the price sign's concrete footing at the street corner of the forecourt (the pylon above it is aerial) */
+export const GAS_SIGN_SIZE = 24;
+const GAS_SIGN_U = 8;
+const GAS_SIGN_V = 8;
 const PARKS = 6;
 /** lots on each side of the avenue crossing (along each avenue) that are downtown */
 const DOWNTOWN_REACH = 2;
@@ -1076,9 +1137,9 @@ function freeFrontRect(grid: YardGrid, e: LotEdge, minAlong: number, minDepth: n
 	return best;
 }
 
-function addCar(w: WorldData, x: number, y: number, cw: number, ch: number, heading: number): void {
+function addCar(w: WorldData, x: number, y: number, cw: number, ch: number, heading: number): Solid {
 	const q = math.floor(heading / (math.pi / 2) + 0.5);
-	addSolid(w, {
+	return addSolid(w, {
 		kind: "car",
 		x,
 		y,
@@ -1180,7 +1241,13 @@ function addParking(g: Gen, lot: Lot, e: LotEdge, free: FrontRect): boolean {
 
 /**
  * Gas station on the corner where edge `e1` (forecourt + door) meets the cross street at its
- * `a` end (atA) or `b` end: shop at the back, pump islands on an open forecourt facing e1.
+ * `a` end (atA) or `b` end: shop at the back, pump islands on an open forecourt facing e1 (EDI-02, EDI-16).
+ *
+ * The forecourt says what it is at a glance: two pump islands (each a container of oil, searched like a building,
+ * MP-05) under a canopy on one column per island, a car pulled up at some of them -- half of those abandoned
+ * mid-fill -- and the price sign on its footing at the street corner. Everything new is laid inside the forecourt the
+ * station always reserved and decided by hashes of where it stands, never by the town's rng: the rest of the town is
+ * the one it always was.
  */
 function placeGas(g: Gen, lot: Lot, e1: LotEdge, e2: LotEdge, atA: boolean): boolean {
 	const b = GAS_DEF;
@@ -1198,12 +1265,17 @@ function placeGas(g: Gen, lot: Lot, e1: LotEdge, e2: LotEdge, atA: boolean): boo
 	if (!g.placer.canPlace(apron.x, apron.y, apron.w, apron.h, 0)) return false;
 	const doorU = atA ? u0 + along - 130 : u0 + 130;
 	addBuilding(g, lot, b, r, e1, doorU, front);
-	// two pump islands parallel to the street, clear of the door approach
+	// [u0, u1] measured from the corner, as a span along e1 (the far side mirrors the near one)
+	const fromCorner = (o0: number, o1: number): [number, number] =>
+		atA ? [span.a + o0, span.a + o1] : [span.b - o1, span.b - o0];
+	// two pump islands parallel to the street, clear of the door approach: each one a container of oil (EDI-16,
+	// MP-05: searched like a building, shared, back after ITEM_RESPAWN_HOURS)
 	const vMid = TOWN.SIDEWALK + TOWN.FORECOURT / 2;
-	for (const off of [70, 300]) {
-		const a = atA ? span.a + off : span.b - off - 150;
-		const p = edgeRect(e1, a, a + 150, vMid - 20, vMid + 20);
-		addSolid(g.w, {
+	const half = PUMP_ISLAND_D / 2;
+	for (const off of PUMP_ISLAND_AT) {
+		const [a0, a1] = fromCorner(off, off + PUMP_ISLAND_L);
+		const p = edgeRect(e1, a0, a1, vMid - half, vMid + half);
+		const island = addSolid(g.w, {
 			kind: isAlongX(e1.side) ? "wall_h" : "wall_v",
 			x: p.x,
 			y: p.y,
@@ -1213,6 +1285,60 @@ function placeGas(g: Gen, lot: Lot, e1: LotEdge, e2: LotEdge, atA: boolean): boo
 			hpMax: 999999,
 			destructible: false,
 			tags: "pump",
+			face: e1.side,
+			lootSlots: 1,
+			lootItems: [],
+			lootTimer: 0,
+		});
+		// a car pulled up on the street side, its right flank to the island, left there when the town fell: some
+		// with the nozzle still in the tank. A hash of the island (never the town's rng): the rest of the town is the
+		// one it always was
+		if (hash01(island.x, island.y, 83) < PUMP_CAR_SHARE) {
+			const c = edgeRect(e1, a0, a1, vMid - half - PUMP_CAR_GAP - TOWN.CAR_W, vMid - half - PUMP_CAR_GAP);
+			const mid = (a0 + a1) / 2;
+			const car = isAlongX(e1.side)
+				? { x: mid - TOWN.CAR_L / 2, y: c.y, w: TOWN.CAR_L, h: TOWN.CAR_W }
+				: { x: c.x, y: mid - TOWN.CAR_L / 2, w: TOWN.CAR_W, h: TOWN.CAR_L };
+			const heading = inwardHeading(e1) - math.pi / 2;
+			const parked = addCar(g.w, car.x, car.y, car.w, car.h, math.atan2(math.sin(heading), math.cos(heading)));
+			parked.variant = hash01(island.x, island.y, 84) < PUMP_FILLING_SHARE ? PUMP_CAR_FILLING : PUMP_CAR_PARKED;
+		}
+	}
+	// the canopy over the islands (aerial: nothing collides with it; its column stands on each island)
+	{
+		const [c0, c1] = fromCorner(PUMP_CANOPY_U0, PUMP_CANOPY_U1);
+		const q = edgeRect(e1, c0, c1, vMid - PUMP_CANOPY_STREET, vMid + PUMP_CANOPY_SHOP);
+		addSolid(g.w, {
+			kind: "canopy",
+			x: q.x,
+			y: q.y,
+			w: q.w,
+			h: q.h,
+			hp: 999999,
+			hpMax: 999999,
+			destructible: false,
+			tags: "canopy",
+			passable: true,
+			// the side its street is on: the roof's art is drawn for that side (its eave, its drains over the columns)
+			face: e1.side,
+			canopyAlpha: 1,
+		});
+	}
+	// the price sign on its footing at the street corner (its pylon is drawn over it, upright; no brand, no text)
+	{
+		const [s0, s1] = fromCorner(GAS_SIGN_U, GAS_SIGN_U + GAS_SIGN_SIZE);
+		const q = edgeRect(e1, s0, s1, TOWN.SIDEWALK + GAS_SIGN_V, TOWN.SIDEWALK + GAS_SIGN_V + GAS_SIGN_SIZE);
+		addSolid(g.w, {
+			kind: "wall_v",
+			x: q.x,
+			y: q.y,
+			w: q.w,
+			h: q.h,
+			hp: 999999,
+			hpMax: 999999,
+			destructible: false,
+			tags: "gas_sign",
+			canopyAlpha: 1,
 		});
 	}
 	lot.ground.push({ ...apron, kind: "apron" });
@@ -1905,7 +2031,20 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 	for (const l of schools) l.zone = "civic";
 	const hospitals = pickLots(HOSPITALS, l => residentialFree(l) && onAvenue(l), 3, []);
 	for (const l of hospitals) l.zone = "civic";
-	const gasLots = pickLots(GAS_STATIONS, l => l.kind === "block" && l.zone !== "civic" && onAvenue(l), 2, []);
+	// the five stations, then GAS_SPARE more lots from the same shuffle: the first five are the ones a pick of five
+	// always gave (the shuffle's draws do not depend on how many are taken), the rest stand by for GAS_MIN (EDI-16)
+	const gasPick = pickLots(
+		GAS_STATIONS + GAS_SPARE,
+		l => l.kind === "block" && l.zone !== "civic" && onAvenue(l),
+		2,
+		[],
+	);
+	const gasLots: Array<Lot> = [];
+	const gasSpare: Array<Lot> = [];
+	for (let i = 0; i < gasPick.size(); i++) (i < GAS_STATIONS ? gasLots : gasSpare).push(gasPick[i]);
+	/** stations standing, and picked lots not laid out yet: a spare lot is used only if these two cannot reach GAS_MIN */
+	let gasPlaced = 0;
+	let gasPending = gasLots.size();
 
 	// --- parks: dirt paths (kept free of trees) ---
 	for (const lot of w.lots) {
@@ -1957,7 +2096,9 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 			const def = hospitals.includes(lot) ? HOSPITAL_DEF : SCHOOL_DEF;
 			if (!placeCivic(g, lot, def, edges)) lot.zone = "residential";
 		}
-		if (gasLots.includes(lot)) {
+		const gasPrimary = gasLots.includes(lot);
+		if (gasPrimary) gasPending -= 1;
+		if (gasPrimary || (gasSpare.includes(lot) && gasPlaced + gasPending < GAS_MIN)) {
 			let done = false;
 			for (const e1 of edges) {
 				if (done) break;
@@ -1970,6 +2111,7 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 					done = placeGas(g, lot, e1, e2, atA);
 				}
 			}
+			if (done) gasPlaced += 1;
 		}
 		if (lot.zone === "commercial") {
 			for (const e of edges) {

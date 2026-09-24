@@ -77,6 +77,16 @@ const SPATIAL_VOICES = 20;
 const FLAT_VOICES = 10;
 /** a voice younger than this is never recycled, even if the engine says it is not playing yet */
 const MIN_VOICE_AGE = 0.05;
+/**
+ * Held loops (`holdLoop`): an engine or a flamethrower is ONE looping voice that follows its source while somebody
+ * holds it every frame. Six: the six survivors of a full server on motorcycles, or a few riders and a flamethrower.
+ */
+const LOOP_VOICES = 6;
+/** a held loop fades in over this (no click when an engine starts) and out over this once nobody holds it */
+const LOOP_FADE_IN = 0.08;
+const LOOP_FADE_OUT = 0.25;
+/** how fast a held loop's pitch follows what it is asked for (per second): an engine revs, it does not jump */
+const LOOP_PITCH_RATE = 6;
 
 interface Voice {
 	sound: Sound;
@@ -99,6 +109,30 @@ export interface PlayOptions {
 	scale?: number;
 	/** overrides the entry's random pitch range */
 	pitch?: number;
+	/** multiplies the pitch (random or given): the voice of a zombie type, a bigger body lower */
+	pitchScale?: number;
+}
+
+/** one looping voice a caller holds every frame (see `holdLoop`) */
+interface LoopVoice {
+	sound: Sound;
+	attachment?: Attachment;
+	/** the holder's key, or undefined while the voice is free */
+	key?: number;
+	def?: SoundDef;
+	/** 0..1 fade */
+	gain: number;
+	/** held since the last mixer frame */
+	held: boolean;
+	/** the holder's level (0..1, times the entry's volume) and the pitch it asks for */
+	level: number;
+	pitch: number;
+	/** what was last written to the Sound (a steady loop writes nothing frame after frame) */
+	vol: number;
+	speed: number;
+	/** where the emitter was last put (world units) */
+	x: number;
+	y: number;
 }
 
 // ---------------------------------------------------------------- long-running tracks (music, ambience)
@@ -223,6 +257,7 @@ class AudioEngine {
 	private flatRoot?: Folder;
 	private emitter?: BasePart;
 	private voices: Array<Voice> = [];
+	private loops: Array<LoopVoice> = [];
 	private tracks: Array<AudioTrack> = [];
 	private settings?: () => SettingsData;
 	private lastSfx = -1;
@@ -279,6 +314,7 @@ class AudioEngine {
 
 		for (let i = 0; i < SPATIAL_VOICES; i++) this.voices.push(this.makeVoice(true, i));
 		for (let i = 0; i < FLAT_VOICES; i++) this.voices.push(this.makeVoice(false, i));
+		for (let i = 0; i < LOOP_VOICES; i++) this.loops.push(this.makeLoop(i));
 
 		this.heartbeat = RunService.Heartbeat.Connect(dt => this.update(dt));
 		// the sounds are fetched by the client's one preload plan, after the textures the lobby shows
@@ -303,6 +339,26 @@ class AudioEngine {
 			sound.Parent = this.flatRoot;
 		}
 		return { sound, attachment, started: 0, priority: 0, stopAt: math.huge, active: false };
+	}
+
+	/** a held loop's voice: made once, like every voice (nothing is created per engine or per burst of fire) */
+	private makeLoop(index: number): LoopVoice {
+		const v = this.makeVoice(this.emitter !== undefined, SPATIAL_VOICES + FLAT_VOICES + index);
+		v.sound.Name = `Loop_${index}`;
+		v.sound.Looped = true;
+		if (v.attachment !== undefined) v.attachment.Name = `LoopEmitter${index}`;
+		return {
+			sound: v.sound,
+			attachment: v.attachment,
+			gain: 0,
+			held: false,
+			level: 0,
+			pitch: 1,
+			vol: 0,
+			speed: 1,
+			x: math.huge,
+			y: math.huge,
+		};
 	}
 
 	/**
@@ -423,7 +479,7 @@ class AudioEngine {
 		sound.SoundGroup = this.groups.get(def.bus);
 		sound.Looped = false;
 		sound.Volume = def.volume * math.clamp(opts?.scale ?? 1, 0, 1) * flatScale;
-		sound.PlaybackSpeed = opts?.pitch ?? this.randomPitch(def);
+		sound.PlaybackSpeed = (opts?.pitch ?? this.randomPitch(def)) * (opts?.pitchScale ?? 1);
 
 		// the voice is pooled, so its roll-off belongs to the ENTRY playing through it right now
 		if (spatial) sound.RollOffMaxDistance = range * STUDS_PER_UNIT;
@@ -445,6 +501,134 @@ class AudioEngine {
 		sound.Play();
 	}
 
+	/**
+	 * Keeps a looping sound going at (x, y) for one more frame: an engine, a flamethrower's jet. The caller holds it
+	 * EVERY frame it should be heard, under its own `key` (one per source), with its level (0..1, on top of the entry's
+	 * volume) and the pitch it wants now; the voice follows the source, eases to the pitch, and fades out and frees
+	 * itself the first frame nobody holds it. Nothing is created: the voices are the pool made at start. With every
+	 * loop voice busy a new source is simply not heard (the six survivors of a full server fit).
+	 */
+	holdLoop(key: number, name: SoundName, x: number, y: number, level: number, pitch: number): void {
+		if (!this.started) return;
+		const def = soundDef(name);
+		if (def === undefined || def.id === "") return;
+		this.refreshGains(false);
+		if (this.busGain(def.bus) <= 0) return;
+		const range = def.range ?? AUDIO_RANGE;
+		const dx = x - this.listenerX;
+		const dy = y - this.listenerY;
+		const dist = math.sqrt(dx * dx + dy * dy);
+		// out of earshot: not held, so a voice already on it fades out like one that stopped
+		if (dist >= range) return;
+		let v: LoopVoice | undefined;
+		let free: LoopVoice | undefined;
+		for (const l of this.loops) {
+			if (l.key === key) {
+				v = l;
+				break;
+			}
+			if (free === undefined && l.key === undefined) free = l;
+		}
+		if (v === undefined) {
+			if (free === undefined) return;
+			v = free;
+			this.startLoop(v, key, def, x, y, pitch);
+		}
+		v.held = true;
+		// without the emitter part the loop is flat: the distance curve goes into its level, as for a flat one-shot
+		const flat = v.attachment === undefined ? 1 - math.clamp((dist - AUDIO_NEAR) / (range - AUDIO_NEAR), 0, 1) : 1;
+		v.level = math.clamp(level, 0, 1) * flat;
+		v.pitch = pitch;
+		if (v.attachment !== undefined && (math.abs(x - v.x) >= EAR_STEP || math.abs(y - v.y) >= EAR_STEP)) {
+			v.x = x;
+			v.y = y;
+			v.attachment.Position = new Vector3(x * STUDS_PER_UNIT, 0, y * STUDS_PER_UNIT);
+		}
+	}
+
+	/** is a held loop sounding under `key` right now? (tests, and a caller that plays a one-shot when it starts) */
+	loopActive(key: number): boolean {
+		for (const l of this.loops) if (l.key === key) return true;
+		return false;
+	}
+
+	private startLoop(v: LoopVoice, key: number, def: SoundDef, x: number, y: number, pitch: number): void {
+		const sound = v.sound;
+		v.key = key;
+		v.def = def;
+		v.gain = 0;
+		v.vol = 0;
+		v.speed = pitch;
+		v.x = x;
+		v.y = y;
+		if (sound.SoundId !== def.id) sound.SoundId = def.id;
+		sound.SoundGroup = this.groups.get(def.bus);
+		sound.Looped = true;
+		sound.Volume = 0;
+		sound.PlaybackSpeed = pitch;
+		const a = def.loopStart;
+		const b = def.loopEnd;
+		// a take is a whole recording: only its steady stretch loops (Sound.LoopRegion). pcall: a value type the Node
+		// suites do not model, and a region the engine refuses must still leave a loop that plays
+		if (a !== undefined && b !== undefined) {
+			pcall(() => {
+				const region = new NumberRange(a, b);
+				sound.LoopRegion = region;
+				sound.PlaybackRegionsEnabled = true;
+			});
+		} else {
+			sound.PlaybackRegionsEnabled = false;
+		}
+		if (v.attachment !== undefined) {
+			sound.RollOffMaxDistance = (def.range ?? AUDIO_RANGE) * STUDS_PER_UNIT;
+			v.attachment.Position = new Vector3(x * STUDS_PER_UNIT, 0, y * STUDS_PER_UNIT);
+		}
+		sound.TimePosition = a ?? 0;
+		sound.Play();
+	}
+
+	private freeLoop(v: LoopVoice): void {
+		v.sound.Stop();
+		v.key = undefined;
+		v.def = undefined;
+		v.gain = 0;
+		v.held = false;
+		if (v.vol !== 0) {
+			v.vol = 0;
+			v.sound.Volume = 0;
+		}
+	}
+
+	/** one mixer frame of the held loops: fade, level, pitch; the ones nobody held are faded out and freed */
+	private updateLoops(dt: number): void {
+		for (const v of this.loops) {
+			const def = v.def;
+			if (v.key === undefined || def === undefined) continue;
+			if (this.busGain(def.bus) <= 0) {
+				// the slider went to 0: no stream, no CPU
+				this.freeLoop(v);
+				continue;
+			}
+			const target = v.held ? 1 : 0;
+			v.held = false;
+			if (v.gain < target) v.gain = math.min(target, v.gain + dt / LOOP_FADE_IN);
+			else if (v.gain > target) v.gain = math.max(target, v.gain - dt / LOOP_FADE_OUT);
+			if (v.gain <= 0 && target === 0) {
+				this.freeLoop(v);
+				continue;
+			}
+			const vol = def.volume * v.gain * v.level;
+			if (math.abs(vol - v.vol) > 0.002) {
+				v.vol = vol;
+				v.sound.Volume = vol;
+			}
+			const k = math.min(1, dt * LOOP_PITCH_RATE);
+			const speed = v.speed + (v.pitch - v.speed) * k;
+			if (math.abs(speed - v.sound.PlaybackSpeed) > 0.004) v.sound.PlaybackSpeed = speed;
+			v.speed = speed;
+		}
+	}
+
 	/** stops every voice and track (leaving a run, or the player muted everything) */
 	stopAll(): void {
 		for (const v of this.voices) {
@@ -453,6 +637,7 @@ class AudioEngine {
 			v.active = false;
 			v.name = undefined;
 		}
+		for (const l of this.loops) if (l.key !== undefined) this.freeLoop(l);
 		for (const t of this.tracks) t.stop();
 	}
 
@@ -530,6 +715,7 @@ class AudioEngine {
 				v.name = undefined;
 			}
 		}
+		this.updateLoops(dt);
 		for (const t of this.tracks) t.update(dt, this.busGain(t.busOf()));
 	}
 

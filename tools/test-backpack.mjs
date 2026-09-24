@@ -609,8 +609,8 @@ function setIconAtlas(id) {
 	ids.itemIcons = id;
 	WA.overrideWorldArt(ids);
 }
-/** the characters' sheets and masks (client/boot/preloadPlan.ts laterArt: survivors, weapons, zombies, dogs, birds) */
-const isCharacterSheet = name => /^(survivors|weapons|zombies|dogs|birds)/.test(name);
+/** the characters' sheets and masks (client/boot/preloadPlan.ts laterArt: survivors, weapons, zombies, dogs, birds, bosses) */
+const isCharacterSheet = name => /^(survivors|weapons|zombies|dogs|birds|boss)/.test(name);
 /**
  * setIconAtlas("") with the characters' sheets on -- their uploaded ids, a stand-in for one not uploaded yet -- or
  * off: the survivor and the pets drawn flat, as before the art (ART-01)
@@ -1732,9 +1732,16 @@ pack.close();
 	click(action(), "Unequip");
 	check("tirar deixa o slot vazio", save.equipOutfit === -1 && action().Text === "Equip");
 
-	// too few coins: the button stays pressable, the server says no, nothing moves
+	// too few coins (MON-06, the shop's rule): the button says how many are missing and is disabled -- the hollow
+	// outline it used to turn into read as another kind of button, not as "you cannot pay"
 	click(tile(0, 1), "Zombie");
-	check("sem moedas: a acao fica discreta (outline)", action().GetAttribute("Variant") === "outline");
+	check(
+		"sem moedas: a acao desabilita e diz quanto falta ('20 more needed'), na chapa de sempre (sem contorno)",
+		action().GetAttribute("Disabled") === true &&
+			action().Text === `${ZOMBIE.price - save.money} more needed` &&
+			action().GetAttribute("Variant") === "default",
+		`${action().Text}, ${action().GetAttribute("Variant")}`,
+	);
 	check(
 		"e a nota diz quantas moedas voce tem",
 		noteText().startsWith("Not enough coins") && noteText().includes(`${save.money}`),
@@ -1742,8 +1749,8 @@ pack.close();
 	);
 	click(action(), "Buy Zombie");
 	check(
-		"o servidor recusa por falta de moedas",
-		asked.length === 2 && save.costumes[ZOMBIE.id] === 0 && save.money === 40 - SANTA.price,
+		"o botao desabilitado nao pede nada ao servidor, e nada muda",
+		asked.length === 1 && save.costumes[ZOMBIE.id] === 0 && save.money === 40 - SANTA.price,
 	);
 
 	// the Pets page
@@ -1763,10 +1770,13 @@ pack.close();
 		status() === "From a pack" && packAction().Visible && packAction().Text === "Equip" && !action().Visible,
 		status(),
 	);
-	// the review of the wardrobe: the old shop always offered the permanent Buy, and the wardrobe replaced it
+	// the review of the wardrobe: the old shop always offered the permanent Buy, and the wardrobe replaced it -- here
+	// with 10 coins for a 30-coin pet, so it says what is missing, disabled, like every Buy the player cannot pay
 	check(
-		"e a permanente continua a venda ao lado (vestir | comprar)",
-		keep().Visible && keep().Text.startsWith("Buy for") && keep().Text.endsWith("coins"),
+		"e a permanente continua a venda ao lado (vestir | comprar), dizendo quanto falta",
+		keep().Visible &&
+			keep().Text === `${CAROLINA.price - save.money} more needed` &&
+			keep().GetAttribute("Disabled") === true,
 		keep()?.Text,
 	);
 	check("e que dura ate o proximo New game", noteText().startsWith("Came in a pack"), noteText());
@@ -1778,6 +1788,14 @@ pack.close();
 		"com o traje que voce veste (nenhum)",
 		sameLook(torso(previewSprites()), torsoOf(COS.OutfitLook.None)),
 		lookText(torso(previewSprites())),
+	);
+	// coins arrive (the next repaint -- here, picking the tile again): the permanent one can be bought now
+	save.money += 100;
+	click(tile(1, 3), "Carolina");
+	check(
+		"com moedas, o comprar para sempre volta: Buy for 30 coins, habilitado",
+		keep().Text === `Buy for ${CAROLINA.price} coins` && keep().GetAttribute("Disabled") === false,
+		keep()?.Text,
 	);
 	const askedBefore = asked.length;
 	click(keep(), "Buy Carolina for good");

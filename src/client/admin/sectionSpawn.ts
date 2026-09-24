@@ -3,6 +3,7 @@ import { EQUIPS } from "shared/data/equips";
 import { USABLES } from "shared/data/usables";
 import { ETC_ITEMS } from "shared/data/etcItems";
 import { AMMO_LABELS, ItemGroup, isAmmoEtcId } from "shared/admin/ops";
+import { ADMIN_WORLD_LIMITS, isCosmeticEquip } from "shared/admin/worldOps";
 import { TEXT, THEME, space } from "../ui/theme";
 import {
 	Button,
@@ -20,8 +21,11 @@ import { CONTENT_H, CONTENT_W, PanelCtx, SectionHandle, region } from "./panelTy
 import { SPAWN_KINDS, STRUCTURE_KINDS, SpawnKind, StructureKind } from "./world";
 
 /*
- * Spawn (the admin's own world, through AdminWorld): pick what, how many and how it behaves, then "Place on map"
- * arms the click-to-place mode (placement.ts) with a ghost of the real footprint under the cursor.
+ * Spawn, through AdminWorld: pick what, how many and how it behaves, then "Place on map" arms the click-to-place mode
+ * (placement.ts) with a ghost of the real footprint under the cursor. Where the server owns the world, each click is a
+ * request it validates and runs (client/admin/serverWorld.ts): what it places is for everybody, and the toast says
+ * what it really did. A spawned zombie or boss pays nobody (no XP, kill, loot or trophy), so spawning is never a way to
+ * farm; items and structures make the admin's own run assisted.
  */
 
 const ITEM_GROUPS: Array<{ group: ItemGroup; label: string }> = [
@@ -37,7 +41,10 @@ function itemEntries(group: ItemGroup): Array<[number, string]> {
 	if (group === "weapon") {
 		WEAPONS.forEach((w, i) => out.push([i, w.name]));
 	} else if (group === "equip") {
-		EQUIPS.forEach((e, i) => out.push([i, e.name]));
+		// outfits and pets are the shop's: never dropped (the server refuses them too)
+		EQUIPS.forEach((e, i) => {
+			if (!isCosmeticEquip(i)) out.push([i, e.name]);
+		});
 	} else if (group === "use") {
 		USABLES.forEach((u, i) => out.push([i, u.name]));
 	} else if (group === "etc") {
@@ -134,7 +141,7 @@ export function buildSpawn(p: PanelCtx, content: Frame): SectionHandle {
 		});
 		placeButton(y0 + 96, () => {
 			const info = SPAWN_KINDS.find(k => k.kind === memory.kind)!;
-			const count = info.boss ? math.min(memory.count, 4) : memory.count;
+			const count = info.boss ? math.min(memory.count, ADMIN_WORLD_LIMITS.BOSSES) : memory.count;
 			p.placement.begin({
 				kind: "zombie",
 				spawn: memory.kind,
@@ -146,7 +153,7 @@ export function buildSpawn(p: PanelCtx, content: Frame): SectionHandle {
 		makeLabel(
 			body,
 			"Hint",
-			`Zombies more than ${p.world.spawnRange("zombie")} u from the survivor are recycled by the spawner. At most 4 bosses at once.`,
+			`Zombies more than ${p.world.spawnRange("zombie")} u from every survivor are recycled. At most ${ADMIN_WORLD_LIMITS.BOSSES} bosses at once. Spawns give no XP or loot.`,
 			0,
 			y0 + 144,
 			CONTENT_W,
@@ -245,14 +252,22 @@ export function buildSpawn(p: PanelCtx, content: Frame): SectionHandle {
 			const info = STRUCTURE_KINDS.find(k => k.kind === memory.structure)!;
 			p.placement.begin({ kind: "structure", structure: memory.structure, label: info.label });
 		});
+		Button(body, "Remove", "Remove a structure", {
+			x: 0,
+			y: y0 + 48,
+			w: CONTENT_W,
+			h: 36,
+			variant: "outline",
+			onClick: () => p.placement.begin({ kind: "remove", label: "remove the construction under the cursor" }),
+		});
 		makeLabel(
 			body,
 			"Hint",
-			"Structures go exactly where you click (red = something is in the way). Lamps start off: press E next to them.",
+			`Structures go exactly where you click (red = something is in the way). Lamps start off: press E next to them. Remove takes down the construction nearest the click (within ${ADMIN_WORLD_LIMITS.REMOVE_REACH} u), whoever built it.`,
 			0,
-			y0 + 50,
+			y0 + 92,
 			CONTENT_W,
-			34,
+			48,
 			TEXT.xs,
 			THEME.mutedForeground,
 			{ align: "left", valign: "top" },

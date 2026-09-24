@@ -1,3 +1,5 @@
+import type { WorldSound } from "shared/sim/types";
+
 /**
  * Consumables. `hp` heals (negative hurts), `hunger` refills the stomach; speed/calm/pain are buff
  * lengths in minutes. (tools/fix-usables.cjs swapped the columns once but skipped negative numbers,
@@ -36,3 +38,23 @@ export const USABLES: Array<UsableDef> = [
 	{ id: 18, name: "Berry", hp: 0, hunger: 15, speed: 0, calm: 0, pain: 0, cook: -1 },
 	{ id: 19, name: "Rotten meat", hp: -10, hunger: 20, speed: 0, calm: 0, pain: 0, cook: -1 },
 ];
+
+/** USABLES ids that are not food: the first aid kit, the two pills, the adrenaline shot and the bandage */
+const FIRST_AID_KIT = 5;
+const PAIN_KILLER = 6;
+const ADRENALINE = 7;
+const SEDATIVE = 8;
+const BANDAGE = 12;
+
+/**
+ * What using a usable sounds like (P0-4), by what it IS (P3): the kit's bag is unzipped, a bandage is torn, pills
+ * rattle, adrenaline is a shot (a silent slot until the library has one: shared/data/sounds.ts `useInject`), and
+ * everything else is eaten. The server plays it when it accepted the use (server/sim/simulation.ts).
+ */
+export function useSoundOf(id: number): WorldSound {
+	if (id === FIRST_AID_KIT) return "useMedkit";
+	if (id === BANDAGE) return "useBandage";
+	if (id === PAIN_KILLER || id === SEDATIVE) return "usePills";
+	if (id === ADRENALINE) return "useInject";
+	return "useEat";
+}

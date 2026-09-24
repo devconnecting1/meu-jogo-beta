@@ -27,7 +27,9 @@
  */
 import { isFiniteNumber } from "shared/net/codec";
 import { MAX_PLAYERS, MP_PHASE, SIM_HZ, WORLD_SERVER_PHASE } from "shared/net/mpConfig";
-import { EdgeShift, edgeCount, FxEvent, HeldBit, IntentMessage } from "shared/net/protocol";
+import { EdgeShift, edgeCount, FxEvent, FxType, HeldBit, IntentMessage } from "shared/net/protocol";
+import { wireSoundId } from "shared/net/fxWire";
+import { useSoundOf } from "shared/data/usables";
 import { serverWorld, updateGroundItems, WorldData } from "shared/game/world";
 import { applyPlayerDamage, currentWeapon, PlayerState } from "shared/game/player";
 import { ZombieState } from "shared/game/entities";
@@ -205,6 +207,12 @@ export class ServerSimulation {
 	 */
 	paysRewards?: (sp: ServerPlayer) => boolean;
 	/**
+	 * The admin's switches (docs/MULTIPLAYER.md §10: god, noclip, infinite ammo) onto this survivor's body, right
+	 * before its step. They belong to the PERSON, not to a body: a stand-up, a reset or a trip to the lobby builds a
+	 * new body, and the switch must still be on in it. server/admin/adminWorld.ts sets it; undefined = nobody has any.
+	 */
+	adminMods?: (sp: ServerPlayer) => void;
+	/**
 	 * The authoritative horde (§3.3, §3.5), or undefined while MP_PHASE < 2 and every client still simulates
 	 * its own. F2-2D reads the zombies, their netIds and their deaths from here. Like everything built around the
 	 * town (combat, progress, projectiles and the F3 world below) it is rebuilt when a world ends (MP-22).
@@ -345,7 +353,14 @@ export class ServerSimulation {
 			// client still delivers them into its own copy and reports it
 			deliversPacks: this.ownsInteractive,
 		});
-		this.backpack.onOutcome = (sp, msg, outcome) => this.onBackpack?.(sp, outcome);
+		this.backpack.onOutcome = (sp, msg, outcome) => {
+			// a usable the server accepted is heard where the survivor stands (P0-4): eaten, torn, unzipped, rattled
+			if (outcome.kind === "used") {
+				const sound = wireSoundId(useSoundOf(outcome.item));
+				this.onFx?.({ t: FxType.Sound, sound, x: sp.state.x, y: sp.state.y, volume: 1 });
+			}
+			this.onBackpack?.(sp, outcome);
+		};
 		this.backpack.onPacks = (sp, opened) => this.onBackpack?.(sp, { kind: "delivered", packs: opened });
 		this.adoptSystems(this.buildAround(this.world));
 	}
@@ -991,6 +1006,7 @@ export class ServerSimulation {
 		prof?.begin("PZ.players");
 		this.refreshBodies();
 		for (const sp of this.roster) {
+			this.adminMods?.(sp);
 			const consumed = sp.counters.consumed;
 			const cmd = takeCommand(sp);
 			// §2.4: the backpack verbs made during this command land BEFORE it is simulated -- its movement (armour,

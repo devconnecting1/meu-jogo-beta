@@ -778,10 +778,12 @@ section("A6. the HUD and the Bag draw every weapon with its own name and a pixel
  * pack's content and every costume.
  */
 function itemSources() {
-	const { MAP_ITEM_LOOT, BOSS_TROPHIES } = require(join(SRC, "shared/data/spawns.ts"));
+	const { MAP_ITEM_LOOT, BOSS_TROPHIES, PUMP_LOOT } = require(join(SRC, "shared/data/spawns.ts"));
 	const out = [];
 	for (const table of BUILDING_SPAWNS)
 		for (const e of table) out.push({ kind: e.kind, index: e.index, from: "loot" });
+	// a gas station's pump islands (EDI-16), on a checkout that has them
+	for (const e of PUMP_LOOT ?? []) out.push({ kind: e.kind, index: e.index, from: "gas pump" });
 	for (const r of CRAFT_RECIPES) out.push({ kind: r.resultKind, index: r.resultIndex, from: `recipe ${r.id}` });
 	for (const p of SHOP_PACKS) for (const it of p.items) out.push({ kind: it.kind, index: it.index, from: p.name });
 	for (const [what, table] of Object.entries(MAP_ITEM_LOOT))
@@ -1813,19 +1815,29 @@ section(
 			const draw = source("client/gameLoop.ts");
 			const body = draw.slice(draw.indexOf("private drawLight("), draw.indexOf("hideWorld(): void"));
 			const shape = source("client/view/lightList.ts");
+			// the beam (P0-4): the flashlight's cone along the aim, or a motorcycle's headlight along the ride -- ONE
+			// rule, survivorLight.ts survivorBeamReach / survivorBeamAngle, whose flashlight IS survivorCone
+			const rule = source("shared/sim/survivorLight.ts");
+			const beamRule =
+				/return survivorCone\(save\)\?\.radius \?\? 0/.test(rule) &&
+				/rideHeading\(ride\) : p\.angle/.test(rule);
 			check(
 				/SurvivorLight\.survivorLightRadius\(save\)/.test(body) &&
-					/SurvivorLight\.survivorCone\(save\)/.test(body) &&
-					/addSurvivorLight\(lights, p\.x, p\.y, p\.angle, radius, cone\?\.radius\)/.test(body) &&
+					/SurvivorLight\.survivorBeamReach\(p, save\)/.test(body) &&
+					/SurvivorLight\.survivorBeamAngle\(p\)/.test(body) &&
+					/addSurvivorLight\(lights, p\.x, p\.y, beamAt, radius, beam > 0 \? beam : undefined\)/.test(body) &&
 					/lights\.cone\(x, y, cone, FLASHLIGHT_INNER, aim, SurvivorLight\.CONE_HALF_ANGLE\)/.test(shape) &&
+					beamRule &&
 					!/PLAYER_LIGHT_R/.test(draw),
 				"the client's light map draws the survivor's light by the shared rule: the circle, and the flashlight's cone along the aim",
 			);
 			const LL = require(join(SRC, "client/view/lightList.ts"));
 			check(
 				/Light\.survivorLightRadius\(save\)/.test(source("shared/sim/ai/zombieBrain.ts")) &&
-					/Light\.survivorCone\(save\)/.test(source("shared/sim/ai/zombieBrain.ts")) &&
-					/> Light\.CONE_HALF_ANGLE/.test(source("shared/sim/ai/zombieBrain.ts")),
+					/Light\.survivorBeamReach\(p, save\)/.test(source("shared/sim/ai/zombieBrain.ts")) &&
+					/Light\.survivorBeamAngle\(p\)/.test(source("shared/sim/ai/zombieBrain.ts")) &&
+					/> Light\.CONE_HALF_ANGLE/.test(source("shared/sim/ai/zombieBrain.ts")) &&
+					beamRule,
 				"and the server's horde visibility by the same rule, cone angle included",
 			);
 			/** the lights the client draws for a survivor at (px, py) aiming at `aim` (gameLoop drawLight, the real shape) */
@@ -2281,6 +2293,72 @@ section(
 			stepPlayer(W.createWorld(2000, 2000), p, save, P.makeCommand(1, 0, 0, 0, 0, 0), TICK_DT);
 			check(p.dead, `${rotten.name} at 5 hp kills (${rotten.hp} hp)`, `hp ${p.hp}`);
 		}
+	},
+);
+
+section(
+	"C1b. VIT-01: what heals from the backpack heals AT ONCE, through the server's useItem, whatever the wait after a hit",
+	() => {
+		const VIT = require(join(SRC, "shared/sim/vitals.ts"));
+		const craft = new SCRAFT.ServerCraft({ world: W.createWorld(2000, 2000), build: { placing: () => false } });
+		const bitten = u => {
+			const save = bareSave();
+			save.invenUse[u.id] = 1;
+			const p = Ply.createPlayer(save, 1000, 1000);
+			p.hp = 40;
+			p.hungry = 40;
+			Ply.applyPlayerDamage(p, save, 10);
+			return { save, p };
+		};
+		checkRows(
+			"every usable that heals: its hp lands on the use a bite ago, and the body's own wait is left running",
+			USABLES.filter(u => u.hp > 0),
+			u => {
+				const { save, p } = bitten(u);
+				const hp = p.hp;
+				craft.remove(0);
+				const out = craft.useItem(0, p, save, u.id);
+				if (out.kind !== "used") return JSON.stringify(out);
+				if (!near(p.hp, Math.min(p.hpMax, hp + u.hp), 1e-9)) return `hp ${hp} -> ${p.hp}, data +${u.hp}`;
+				return p.sinceHurt === 0 || `the use changed the wait (sinceHurt ${p.sinceHurt})`;
+			},
+		);
+		checkRows(
+			"a usable that HURTS (rotten meat) is hp lost: the wait starts over, even on a rested body",
+			USABLES.filter(u => u.hp < 0),
+			u => {
+				const save = bareSave();
+				save.invenUse[u.id] = 1;
+				const p = Ply.createPlayer(save, 1000, 1000);
+				p.hp = 60;
+				craft.remove(0);
+				craft.useItem(0, p, save, u.id);
+				return (p.hp === 60 + u.hp && p.sinceHurt === 0) || `hp ${p.hp}, sinceHurt ${p.sinceHurt}`;
+			},
+		);
+		checkRows(
+			"food that only feeds does not heal by itself: past the wait it lets the BODY heal, and pays for it",
+			USABLES.filter(u => u.hp === 0 && u.hunger > 0),
+			u => {
+				const save = bareSave();
+				save.invenUse[u.id] = 1;
+				const p = Ply.createPlayer(save, 1000, 1000);
+				p.hp = 60;
+				p.hungry = VIT.REGEN_FOOD_MIN - 5;
+				craft.remove(0);
+				craft.useItem(0, p, save, u.id);
+				if (p.hp !== 60) return `hp ${p.hp} straight from the item`;
+				const fed = p.hungry;
+				stepPlayer(W.createWorld(2000, 2000), p, save, P.makeCommand(1, 0, 0, 0, 0, 0), TICK_DT);
+				const healed = p.hp - 60;
+				const spent = fed - p.hungry - 0.3 * TICK_DT;
+				if (!VIT.fedEnough(fed)) return healed === 0 || `healed ${healed} under the food gate (FOOD ${fed})`;
+				return (
+					(healed > 0 && near(spent, healed * VIT.REGEN_FOOD_PER_HP, 1e-9)) ||
+					`healed ${healed}, food ${spent}`
+				);
+			},
+		);
 	},
 );
 
@@ -3418,7 +3496,8 @@ section("E3. every skill's effect, measured where the game applies it", () => {
 	effect[0] = lv =>
 		Ply.createPlayer(withSkill(0, lv), 0, 0).hpMax === 100 + 10 * lv ||
 		`hpMax ${Ply.createPlayer(withSkill(0, lv), 0, 0).hpMax}`;
-	// 1 Recovery: regeneration × (1 + level) (stepPlayer)
+	// 1 Recovery: regeneration × (1 + level) (stepPlayer) -- the RATE only: the wait after a hit is the same at every
+	// level (DESIGN_RULES VIT-01)
 	effect[1] = lv => {
 		const regen = s => {
 			const p = Ply.createPlayer(s, 1000, 1000);
@@ -3428,7 +3507,20 @@ section("E3. every skill's effect, measured where the game applies it", () => {
 		};
 		const a = regen(bareSave());
 		const b = regen(withSkill(1, lv));
-		return near(b / a, 1 + lv, 0.01) || `${a.toFixed(2)} -> ${b.toFixed(2)} hp/s`;
+		if (!near(b / a, 1 + lv, 0.01)) return `${a.toFixed(2)} -> ${b.toFixed(2)} hp/s`;
+		const s = withSkill(1, lv);
+		const p = Ply.createPlayer(s, 1000, 1000);
+		p.hp = 50;
+		Ply.applyPlayerDamage(p, s, 10);
+		let t = 0;
+		while (p.hp <= 40 && t < 20 * CFG.SIM_HZ) {
+			stepPlayer(world, p, s, P.makeCommand(1, 0, 0, 0, 0, 0), TICK_DT);
+			t += 1;
+		}
+		return (
+			near(t / CFG.SIM_HZ, 7, 2 / CFG.SIM_HZ) ||
+			`heals ${(t / CFG.SIM_HZ).toFixed(2)} s after a bite (the wait: 7 s)`
+		);
 	};
 	/** one blade hit on a zombie through the server's weapon machine: its damage and its knockback */
 	const bladeHit = s => {
@@ -3792,6 +3884,8 @@ section("E3. every skill's effect, measured where the game applies it", () => {
 			"server/sim/interaction.ts",
 			"server/sim/items.ts",
 			"shared/sim/playerMove.ts",
+			// the body's step (Recovery, Patience, Poison immunity: DESIGN_RULES VIT-01), called by playerMove.ts
+			"shared/sim/vitals.ts",
 			"shared/sim/ai/zombieBrain.ts",
 			"shared/sim/craftRule.ts",
 			"shared/sim/loot.ts",
@@ -5863,10 +5957,13 @@ section(
 			}
 			const main = source("client/main.client.ts");
 			const notice = source("client/ui/packNotice.ts");
+			// the wallet's listener starts with the other server notices (client/ui/serverNotices.ts, one import in main)
+			const notices = source("client/ui/serverNotices.ts");
 			check(
 				!/packsOpened/.test(main) &&
 					(main.match(/PackNotice\.deliverPacks\(ctx, Bag\.owned\(\)\)/g) ?? []).length === 3 &&
-					/PackNotice\.startPackNotices\(ctx\)/.test(main) &&
+					/startServerNotices\(ctx\)/.test(main) &&
+					/startPackNotices\(ctx\);/.test(notices) &&
 					/if \(serverDelivers\) return;/.test(notice) &&
 					/onWalletChanged\(\(\) => \{\s*const opened = tracker\.newlyOpened\(\);\s*if \(opened\.size\(\) > 0\) toast\(ctx, deliveredText\(/.test(
 						notice,
@@ -5916,9 +6013,14 @@ section(
 					/if \(owned\(\)\) return predictAndSend\(IntentKind\.UseItem/.test(sync),
 				"[L] the Bag's Use goes through backpackSync (a server verb when owned), never the local itemUseEffect",
 			);
+			// (F6-6B: they used to refuse, "SERVER_WORLD"; now the server makes them -- tools/test-admin.mjs section 10)
+			const adminWorld = source("client/admin/serverWorld.ts");
 			check(
-				/SERVER_WORLD/.test(source("client/admin/world.ts")),
-				"[K] the admin's item and structure spawns refuse while the server owns the world",
+				/serverWorld\(\)\) return super\.spawnItem/.test(adminWorld) &&
+					/op: "spawnItem"/.test(adminWorld) &&
+					/serverWorld\(\)\) return super\.spawnStructure/.test(adminWorld) &&
+					/op: "spawnStructure"/.test(adminWorld),
+				"[K] while the server owns the world the admin's item and structure spawns are server requests, never local copies",
 			);
 		}
 		s.quit(friend);

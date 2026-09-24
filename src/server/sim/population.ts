@@ -65,6 +65,16 @@ export class ServerPopulation {
 		this.lastPromise = total;
 	}
 
+	/**
+	 * `n` of the day table at the groups' ΣS(k) right now, by `split`'s rule: what an admin's forced wave queues
+	 * (server/admin/adminWorld.ts, §10), so a forced wave 2 or 3 is as big as the natural one would be.
+	 */
+	scaled(n: number): number {
+		let total = 0;
+		for (const k of this.population.scales()) total += k;
+		return total <= 1 ? n : math.floor(n * total + 0.5);
+	}
+
 	update(refs: Ctx.AiRefs, dt: number): void {
 		const before = refs.zombies.size();
 		this.population.update(refs, dt);

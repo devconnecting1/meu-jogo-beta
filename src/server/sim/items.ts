@@ -42,8 +42,8 @@
 import { DESIGN } from "shared/engine/constants";
 import { rndRange } from "shared/engine/rng";
 import { addItem } from "shared/sim/inventory";
-import { rollBuildingLoot, rollMapItemDrop, thiefFind } from "shared/sim/loot";
-import { edgeDist, isMapItem } from "shared/sim/interactQuery";
+import { isContainer, rollBuildingLoot, rollMapItemDrop, rollPumpLoot, thiefFind } from "shared/sim/loot";
+import { edgeDist, isMapItem, isPump } from "shared/sim/interactQuery";
 import { GROUND_ITEM_CAP, GROUND_ITEM_LIFE_S, ITEM_INTEREST, ITEM_NEWS_S } from "shared/net/mpConfig";
 import { WorldEv, WItemAdd } from "shared/net/protocol";
 import {
@@ -127,6 +127,11 @@ export class ServerItems {
 	 */
 	private readonly told = new Map<number, Set<number>>();
 	private interestSweep = 0;
+	/**
+	 * §10: somebody (the survivor in `slot`) picked up an item an admin dropped (`GroundItem.unpaid`). The pickup pays
+	 * nothing beyond the item itself; server/admin/adminWorld.ts sets this to log who took it.
+	 */
+	onUnpaidTaken?: (slot: number, item: GroundItem) => void;
 	/** every item in the world by id (the sweep turns a told id back into its item) */
 	private readonly byId = new Map<number, GroundItem>();
 	/** the items' own clock, seconds of simulation (`upkeep`): what `GroundItem.born` is measured on */
@@ -364,9 +369,17 @@ export class ServerItems {
 	 * the loser, who is credited nothing. Doing it the other way round would credit both and then remove
 	 * once, which is the duplication bug written out longhand.
 	 *
-	 * `pays` false: an assisted run (§9.3) -- the item is theirs, the achievement (Woodpile) is not.
+	 * `slot` is the picker's (the audit of an admin's drop, §10); `pays` false: an assisted run (§9.3) -- the item is
+	 * theirs, the achievement (Woodpile) is not.
 	 */
-	pickup(save: PlayerSaveData, x: number, y: number, item: GroundItem | undefined, pays = true): PickupResult {
+	pickup(
+		save: PlayerSaveData,
+		x: number,
+		y: number,
+		item: GroundItem | undefined,
+		slot = -1,
+		pays = true,
+	): PickupResult {
 		if (item === undefined) return { ok: false, why: "none" };
 		const dx = item.x - x;
 		const dy = item.y - y;
@@ -380,8 +393,13 @@ export class ServerItems {
 		if (!segmentClear(this.world, x, y, item.x, item.y, blocks)) return { ok: false, why: "blocked" };
 		if (!removeGroundItem(this.world, item)) return { ok: false, why: "taken" };
 		addItem(save, item.kind, item.itemId, item.count);
-		// CON-04: what the SERVER put into the backpack (wood is Woods collector's), in a run that still earns (§9.3)
-		if (pays) creditTaken(save, item.kind, item.itemId, item.count);
+		if (item.unpaid === true) {
+			// an admin's drop is a gift, not a find: no collector credit (CON-04), and the audit learns who took it (§10)
+			this.onUnpaidTaken?.(slot, item);
+		} else if (pays) {
+			// CON-04: what the SERVER put into the backpack (wood is Woods collector's), in a run that still earns (§9.3)
+			creditTaken(save, item.kind, item.itemId, item.count);
+		}
 		return { ok: true, kind: item.kind, itemId: item.itemId, count: item.count };
 	}
 
@@ -402,11 +420,7 @@ export class ServerItems {
 		if (b === undefined) return { building: undefined, taken };
 		const loot = b.lootItems;
 		if (loot === undefined || loot.size() === 0) return { building: b, taken };
-		for (const drop of loot) {
-			addItem(save, drop.kind, drop.id, drop.count);
-			if (pays) creditTaken(save, drop.kind, drop.id, drop.count);
-			taken.push(drop);
-		}
+		this.takeAll(save, b, hours, taken, pays);
 		// Thief: one more slot of this building's table, rolled for this searcher alone (shared/sim/loot.ts); the
 		// building's own loot, the shared part, is exactly what anyone else would have found
 		const extra = thiefFind(save, b.buildingType ?? 0);
@@ -415,14 +429,52 @@ export class ServerItems {
 			if (pays) creditTaken(save, extra.kind, extra.id, extra.count);
 			taken.push(extra);
 		}
-		// emptied before anything can yield: a second searcher this tick finds size() === 0 above and is
-		// told the building is empty, which by then it is (§8.1 "o primeiro pedido processado leva tudo")
-		b.lootItems = [];
-		b.lootTimer = hours + DESIGN.ITEM_RESPAWN_HOURS;
 		return { building: b, taken };
 	}
 
-	/** does this building still hold something? (what the `LootFlag` delta carries, §4.5) */
+	/**
+	 * A survivor drains a gas station's pump island (EDI-16): the same rules as a building's search (MP-05) -- the
+	 * first E takes everything, for everybody, and the island is dry until ITEM_RESPAWN_HOURS of game time have passed
+	 * -- minus the Thief's extra: the skill finds one more thing when SEARCHING A BUILDING ("Searching a building finds
+	 * one more item"), and a pump has nothing more to find than the fuel in it. The reach is the caller's
+	 * (server/sim/interaction.ts, at the SERVER's position, with a clear line to the island). `pays` as for `search`.
+	 */
+	drain(
+		save: PlayerSaveData,
+		pump: Solid,
+		hours: number,
+		pays = true,
+	): Array<{ kind: number; id: number; count: number }> {
+		const taken = new Array<{ kind: number; id: number; count: number }>();
+		if (!isPump(pump) || pump.removed === true) return taken;
+		const loot = pump.lootItems;
+		if (loot === undefined || loot.size() === 0) return taken;
+		this.takeAll(save, pump, hours, taken, pays);
+		return taken;
+	}
+
+	/**
+	 * Everything in container `c` into `save`, and the container empty until `hours` + ITEM_RESPAWN_HOURS. Emptied
+	 * before anything can yield: a second searcher this tick finds it empty, which by then it is (§8.1 "o primeiro
+	 * pedido processado leva tudo"). `pays` false: an assisted run (§9.3) -- the loot is theirs, no achievement moves.
+	 */
+	private takeAll(
+		save: PlayerSaveData,
+		c: Solid,
+		hours: number,
+		taken: Array<{ kind: number; id: number; count: number }>,
+		pays: boolean,
+	): void {
+		for (const drop of c.lootItems ?? []) {
+			addItem(save, drop.kind, drop.id, drop.count);
+			if (pays) creditTaken(save, drop.kind, drop.id, drop.count);
+			taken.push(drop);
+		}
+		c.lootItems = [];
+		c.lootTimer = hours + DESIGN.ITEM_RESPAWN_HOURS;
+	}
+
+	/** does this building (or pump island) still hold something? (what the `LootFlag` delta carries, §4.5) */
 	hasLoot(b: Solid): boolean {
 		const loot = b.lootItems;
 		return loot !== undefined && loot.size() > 0;
@@ -431,7 +483,8 @@ export class ServerItems {
 	/**
 	 * The original's lazy loot, on a sweep instead of every frame: a building rolls its slots the first time
 	 * a survivor comes within LOOT_ROLL_RANGE, and again once its respawn timer has passed. Rolling at world
-	 * generation would mean rolling 140 buildings nobody will ever walk into.
+	 * generation would mean rolling 140 buildings nobody will ever walk into. A gas station's pump islands are
+	 * containers too (EDI-16) and roll the same way, from their own table.
 	 */
 	rollNearby(players: ReadonlyArray<{ x: number; y: number }>, hours: number, dt: number): void {
 		this.sweep -= dt;
@@ -447,7 +500,7 @@ export class ServerItems {
 				this.scratch,
 			);
 			for (const s of found) {
-				if (s.kind !== "building") continue;
+				if (!isContainer(s)) continue;
 				const loot = s.lootItems;
 				if (loot === undefined || loot.size() > 0) continue;
 				if (hours < (s.lootTimer ?? 0)) continue;
@@ -463,10 +516,11 @@ export class ServerItems {
 	 * client/systems/interaction.ts and put on the shared rng so a test can replay it).
 	 *
 	 * One function on purpose, and the roll itself is the SHARED one (shared/sim/loot.ts), the very roll the
-	 * client's MP_PHASE 2 path makes: there is no second place that chooses what a container holds.
+	 * client's MP_PHASE 2 path makes: there is no second place that chooses what a container holds. A pump island
+	 * rolls its fuel (EDI-16), a building its type's table.
 	 */
 	rollLoot(s: Solid): void {
-		s.lootItems = rollBuildingLoot(s.buildingType ?? 0, s.lootSlots ?? 2);
+		s.lootItems = isPump(s) ? rollPumpLoot() : rollBuildingLoot(s.buildingType ?? 0, s.lootSlots ?? 2);
 	}
 
 	// ---------------------------------------------------------------- map items (§8.1)

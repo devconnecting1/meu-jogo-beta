@@ -19,7 +19,7 @@ import { PlayerSaveData } from "shared/game/save";
 import { WorldData } from "shared/game/world";
 import { BossState, ZombieState } from "shared/game/entities";
 import { Bullet } from "shared/game/bullets";
-import { BloodSource, DebrisMaterial, FxEvent, TracerKind } from "shared/sim/types";
+import { BloodSource, DebrisMaterial, FxEvent, TracerKind, WorldSound } from "shared/sim/types";
 import * as Flank from "shared/sim/ai/flank";
 import * as Sense from "shared/sim/ai/perception";
 
@@ -327,6 +327,11 @@ export function fxTracer(
 	life: number,
 ): void {
 	refs.fx.push({ kind: "tracer", x1, y1, x2, y2, tracer, life });
+}
+
+/** a sound the simulation decided, heard where it happened (P0-4: the bite; shared/net/fxWire.ts WIRE_SOUNDS) */
+export function fxSound(refs: AiRefs, sound: WorldSound, x: number, y: number): void {
+	refs.fx.push({ kind: "sound", sound, x, y });
 }
 
 /** HUD message for one survivor, or for everyone when `player` is undefined */
