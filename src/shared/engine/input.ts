@@ -36,6 +36,12 @@ export class InputState {
 	attackBlocked = false;
 
 	actionPressed = false;
+	/**
+	 * This frame's E press is meant for a window's glass (EDI-18): the interaction's target -- what its hint named --
+	 * was the window. Written by client/systems/interaction.ts `tryInteract` before the frame's command is built, and
+	 * carried on that press's command as `HeldBit.Glass` (client/net/commands.ts): the server breaks glass on it alone.
+	 */
+	actionGlass = false;
 	reloadPressed = false;
 	backpackPressed = false;
 	pausePressed = false;
@@ -101,6 +107,7 @@ export class InputState {
 		this.attackPressed = false;
 		this.attackReleased = false;
 		this.actionPressed = false;
+		this.actionGlass = false;
 		this.reloadPressed = false;
 		this.backpackPressed = false;
 		this.pausePressed = false;
@@ -126,6 +133,7 @@ export class InputState {
 		this.attackPressed = false;
 		this.attackReleased = false;
 		this.actionPressed = false;
+		this.actionGlass = false;
 		this.reloadPressed = false;
 		this.weaponSlotPressed = -1;
 		this.weaponCycle = 0;

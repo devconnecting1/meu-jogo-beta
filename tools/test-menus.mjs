@@ -300,6 +300,7 @@ class Client {
 			input.attackReleased && !input.attackBlocked,
 			input.actionPressed,
 			input.reloadPressed,
+			input.actionGlass,
 		);
 		readRawInput(this.cam, input, false, this.raw);
 		const cmds = [];
@@ -1142,7 +1143,7 @@ section("5) source guards (UI-06): nothing left that pauses the world");
 	check(
 		"netClient.ts predict() sends the edges this harness sends (a blocked button's release is no release)",
 		edgeArgs.join(", ") ===
-			"input.attackPressed, input.attackReleased && !input.attackBlocked, input.actionPressed, input.reloadPressed",
+			"input.attackPressed, input.attackReleased && !input.attackBlocked, input.actionPressed, input.reloadPressed, input.actionGlass",
 		edgeArgs.join(", ") || "commands.addEdges(...) not found in predict()",
 	);
 }

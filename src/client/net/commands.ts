@@ -27,7 +27,7 @@
  * lets tools/test-predict.mjs drive this against the real server queue (server/sim/players.ts).
  */
 import { wrapU16 } from "shared/net/codec";
-import { InputCommand, InputPacket, makeCommand, packEdges } from "shared/net/protocol";
+import { HeldBit, InputCommand, InputPacket, makeCommand, packEdges } from "shared/net/protocol";
 import {
 	INPUT_BUFFER_MAX,
 	INPUT_BUFFER_TARGET,
@@ -98,6 +98,8 @@ export class CommandStream {
 	private eAttackRelease = 0;
 	private eActionPress = 0;
 	private eReload = 0;
+	/** an E press of those was meant for a window's glass (EDI-18): the command carrying them says so, HeldBit.Glass */
+	private eGlass = false;
 	// local token bucket (§2.2)
 	private tokens = INPUT_BURST;
 	private bucketAt = 0;
@@ -129,6 +131,7 @@ export class CommandStream {
 		this.eAttackRelease = 0;
 		this.eActionPress = 0;
 		this.eReload = 0;
+		this.eGlass = false;
 		this.tokens = INPUT_BURST;
 		this.bucketAt = 0;
 		this.sampled = 0;
@@ -150,11 +153,13 @@ export class CommandStream {
 	 * and nothing sent in this frame can overtake it. It is also the tick the screen shows at the end of the
 	 * frame, so the shot leaves from where the survivor is drawn.
 	 */
-	addEdges(attackPress: boolean, attackRelease: boolean, actionPress: boolean, reload: boolean): void {
+	addEdges(attackPress: boolean, attackRelease: boolean, actionPress: boolean, reload: boolean, glass = false): void {
 		if (attackPress) this.eAttackPress += 1;
 		if (attackRelease) this.eAttackRelease += 1;
 		if (actionPress) this.eActionPress += 1;
 		if (reload) this.eReload += 1;
+		// EDI-18: the E press is for the window's glass (the hint named it) -- it rides with the edge, never apart from it
+		if (actionPress && glass) this.eGlass = true;
 	}
 
 	/** `bufDepth` of the last self block: steers the ±2 % dilation towards INPUT_BUFFER_TARGET */
@@ -229,19 +234,23 @@ export class CommandStream {
 	/** builds one command from `raw` -- with the edges seen since the last drain when `withEdges` -- and queues it */
 	private build(raw: RawInput, withEdges: boolean): InputCommand {
 		let edges = 0;
+		// the glass bit is the edge's own (protocol.ts note 23): only the command that carries the E press has it
+		let held = raw.held - (raw.held & HeldBit.Glass);
 		if (withEdges) {
 			edges = packEdges(this.eAttackPress, this.eAttackRelease, this.eActionPress, this.eReload);
+			if (this.eGlass && this.eActionPress > 0) held += HeldBit.Glass;
 			this.eAttackPress = 0;
 			this.eAttackRelease = 0;
 			this.eActionPress = 0;
 			this.eReload = 0;
+			this.eGlass = false;
 		}
 		this.seq = wrapU16(this.seq + 1);
 		const mag = math.clamp(raw.magnitude, 0, 1);
 		const len = math.sqrt(raw.moveX * raw.moveX + raw.moveY * raw.moveY);
 		// makeCommand takes the direction's length as the magnitude: feed it a vector of exactly `mag`
 		const scale = len > 1e-6 ? mag / len : 0;
-		const cmd = makeCommand(this.seq, raw.moveX * scale, raw.moveY * scale, raw.aim, raw.held, edges);
+		const cmd = makeCommand(this.seq, raw.moveX * scale, raw.moveY * scale, raw.aim, held, edges);
 		this.pending.push(cmd);
 		while (this.pending.size() > MAX_PENDING) this.pending.remove(0);
 		this.unsent = math.min(this.unsent + 1, this.pending.size());

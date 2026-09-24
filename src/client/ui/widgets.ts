@@ -1,5 +1,5 @@
 /*
- * Project Z UI kit: the shadcn/ui vocabulary (Button, Card, Badge, Progress, Tabs, Separator, Dialog, Slider,
+ * Last Town UI kit: the shadcn/ui vocabulary (Button, Card, Badge, Progress, Tabs, Separator, Dialog, Slider,
  * Toast) rebuilt on Roblox GuiObjects and dressed in the author's "Pixel Quest relief" skin (skin.ts).
  *
  * Look (from the reference art, DESIGN_RULES UI-07):

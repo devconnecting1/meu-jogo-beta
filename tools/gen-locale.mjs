@@ -2,7 +2,7 @@
 /*
  * Exports the game's strings to the CSV that Roblox's localization table imports.
  *
- *   npm run locale                  writes design/locale/ProjectZ.csv
+ *   npm run locale                  writes design/locale/LastTown.csv
  *   npm run locale -- --split 100   also writes it in chunks of 100 rows
  *
  * Why this exists: our text lives in src/shared/data/lang.ts, keyed by the English string itself. Roblox can
@@ -44,7 +44,7 @@ import { CONTEXT } from "./locale-context.mjs";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SRC = join(ROOT, "src/shared/data/lang.ts");
 const OUT_DIR = join(ROOT, "design/locale");
-const OUT = join(OUT_DIR, "ProjectZ.csv");
+const OUT = join(OUT_DIR, "LastTown.csv");
 
 /** the documented column order; Source last is not a typo */
 const HEADER = ["Key", "Context", "Example", "Source"];
@@ -132,7 +132,7 @@ if (splitAt >= 0) {
 	const parts = Math.ceil(body.length / size);
 	for (let i = 0; i < parts; i++) {
 		const chunk = [lines[0], ...body.slice(i * size, (i + 1) * size)];
-		const name = join(OUT_DIR, `ProjectZ-${String(i + 1).padStart(2, "0")}.csv`);
+		const name = join(OUT_DIR, `LastTown-${String(i + 1).padStart(2, "0")}.csv`);
 		writeFileSync(name, chunk.join("\n") + "\n", "utf8");
 		console.log(`  parte ${i + 1}/${parts}: ${chunk.length - 1} textos -> ${name}`);
 	}

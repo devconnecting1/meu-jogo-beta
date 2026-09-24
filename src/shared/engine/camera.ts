@@ -38,6 +38,12 @@ export class Camera {
 	isoSquash = 0.5;
 	shakeMag = 0;
 	shakeT = 0;
+	/**
+	 * The player asked for reduced motion (client/ui/skin.ts `reducedMotion`, set by the client's loop every frame):
+	 * the camera never shakes. Taken away, not toned down -- every kick doubled a cue that does not move and stays (the
+	 * shot's line and sound, the blow's blood and hitstop, the bite's flashes), docs/DESIGN_RULES.md BEM-08.
+	 */
+	reduceMotion = false;
 
 	/**
 	 * Where the LAST `project()` landed, in viewport px. Read it immediately after the call and never keep it:
@@ -86,6 +92,7 @@ export class Camera {
 	}
 
 	shake(magnitude: number, duration: number): void {
+		if (this.reduceMotion) return;
 		if (magnitude > this.shakeMag) {
 			this.shakeMag = magnitude;
 		}
@@ -93,6 +100,14 @@ export class Camera {
 	}
 
 	update(dt: number): void {
+		// Reduce Motion turned on in the middle of a kick: the view settles at once instead of finishing it
+		if (this.reduceMotion && (this.shakeT > 0 || this.shakeX !== 0 || this.shakeY !== 0)) {
+			this.shakeT = 0;
+			this.shakeMag = 0;
+			this.shakeX = 0;
+			this.shakeY = 0;
+			return;
+		}
 		if (this.shakeT > 0) {
 			this.shakeT -= dt;
 			this.shakeX = (math.random() * 2 - 1) * this.shakeMag;

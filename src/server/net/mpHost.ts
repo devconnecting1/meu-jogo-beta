@@ -169,6 +169,12 @@ export interface MpAnomalyRow {
 	 */
 	rewindClamped: number;
 	shots: number;
+	/**
+	 * (EDI-18) Attempts to break a window's glass by hand the server refused: out of reach or through a wall from its
+	 * own position, or past the survivor's rate (server/sim/windows.ts `refusedOf`). The client's hint asks the same
+	 * test, so an honest one is refused only across a latency spike; evidence, never an action.
+	 */
+	windowRefused: number;
 }
 
 export interface MpHost {
@@ -388,6 +394,9 @@ export function startMpHost(options: MpHostOptions): MpHost {
 		},
 		life(slot, state) {
 			replicator.life(slot, state);
+		},
+		died(slot, arg) {
+			replicator.died(slot, arg);
 		},
 	});
 	// the death goes out reliably (§4.5), `runOver` goes into the save the same tick, and the daybreak countdown
@@ -980,6 +989,7 @@ export function startMpHost(options: MpHostOptions): MpHost {
 					counters: sp.counters,
 					rewindClamped: fight?.rewindClamped ?? 0,
 					shots: fight?.shots ?? 0,
+					windowRefused: sim.windows?.refusedOf(sp.slot) ?? 0,
 				});
 			}
 			return rows;

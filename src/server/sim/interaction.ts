@@ -27,6 +27,7 @@ import {
 	interactTarget,
 	isFire,
 	nearestGroundItem,
+	nearestIntactWindow,
 	nearestPump,
 	pumpsOf,
 	repairMaterial,
@@ -41,8 +42,11 @@ import { ZombieState } from "shared/game/entities";
 import { FxEvent, FxType, SolidState, WorldEv } from "shared/net/protocol";
 import { wireSoundId } from "shared/net/fxWire";
 import { isMachine } from "shared/data/power";
+import { WINDOW_REACH } from "shared/game/windows";
+import * as Noise from "shared/sim/ai/noise";
 import { ServerItems } from "./items";
 import type { MachineOutcome } from "./power";
+import { ServerWindows, WINDOW_REACH_SLACK } from "./windows";
 import { WorldOut } from "./worldOut";
 
 /** §8.1: the reach checks get the same latency allowance as `pickup` */
@@ -91,7 +95,9 @@ export type InteractOutcome =
 	| { kind: "pump"; solid: Solid; taken: number }
 	/** an electric build did its own job (server/sim/power.ts): charged, refuelled, switched, launched a drone… */
 	| { kind: "machine"; machine: MachineOutcome }
-	| { kind: "refused"; why: "range" | "blocked" | "material" | "empty" | "cooldown" | "taken" | "full" };
+	/** a window's glass broken on purpose (EDI-18): the crash, the open frame (server/sim/windows.ts) */
+	| { kind: "window"; solid: Solid }
+	| { kind: "refused"; why: "range" | "blocked" | "material" | "empty" | "cooldown" | "taken" | "full" | "rate" };
 
 /** what E does on an electric build (server/sim/power.ts `ServerPower.act`); undefined = the ordinary E */
 export interface MachineActions {
@@ -117,6 +123,13 @@ export interface ServerInteractionOptions {
 	 * run's backpack is theirs, the achievement (Woodpile) is not. Left undefined, every run does -- what a test wants.
 	 */
 	paysRewards?: (slot: number) => boolean;
+	/** the town's window glass (EDI-18): E at an intact pane breaks it, through its reach, line and rate */
+	windows?: ServerWindows;
+	/**
+	 * A noise the horde hears (IA-02): a door turning (Noise.DOOR). Passed in, so the module stays pure; left undefined
+	 * (no horde, a test), nobody hears it.
+	 */
+	noise?: (x: number, y: number, radius: number) => void;
 }
 
 /** the world as the resolver needs to see it for one press */
@@ -129,6 +142,11 @@ export interface InteractContext {
 	zombies: ReadonlyArray<ZombieState>;
 	/** the world clock in game hours, `gameHours(day, dayTime)` */
 	hours: number;
+	/**
+	 * (EDI-18) The press is meant for a window's glass: its command carried `HeldBit.Glass` (protocol.ts note 23), set by
+	 * a client whose hint named the window. Such a press breaks glass and does nothing else; any other press never does.
+	 */
+	glass?: boolean;
 }
 
 export class ServerInteraction {
@@ -139,6 +157,8 @@ export class ServerInteraction {
 	private readonly machines?: MachineActions;
 	private readonly onSolidChanged?: (x: number, y: number, w: number, h: number) => void;
 	private readonly paysRewards?: (slot: number) => boolean;
+	private readonly windows?: ServerWindows;
+	private readonly noise?: (x: number, y: number, radius: number) => void;
 	/** seconds of fire left per campfire/brazier; absent = freshly built, full (the original's `fuelOf`) */
 	private readonly fuel = new Map<Solid, number>();
 	private fireTick = 0;
@@ -160,6 +180,8 @@ export class ServerInteraction {
 		this.machines = options.machines;
 		this.onSolidChanged = options.onSolidChanged;
 		this.paysRewards = options.paysRewards;
+		this.windows = options.windows;
+		this.noise = options.noise;
 	}
 
 	/** §9.3: the run of the survivor in `slot` still earns achievements */
@@ -178,6 +200,8 @@ export class ServerInteraction {
 		const p = ctx.state;
 		if (p.dead) return { kind: "none" };
 		if ((this.pressCd.get(ctx.slot) ?? 0) > 0) return { kind: "refused", why: "cooldown" };
+		// EDI-18: the glass is its own intent -- a press that asks for it does nothing else, and no other press breaks it
+		if (ctx.glass === true) return this.window(ctx);
 		// ITM-07: an item this save has no room for is passed over, so a full stack does not hide the door, the search
 		// or the repair behind it (review of 1186a83, M1); the client's hint passes the same check
 		const target = interactTarget(this.world, p.x, p.y, noRoomIn(ctx.save));
@@ -229,6 +253,33 @@ export class ServerInteraction {
 		return this.search(ctx, target.building);
 	}
 
+	// ---------------------------------------------------------------- a window's glass (EDI-18)
+
+	/**
+	 * An E press meant for the glass breaks the intact pane at hand: the one the SERVER's query finds at the server's
+	 * position (the press names none), within WINDOW_REACH of its edge plus the latency slack, with a clear line (the
+	 * test the client's hint asked), at the survivor's rate (server/sim/windows.ts). Nothing else: an item, a door or the
+	 * loot beside the window is left alone.
+	 */
+	private window(ctx: InteractContext): InteractOutcome {
+		const windows = this.windows;
+		if (windows === undefined) return { kind: "none" };
+		const p = ctx.state;
+		const s = nearestIntactWindow(this.world, p.x, p.y, WINDOW_REACH + WINDOW_REACH_SLACK);
+		if (s === undefined) {
+			windows.missed(ctx.slot);
+			return { kind: "refused", why: "range" };
+		}
+		// a press that reached a pane spends the cooldown, like any press that reaches something
+		this.pressCd.set(ctx.slot, PRESS_COOLDOWN_S);
+		// a press: a refusal is evidence against the slot (§9.3)
+		const got = windows.byHand(ctx.slot, p, s, WINDOW_REACH, true);
+		if (got === "broken") return { kind: "window", solid: s };
+		if (got === "range" || got === "blocked" || got === "rate") return { kind: "refused", why: got };
+		if (got === "budget") return { kind: "refused", why: "cooldown" };
+		return { kind: "none" };
+	}
+
 	// ---------------------------------------------------------------- one door, for everybody
 
 	private door(ctx: InteractContext, s: Solid): InteractOutcome {
@@ -248,6 +299,8 @@ export class ServerInteraction {
 		const iron = s.kind === "iron_door";
 		const sound = willOpen ? (iron ? "ironDoorOpen" : "doorOpen") : iron ? "ironDoorClose" : "doorClose";
 		this.fx?.({ t: FxType.Sound, sound: wireSoundId(sound), x: s.x + s.w / 2, y: s.y + s.h / 2, volume: 1 });
+		// ...and by the horde, as the next zombie over hears a blow (IA-02: a door is LOW, 150 u)
+		this.noise?.(s.x + s.w / 2, s.y + s.h / 2, Noise.DOOR);
 		return { kind: "door", solid: s, open: willOpen };
 	}
 

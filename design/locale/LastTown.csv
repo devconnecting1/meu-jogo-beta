@@ -328,7 +328,7 @@ They are a record of what you did: they give no coins and no items. Titles are e
 ,,,HUD size
 ,,,"Console, hints and messages."
 ,settings row: stills the moving town for motion sensitivity,,Reduce motion
-,,,Set in the Roblox menu. Stills the town.
+,,,Set in Roblox. Stills town and camera.
 ,,,Graphics
 ,,,"Low: simpler night, fewer particles."
 ,graphics quality option: switches quality automatically,,Auto
@@ -537,6 +537,36 @@ If nobody is left standing, a new town begins at day 1."
 ,,,It wakes at first light.
 ,,,Nobody else is standing: this town ends now and a new one begins.
 ,,,New best!
+,,,Killed by the horde at night.
+,,,Killed by zombies.
+,,,Starved.
+,,,Poisoned.
+,,,Killed by a boss.
+,,,You fell.
+,,,Tip:
+,,,"Waves come at 19:00, 22:00 and 01:00. Get behind a door."
+,,,Your light lets them see you from farther away.
+,,,Gunfire carries a whole street. A blade stays quiet.
+,,,A steel barricade blocks their sight. Wood does not.
+,,,They search where they last saw you. Break line of sight.
+,,,A zombie that sees you shouts and wakes the ones nearby.
+,,,An empty stomach drains health. Eat before FOOD runs out.
+,,,Cook at a campfire: cooked meat fills more than raw.
+,,,Rotten meat costs health. Canned food and bread do not.
+,,,Jumpers poison on contact. Keep them at a distance.
+,,,Poison stops healing. Poison immunity halves it.
+,,,A boss is a group fight: all who help share the kill.
+,,,Heal before a boss: a First aid kit restores 50 health.
+,,,Night survived
+,,,zombie
+,,,zombies
+,,,damage taken
+,,,item found
+,,,items found
+,,,Progress saved
+,,,You've played for over 90 minutes. Dawn is a good time for a break.
+,,,skill point
+,,,skill points
 ,,,"The backpack and the menu never stop the world: open them somewhere safe.
 Fire keeps the night lit and cooks what you find — 10 wood makes a campfire, no workbench needed.
 Houses are looted once with E; their shelves refill after half a day.
@@ -825,3 +855,4 @@ The backpack and the menu never stop the world: open them somewhere safe."
 ,,,Pick something up
 ,,,"Walk over food, ammo and materials. For weapons and gear, press use."
 ,,,Siphon Oil
+,,,Break window

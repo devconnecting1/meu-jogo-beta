@@ -1,5 +1,5 @@
 /*
- * The Context column of design/locale/ProjectZ.csv: one short English hint per Source string that a translator
+ * The Context column of design/locale/LastTown.csv: one short English hint per Source string that a translator
  * (human, or Roblox's automatic one) could get wrong reading it alone -- a common word with another meaning
  * ("Round" is a magazine, not a shape; "Watch" is a wristwatch, not the verb), or a game-specific name a
  * dictionary will not have (Rebirth, a boss, a skill, a title).

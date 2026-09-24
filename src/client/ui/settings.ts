@@ -3,7 +3,7 @@ import { langGet } from "shared/data/lang";
 import { defaultSettings } from "shared/game/save";
 import { TouchButton, TouchLayout } from "shared/engine/input";
 import { MAX_PLAYERS } from "shared/net/mpConfig";
-import { DEVELOPER, INSPIRED_BY } from "shared/module";
+import { DEVELOPER, GAME_NAME, INSPIRED_BY } from "shared/module";
 import { GAME_BUILD, GAME_VERSION } from "shared/version";
 import { previewBgm, previewSfx } from "../audio";
 import { getTouchLayout, refreshTouchLayout } from "../bootstrap";
@@ -404,13 +404,14 @@ export function showSettings(
 			generalRefreshers,
 		);
 		// Reduce Motion is the player's Roblox setting, and the game honours it (skin.ts): the town behind the menus
-		// stands still and the fades cut. Shown as a key -- information, never a control -- that follows it live
+		// stands still, the fades cut, and in a run the camera never shakes nor a struck tree or car (BEM-08). Shown as a
+		// key -- information, never a control -- that follows it live
 		const motion = SettingRow(
 			uiList,
 			"Motion",
 			1,
 			tr("Reduce motion"),
-			form("Set in the Roblox menu. Stills the town."),
+			form("Set in Roblox. Stills town and camera."),
 		);
 		const motionKey = ValueKey(motion.value, "Value", "", { x: SETTING_CONTROL_X, anchorX: 0, minW: VALUE_KEY_W });
 		onLayoutChange(motionKey, () => setValueKey(motionKey, tr(reducedMotion() ? "On" : "Off")));
@@ -662,7 +663,7 @@ export function showSettings(
 		});
 		const list = SettingsList(about.frame, "List", LIST_X, listY, LIST_W, aboutListH);
 		const valueW = LIST_W - 220;
-		textRow(SettingRow(list, "Game", 0, tr("Game")), valueW, "Project Z");
+		textRow(SettingRow(list, "Game", 0, tr("Game")), valueW, GAME_NAME);
 		textRow(SettingRow(list, "Genre", 1, tr("Genre")), valueW, tr("Top-down zombie survival"));
 		// CON-01: the original is credited by its name, never its studio (the owner's decision, 2026-09-23)
 		textRow(SettingRow(list, "Inspired", 2, tr("Inspired by")), valueW, INSPIRED_BY);

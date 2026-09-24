@@ -7,7 +7,8 @@
  * panels over the real town gliding behind them (UI-10). So, one thread, one step after the other:
  *
  *   1. what the first screens are made of: the UI skin (client/ui/skin.ts preloadSkin: 13 tiny textures, and its
- *      own flat fallback), the item icons' atlas (client/ui/itemIcon.ts: the HUD's hotbar and the Bag draw from it),
+ *      own flat fallback), the item icons' atlas (client/ui/itemIcon.ts: the HUD's hotbar and the Bag draw from it)
+ *      and the game's name (client/ui/logo.ts: the pixel wordmark, with the text standing in until it is in),
  *      then the textures of the town the lobby's flyover draws -- the very town the match takes
  *      (client/boot/townCache.ts): the ground, roads, roofs, trees, cars, litter, and last its building signs (ART-07)
  *      and the helipad, small on the facades. The menu icons are pixel Frames (client/ui/pixelIcon.ts): nothing to
@@ -45,11 +46,12 @@ export function laterArt(name: string): boolean {
 }
 
 /**
- * Where a world texture goes in step 1: the icon atlas (the HUD), the town, then the building signs and the helipad
- * (small, on the facades). The order inside a PreloadAsync list is the order the engine is asked in.
+ * Where a world texture goes in step 1: the icon atlas (the HUD) and the game's name (the lobby's title and the splash,
+ * client/ui/logo.ts), the town, then the building signs and the helipad (small, on the facades). The order inside a
+ * PreloadAsync list is the order the engine is asked in.
  */
 function firstRank(name: WorldArtName): number {
-	if (name === "itemIcons") return 0;
+	if (name === "itemIcons" || name === "wordmark") return 0;
 	if (name.sub(1, 4) === "sign" || name === "helipad") return 2;
 	return 1;
 }

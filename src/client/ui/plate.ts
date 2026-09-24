@@ -1,5 +1,5 @@
 /*
- * Project Z plates: the pixel plates of the reference art (docs/DESIGN_RULES.md UI-07), drawn with Frames.
+ * Last Town plates: the pixel plates of the reference art (docs/DESIGN_RULES.md UI-07), drawn with Frames.
  *
  * Every pressable, key, tab and tile of the kit is the same notched shape, one RELIEF UNIT per band:
  *

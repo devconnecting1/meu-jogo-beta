@@ -134,6 +134,48 @@
  *     direction -- a kill, a bite the simulation gave no angle --, and its angle byte (still sent, 0) means nothing:
  *     the client sprays it all round. No byte more. Before, "no direction" travelled as angle 0 and every such spray
  *     and stain went to +x. `BloodKind.Green` is now `BloodKind.Horde` (same value, 1): the horde bleeds dark red.
+ * 23. (EDI-18, the window glass) No new message and no byte more.
+ *       - S→C: a window's glass breaking is the `DoorSet` every door already takes, with the window's STATIC id and
+ *         `state` = Open (the open frame: shared/game/windows.ts); GLOBAL like a door's, since it changes everybody's
+ *         collision and prediction, and at most WINDOW_BREAKS_PER_TICK a tick whoever broke them. Glass only ever
+ *         breaks, so a newcomer's WorldInit carries a DoorSet only for the windows broken SINCE the town was
+ *         generated (one born broken comes from the seed); the client's mirror lays each one on its copy of the town
+ *         and a reset of the mirror puts the generated glass back. `DoorSet` with Open cleared on a window that had
+ *         glass puts it back (nothing sends that today); on one born broken, or on anything that is neither a door nor
+ *         a window, it is ignored as before. A pane broken in the tick a survivor is welcomed goes out in that tick's
+ *         broadcast first -- which the newcomer drops, being before its InitBegin -- and is repeated after the welcome,
+ *         at the end of its own batch after its WorldInit, with every other global change of the town's state in that
+ *         broadcast (SolidAdd, SolidRemove, DoorSet, SolidHp, LightSet, PowerSet: all idempotent; server/net/
+ *         replication.ts `flushWorld`). The crash is the `Debris` Fx with the material "glass", appended as wire
+ *         id 6 (fxWire.ts `GLASS_DEBRIS`): an older client reads an unknown material as "impact". It is heard in
+ *         range but, unlike a thud or a hit, not held back by the sight filter (MP-07): the DoorSet already told
+ *         everybody that pane broke. A zombie's blows on the glass are the "structure" debris of a blow on a
+ *         barricade, sight-filtered as before.
+ *       - C→S: breaking glass with E is an EXPLICIT intent, `HeldBit.Glass` (8) on the command that carries the
+ *         ActionPress edge -- set only when the client's hint was the window (client/systems/interaction.ts, the
+ *         edge and the bit travel together through client/net/commands.ts). HELD_MASK becomes 15: a bit above it is
+ *         still malformed. The server breaks a pane only on a press with the bit, and a press with it does nothing
+ *         else (server/sim/interaction.ts `act`): E meant for an item, a search, a door or a repair never smashes
+ *         glass, whatever the server's own query finds; E meant for the glass never picks something up, nor gets on a
+ *         vehicle parked in reach (server/sim/simulation.ts `stepWorldActions`), instead. The bit follows its edge
+ *         when a dropped command's edges are carried on (server/sim/players.ts `carryEdges`).
+ * 24. (UI-13 / BEM-04 / BEM-08, the death screen teaches, the dawn card's break line) No new message and no byte more
+ *     per event: two more AnnounceKinds, both S→C only, reliable and DIRECTED (`queueFor(slot)`, like TitleUnlocked):
+ *       - `Died` (7), whose `arg` is the cause of this survivor's death, read by the server off the lethal damage
+ *         (shared/data/deathCause.ts `deathKindOf`, the same rule as the analytics `Died` event): the kind in bits 0-2
+ *         (1 horde, 2 hunger, 3 poison, 4 boss) and bit 3 set when it happened at night (19:00-06:00) --
+ *         `deathWireOf`. server/sim/life.ts `died` -> server/net/replication.ts `died`; the life record keeps it and
+ *         `enter` sends it again, after the welcome's PlayerLife Dead, to a survivor who comes back to the same death
+ *         (Home and PLAY, a reconnect). Nobody else hears why somebody died. The decoder refuses any arg
+ *         `deathFromWire` does not know (kind 0 or > 4, any other bit).
+ *       - `BreakNudge` (8), arg 0 and nothing else: the SERVER's rule gave this survivor the break line at dawn
+ *         (shared/data/wellbeing.ts `breakNudgeEarned`: a session of BREAK_NUDGE_MIN minutes, the night lived standing
+ *         since midnight; once per session, decided in server/main.server.ts, which also logs the analytics
+ *         `BreakNudge`), so the line the player reads and the event the dashboard counts are one decision.
+ *     The client never lets either reach the round banner (netClient.ts: each is noted for its screen and nothing
+ *     else). A client and its server always run the same build, so no older decoder ever meets the new kinds. Neither
+ *     carries anything the survivor could not see or know: their own hunger and poison, whether a boss stood within
+ *     BOSS_REACH (bosses are on the snapshot), and how long they have played. No C→S change.
  */
 import {
 	NetReader,
@@ -171,6 +213,7 @@ import {
 	ZOMBIE_TYPE_MAX,
 } from "./mpConfig";
 import { OUTFIT_LOOK_MAX, PET_LOOK_MAX } from "shared/data/cosmetics";
+import { deathFromWire } from "shared/data/deathCause";
 import { POWER_STATE_MASK, powerFlying } from "shared/data/power";
 import { TITLE_WIRE_MAX } from "shared/data/titles";
 import { SAVE_LIMITS } from "shared/game/save";
@@ -244,9 +287,15 @@ export const HeldBit = {
 	Attack: 1,
 	Action: 2,
 	SniperAim: 4,
+	/**
+	 * (EDI-18, note 23) This command's E press is meant for a window's GLASS: the client's hint named the window. The
+	 * server breaks a pane only on a press with this bit, and a press with it does nothing else: an E meant for an
+	 * item, a search or a door never smashes glass, and one meant for the glass never picks something up instead.
+	 */
+	Glass: 8,
 } as const;
 /** meaningful `held` bits; the others are reserved and must be 0 */
-export const HELD_MASK = 7;
+export const HELD_MASK = 15;
 
 /** bit offset of each 2-bit counter in `edges` (0..3 per tick) */
 export const EdgeShift = {
@@ -1501,8 +1550,18 @@ export const AnnounceKind = {
 	BossKilled: 5,
 	/** (MON-05) arg = the title byte (`titleToWire`, 1..TITLE_WIRE_MAX); sent only to the survivor who earned it */
 	TitleUnlocked: 6,
+	/**
+	 * (UI-13, note 24) arg = why this survivor just died (shared/data/deathCause.ts `deathWireOf`: the kind, and bit 3 for
+	 * night); sent only to the survivor who died
+	 */
+	Died: 7,
+	/**
+	 * (BEM-04, note 24) arg = 0: the server's rule gave this survivor the dawn card's break line (a long session, a night
+	 * lived standing); sent only to them, once per session. The client shows the line because the server said so
+	 */
+	BreakNudge: 8,
 } as const;
-const ANNOUNCE_KIND_MAX = 6;
+const ANNOUNCE_KIND_MAX = 8;
 
 export interface WSolidAdd {
 	t: typeof WorldEv.SolidAdd;
@@ -1949,6 +2008,10 @@ function readWorldEvent(r: NetReader): WorldEvent | undefined {
 		if (msg < 1 || msg > ANNOUNCE_KIND_MAX) return undefined;
 		// MON-05: a title that does not exist is not something to announce
 		if (msg === AnnounceKind.TitleUnlocked && (arg < 1 || arg > TITLE_WIRE_MAX)) return undefined;
+		// note 24: a cause the server never writes (kind 0 or past the table, a stray bit) is malformed
+		if (msg === AnnounceKind.Died && deathFromWire(arg) === undefined) return undefined;
+		// ...and the break line carries nothing: any other arg is malformed
+		if (msg === AnnounceKind.BreakNudge && arg !== 0) return undefined;
 		return { t: WorldEv.Announce, msg, arg };
 	} else if (t === WorldEv.ZombieDied) {
 		const netId = r.u16();
