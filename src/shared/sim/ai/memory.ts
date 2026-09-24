@@ -1,3 +1,4 @@
+//!native
 /*
  * Zombie memory, investigation and the awareness state the players see (docs/DESIGN_RULES.md IA-03, P2).
  *

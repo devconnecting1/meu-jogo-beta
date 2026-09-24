@@ -1,3 +1,4 @@
+//!native
 import { DESIGN } from "shared/engine/constants";
 import { chance, choose, damageCal, rnd, rndRange } from "shared/engine/rng";
 import { angleDiff } from "shared/engine/vec2";

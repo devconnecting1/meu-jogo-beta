@@ -1,3 +1,4 @@
+//!native
 /*
  * Short position history of every zombie and boss, so a shot is judged in the world the shooter was actually
  * looking at (docs/MULTIPLAYER.md §2.3 "Compensação de latência", §3.1 step 3).

@@ -1,3 +1,4 @@
+//!native
 import { isBlocking, querySolids, Solid, WorldData } from "shared/game/world";
 import { TOWN } from "shared/engine/constants";
 import { isPlayerBuilt, stampWindow, WINDOW_COST } from "shared/game/physics";

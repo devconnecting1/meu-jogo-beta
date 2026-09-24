@@ -1,3 +1,4 @@
+//!native
 /*
  * What the enemy simulation needs from the world it runs in (docs/MULTIPLAYER.md §3, §11.2).
  *

@@ -1,3 +1,4 @@
+//!native
 /*
  * Projectiles in flight, on the server (docs/MULTIPLAYER.md §3.1 step 2 "projéteis, explosões e poças",
  * §2.3, §4.1 Fx). SERVER ONLY, and pure: no Instances, no services.

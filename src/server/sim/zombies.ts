@@ -1,3 +1,4 @@
+//!native
 import * as CFG from "shared/net/mpConfig";
 import { Bullet } from "shared/game/bullets";
 import { PlayerState } from "shared/game/player";

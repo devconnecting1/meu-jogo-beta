@@ -1,3 +1,4 @@
+//!native
 /*
  * Flanking: stop the horde from queueing at one door (docs/DESIGN_RULES.md P2, docs/MULTIPLAYER.md §3.3).
  *

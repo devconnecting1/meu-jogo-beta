@@ -1,3 +1,4 @@
+//!native
 import { isBlocking, querySegment, querySolids, Solid, WorldData } from "./world";
 
 /** collision radius of the player body (world units) */
