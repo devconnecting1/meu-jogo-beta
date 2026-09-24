@@ -1311,6 +1311,14 @@
 			"w": 1024,
 			"h": 718,
 			"description": "interiors: 1339 cells of furniture, decoration and frames (client/view/interiorArt.ts)"
+		},
+		{
+			"name": "blood",
+			"file": "blood.png",
+			"kind": "atlas",
+			"w": 96,
+			"h": 264,
+			"description": "combat blood: 44 cells of drops, splats and smears, matte and wet (client/view/bloodView.ts)"
 		}
 	]
 }
