@@ -22,7 +22,7 @@ before (SND-01, like ART-01 for the town's art).
 | `items` | `banks/items.wav` | 7.89 s | 13 | `4b345798f3f8` |
 | `weapons` | `banks/weapons.wav` | 19.53 s | 24 | `519c30e149df` |
 | `impacts` | `banks/impacts.wav` | 9.06 s | 17 | `ca7855cee3cc` |
-| `cues` | `banks/cues.wav` | 21.52 s | 7 | `a8077bd82a60` |
+| `cues` | `banks/cues.wav` | 21.52 s | 7 | `cf32467032f7` |
 
 ## Events
 
@@ -62,13 +62,13 @@ mix level is the loudness plus the catalogue's base volume (in dB) before the Se
 | `debrisMetal` | impacts | 3 | -17.0 / -17.0 / -17.0 | -1.8 | -27.5 | Four inharmonic partials (x1, 2.32, 3.87, 5.61) each with its beating twin, over a sharp transient: a panel struck. |
 | `debrisWood` | impacts | 3 | -17.2 / -17.3 / -17.3 | -1.4 | -27.7 | A hollow knock (band-passed noise at 750 Hz, a 210 Hz body, one partial) and a little splinter crunch. |
 | `useInject` | impacts | 1 | -19.0 | -7.5 | -27.0 | The autoinjector: a plastic snap, a 'pssht' of air, a glassy tink. Fills the slot the library could not (pendency D). |
-| `footstepA` | impacts | 3 | -22.1 / -23.2 / -22.4 | -1.3 | -30.1 | A soft heel thump (noise under 700 Hz, a 80 Hz body) with a trace of asphalt grit: felt more than heard. |
-| `footstepB` | impacts | 3 | -22.9 / -22.4 / -22.9 | -1.1 | -30.4 | The other foot: a toe roll, a little brighter and shorter, so left and right never sound like a metronome. |
+| `footstepA` | impacts | 3 | -22.1 / -23.2 / -22.4 | -1.3 | -32.6 | A soft heel thump (noise under 700 Hz, a 80 Hz body) with a trace of asphalt grit: felt more than heard. |
+| `footstepB` | impacts | 3 | -22.9 / -22.4 / -22.9 | -1.1 | -32.9 | The other foot: a toe roll, a little brighter and shorter, so left and right never sound like a metronome. |
 | `stingerWave1` | cues | 1 | -16.0 | -1.5 | -24.0 | 19:00, night falls and the first wave: a detuned A-minor brass stab, a boom, an unresolved tritone above. |
 | `stingerWave2` | cues | 1 | -16.0 | -2.1 | -23.3 | 22:00, wave 2: the same motif a whole tone lower (G), grittier. |
 | `stingerWave3` | cues | 1 | -16.0 | -2.1 | -22.7 | 01:00, wave 3: lower still (F) and the boom doubles like a heartbeat: the worst of the night. |
 | `stingerDawn` | cues | 1 | -16.0 | -6.3 | -25.4 | 07:00, you made it: an A-major arpeggio over a soft pad, two bird chirps, a long room. |
-| `heartbeat1` | cues | 1 | -18.0 | -2.6 | -26.0 | Below 35 % HP: lub-dub at 76 bpm, four beats, silent at the loop point so it loops seamlessly. |
+| `heartbeat1` | cues | 1 | -18.0 | -2.6 | -26.0 | Below 35 % HP: lub-dub at 76 bpm, four beats, its tail folded onto its start so the loop point never clicks. |
 | `heartbeat2` | cues | 1 | -18.0 | -2.6 | -24.7 | Below 22 %: 100 bpm. A real faster tempo instead of the same loop sped up (the pitch stays a heart's). |
 | `heartbeat3` | cues | 1 | -18.0 | -2.7 | -23.7 | Below 10 %: 128 bpm, the beats almost on top of each other. |
 

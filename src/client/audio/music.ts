@@ -78,16 +78,19 @@ export class GameMusic {
 	private updateHeartbeat(s: MusicState): void {
 		let level = 0;
 		if (!s.dead && s.hpRatio > 0) {
-			const cur = this.heartLevel;
-			const edge = (threshold: number, lvl: number) => s.hpRatio < threshold + (cur >= lvl ? HEART_HYSTERESIS : 0);
-			if (edge(HEART_L3, 3)) level = 3;
-			else if (edge(HEART_L2, 2)) level = 2;
-			else if (edge(HEART_L1, 1)) level = 1;
+			if (this.under(s.hpRatio, HEART_L3, 3)) level = 3;
+			else if (this.under(s.hpRatio, HEART_L2, 2)) level = 2;
+			else if (this.under(s.hpRatio, HEART_L1, 1)) level = 1;
 		}
 		if (level === this.heartLevel) return;
 		this.heartLevel = level;
 		if (level === 0) this.heart.stop();
 		else this.heart.set(level === 1 ? "heartbeat1" : level === 2 ? "heartbeat2" : "heartbeat3");
+	}
+
+	/** is `hp` inside heartbeat level `lvl` (under `threshold`, or under it + the hysteresis while already in it)? */
+	private under(hp: number, threshold: number, lvl: number): boolean {
+		return hp < threshold + (this.heartLevel >= lvl ? HEART_HYSTERESIS : 0);
 	}
 
 	/** wave 1, 2 or 3 was announced */

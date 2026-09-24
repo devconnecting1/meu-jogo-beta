@@ -169,6 +169,9 @@ jobs:
       - name: Footstep cadence (the walk cycle drives the sound)
         run: npm run test:footsteps
 
+      - name: Audio (the catalogue, world sounds on the wire, loops that always end, no spam, 10 minutes without churn, our own SFX banks, upload-audio)
+        run: npm run test:audio
+
       - name: Remote smoothing (an ally is drawn continuously, not in snapshot steps)
         run: npm run test:smoothness
 

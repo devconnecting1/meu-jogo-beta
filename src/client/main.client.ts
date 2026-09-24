@@ -563,7 +563,7 @@ function warnNoAmmo(): void {
 	if (now - lastNoAmmo < NO_AMMO_COOLDOWN) return;
 	lastNoAmmo = now;
 	hud.showMessage("No ammo");
-	gameAudio.emptyMagazine(refs);
+	gameAudio.emptyMagazine();
 }
 
 function openPause(): void {

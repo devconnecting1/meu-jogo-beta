@@ -1079,13 +1079,6 @@ export type SoundName = keyof typeof SOUNDS;
  */
 const CATALOGUE = SOUNDS as Record<SoundName, SoundDef>;
 
-/** every event name, in the catalogue's order (built once) */
-const NAMES: ReadonlyArray<SoundName> = (() => {
-	const out: Array<SoundName> = [];
-	for (const [name] of pairs(SOUNDS)) out.push(name as SoundName);
-	return out;
-})();
-
 /** bank asset ids this client could not load (preload): their events are back on the library for the session */
 const droppedIds = new Set<string>();
 
@@ -1116,16 +1109,21 @@ function resolve(name: SoundName): SoundDef {
 	};
 }
 
-/** the resolved catalogue: built at load, rebuilt only when a bank is dropped (never per trigger) */
-const RESOLVED = {} as Record<SoundName, SoundDef>;
-function rebuild(): void {
-	for (const name of NAMES) RESOLVED[name] = resolve(name);
-}
-rebuild();
+/**
+ * The resolved catalogue, one entry per name the first time it is asked for (nothing iterates the table at load),
+ * forgotten only when a bank is dropped: never an allocation per trigger.
+ */
+const RESOLVED = new Map<SoundName, SoundDef>();
 
 /** the definition of `name` as it plays now (ours or the library's), or undefined when the slot does not exist */
 export function soundDef(name: SoundName): SoundDef | undefined {
-	return RESOLVED[name];
+	let def = RESOLVED.get(name);
+	if (def === undefined) {
+		if (CATALOGUE[name] === undefined) return undefined;
+		def = resolve(name);
+		RESOLVED.set(name, def);
+	}
+	return def;
 }
 
 /** the library entry of `name`, whatever plays now (the fallback; tests and the credits) */
@@ -1133,9 +1131,16 @@ export function librarySoundDef(name: SoundName): SoundDef | undefined {
 	return CATALOGUE[name];
 }
 
-/** every event of the catalogue */
+let names: Array<SoundName> | undefined;
+
+/** every event of the catalogue (built on first use) */
 export function soundNames(): ReadonlyArray<SoundName> {
-	return NAMES;
+	if (names === undefined) {
+		const out: Array<SoundName> = [];
+		for (const [name] of pairs(SOUNDS)) out.push(name as SoundName);
+		names = out;
+	}
+	return names;
 }
 
 /**
@@ -1151,8 +1156,13 @@ export function dropSoundAsset(id: string): boolean {
 	}
 	if (!bank) return false;
 	droppedIds.add(id);
-	rebuild();
+	RESOLVED.clear();
 	return true;
+}
+
+/** resolves every entry again on its next use (tests that hand the banks ids; a reloaded ./audioAssets) */
+export function refreshSounds(): void {
+	RESOLVED.clear();
 }
 
 /** an empty slot (id "") is silent on purpose: no asset was found that the game may legally use */
@@ -1164,9 +1174,9 @@ export function isSilentSlot(def: SoundDef): boolean {
 export function soundAssetIds(): Array<string> {
 	const seen = new Set<string>();
 	const ids: Array<string> = [];
-	for (const name of NAMES) {
-		const def = RESOLVED[name];
-		if (def.id === "" || seen.has(def.id)) continue;
+	for (const name of soundNames()) {
+		const def = soundDef(name);
+		if (def === undefined || def.id === "" || seen.has(def.id)) continue;
 		seen.add(def.id);
 		ids.push(def.id);
 	}

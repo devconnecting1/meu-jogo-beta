@@ -293,7 +293,7 @@ export class GameAudio {
 	}
 
 	/** the survivor pulled the trigger with nothing left (their own sound: flat, on the ear) */
-	emptyMagazine(_refs: GameRefs): void {
+	emptyMagazine(): void {
 		if (!this.running) return;
 		audio.play("emptyClick");
 	}

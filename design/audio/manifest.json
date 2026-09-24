@@ -47,7 +47,7 @@
 			"name": "cues",
 			"file": "banks/cues.wav",
 			"seconds": 21.525,
-			"sha1": "a8077bd82a60f907b52c61ff959c99ef9782ced9"
+			"sha1": "cf32467032f7dd746bd4279d1f097814cb6a0502"
 		}
 	],
 	"sounds": {
@@ -998,7 +998,7 @@
 			"bank": "impacts",
 			"category": "step",
 			"target": -22,
-			"volume": 0.4,
+			"volume": 0.3,
 			"pitchMin": 0.94,
 			"pitchMax": 1.06,
 			"why": "A soft heel thump (noise under 700 Hz, a 80 Hz body) with a trace of asphalt grit: felt more than heard.",
@@ -1041,7 +1041,7 @@
 			"bank": "impacts",
 			"category": "step",
 			"target": -22,
-			"volume": 0.4,
+			"volume": 0.3,
 			"pitchMin": 0.94,
 			"pitchMax": 1.06,
 			"why": "The other foot: a toe roll, a little brighter and shorter, so left and right never sound like a metronome.",
@@ -1179,7 +1179,7 @@
 			"volume": 0.4,
 			"pitchMin": 1,
 			"pitchMax": 1,
-			"why": "Below 35 % HP: lub-dub at 76 bpm, four beats, silent at the loop point so it loops seamlessly.",
+			"why": "Below 35 % HP: lub-dub at 76 bpm, four beats, its tail folded onto its start so the loop point never clicks.",
 			"takes": [
 				{
 					"startAt": 13.33,
@@ -1240,7 +1240,7 @@
 				{
 					"seconds": 1.875,
 					"lufs": -18,
-					"truePeak": -2.66,
+					"truePeak": -2.67,
 					"brightness": 0
 				}
 			],

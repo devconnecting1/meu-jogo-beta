@@ -10,6 +10,11 @@
  *   npm run cloud -- upload-art [--dry-run] upload design/world-art/*.png (new or changed ones only), write their
  *                                           ids to design/world-art/assets.json and regenerate
  *                                           src/client/view/worldArtAssets.ts; --dry-run lists without a key
+ *   npm run cloud -- upload-audio [--dry-run]
+ *                                           upload our own sound banks, design/audio/banks/*.wav (tools/gen-sfx.mjs;
+ *                                           new or changed ones only) as Audio assets, write their ids and hashes to
+ *                                           design/audio/assets.json and regenerate src/shared/data/audioAssets.ts;
+ *                                           --dry-run lists without a key
  *   npm run cloud -- erase <userId> [--dry-run | --yes]
  *                                           right to erasure: delete the player's key from every per-player store
  *                                           (and their _studio copies) and take their entries out of the admin log;
@@ -214,7 +219,8 @@ async function publish(live) {
 
 const ART_DIR = join(ROOT, "design", "world-art");
 const ASSETS_JSON = join(ART_DIR, "assets.json");
-const sleep = ms => new Promise(done => setTimeout(done, ms));
+/** the pauses that keep us under the Assets API's rate; against the fake Open Cloud (a test) there is nothing to wait for */
+const sleep = ms => new Promise(done => setTimeout(done, UNDER_TEST ? 0 : ms));
 const sha1 = bytes => createHash("sha1").update(bytes).digest("hex");
 
 /**
@@ -329,6 +335,11 @@ async function waitForAsset(op, name) {
 		console.log(`  ${name.padEnd(16)} recusado pela moderação`);
 		return undefined;
 	}
+	if (state !== "" && state !== "MODERATION_STATE_APPROVED") {
+		// an audio can come back still under review: the id is real, and until it is approved the client cannot load
+		// it -- which the game already answers by falling back to the library (sounds.ts dropSoundAsset)
+		console.log(`  ${name.padEnd(16)} moderação: ${state} (o id vale; até a aprovação o jogo toca a biblioteca)`);
+	}
 	return res.assetId;
 }
 
@@ -338,6 +349,123 @@ function regenerateArtModule() {
 		stdio: "inherit",
 	});
 	console.log("pronto: `npm run build` e a cidade sai texturizada (sem id, cada superfície continua lisa)");
+}
+
+// ---------------------------------------------------------------- our own sounds (design/audio -> Roblox)
+
+/** where the banks live (tools/gen-sfx.mjs; a test points both at a copy) */
+const AUDIO_DIR = process.env.PZ_AUDIO_DIR ?? join(ROOT, "design", "audio");
+
+/**
+ * Uploads our own sound banks (tools/gen-sfx.mjs: five WAVs, every take of the set packed with silence between them)
+ * through the Open Cloud Assets API as Audio assets, owned by the creator in `.env`, exactly as upload-art does the
+ * textures: only a bank that is new or whose WAV changed goes up (assets.json keeps each one's sha1), assets.json is
+ * written after EVERY upload (an interrupted run resumes), and src/shared/data/audioAssets.ts is regenerated at the end
+ * -- with an id only for a bank whose sha1 is the uploaded one, so an id never points at an older cut of the windows.
+ *
+ * What the docs say about audio (create.roblox.com, cloud/guides/usage-assets and audio/assets, read 2026-09-24):
+ * .mp3 / .ogg / .wav / .flac (`audio/wav`), up to 7 minutes and 20 MB, <= 48 kHz, mono or stereo; audio assets cannot
+ * be UPDATED (a changed bank is a new asset, hence the new id); and the monthly quota is counted per upload (the Open
+ * Cloud guide: 100 a month ID-verified, 10 not) -- which is why the set is five banks and not sixty files. An upload is
+ * private to its creator: an experience owned by the same user or group plays it; a group experience with a bank
+ * uploaded by a user needs ROBLOX_CREATOR_GROUP_ID (or the permission granted in the Creator Dashboard).
+ */
+async function uploadAudio(dryRun) {
+	const manifestPath = join(AUDIO_DIR, "manifest.json");
+	if (!existsSync(manifestPath)) fail("sem design/audio/manifest.json: rode `npm run audio:sfx` antes");
+	const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+	const assetsPath = join(AUDIO_DIR, "assets.json");
+	const assets = existsSync(assetsPath) ? JSON.parse(readFileSync(assetsPath, "utf8")) : {};
+	const ids = assets.ids ?? {};
+	const hashes = assets.sha1 ?? {};
+	const todo = [];
+	for (const b of manifest.banks) {
+		const bytes = readFileSync(join(AUDIO_DIR, b.file));
+		const hash = sha1(bytes);
+		if (hash !== b.sha1) fail(`${b.file} não é o do manifest (rode \`npm run audio:sfx\` de novo)`);
+		if (ids[b.name] && hashes[b.name] === hash) continue;
+		todo.push({ b, bytes, hash });
+	}
+	console.log(`${manifest.banks.length} bancos de som; ${todo.length} a enviar (novos ou alterados)`);
+	if (dryRun) {
+		for (const { b, bytes } of todo)
+			console.log(
+				`  ${b.name.padEnd(10)} ${String(bytes.length).padStart(8)} B  ${b.seconds.toFixed(2)} s  audio/wav`,
+			);
+		console.log("(dry run: nada foi enviado, nenhuma chave foi lida)");
+		return;
+	}
+	if (todo.length === 0) {
+		regenerateAudioModule();
+		return;
+	}
+	useKey(["ROBLOX_API_KEY"]);
+	const creator = env.ROBLOX_CREATOR_GROUP_ID
+		? { groupId: String(env.ROBLOX_CREATOR_GROUP_ID) }
+		: env.ROBLOX_CREATOR_USER_ID
+			? { userId: String(env.ROBLOX_CREATOR_USER_ID) }
+			: undefined;
+	if (creator === undefined)
+		fail("falta ROBLOX_CREATOR_USER_ID (ou ROBLOX_CREATOR_GROUP_ID) no .env: de quem é o asset");
+	const persist = () => {
+		const out = {
+			uploadedAt: new Date().toISOString().slice(0, 10),
+			source: "tools/gen-sfx.mjs + npm run cloud -- upload-audio (Open Cloud Assets API, assetType Audio)",
+			ids,
+			sha1: hashes,
+		};
+		writeFileSync(assetsPath, `${JSON.stringify(out, undefined, "\t")}\n`);
+	};
+	let failed = 0;
+	for (const { b, bytes, hash } of todo) {
+		let id;
+		for (let attempt = 0; attempt < 4 && id === undefined; attempt++) {
+			const form = new FormData();
+			form.append(
+				"request",
+				JSON.stringify({
+					assetType: "Audio",
+					displayName: `ProjectZ sfx ${b.name}`,
+					description: `Project Z sound effects, bank "${b.name}": our own synthesised sounds (tools/gen-sfx.mjs)`,
+					creationContext: { creator },
+				}),
+			);
+			form.append("fileContent", new Blob([bytes], { type: "audio/wav" }), `${b.name}.wav`);
+			const r = await call("https://apis.roblox.com/assets/v1/assets", { method: "POST", body: form });
+			if (!r.ok) {
+				if (r.status === 429 || r.status >= 500) {
+					await sleep(2000 * (attempt + 1));
+					continue;
+				}
+				fail(`${b.name}: ${r.why}\n  ${r.body ?? ""}`);
+			}
+			id = await waitForAsset(r.data, b.name);
+			if (id === undefined) break;
+		}
+		if (id === undefined) {
+			failed++;
+			console.log(`  ${b.name.padEnd(10)} FALHOU (tente de novo: o que subiu fica salvo)`);
+			continue;
+		}
+		ids[b.name] = `rbxassetid://${id}`;
+		hashes[b.name] = hash;
+		persist();
+		console.log(`  ${b.name.padEnd(10)} rbxassetid://${id}`);
+		await sleep(700);
+	}
+	regenerateAudioModule();
+	if (failed > 0) fail(`${failed} banco(s) não subiram; rode o comando de novo para enviar só eles`);
+}
+
+function regenerateAudioModule() {
+	execFileSync(process.execPath, [join(ROOT, "tools", "gen-sfx.mjs"), "--assets"], {
+		cwd: ROOT,
+		stdio: "inherit",
+		env: process.env,
+	});
+	console.log(
+		"pronto: `npm run build` e os eventos dos bancos enviados tocam os nossos sons (sem id, cada um segue na biblioteca)",
+	);
 }
 
 // ---------------------------------------------------------------- right to erasure
@@ -495,15 +623,16 @@ const commands = {
 	save: () => save(rest[0]),
 	publish: () => publish(rest.includes("--live")),
 	"upload-art": () => uploadArt(rest.includes("--dry-run")),
+	"upload-audio": () => uploadAudio(rest.includes("--dry-run")),
 	erase: () => erase(rest),
 };
 if (!cmd || !(cmd in commands)) {
 	console.log(
 		"uso: npm run cloud -- <whoami|stores|save <userId>|bans|publish [--live]|upload-art [--dry-run]|" +
-			"erase <userId> [--dry-run | --yes]>",
+			"upload-audio [--dry-run]|erase <userId> [--dry-run | --yes]>",
 	);
 	process.exit(cmd ? 1 : 0);
 }
-// upload-art and erase ask for their own key (a dry run of either reads none)
-if (cmd !== "upload-art" && cmd !== "erase") useKey();
+// upload-art, upload-audio and erase ask for their own key (a dry run of any of them reads none)
+if (cmd !== "upload-art" && cmd !== "upload-audio" && cmd !== "erase") useKey();
 await commands[cmd]();

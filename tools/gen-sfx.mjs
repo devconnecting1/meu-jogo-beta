@@ -94,7 +94,9 @@ const envAD = (attack, tau) => t => (t < attack ? t / attack : Math.exp(-(t - at
 /** a raised-cosine bell from 0 to `length` peaking at `peak` (a whoosh) */
 const bell = (peak, length) => t => {
 	if (t <= 0 || t >= length) return 0;
-	return t < peak ? 0.5 - 0.5 * Math.cos((Math.PI * t) / peak) : 0.5 + 0.5 * Math.cos((Math.PI * (t - peak)) / (length - peak));
+	return t < peak
+		? 0.5 - 0.5 * Math.cos((Math.PI * t) / peak)
+		: 0.5 + 0.5 * Math.cos((Math.PI * (t - peak)) / (length - peak));
 };
 const asFn = v => (typeof v === "function" ? v : () => v);
 
@@ -512,6 +514,13 @@ function limit(x, ceilingDb) {
 /** the same last stage for every take: no DC, clean edges, loudness to target under the ceiling */
 function finish(raw, target, { loop = false } = {}) {
 	let x = filt(filt(raw, "hp", 25), "hp", 25);
+	if (loop && raw.loopLength !== undefined) {
+		// a loop: what rings past its end is folded onto its start (the wrap is then a sample like any other)
+		const L = raw.loopLength;
+		const folded = x.slice(0, L);
+		for (let i = L; i < x.length; i++) folded[(i - L) % L] += x[i];
+		x = folded;
+	}
 	if (!loop) {
 		// the tail: cut where it stays under -66 dB of the peak, then a short fade to digital silence
 		let peak = 0;
@@ -556,14 +565,15 @@ function gunshot(rng, p) {
 	// the crack: a couple of ms of bright noise
 	mix(out, shape(filt(noise(rng, 0.004), "hp", 2500), envAD(0.0002, 0.0012)), p.crack);
 	// the blast
-	const blast = filt(
-		noise(rng, p.dur, envAD(0.0008, p.blastTau)),
-		"lp",
-		sweep(p.cut0, p.cut1, p.cutTau),
-		0.8,
-	);
+	const blast = filt(noise(rng, p.dur, envAD(0.0008, p.blastTau)), "lp", sweep(p.cut0, p.cut1, p.cutTau), 0.8);
 	mix(out, blast, 1.1);
-	if (p.spread) mix(out, filt(noise(rng, p.dur, envAD(0.002, p.blastTau * 1.3)), "lp", sweep(p.cut0 * 0.6, p.cut1, p.cutTau)), 0.6, 0.004);
+	if (p.spread)
+		mix(
+			out,
+			filt(noise(rng, p.dur, envAD(0.002, p.blastTau * 1.3)), "lp", sweep(p.cut0 * 0.6, p.cut1, p.cutTau)),
+			0.6,
+			0.004,
+		);
 	// the body: a thump whose pitch falls
 	osc(out, { freq: sweep(p.body0, p.body1, p.bodyTau * 0.8), amp: t => p.bodyAmp * envAD(0.001, p.bodyTau)(t) });
 	// the room: a dull tail
@@ -587,7 +597,10 @@ function whoosh(rng, { dur, peak, lo, hi, q = 1.4, body = 0.5 }) {
 	const b = bell(peak, dur);
 	const center = t => lo + (hi - lo) * Math.pow(b(t), 0.8);
 	const air = shape(filt(noise(rng, dur), "bp", center, q), b);
-	const low = shape(filt(noise(rng, dur), "lp", t => center(t) * 0.5, 0.7), b);
+	const low = shape(
+		filt(noise(rng, dur), "lp", t => center(t) * 0.5, 0.7),
+		b,
+	);
 	return mix(air, low, body);
 }
 
@@ -595,7 +608,8 @@ function whoosh(rng, { dur, peak, lo, hi, q = 1.4, body = 0.5 }) {
 function notes(dur, list, { duty = 0.25, sq = 0.35, tri = 1, lp = 5000 } = {}) {
 	const out = buf(dur);
 	for (const [at, midi, noteDur, tau, amp = 1] of list) {
-		const env = t => amp * (t < noteDur ? envAD(0.004, tau)(t) : envAD(0.004, tau)(noteDur) * Math.exp(-(t - noteDur) / 0.012));
+		const env = t =>
+			amp * (t < noteDur ? envAD(0.004, tau)(t) : envAD(0.004, tau)(noteDur) * Math.exp(-(t - noteDur) / 0.012));
 		osc(out, { wave: "tri", freq: hz(midi), amp: t => tri * env(t), at, dur: noteDur + 0.08 });
 		if (sq > 0) osc(out, { wave: "square", duty, freq: hz(midi), amp: t => sq * env(t), at, dur: noteDur + 0.08 });
 	}
@@ -608,16 +622,22 @@ function beat(out, at, amp, f0, f1) {
 	osc(out, { freq: sweep(f0 * 2.02, f1 * 2, 0.02), amp: t => 0.18 * amp * envAD(0.004, 0.03)(t), at, dur: 0.2 });
 }
 
-/** a heart loop of `beats` at `bpm`, sample-exact, silent at both ends (Sound.LoopRegion loops it seamlessly) */
+/**
+ * A heart loop of `beats` at `bpm`, sample-exact. At 128 bpm the last "dub" is still ringing when the loop ends, so the
+ * render runs past the loop and `finish` FOLDS that tail back onto the start (`loopLength`): the waveform is continuous
+ * across Sound.LoopRegion's wrap, as if it had always been looping -- no click at the loop point, at any tempo.
+ */
 function heartLoop(bpm, beats = 4) {
 	const period = Math.round((60 / bpm) * SR) / SR;
-	const out = new Float64Array(Math.round(period * SR) * beats);
+	const loopLength = Math.round(period * SR) * beats;
+	const out = new Float64Array(loopLength + len(0.8));
 	const gap = Math.min(0.3, 0.16 + period * 0.14);
 	for (let b = 0; b < beats; b++) {
 		const at = 0.02 + b * period;
 		beat(out, at, 1, 78, 46);
 		beat(out, at + gap, 0.62, 92, 56);
 	}
+	out.loopLength = loopLength;
 	return out;
 }
 
@@ -686,7 +706,16 @@ export const SPEC = [
 		volume: 0.32,
 		pitch: [1, 1.02],
 		why: "Two notes up a fourth (E5, A5): a window opening rises.",
-		render: () => echo(notes(0.2, [[0, 76, 0.05, 0.03], [0.055, 81, 0.07, 0.035]]), 0.06, 0.2, 1),
+		render: () =>
+			echo(
+				notes(0.2, [
+					[0, 76, 0.05, 0.03],
+					[0.055, 81, 0.07, 0.035],
+				]),
+				0.06,
+				0.2,
+				1,
+			),
 	},
 	{
 		name: "uiClose",
@@ -695,7 +724,11 @@ export const SPEC = [
 		volume: 0.28,
 		pitch: [1, 1.02],
 		why: "The same two notes falling (A5, E5), a little softer: closing is the answer to opening.",
-		render: () => notes(0.18, [[0, 81, 0.045, 0.025], [0.05, 76, 0.06, 0.03, 0.85]]),
+		render: () =>
+			notes(0.18, [
+				[0, 81, 0.045, 0.025],
+				[0.05, 76, 0.06, 0.03, 0.85],
+			]),
 	},
 	{
 		name: "uiBuy",
@@ -705,7 +738,20 @@ export const SPEC = [
 		pitch: [1, 1],
 		why: "A major arpeggio (A5, C#6, E6) with a short echo: confirmation, the purchase went through.",
 		render: () =>
-			echo(notes(0.45, [[0, 81, 0.05, 0.04], [0.06, 85, 0.05, 0.04], [0.12, 88, 0.18, 0.12]], { sq: 0.45 }), 0.09, 0.28, 2),
+			echo(
+				notes(
+					0.45,
+					[
+						[0, 81, 0.05, 0.04],
+						[0.06, 85, 0.05, 0.04],
+						[0.12, 88, 0.18, 0.12],
+					],
+					{ sq: 0.45 },
+				),
+				0.09,
+				0.28,
+				2,
+			),
 	},
 	{
 		name: "uiError",
@@ -721,7 +767,13 @@ export const SPEC = [
 				[0.1, 185],
 			]) {
 				for (const det of [0, 2.5]) {
-					osc(out, { wave: "square", freq: f + det, amp: t => 0.5 * envAD(0.004, 0.04)(t) * (t < 0.08 ? 1 : 0), at, dur: 0.09 });
+					osc(out, {
+						wave: "square",
+						freq: f + det,
+						amp: t => 0.5 * envAD(0.004, 0.04)(t) * (t < 0.08 ? 1 : 0),
+						at,
+						dur: 0.09,
+					});
 				}
 			}
 			return filt(out, "lp", 1500, 0.7);
@@ -754,8 +806,31 @@ export const SPEC = [
 		render: (rng, take) => {
 			const out = buf(0.2);
 			const f = take === 0 ? 3200 : 3500;
-			mix(out, click(rng, { f, q: 4, ring: [[2400, 0.25, 0.025], [3700, 0.15, 0.018]] }));
-			mix(out, click(rng, { f: f * 1.08, q: 4, ring: [[2550, 0.22, 0.022], [3950, 0.12, 0.015]], amp: 0.8 }), 1, 0.07);
+			mix(
+				out,
+				click(rng, {
+					f,
+					q: 4,
+					ring: [
+						[2400, 0.25, 0.025],
+						[3700, 0.15, 0.018],
+					],
+				}),
+			);
+			mix(
+				out,
+				click(rng, {
+					f: f * 1.08,
+					q: 4,
+					ring: [
+						[2550, 0.22, 0.022],
+						[3950, 0.12, 0.015],
+					],
+					amp: 0.8,
+				}),
+				1,
+				0.07,
+			);
 			osc(out, { freq: 420, amp: t => 0.15 * envAD(0.001, 0.01)(t) });
 			return out;
 		},
@@ -818,16 +893,30 @@ export const SPEC = [
 		pitch: [1, 1],
 		why: "An A-major run (A4 C#5 E5 A5) then A5 and E6 held with a vibrato: the classic level-up, in the UI's key.",
 		render: () => {
-			const run = notes(1.1, [[0, 69, 0.06, 0.05], [0.07, 73, 0.06, 0.05], [0.14, 76, 0.06, 0.05], [0.21, 81, 0.06, 0.05]], {
-				sq: 0.45,
-				duty: 0.125,
-			});
+			const run = notes(
+				1.1,
+				[
+					[0, 69, 0.06, 0.05],
+					[0.07, 73, 0.06, 0.05],
+					[0.14, 76, 0.06, 0.05],
+					[0.21, 81, 0.06, 0.05],
+				],
+				{
+					sq: 0.45,
+					duty: 0.125,
+				},
+			);
 			const hold = buf(1.1);
 			for (const [midi, amp] of [
 				[81, 0.5],
 				[88, 0.35],
 			]) {
-				osc(hold, { wave: "tri", freq: t => hz(midi) * (1 + 0.006 * Math.sin(TAU * 6 * t)), amp: t => amp * envAD(0.01, 0.35)(t), at: 0.28 });
+				osc(hold, {
+					wave: "tri",
+					freq: t => hz(midi) * (1 + 0.006 * Math.sin(TAU * 6 * t)),
+					amp: t => amp * envAD(0.01, 0.35)(t),
+					at: 0.28,
+				});
 			}
 			return echo(mix(run, hold), 0.11, 0.25, 2);
 		},
@@ -880,7 +969,13 @@ export const SPEC = [
 			const out = buf(0.24);
 			for (const at of [0, 0.11]) {
 				for (const f of [110, 116.5]) {
-					osc(out, { wave: "square", freq: f, amp: t => 0.4 * envAD(0.003, 0.03)(t) * (t < 0.07 ? 1 : 0), at, dur: 0.08 });
+					osc(out, {
+						wave: "square",
+						freq: f,
+						amp: t => 0.4 * envAD(0.003, 0.03)(t) * (t < 0.07 ? 1 : 0),
+						at,
+						dur: 0.08,
+					});
 				}
 			}
 			return filt(out, "lp", 900, 0.7);
@@ -1066,7 +1161,17 @@ export const SPEC = [
 		why: "Click, slide, click: the magazine released and pulled out.",
 		render: rng => {
 			const out = buf(0.32);
-			mix(out, click(rng, { f: 2800, q: 6, ring: [[1870, 0.3, 0.02], [3120, 0.2, 0.015]] }));
+			mix(
+				out,
+				click(rng, {
+					f: 2800,
+					q: 6,
+					ring: [
+						[1870, 0.3, 0.02],
+						[3120, 0.2, 0.015],
+					],
+				}),
+			);
 			mix(out, shape(filt(noise(rng, 0.13), "bp", sweep(1200, 2400, 0.06), 2), bell(0.05, 0.12)), 0.35, 0.04);
 			mix(out, click(rng, { f: 2200, q: 6, ring: [[1500, 0.25, 0.02]], amp: 0.8 }), 1, 0.17);
 			return out;
@@ -1084,7 +1189,21 @@ export const SPEC = [
 			osc(out, { freq: 300, amp: envAD(0.0008, 0.015) });
 			mix(out, click(rng, { f: 2000, q: 3, ring: [] }), 0.9);
 			mix(out, shape(filt(noise(rng, 0.1), "bp", sweep(1500, 2600, 0.05), 2), bell(0.04, 0.09)), 0.3, 0.06);
-			mix(out, click(rng, { f: 3200, q: 4, ring: [[1450, 0.35, 0.04], [2380, 0.25, 0.03], [3900, 0.15, 0.02]], amp: 1.2 }), 1, 0.17);
+			mix(
+				out,
+				click(rng, {
+					f: 3200,
+					q: 4,
+					ring: [
+						[1450, 0.35, 0.04],
+						[2380, 0.25, 0.03],
+						[3900, 0.15, 0.02],
+					],
+					amp: 1.2,
+				}),
+				1,
+				0.17,
+			);
 			return out;
 		},
 	},
@@ -1113,7 +1232,17 @@ export const SPEC = [
 		why: "A dry hammer click and its tiny echo, nothing else: the most disappointing sound in the game, on purpose.",
 		render: rng => {
 			const out = buf(0.08);
-			mix(out, click(rng, { f: 3000, q: 5, ring: [[2200, 0.35, 0.008], [4100, 0.2, 0.005]] }));
+			mix(
+				out,
+				click(rng, {
+					f: 3000,
+					q: 5,
+					ring: [
+						[2200, 0.35, 0.008],
+						[4100, 0.2, 0.005],
+					],
+				}),
+			);
 			mix(out, click(rng, { f: 3300, q: 5, ring: [], amp: 0.45 }), 1, 0.025);
 			return out;
 		},
@@ -1128,7 +1257,14 @@ export const SPEC = [
 		why: "A whoosh whose band sweeps up and back (500 Hz to 1.7 kHz), three speeds: a blade or a bat through the air.",
 		render: (rng, take) => {
 			const dur = [0.2, 0.24, 0.18][take];
-			return whoosh(rng, { dur, peak: dur * [0.55, 0.5, 0.6][take], lo: 450, hi: 1700 + take * 150, q: 1.5, body: 0.6 });
+			return whoosh(rng, {
+				dur,
+				peak: dur * [0.55, 0.5, 0.6][take],
+				lo: 450,
+				hi: 1700 + take * 150,
+				q: 1.5,
+				body: 0.6,
+			});
 		},
 	},
 
@@ -1144,7 +1280,12 @@ export const SPEC = [
 		render: (rng, take) => {
 			const out = buf(0.24);
 			osc(out, { freq: sweep(95 + take * 6, 45, 0.025), amp: envAD(0.001, 0.03) });
-			const sq = filt(noise(rng, 0.2, envAD(0.002, 0.05)), "bp", t => 550 + take * 40 + 150 * Math.sin(TAU * 12 * t), 2.5);
+			const sq = filt(
+				noise(rng, 0.2, envAD(0.002, 0.05)),
+				"bp",
+				t => 550 + take * 40 + 150 * Math.sin(TAU * 12 * t),
+				2.5,
+			);
 			mix(out, sq, 1.4);
 			mix(out, filt(noise(rng, 0.06, envAD(0.0005, 0.015)), "lp", 2500), 0.6);
 			return saturate(out, 3);
@@ -1160,12 +1301,16 @@ export const SPEC = [
 		why: "Four inharmonic partials (x1, 2.32, 3.87, 5.61) each with its beating twin, over a sharp transient: a panel struck.",
 		render: (rng, take) => {
 			const out = buf(0.6);
-			mix(out, partials(0.6, [470, 520, 560][take], [
-				[1, 1, 0.22],
-				[2.32, 0.6, 0.14],
-				[3.87, 0.45, 0.08],
-				[5.61, 0.3, 0.05],
-			]), 0.5);
+			mix(
+				out,
+				partials(0.6, [470, 520, 560][take], [
+					[1, 1, 0.22],
+					[2.32, 0.6, 0.14],
+					[3.87, 0.45, 0.08],
+					[5.61, 0.3, 0.05],
+				]),
+				0.5,
+			);
 			mix(out, shape(filt(noise(rng, 0.01), "bp", 4000, 2), envAD(0.0002, 0.002)), 1.2);
 			return out;
 		},
@@ -1198,7 +1343,12 @@ export const SPEC = [
 			const out = buf(0.42);
 			mix(out, click(rng, { f: 2400, q: 4, ring: [[1600, 0.3, 0.01]] }));
 			const hiss = filt(filt(noise(rng, 0.3), "hp", 4000), "lp", 9000);
-			mix(out, shape(hiss, t => (t < 0.01 ? t / 0.01 : t < 0.18 ? 1 : Math.exp(-(t - 0.18) / 0.04))), 0.35, 0.02);
+			mix(
+				out,
+				shape(hiss, t => (t < 0.01 ? t / 0.01 : t < 0.18 ? 1 : Math.exp(-(t - 0.18) / 0.04))),
+				0.35,
+				0.02,
+			);
 			osc(out, { freq: 3600, amp: t => 0.1 * envAD(0.001, 0.03)(t), at: 0.33 });
 			osc(out, { freq: 5900, amp: t => 0.05 * envAD(0.001, 0.02)(t), at: 0.33 });
 			return out;
@@ -1209,7 +1359,7 @@ export const SPEC = [
 		bank: "impacts",
 		category: "step",
 		takes: 3,
-		volume: 0.4,
+		volume: 0.3,
 		pitch: [0.94, 1.06],
 		why: "A soft heel thump (noise under 700 Hz, a 80 Hz body) with a trace of asphalt grit: felt more than heard.",
 		render: (rng, take) => {
@@ -1225,7 +1375,7 @@ export const SPEC = [
 		bank: "impacts",
 		category: "step",
 		takes: 3,
-		volume: 0.4,
+		volume: 0.3,
 		pitch: [0.94, 1.06],
 		why: "The other foot: a toe roll, a little brighter and shorter, so left and right never sound like a metronome.",
 		render: (rng, take) => {
@@ -1297,7 +1447,7 @@ export const SPEC = [
 		loop: true,
 		volume: 0.4,
 		pitch: [1, 1],
-		why: "Below 35 % HP: lub-dub at 76 bpm, four beats, silent at the loop point so it loops seamlessly.",
+		why: "Below 35 % HP: lub-dub at 76 bpm, four beats, its tail folded onto its start so the loop point never clicks.",
 		render: () => heartLoop(76),
 	},
 	{
@@ -1421,7 +1571,8 @@ export function encodeWav(samples) {
 
 /** reads what encodeWav writes (and any plain 16-bit PCM WAV): { sampleRate, channels, samples: Int16Array } */
 export function decodeWav(bytes) {
-	if (bytes.toString("ascii", 0, 4) !== "RIFF" || bytes.toString("ascii", 8, 12) !== "WAVE") throw new Error("not a WAV");
+	if (bytes.toString("ascii", 0, 4) !== "RIFF" || bytes.toString("ascii", 8, 12) !== "WAVE")
+		throw new Error("not a WAV");
 	let p = 12;
 	let fmt;
 	while (p + 8 <= bytes.length) {
@@ -1456,7 +1607,9 @@ export function liveBankIds(manifest, assets) {
 		const id = assets.ids?.[b.name] ?? "";
 		ids[b.name] = id !== "" && assets.sha1?.[b.name] === b.sha1 ? id : "";
 		if (id !== "" && ids[b.name] === "") {
-			console.log(`${b.name}: the uploaded bank is not this WAV (run npm run cloud -- upload-audio); its id is left out`);
+			console.log(
+				`${b.name}: the uploaded bank is not this WAV (run npm run cloud -- upload-audio); its id is left out`,
+			);
 		}
 	}
 	return ids;
@@ -1466,7 +1619,9 @@ export function moduleSource(manifest, ids) {
 	const L = [];
 	L.push("// generated by tools/gen-sfx.mjs — do not edit");
 	L.push("// banks: design/audio/manifest.json, asset ids: design/audio/assets.json (npm run cloud -- upload-audio)");
-	L.push("// a bank without an id plays nothing of ours: every event on it keeps its library take (DESIGN_RULES SND-01)");
+	L.push(
+		"// a bank without an id plays nothing of ours: every event on it keeps its library take (DESIGN_RULES SND-01)",
+	);
 	L.push("");
 	L.push(`export type AudioBank =${manifest.banks.map(b => `\n\t| "${b.name}"`).join("")};`);
 	L.push("");
@@ -1552,12 +1707,17 @@ function previewHtml(manifest, banks) {
 	const rows = [];
 	for (const bank of BANKS) {
 		rows.push(`<h2>${esc(bank)} <small>${esc(manifest.banks.find(b => b.name === bank).file)}</small></h2>`);
-		rows.push("<table><thead><tr><th>Event</th><th>Takes</th><th>Loudness</th><th>Why it fits</th></tr></thead><tbody>");
+		rows.push(
+			"<table><thead><tr><th>Event</th><th>Takes</th><th>Loudness</th><th>Why it fits</th></tr></thead><tbody>",
+		);
 		for (const [name, s] of Object.entries(manifest.sounds)) {
 			if (s.bank !== bank) continue;
 			const buttons = s.takes
 				.map((t, i) => {
-					const x = banks[bank].subarray(Math.round((t.startAt + PRE) * SR), Math.round((t.startAt + t.maxPlay) * SR));
+					const x = banks[bank].subarray(
+						Math.round((t.startAt + PRE) * SR),
+						Math.round((t.startAt + t.maxPlay) * SR),
+					);
 					return `<button data-bank="${bank}" data-start="${t.startAt}" data-len="${t.maxPlay}" data-loop="${s.loopStart !== undefined}" title="play take ${i + 1}">${waveSvg(x)}<span>${i + 1}</span></button>`;
 				})
 				.join("");
@@ -1621,18 +1781,26 @@ function readmeMd(manifest) {
 	const L = [];
 	L.push("# Project Z — our own sound effects");
 	L.push("");
-	L.push("Generated by `npm run audio:sfx` (`tools/gen-sfx.mjs`) — do not edit by hand; the rules are DESIGN_RULES **SND**.");
+	L.push(
+		"Generated by `npm run audio:sfx` (`tools/gen-sfx.mjs`) — do not edit by hand; the rules are DESIGN_RULES **SND**.",
+	);
 	L.push("Listen before uploading: open `docs/audio/preview.html` from the repository (it plays the banks below).");
 	L.push("");
 	L.push("## How it gets into the game");
 	L.push("");
 	L.push("1. `npm run audio:sfx` renders every take and packs them into the five banks of `banks/` (one WAV each).");
 	L.push("2. On the PC, with the `.env`: `npm run cloud -- upload-audio` uploads the banks that are new or changed");
-	L.push("   (Open Cloud Assets API, `assetType: Audio`, `audio/wav`), writes their ids and hashes to `assets.json` and");
-	L.push("   regenerates `src/shared/data/audioAssets.ts`. `-- upload-audio --dry-run` lists them without reading any key.");
+	L.push(
+		"   (Open Cloud Assets API, `assetType: Audio`, `audio/wav`), writes their ids and hashes to `assets.json` and",
+	);
+	L.push(
+		"   regenerates `src/shared/data/audioAssets.ts`. `-- upload-audio --dry-run` lists them without reading any key.",
+	);
 	L.push("3. `npm run build`, commit `design/audio/assets.json` + `src/shared/data/audioAssets.ts`.");
 	L.push("");
-	L.push("Until a bank has an id — or if the client cannot load it — every event on it keeps the library take it had");
+	L.push(
+		"Until a bank has an id — or if the client cannot load it — every event on it keeps the library take it had",
+	);
 	L.push("before (SND-01, like ART-01 for the town's art).");
 	L.push("");
 	L.push("## Banks");
@@ -1663,8 +1831,12 @@ function readmeMd(manifest) {
 	L.push("## What stays on the library, and why");
 	L.push("");
 	L.push("Organic sound is what a synthesiser does worst and a recording does best, so these keep their official");
-	L.push("library takes (`design/audio-credits.md`): the horde's voices (groans, snarls, the group shout, the death),");
-	L.push("the boss roar, the bite, the survivor's hurt and death, the doors, eating, the bandage, the kit's zipper, the");
+	L.push(
+		"library takes (`design/audio-credits.md`): the horde's voices (groans, snarls, the group shout, the death),",
+	);
+	L.push(
+		"the boss roar, the bite, the survivor's hurt and death, the doors, eating, the bandage, the kit's zipper, the",
+	);
 	L.push("pills, the flamethrower's jet and ignition, the motorcycle's engine and horn, the bicycle's bell, the");
 	L.push("explosion, breaking glass, the night music and the day and dawn ambiences.");
 	L.push("");
@@ -1718,13 +1890,20 @@ async function main(args) {
 			const have = decodeWav(readFileSync(file)).samples;
 			const want = decodeWav(bankBytes[b]).samples;
 			let worst = have.length === want.length ? 0 : Infinity;
-			for (let i = 0; i < Math.min(have.length, want.length); i++) worst = Math.max(worst, Math.abs(have[i] - want[i]));
+			for (let i = 0; i < Math.min(have.length, want.length); i++)
+				worst = Math.max(worst, Math.abs(have[i] - want[i]));
 			if (worst > 1) {
-				console.log(`${b}: the committed bank differs from the renderer (${worst === Infinity ? "length" : `${worst} LSB`})`);
+				console.log(
+					`${b}: the committed bank differs from the renderer (${worst === Infinity ? "length" : `${worst} LSB`})`,
+				);
 				drift++;
 			}
 		}
-		console.log(drift === 0 ? `the ${BANKS.length} banks match the renderer` : `${drift} bank(s) drifted: run npm run audio:sfx`);
+		console.log(
+			drift === 0
+				? `the ${BANKS.length} banks match the renderer`
+				: `${drift} bank(s) drifted: run npm run audio:sfx`,
+		);
 		process.exit(drift === 0 ? 0 : 1);
 	}
 	mkdirSync(join(AUDIO_DIR, "banks"), { recursive: true });
@@ -1738,7 +1917,8 @@ async function main(args) {
 		const dir = resolve(args[split + 1]);
 		mkdirSync(dir, { recursive: true });
 		for (const spec of SPEC) {
-			for (let t = 0; t < (spec.takes ?? 1); t++) writeFileSync(join(dir, `${spec.name}-${t + 1}.wav`), encodeWav(renderTake(spec, t)));
+			for (let t = 0; t < (spec.takes ?? 1); t++)
+				writeFileSync(join(dir, `${spec.name}-${t + 1}.wav`), encodeWav(renderTake(spec, t)));
 		}
 		console.log(`wrote every take to ${dir}`);
 	}

@@ -8,6 +8,7 @@
 		"serve": "rojo serve",
 		"theme": "node tools/gen-theme.mjs",
 		"art:world": "node tools/gen-world-art.mjs",
+		"audio:sfx": "node tools/gen-sfx.mjs",
 		"render:map": "node tools/render-map.mjs",
 		"cloud": "node tools/cloud.mjs",
 		"locale": "node tools/gen-locale.mjs",
