@@ -365,6 +365,162 @@ function pinchesAny(kit: TownKit, r: Rect): boolean {
 	return false;
 }
 
+/**
+ * Does the rect reach into a boss plaza (TOWN.BOSS_CLEAR round each anchor, world.ts `Placer.bossClear`; INT-01)?
+ * `canPlace` asks it for everything it places; a solid added past it (a canopy) asks here.
+ */
+function inBossPlaza(kit: TownKit, r: Rect): boolean {
+	const R = TOWN.BOSS_CLEAR;
+	for (const a of kit.w.bossAnchors) {
+		const dx = a.x - math.clamp(a.x, r.x, r.x + r.w);
+		const dy = a.y - math.clamp(a.y, r.y, r.y + r.h);
+		if (dx * dx + dy * dy < R * R) return true;
+	}
+	return false;
+}
+
+// ---------------------------------------------------------------------------------------------- no sealed pocket (CID-05)
+
+/** the town's body grid (tools/validate-world.mjs `reachability`, CID-05): 8 u cells on the world grid, a body of 18 */
+const REACH_CELL = 8;
+const REACH_BODY = 18;
+/** how far round a thing `closesPocket` looks: the ground it could close off lies within this of it */
+const POCKET_REACH = 160;
+/**
+ * A thing further than this from `r` has no blocked cell next to one of `r`'s (18 u round each, and a cell's diagonal
+ * between their centres), so it cannot help `r` close anything off
+ */
+const POCKET_NEAR = REACH_BODY * 2 + REACH_CELL * 2;
+/** `closesPocket`'s scratch (grown, never cleared: a cell holds the generation that last marked it) */
+const PK_BLOCK: Array<number> = [];
+const PK_SEEN: Array<number> = [];
+const PK_QUEUE: Array<number> = [];
+let PK_GEN = 0;
+
+/** marks with `gen` the cells of the window (x0, y0, cols × rows) whose centre is closer than REACH_BODY to `s` */
+function pkStamp(s: Rect, x0: number, y0: number, cols: number, rows: number, gen: number, keep: number): void {
+	const C = REACH_CELL;
+	const R = REACH_BODY;
+	const i0 = math.max(0, math.floor((s.x - R - x0) / C));
+	const i1 = math.min(cols - 1, math.floor((s.x + s.w + R - x0) / C));
+	const j0 = math.max(0, math.floor((s.y - R - y0) / C));
+	const j1 = math.min(rows - 1, math.floor((s.y + s.h + R - y0) / C));
+	for (let j = j0; j <= j1; j++) {
+		const py = y0 + j * C + C / 2;
+		const dy = math.max(s.y - py, 0, py - s.y - s.h);
+		for (let i = i0; i <= i1; i++) {
+			const px = x0 + i * C + C / 2;
+			const dx = math.max(s.x - px, 0, px - s.x - s.w);
+			const k = j * cols + i;
+			// a cell `keep` already holds stays that way (blocked by another thing: blocked with `r` or without it)
+			if (dx * dx + dy * dy < R * R && PK_BLOCK[k] !== keep) PK_BLOCK[k] = gen;
+		}
+	}
+}
+
+/**
+ * The flood of `closesPocket`: from every free cell of the window's edge, four neighbours; a cell is blocked when it
+ * holds `blocked` or `also` (-1: nothing more). Answers the generation it marked the reached cells with.
+ */
+function pkFlood(cols: number, rows: number, blocked: number, also: number): number {
+	PK_GEN++;
+	const seen = PK_GEN;
+	const n = cols * rows;
+	let tail = 0;
+	for (let k = 0; k < n; k++) {
+		const i = k % cols;
+		if (i !== 0 && i !== cols - 1 && k >= cols && k < n - cols) continue;
+		const b = PK_BLOCK[k];
+		if (b === blocked || b === also) continue;
+		PK_SEEN[k] = seen;
+		PK_QUEUE[tail] = k;
+		tail++;
+	}
+	for (let head = 0; head < tail; head++) {
+		const k = PK_QUEUE[head];
+		const i = k % cols;
+		for (let d = 0; d < 4; d++) {
+			let nb: number;
+			if (d === 0) {
+				if (i === 0) continue;
+				nb = k - 1;
+			} else if (d === 1) {
+				if (i === cols - 1) continue;
+				nb = k + 1;
+			} else if (d === 2) {
+				if (k < cols) continue;
+				nb = k - cols;
+			} else {
+				if (k >= n - cols) continue;
+				nb = k + cols;
+			}
+			if (PK_SEEN[nb] === seen) continue;
+			const b = PK_BLOCK[nb];
+			if (b === blocked || b === also) continue;
+			PK_SEEN[nb] = seen;
+			PK_QUEUE[tail] = nb;
+			tail++;
+		}
+	}
+	return seen;
+}
+
+/**
+ * Would a thing standing at `r` close off ground a body could walk onto without it -- a sealed pocket (CID-05)? Two
+ * things a sealed gap apart pinch nothing (`pinches`), nor two corner to corner, and a trunk planted earlier does not
+ * ask; but a shed, a swing set and a grill round a yard tree can ring off a patch of lawn nobody gets into (seeds
+ * 378184614, 309470794 -- there against the town's border fence), or leave one spot a body stands on in the corner
+ * between a trunk and a shed (seed 1386337250).
+ *
+ * Checked on the validator's own grid round `r` (POCKET_REACH, world-aligned 8 u cells, a cell free when its centre is
+ * 18 clear of every standing thing, four neighbours), flooded from the window's edge: a free cell the flood no longer
+ * reaches with `r` standing, which it reached without it, is ground `r` closes off. Buildings count as their boxes
+ * (their walls come later; a backyard keeps YARD_CLEAR from them). Only asked when something stands within POCKET_NEAR
+ * of `r` (two thirds of the time nothing does): alone, `r`'s cells are a convex blob, with no cell shut in beside it --
+ * but one neighbour is enough, a trunk corner to corner with a shed 36-47 u off shuts in the one cell between them.
+ */
+function closesPocket(kit: TownKit, r: Rect): boolean {
+	const C = REACH_CELL;
+	const R = REACH_BODY;
+	const x0 = math.floor((r.x - POCKET_REACH) / C) * C;
+	const y0 = math.floor((r.y - POCKET_REACH) / C) * C;
+	const cols = math.ceil((r.x + r.w + POCKET_REACH - x0) / C);
+	const rows = math.ceil((r.y + r.h + POCKET_REACH - y0) / C);
+	const near = kit.solidsIn(x0 - R, y0 - R, cols * C + R * 2, rows * C + R * 2);
+	let touching = false;
+	for (const s of near) {
+		if (!standing(s)) continue;
+		const dx = math.max(0, s.x - (r.x + r.w), r.x - (s.x + s.w));
+		const dy = math.max(0, s.y - (r.y + r.h), r.y - (s.y + s.h));
+		if (dx * dx + dy * dy < POCKET_NEAR * POCKET_NEAR) touching = true;
+	}
+	if (!touching) return false;
+	const n = cols * rows;
+	for (let k = PK_BLOCK.size(); k < n; k++) {
+		PK_BLOCK.push(0);
+		PK_SEEN.push(0);
+		PK_QUEUE.push(0);
+	}
+	// the cells a body cannot stand on without `r`, then those only `r` takes
+	PK_GEN++;
+	const blocked = PK_GEN;
+	for (const s of near) if (standing(s)) pkStamp(s, x0, y0, cols, rows, blocked, -1);
+	PK_GEN++;
+	const onlyR = PK_GEN;
+	pkStamp(r, x0, y0, cols, rows, onlyR, blocked);
+	const withR = pkFlood(cols, rows, blocked, onlyR);
+	const shut: Array<number> = [];
+	for (let k = 0; k < n; k++) {
+		const b = PK_BLOCK[k];
+		if (PK_SEEN[k] !== withR && b !== blocked && b !== onlyR) shut.push(k);
+	}
+	if (shut.size() === 0) return false;
+	// free and out of reach with `r`: was it reachable before? (a pocket already there is not `r`'s doing)
+	const without = pkFlood(cols, rows, blocked, -1);
+	for (const k of shut) if (PK_SEEN[k] === without) return true;
+	return false;
+}
+
 /** is anything standing within `d` of the rect a building (its box)? */
 function nearBuilding(kit: TownKit, r: Rect, d: number): boolean {
 	for (const s of kit.solidsIn(r.x - d, r.y - d, r.w + d * 2, r.h + d * 2)) {
@@ -644,6 +800,8 @@ export function placeMarket(kit: TownKit, lot: Lot): boolean {
 	const margin = 112;
 	const n = math.floor((C1 - C0 - margin * 2 + MARKET_AISLE) / (block + MARKET_AISLE));
 	if (n < 1) return false;
+	/** the market's own solids are the town's from here on (`kit.add` appends) */
+	const firstSolid = kit.w.solids.size();
 	const used = n * block + (n - 1) * MARKET_AISLE;
 	const c0 = snap8(C0 + (C1 - C0 - used) / 2);
 	const mid = (A0 + A1) / 2;
@@ -656,6 +814,8 @@ export function placeMarket(kit: TownKit, lot: Lot): boolean {
 	const sideLow: DoorSide = ax ? "top" : "left";
 	const sideHigh: DoorSide = ax ? "bottom" : "right";
 	let stockedLeft = MARKET_STOCKED_MAX;
+	/** the first table left standing: stocked after all if the draws stocked none (below) */
+	let firstStall: Solid | undefined;
 	const pairCount = n * starts.size();
 	let pairsLeft = pairCount;
 	let downLeft = pairCount >= 6 ? 2 + kit.rng.int(0, TENTS_DOWN - 2) : 1;
@@ -693,11 +853,12 @@ export function placeMarket(kit: TownKit, lot: Lot): boolean {
 				}
 				const stocked = kit.rng.chance(STALL_STOCKED) && stockedLeft > 0;
 				if (stocked) stockedLeft -= 1;
-				prop(kit, "stall", r, true, {
+				const stall = prop(kit, "stall", r, true, {
 					face,
 					variant: kit.rng.int(0, 2),
 					...(stocked ? holds() : {}),
 				});
+				if (firstStall === undefined) firstStall = stall;
 			}
 			// the crates between the tables: one, two stacked, or one tipped over
 			for (const k of [0, 1]) {
@@ -736,6 +897,15 @@ export function placeMarket(kit: TownKit, lot: Lot): boolean {
 				heading: kit.rng.range(-1, 1) * (down ? TENT_SKEW * 3 : TENT_SKEW),
 			});
 		}
+	}
+	// a market always has something left on a table (EDI-21: 1 to MARKET_STOCKED_MAX): with ~12 standing tables at a
+	// third each, none stocked is one market in a hundred or so (seed 800380018: 0 of 9) -- then the first one is.
+	// No draw: every market that stocked one is the one it was
+	if (stockedLeft === MARKET_STOCKED_MAX && firstStall !== undefined) {
+		const h = holds();
+		firstStall.lootSlots = h.lootSlots;
+		firstStall.lootItems = h.lootItems;
+		firstStall.lootTimer = h.lootTimer;
 	}
 	// the food truck at the far end of the first aisle (or of the margin, with one row), against the row's side
 	// (the stalls stand a step off their lines: the first spot that pinches nothing, EDI-11)
@@ -781,6 +951,13 @@ export function placeMarket(kit: TownKit, lot: Lot): boolean {
 	}
 	// the rows' ground is the market's: no tree grows in an aisle
 	kit.reserve(grown(frameRect(ax, A0 + ends, A1 - ends, c0, c0 + used), PATH));
+	// and none within PATH of anything of the market that stands (a trunk does not ask about slots): a pair a jitter
+	// step past the rows' lines, the food truck in the margin of a one-row market (seed 838333641: a yard tree 82 u
+	// from a table knocked over 8 u out of its row, EDI-11)
+	for (let i = firstSolid; i < kit.w.solids.size(); i++) {
+		const s = kit.w.solids[i];
+		if (standing(s)) kit.reserve(grown(s, PATH));
+	}
 	return true;
 }
 
@@ -988,8 +1165,10 @@ function busStop(kit: TownKit, e: LotEdge, range: { a: number; b: number }): voi
 		const u = snap8(kit.rng.range(range.a + SHELTER_L / 2 + 24, range.b - SHELTER_L / 2 - 24));
 		if (kit.inCut(e, u - SHELTER_L / 2 - 16, u + SHELTER_L / 2 + 16, 8)) continue;
 		const roof = edgeRect(e, u - SHELTER_L / 2, u + SHELTER_L / 2, 4, 4 + SHELTER_D);
-		// the roof is aerial, but nothing else of the town may stand under it (a tree's trunk, a lamp)
-		let clear = true;
+		// the roof is aerial, but nothing else of the town may stand under it (a tree's trunk, a lamp); and, as every
+		// solid of the town, it keeps out of a boss plaza (INT-01) -- the bench and the sign ask `canPlace`, the roof
+		// reaches past them (seeds 324062450, 835269582: a shelter's roof in boss 2's plaza)
+		let clear = !inBossPlaza(kit, roof);
 		for (const s of kit.solidsIn(roof.x, roof.y, roof.w, roof.h)) if (standing(s)) clear = false;
 		if (!clear) continue;
 		const bench = fixture(
@@ -1055,7 +1234,8 @@ export function furnishBackyards(kit: TownKit, lot: Lot): void {
 		const near = ax ? b.y : b.x;
 		const far = near + (ax ? b.h : b.w);
 		const back = e.inward > 0 ? far - e.curb : e.curb - near;
-		const tryAt = (along: number, deep: number): Rect | undefined => {
+		// `stands`: a thing that stands (a shed, a pool), not a bed of vegetables: it must close off no ground (CID-05)
+		const tryAt = (along: number, deep: number, stands: boolean): Rect | undefined => {
 			for (let v = back + YARD_CLEAR; v <= back + YARD_CLEAR + 160; v += 32) {
 				for (let u = u0; u + along <= u1; u += 32) {
 					const r = edgeRect(e, u, u + along, v, v + deep);
@@ -1065,7 +1245,8 @@ export function furnishBackyards(kit: TownKit, lot: Lot): void {
 					if (
 						!kit.canPlace(r.x, r.y, r.w, r.h, 16) ||
 						nearBuilding(kit, r, YARD_CLEAR) ||
-						pinchesAny(kit, r)
+						pinchesAny(kit, r) ||
+						(stands && closesPocket(kit, r))
 					) {
 						continue;
 					}
@@ -1076,13 +1257,13 @@ export function furnishBackyards(kit: TownKit, lot: Lot): void {
 		};
 		for (const [tags, along, deep, low, share, box] of YARD_THINGS) {
 			if (!kit.rng.chance(share)) continue;
-			const r = tryAt(along, deep);
+			const r = tryAt(along, deep, true);
 			if (r !== undefined) {
 				prop(kit, tags, r, low, box ? { face: inwardSide(e.side), ...holds() } : { face: inwardSide(e.side) });
 			}
 		}
 		if (kit.rng.chance(GARDEN_SHARE)) {
-			const r = tryAt(GARDEN_W, GARDEN_H);
+			const r = tryAt(GARDEN_W, GARDEN_H, false);
 			if (r !== undefined) {
 				lot.ground.push({ ...r, kind: "garden" });
 				kit.reserve(r);

@@ -208,9 +208,12 @@ const VEG06_DEAD_MAX = 0.05;
 const VEG06_STREET_MAIN = 0.6;
 /**
  * VEG-06: a park's trees stand in groves when a tree's nearest neighbour is of its own kind at least this many times as
- * often as a random mix of the same trees would make it (the groves measured 1.27-2.2x chance over 90 towns)
+ * often as a random mix of the same trees would make it -- over the run's parks (GROVE_RUN): per town it is noise
+ * (1.27-2.2x chance over 90 towns, 1.04-2.45x over 485; over any run of 25 towns, 1.6-1.8x)
  */
 const VEG06_GROVES = 1.2;
+/** VEG-06 over the run: the park trees whose nearest grown neighbour is their kind, what chance makes of it, how many */
+const GROVE_RUN = { same: 0, chance: 0, trees: 0 };
 const TYPE_TAG = {
 	1: "house",
 	2: "house",
@@ -2543,14 +2546,12 @@ function validate(seed) {
 		}
 	}
 	const groves = parkTrees > 0 ? sameKind / Math.max(1e-9, byChance) : 0;
-	if (parkTrees > 0 && groves < VEG06_GROVES) {
-		fail(
-			"VEG-06",
-			`the parks' kinds are mixed at random, not in groves (a tree's nearest is its kind ${fmt((sameKind / parkTrees) * 100)}% of the time, ${groves.toFixed(2)}x chance)`,
-			0,
-			0,
-		);
-	}
+	// judged over the run (below the seeds' loop), like EDI-09's doors and EDI-18's windows: a town's six parks hold
+	// ~100 grown trees and one park's own ratio swings 0.4-2.9x with where its playground and court fall, so one
+	// town in a hundred lands under the line with the same generator (1.04-2.45x over 485 towns, median 1.76x)
+	GROVE_RUN.same += sameKind;
+	GROVE_RUN.chance += byChance;
+	GROVE_RUN.trees += parkTrees;
 	const treeKinds = { kinds, deadShare, twins, plantedWorst, groves };
 	for (const b of buildings) {
 		if (b.passable !== true) fail("COL-02", `${b.tags} #${b.id}: footprint/roof record collides`, cx(b), cy(b));
@@ -2917,6 +2918,18 @@ console.log(`  doors over the run (EDI-09, >= ${DOOR_SHARE * 100}% with all thei
 	console.log(
 		`  windows over the run (EDI-18): ${(town * 100).toFixed(0)}% of ${n} generated broken -- ${glassShares.join(", ")}`,
 	);
+}
+// VEG-06 over the run: the parks in groves
+if (GROVE_RUN.trees > 0) {
+	const groves = GROVE_RUN.same / Math.max(1e-9, GROVE_RUN.chance);
+	const line = `a tree's nearest is its kind ${fmt((GROVE_RUN.same / GROVE_RUN.trees) * 100)}% of the time, ${groves.toFixed(2)}x chance, over ${GROVE_RUN.trees} park trees`;
+	if (groves < VEG06_GROVES) {
+		const msg = `the parks' kinds are mixed at random, not in groves (${line})`;
+		all.push({ rule: "VEG-06", msg, x: 0, y: 0 });
+		total++;
+		console.log(`  VEG-06 (run) ${msg}`);
+	}
+	console.log(`  parks over the run (VEG-06, groves >= ${VEG06_GROVES}x chance): ${line}`);
 }
 if (CAMPUS !== undefined) console.log(`  campus (EDI-17): in ${CAMPUS_RUN.campus} of ${CAMPUS_RUN.towns} towns`);
 if (MARKS_FILE) writeFileSync(MARKS_FILE, JSON.stringify(all));

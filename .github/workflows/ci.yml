@@ -137,6 +137,34 @@ jobs:
           echo "::error title=Roblox assets::an upload failed or moderation rejected a file (see this job's summary). The approved ids were committed; this run publishes no place."
           exit 1
 
+  # Every [auto] rule of docs/DESIGN_RULES.md over 60 more towns per spread, drawn as a world reset draws its seed
+  # (MP-22 can land on ANY seed), beside `build` and off its path (~2 min against its ~15). Fixed spreads, so a failure
+  # names a seed and repeats: 424242 and 777 are the spreads where a wider sweep first caught the generator (EDI-08,
+  # EDI-11, CID-05, MOB-05, EDI-21, INT-01 in 11 of their 120 swept towns, none of them among the 20 above; fixed).
+  # New spreads every night: .github/workflows/world-sweep.yml
+  world-sweep:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        base: [424242, 777]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: World design rules over 60 more towns (npm run validate:world -- --sweep 60)
+        env:
+          SWEEP_BASE: ${{ matrix.base }}
+        run: npm run validate:world -- --sweep 60 --sweep-base "$SWEEP_BASE"
+
   build:
     # pull requests: `assets` is skipped and this builds the PR exactly as before. main: after `assets`, from the
     # commit it left, so the place of this run carries the ids it uploaded. The tests run either way; the place is
@@ -185,7 +213,8 @@ jobs:
         run: npm run format:check
 
       # the 5 reference towns and 20 more from seeds drawn as a world reset draws them (MP-22 picks ANY seed): the
-      # interiors must leave no hiding spot in any town a player can get (EDI-11), not just in the 5 we look at
+      # interiors must leave no hiding spot in any town a player can get (EDI-11), not just in the 5 we look at (120
+      # more beside this job: `world-sweep`)
       - name: World design rules (docs/DESIGN_RULES.md [auto]) + a 20-seed sweep
         run: npm run validate:world -- --sweep 20
 
