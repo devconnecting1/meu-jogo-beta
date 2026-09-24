@@ -466,7 +466,7 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	/** mask: bossRafflesia: white outlines of the same cells (tint: the hit outline) */
 	bossRafflesiaRim: { id: "rbxassetid://125105479176447", w: 816, h: 68 },
 	/** atlas: item icons: 99 icons, their dimmed copies and 12 glyphs (client/ui/itemIcon.ts) */
-	itemIcons: { id: "", w: 288, h: 244 },
+	itemIcons: { id: "rbxassetid://87218977110707", w: 288, h: 244 },
 	/** atlas: interiors: 1707 cells of furniture, decoration and frames (client/view/interiorArt.ts) */
 	furniture: { id: "rbxassetid://107932658085342", w: 1024, h: 923 },
 	/** atlas: combat blood: 44 cells of drops, splats and smears, matte and wet (client/view/bloodView.ts) */
