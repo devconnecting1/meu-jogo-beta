@@ -2610,6 +2610,289 @@ section("C4. cooking: every raw food at a fire, as the card and How to play prom
 	}
 });
 
+// ================================================================ C5 / C6. quick use (ITM-08)
+
+const QUICK = require(join(SRC, "shared/game/quickUse.ts"));
+const { QUICK_HEAL, QUICK_EAT, QUICK_ICON } = require(join(SRC, "shared/data/usables.ts"));
+const HEAL_KIND = QUICK.QUICK_HEAL_KIND;
+const EAT_KIND = QUICK.QUICK_EAT_KIND;
+const vitals = (hp, hunger, dead = false) => ({ hp, hpMax: 100, hunger, hungerMax: 100, dead });
+
+/**
+ * The rule written the slow way, straight from DESIGN_RULES ITM-08, to hold the real one to: the first tier holding
+ * anything the survivor can take (never an item that would end them), inside it the smallest value that covers the
+ * room, else the biggest, a tie to the first in the tier.
+ */
+function referencePick(kind, save, v) {
+	const tiers = kind === HEAL_KIND ? QUICK_HEAL : QUICK_EAT;
+	const value = id => (kind === HEAL_KIND ? USABLES[id].hp : USABLES[id].hunger);
+	const room = kind === HEAL_KIND ? v.hpMax - v.hp : v.hungerMax - v.hunger;
+	let count = 0;
+	for (const tier of tiers) for (const id of tier) count += Math.max(0, save.invenUse[id] ?? 0);
+	let id = -1;
+	let risky = -1;
+	for (const tier of tiers) {
+		const owned = tier.filter(i => (save.invenUse[i] ?? 0) > 0);
+		const safe = owned.filter(i => !(USABLES[i].hp < 0 && v.hp + USABLES[i].hp <= 0));
+		if (risky < 0) risky = owned.find(i => !safe.includes(i)) ?? -1;
+		if (safe.length === 0) continue;
+		const covering = safe.filter(i => value(i) >= room);
+		const pool = covering.length > 0 ? covering : safe;
+		const best = covering.length > 0 ? Math.min(...pool.map(value)) : Math.max(...pool.map(value));
+		id = pool.find(i => value(i) === best);
+		break;
+	}
+	let why;
+	if (count <= 0) why = "none";
+	else if (v.dead || v.hp <= 0) why = "dead";
+	else if (id < 0) why = "risky";
+	else if (room <= 0) why = "full";
+	else why = "ok";
+	const shown = id >= 0 ? id : risky >= 0 ? risky : QUICK_ICON[kind];
+	return { id: shown, count, why, gain: id >= 0 ? Math.max(0, Math.min(value(id), room)) : 0 };
+}
+
+section(
+	"C5. quick use: which item HEAL and EAT pick, one rule for every client (shared/game/quickUse.ts, ITM-08)",
+	() => {
+		const heal = QUICK_HEAL.flat();
+		const eat = QUICK_EAT.flat();
+		// ---- the lists are the data's own columns: nothing a plate could burn for no reason
+		checkRows(
+			"HEAL holds exactly the medicine that restores health without feeding (Bandage, First aid kit)",
+			USABLES,
+			u => {
+				const medicine = u.hp > 0 && u.hunger <= 0;
+				return (
+					heal.includes(u.id) === medicine || `${medicine ? "missing from" : "should not be in"} QUICK_HEAL`
+				);
+			},
+		);
+		checkRows(
+			"EAT holds every food exactly once: tier 1 ready, tier 2 raw (it cooks into more), tier 3 the one that hurts",
+			USABLES,
+			u => {
+				const tiers = QUICK_EAT.map((t, i) => (t.includes(u.id) ? i : -1)).filter(i => i >= 0);
+				if (u.hunger <= 0) return tiers.length === 0 || "not food, but in QUICK_EAT";
+				if (tiers.length !== 1) return `in ${tiers.length} tiers`;
+				const want = u.hp < 0 ? 2 : u.cook >= 0 ? 1 : 0;
+				return tiers[0] === want || `tier ${tiers[0] + 1}, should be ${want + 1}`;
+			},
+		);
+		const utility = USABLES.filter(u => u.hp <= 0 && u.hunger <= 0);
+		check(
+			utility.length === 3 && utility.every(u => !heal.includes(u.id) && !eat.includes(u.id)),
+			"the utility items (Pain killer, Adrenaline, Sedative: neither heal nor feed) are on no plate",
+			utility.map(u => u.name).join(", "),
+		);
+		check(
+			heal.includes(QUICK_ICON[HEAL_KIND]) && eat.includes(QUICK_ICON[EAT_KIND]),
+			"the icon of an empty plate is one of its own items (Bandage, Canned food)",
+		);
+
+		// ---- the rule, against the slow reference, on 4000 random backpacks and bars (both plates)
+		{
+			let seed = 12345;
+			const rnd = n => {
+				seed = (seed * 1103515245 + 12345) % 2147483648;
+				return seed % n;
+			};
+			const bad = [];
+			for (let i = 0; i < 4000; i++) {
+				const save = bareSave();
+				for (const id of [...heal, ...eat, ...utility.map(u => u.id)])
+					save.invenUse[id] = rnd(4) === 0 ? rnd(3) + 1 : 0;
+				const v = vitals(rnd(5) === 0 ? 100 : rnd(101), rnd(5) === 0 ? 100 : rnd(101), rnd(40) === 0);
+				for (const kind of [HEAL_KIND, EAT_KIND]) {
+					const got = QUICK.quickPick(kind, save, v);
+					const want = referencePick(kind, save, v);
+					if (
+						got.id !== want.id ||
+						got.count !== want.count ||
+						got.why !== want.why ||
+						got.gain !== want.gain
+					) {
+						bad.push(
+							`${kind ? "EAT" : "HEAL"} hp ${v.hp} food ${v.hunger}: ${JSON.stringify(got)} vs ${JSON.stringify(want)}`,
+						);
+					}
+				}
+			}
+			check(
+				bad.length === 0,
+				"4000 random backpacks and bars: quickPick is the rule, id, count, why and gain",
+				bad.slice(0, 3).join(" | "),
+			);
+		}
+
+		// ---- the cases a player meets, spelled out
+		const byName = n => USABLES.find(u => u.name === n).id;
+		const BANDAGE = byName("Bandage");
+		const KIT = byName("First aid kit");
+		const pick = (kind, stock, v) => {
+			const save = bareSave();
+			for (const [id, n] of Object.entries(stock)) save.invenUse[Number(id)] = n;
+			return QUICK.quickPick(kind, save, v);
+		};
+		const healStock = { [BANDAGE]: 2, [KIT]: 1 };
+		const at = hp => pick(HEAL_KIND, healStock, vitals(hp, 50));
+		check(
+			at(85).id === BANDAGE &&
+				at(80).id === BANDAGE &&
+				at(79).id === KIT &&
+				at(30).id === KIT &&
+				at(10).id === KIT,
+			"HEAL: 15 or 20 missing -> Bandage (it covers); 21 to 50 -> First aid kit (the smallest that covers); 90 -> the kit (none covers: the biggest)",
+			[85, 80, 79, 30, 10].map(h => `${h}: ${USABLES[at(h).id].name}`).join(", "),
+		);
+		check(
+			at(85).gain === 15 && at(30).gain === 50 && at(10).gain === 50 && at(85).count === 3,
+			"its gain is what the bar takes (+15 of a Bandage at 85), and the count is every heal item (3)",
+		);
+		check(
+			at(100).why === "full" && at(100).id === BANDAGE && pick(HEAL_KIND, {}, vitals(50, 50)).why === "none",
+			"full: the plate greys out showing the smallest; none: greyed with the Bandage's icon",
+		);
+		const RAW = byName("Raw meat");
+		const COOKED = byName("Cooked meat");
+		const ROTTEN = byName("Rotten meat");
+		const APPLE = byName("Apple");
+		const BERRY = byName("Berry");
+		const eatWith = (stock, hp = 80, hunger = 40) => pick(EAT_KIND, stock, vitals(hp, hunger));
+		check(
+			eatWith({ [RAW]: 3, [APPLE]: 1 }).id === APPLE &&
+				eatWith({ [RAW]: 3 }).id === RAW &&
+				eatWith({ [ROTTEN]: 2, [RAW]: 1 }).id === RAW &&
+				eatWith({ [ROTTEN]: 2 }).id === ROTTEN,
+			"EAT: ready food first (the Apple before 3 Raw meat, which a fire makes worth more); raw only without ready food; rotten last",
+		);
+		check(
+			eatWith({ [APPLE]: 1, [BERRY]: 1, [COOKED]: 1 }, 80, 85).id === BERRY &&
+				eatWith({ [APPLE]: 1, [BERRY]: 1, [COOKED]: 1 }, 80, 80).id === APPLE &&
+				eatWith({ [APPLE]: 1, [BERRY]: 1, [COOKED]: 1 }, 80, 10).id === COOKED,
+			"EAT: 15 missing -> Berry (15), 20 -> Apple (20), 90 -> Cooked meat (30, the biggest): no waste when it can",
+		);
+		check(
+			eatWith({ [ROTTEN]: 2 }, 10).why === "risky" &&
+				eatWith({ [ROTTEN]: 2 }, 11).why === "ok" &&
+				eatWith({ [ROTTEN]: 2, [APPLE]: 1 }, 5).id === APPLE,
+			"rotten meat is never the pick when its 10 hp would end the survivor (hp 10: refused as risky; hp 11: eaten)",
+		);
+		check(
+			pick(HEAL_KIND, healStock, vitals(0, 50, true)).why === "dead" &&
+				pick(EAT_KIND, { [APPLE]: 1 }, vitals(50, 50, true)).why === "dead",
+			"a dead survivor's plates do nothing",
+		);
+		const pill = byName("Pain killer");
+		const rush = byName("Adrenaline");
+		check(
+			pick(HEAL_KIND, { [pill]: 3, [rush]: 3 }, vitals(20, 20)).why === "none" &&
+				pick(EAT_KIND, { [pill]: 3, [rush]: 3 }, vitals(20, 20)).why === "none",
+			"with only utility items in the bag, both plates say none: a rare item is never burnt to heal or eat",
+		);
+		// ---- and an "ok" pick is a use the server takes (itemUseWouldWork: the check of its useItem)
+		{
+			const bad = [];
+			for (let hp = 1; hp <= 100; hp += 3) {
+				for (let hunger = 0; hunger <= 100; hunger += 5) {
+					const save = bareSave();
+					for (const id of [...heal, ...eat]) save.invenUse[id] = 1;
+					const p = Ply.createPlayer(save, 0, 0);
+					p.hp = hp;
+					p.hungry = hunger;
+					for (const kind of [HEAL_KIND, EAT_KIND]) {
+						const r = QUICK.quickPick(kind, save, vitals(hp, hunger));
+						if (r.why === "ok" && !Ply.itemUseWouldWork(p, save, r.id))
+							bad.push(`${kind} ${hp}/${hunger}: ${r.id}`);
+					}
+				}
+			}
+			check(
+				bad.length === 0,
+				"every pick the plates would press is a use the server's useItem accepts",
+				bad.slice(0, 3).join(", "),
+			);
+		}
+	},
+);
+
+section(
+	"C6. quick use on the client: the cooldown, the bars read as they will be, the Bag's use (client/systems/quickUse.ts)",
+	() => {
+		const QU = require(join(SRC, "client/systems/quickUse.ts"));
+		const BANDAGE = USABLES.find(u => u.name === "Bandage").id;
+		const save = bareSave();
+		save.invenUse[BANDAGE] = 3;
+		const body = Ply.createPlayer(save, 0, 0);
+		body.hp = 60;
+		const q = new QU.QuickUse();
+		const sent = [];
+		const send = id => (sent.push(id), true);
+		const a = q.press(HEAL_KIND, body, save, 10, send);
+		const b = q.press(HEAL_KIND, body, save, 10.1, send);
+		check(
+			a.used && a.id === BANDAGE && !b.used && b.why === "cooldown" && sent.length === 1,
+			`a second press inside the use cooldown (${Ply.USE_COOLDOWN_S} s, the server's) sends nothing`,
+			`${b.why}`,
+		);
+		const c = q.press(HEAL_KIND, body, save, 10.3, send);
+		const d = q.press(HEAL_KIND, body, save, 10.6, send);
+		check(
+			c.used && !d.used && d.why === "full" && sent.length === 2,
+			"60 hp and a snapshot behind: two Bandages (60 -> 80 -> 100 as the pick reads it), and the third press says full",
+			`${sent.length} sent, then ${d.why}`,
+		);
+		body.hp = 100;
+		const e = q.press(HEAL_KIND, body, save, 10.9, send);
+		body.hp = 70; // bitten after the heal arrived: the bar is the server's again
+		const f = q.press(HEAL_KIND, body, save, 11.2, send);
+		check(
+			!e.used && f.used && sent.length === 3,
+			"the snapshot shows the heal: from then on the body's own hp counts again (bitten to 70, it heals)",
+		);
+		body.hp = 40;
+		q.reset();
+		const g = q.press(HEAL_KIND, body, save, 20, () => false);
+		check(
+			!g.used && g.why === "busy",
+			"a verb the backpack does not take (its queue is full) is not counted as used",
+		);
+		// offline the Bag's verb heals the body at once: the plate must not read the heal twice
+		const off = new QU.QuickUse();
+		const local = bareSave();
+		local.invenUse[BANDAGE] = 2;
+		const me = Ply.createPlayer(local, 0, 0);
+		me.hp = 50;
+		const r = off.press(HEAL_KIND, me, local, 30, id => Ply.itemUseEffect(me, local, id));
+		const v = off.frame(me, local, 30.3)[HEAL_KIND];
+		check(
+			r.used && me.hp === 70 && v.why === "ok" && v.id === BANDAGE,
+			"offline (the Bag's verb heals at once): 70 hp after the Bandage, and the plate still offers the next one",
+			`${me.hp} hp, ${v.why}`,
+		);
+		// the Bag's Use starts the same cooldown (server/sim/craft.ts holds one use every 0.25 s, whoever asked)
+		const bagQ = new QU.QuickUse();
+		bagQ.noteUse(BANDAGE, me, 40);
+		check(
+			bagQ.frame(me, local, 40.1)[HEAL_KIND].cooldown > 0,
+			"a use from the Bag sweeps the plates too (one cooldown)",
+		);
+		check(
+			QU.quickGainText({ hpGain: 20, foodGain: 0 }, t => t) === "+20 HP" &&
+				QU.quickGainText({ hpGain: 5, foodGain: 25 }, t => t) === "+25 FOOD · +5 HP" &&
+				QU.quickGainText({ hpGain: -10, foodGain: 20 }, t => t) === "+20 FOOD · -10 HP",
+			'the feed line says what the bars get: "+20 HP", "+25 FOOD · +5 HP", rotten meat\'s "-10 HP"',
+		);
+		check(
+			inLang("No healing items") &&
+				inLang("No food") &&
+				inLang("Eating that would kill you") &&
+				inLang("Quick heal / eat"),
+			"every reason a plate gives is in lang.ts",
+		);
+	},
+);
+
 // ================================================================ D. crafting
 
 const INV_FIELD = { 1: "invenWeapon", 2: "invenEquip", 3: "invenUse", 4: "invenEtc" };
@@ -6258,6 +6541,232 @@ section(
 			"...nor in the document the DataStore keeps: the next session starts drawn whatever this one did",
 			`stored ${stored !== undefined}`,
 		);
+	},
+);
+
+section(
+	"G11. quick HEAL / EAT on the real server: the Bag's own UseItem verb, the server's rule, refused dead / full / none (ITM-08)",
+	() => {
+		const s = Roblox.bootServer();
+		const P2 = s.P;
+		const IK = P2.IntentKind;
+		const BP = require(join(SRC, "client/net/bagPrediction.ts"));
+		const { Prediction } = require(join(SRC, "client/net/prediction.ts"));
+		const SAVE2 = require(join(SRC, "shared/game/save.ts"));
+		const Ply2 = require(join(SRC, "shared/game/player.ts"));
+		const W2 = require(join(SRC, "shared/game/world.ts"));
+		const QU = require(join(SRC, "client/systems/quickUse.ts"));
+		const Q2 = require(join(SRC, "shared/game/quickUse.ts"));
+		const HEAL = Q2.QUICK_HEAL_KIND;
+		const EAT = Q2.QUICK_EAT_KIND;
+		const byName = n => USABLES.find(u => u.name === n).id;
+		const BANDAGE = byName("Bandage");
+		const KIT = byName("First aid kit");
+		const CAN = byName("Canned food");
+		const APPLE = byName("Apple");
+		// no new protocol: the plates' press is the Bag's verb -- the intent kinds are the ones F3 shipped
+		check(
+			!Object.keys(IK).some(k => /quick/i.test(k)) &&
+				/send: id => Bag\.useItem\(p, ctx\.save, id\)/.test(source("client/main.client.ts")) &&
+				!/netSend|IntentKind/.test(source("client/systems/quickUse.ts")),
+			"no new protocol: no quick intent kind, and main.client.ts presses through backpackSync.useItem (the Bag's UseItem)",
+		);
+		const pl = s.join(newUser(), "medic");
+		s.immortal.add(pl); // no bites: every hp point below is an item's
+		const save = s.save(pl);
+		for (let i = 0; i < save.invenUse.length; i++) save.invenUse[i] = 0;
+		save.invenUse[BANDAGE] = 2;
+		save.invenUse[KIT] = 1;
+		save.invenUse[CAN] = 2;
+		save.invenUse[APPLE] = 1;
+		const sp = s.enter(pl);
+		sp.state.hp = 40;
+		sp.state.hungry = 30;
+		// what the server did with each verb (the session layer's hook, chained)
+		const outcomes = [];
+		const prevOutcome = s.sim.backpack.onOutcome;
+		s.sim.backpack.onOutcome = (who, msg, outcome) => {
+			outcomes.push({ kind: msg.kind, arg: msg.arg, outcome });
+			prevOutcome?.(who, msg, outcome);
+		};
+		// the client: its copy of the backpack, its survivor, and the prediction that adopts every self block (as G6)
+		const client = clone(save);
+		const body = Ply2.createPlayer(client, sp.state.x, sp.state.y);
+		const pred = new Prediction();
+		pred.attach(W2.createWorld(s.sim.world.width, s.sim.world.height), body, client);
+		const cursor = { pendingPlace: -1 };
+		const entries = [];
+		const snapRemote = s.remote("Snap");
+		let nonce = 0;
+		let now = 0;
+		const drain = () => {
+			for (const e of snapRemote.sent) {
+				if (e.to !== pl) continue;
+				const part = P2.decodeSnapshotPart(e.args[0]);
+				if (part?.self === undefined) continue;
+				now += 0.05;
+				pred.reconcile(part.self, [], now);
+			}
+			snapRemote.sent.length = 0;
+		};
+		const play = seconds => {
+			for (let t = 0; t < seconds; t += 0.05) {
+				s.run(0.05);
+				drain();
+			}
+			const bag = SAVE2.readBag(s.lastBag(pl));
+			if (bag !== undefined) BP.rebase(client, cursor, bag, entries, now);
+		};
+		/** client/net/backpackSync.ts useItem, owned: predicted on the client's copy, then the UseItem verb with a nonce */
+		const send = id => {
+			if (!BP.predictVerb(client, cursor, IK.UseItem, id, body)) return false;
+			nonce += 1;
+			entries.push({ kind: IK.UseItem, arg: id, nonce, seq: 0, at: now });
+			s.verb(pl, IK.UseItem, id, 0, nonce);
+			return true;
+		};
+		const q = new QU.QuickUse();
+		const said = [];
+		let heard = 0;
+		const quick = kind => {
+			const r = QU.pressQuick(
+				kind,
+				body,
+				client,
+				now,
+				{ send, say: t => said.push(t), heard: () => heard++, tr: t => t },
+				q,
+			);
+			return r;
+		};
+		play(0.4);
+
+		// 1. HEAL at 40 hp: 60 missing, nothing covers -> the biggest, the First aid kit; the server heals it
+		const hp0 = body.hp;
+		const server0 = sp.state.hp;
+		const r1 = quick(HEAL);
+		check(
+			r1.used &&
+				r1.id === KIT &&
+				client.invenUse[KIT] === 0 &&
+				body.hp === hp0 &&
+				said.at(-1) === "+50 HP" &&
+				heard === 1,
+			'H at 40 hp: the First aid kit (60 missing, none covers: the biggest), predicted as one fewer, "+50 HP" and the use sound',
+			`${USABLES[r1.id]?.name}, "${said.at(-1)}"`,
+		);
+		play(1);
+		// (the second of play also regenerates a little: the heal is the jump of 50, the rest is the regen's)
+		check(
+			sp.state.hp >= server0 + 50 - 0.01 &&
+				sp.state.hp <= server0 + 50 + 3 &&
+				Math.abs(body.hp - sp.state.hp) <= 1 &&
+				save.invenUse[KIT] === 0 &&
+				client.invenUse[KIT] === 0 &&
+				entries.length === 0 &&
+				outcomes.some(o => o.kind === IK.UseItem && o.arg === KIT && o.outcome.kind === "used"),
+			"the SERVER's body healed 50 through its useItem (the UseItem verb), the self block brought it, the bag retired the prediction",
+			`server ${sp.state.hp.toFixed(1)}, client ${body.hp.toFixed(1)}`,
+		);
+		// 2. 10 missing: the Bandage, the smallest that covers (no waste of a second kit -- there is none, but also no
+		// bandage burnt twice: see C6)
+		const r2 = quick(HEAL);
+		play(1);
+		check(
+			r2.used && r2.id === BANDAGE && sp.state.hp === sp.state.hpMax && save.invenUse[BANDAGE] === 1,
+			"H at 90 hp: a Bandage, and the server's bar is full",
+			`${sp.state.hp}`,
+		);
+		// 3. full: refused on the client, nothing predicted, nothing sent
+		const sentBefore = nonce;
+		const r3 = quick(HEAL);
+		check(
+			!r3.used &&
+				r3.why === "full" &&
+				nonce === sentBefore &&
+				client.invenUse[BANDAGE] === 1 &&
+				said.at(-1) === "Already at full health",
+			"H at full health: refused on the client with the reason, nothing sent",
+		);
+		// 4. EAT at 30 food: 70 missing -> the Canned food (25, the biggest), the server feeds it
+		const food0 = sp.state.hungry;
+		const r4 = quick(EAT);
+		play(1);
+		check(
+			r4.used &&
+				r4.id === CAN &&
+				sp.state.hungry >= food0 + 24 &&
+				save.invenUse[CAN] === 1 &&
+				client.invenUse[CAN] === 1,
+			"F at 30 food: the Canned food, fed on the server, one fewer on both sides",
+			`${food0.toFixed(1)} -> ${sp.state.hungry.toFixed(1)}`,
+		);
+		// 5. none: the last Bandage, then nothing to heal with
+		sp.state.hp = 50;
+		play(0.4);
+		const r5 = quick(HEAL);
+		play(1);
+		const sentNone = nonce;
+		sp.state.hp = 50;
+		play(0.4);
+		const r6 = quick(HEAL);
+		check(
+			r5.used &&
+				save.invenUse[BANDAGE] === 0 &&
+				!r6.used &&
+				r6.why === "none" &&
+				nonce === sentNone &&
+				said.at(-1) === "No healing items",
+			'the last Bandage used, then H says "No healing items" and sends nothing',
+			`${r5.used}/${r5.why} ${USABLES[r5.id]?.name}, server ${save.invenUse[BANDAGE]}, then ${r6.why}, "${said.at(-1)}"`,
+		);
+		// 6. a client a bag behind believes in an apple the server no longer has: the verb is refused there, rolled back here
+		save.invenUse[APPLE] = 0;
+		sp.state.hungry = 40;
+		play(0.3);
+		client.invenUse[APPLE] = 1;
+		client.invenUse[CAN] = 0;
+		const apples = client.invenUse[APPLE];
+		const food1 = sp.state.hungry;
+		const r7 = quick(EAT);
+		play(1);
+		check(
+			r7.used &&
+				apples === 1 &&
+				client.invenUse[APPLE] === 0 &&
+				entries.length === 0 &&
+				sp.state.hungry <= food1 + 0.01,
+			"none on the server (a client a bag behind): the verb is refused there, nothing eaten, and its bag rolls the client back",
+			`server food ${food1.toFixed(1)} -> ${sp.state.hungry.toFixed(1)}`,
+		);
+		// 7. dead: the body dies on the server while the client is a snapshot behind -- the press goes out, the server
+		// refuses it (`dead`) and eats nothing; once the client knows, its plates do nothing and send nothing
+		save.invenUse[CAN] = 1;
+		play(0.3);
+		client.invenUse[CAN] = 1;
+		s.immortal.delete(pl);
+		s.kill(pl);
+		const cans = save.invenUse[CAN];
+		body.dead = false;
+		body.hp = 50;
+		const r8 = quick(EAT);
+		s.run(0.2);
+		const refusedDead = outcomes.some(
+			o => o.kind === IK.UseItem && o.arg === CAN && o.outcome.kind === "refused" && o.outcome.why === "dead",
+		);
+		check(
+			r8.used && refusedDead && save.invenUse[CAN] === cans,
+			"a press already on its way when the server's body died: refused as dead, the can stays in the server's backpack",
+		);
+		play(0.5);
+		const sentDead = nonce;
+		const r9 = quick(EAT);
+		check(
+			(body.dead || body.hp <= 0) && !r9.used && r9.why === "dead" && nonce === sentDead,
+			"and once the client's body is dead too (the self block's 0 hp): the plate does nothing and sends nothing",
+			`${r9.why}, ${body.hp} hp`,
+		);
+		s.quit(pl);
 	},
 );
 

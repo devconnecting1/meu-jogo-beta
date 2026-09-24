@@ -50,6 +50,11 @@ export class InputState {
 	 * pick from, drawn (client/systems/combat.ts `cycleWeapon`). The pad has no number keys.
 	 */
 	weaponCycle = 0;
+	/**
+	 * A quick-use plate pressed this frame (DESIGN_RULES ITM-08): 0 HEAL (H, the D-pad's up), 1 EAT (F, the D-pad's
+	 * down), -1 none. The HUD's plates write it too, by click or tap (client/ui/hudQuick.ts): one path, like the hotbar.
+	 */
+	quickUsePressed = -1;
 
 	/**
 	 * DESIGN_RULES UI-06: the SURVIVOR is out of play this frame -- a screen is open over the run (Bag, menu,
@@ -102,6 +107,7 @@ export class InputState {
 		this.scoreboardPressed = false;
 		this.weaponSlotPressed = -1;
 		this.weaponCycle = 0;
+		this.quickUsePressed = -1;
 	}
 
 	/**
@@ -123,6 +129,8 @@ export class InputState {
 		this.reloadPressed = false;
 		this.weaponSlotPressed = -1;
 		this.weaponCycle = 0;
+		// the Bag has its own Use; a dead survivor eats nothing (UI-06, ITM-08)
+		this.quickUsePressed = -1;
 		if (this.attackHeld) this.attackBlocked = true;
 	}
 
