@@ -1026,6 +1026,213 @@ section(
 	},
 );
 
+section(
+	"B11. security review of 5874cfa: presence, fuel debt, ram credit, step-aside, reach, body swap, E priority",
+	() => {
+		const { WEAPONS } = require(join(SRC, "shared/data/weapons.ts"));
+		const { AchievementId } = require(join(SRC, "shared/data/achievements.ts"));
+		const wall = (world, x, y, w, h) =>
+			W.addSolid(world, { kind: "wall", x, y, w, h, hp: 1e6, hpMax: 1e6, destructible: false, tags: "bwall" });
+
+		// V1: riding with the stick is presence (the day's credit, MP-13); the step itself still does not "walk"
+		{
+			const { world, sim } = serverWith({ width: 30000 });
+			const sp = addPlayer(sim, 0, 1000, 2000, fueled(40));
+			park(world, 21, 1000, 2040);
+			const d = driver(sim, sp);
+			d.tick(0, 0, PRESS_E);
+			d.ticks(60 * 10, 1, 0);
+			check(sim.vehicles.riding(0), "V1: ten seconds on the bicycle, stick held");
+			check(sim.idleSeconds(sp) < 0.5, "V1: ...and the server does not count them idle", f1(sim.idleSeconds(sp)));
+			const steps = ride(wallWorld(), rider(VehicleKind.Bicycle), 60, i => stick(i + 1, 1, 0));
+			check(
+				steps.every(r => !r.walking) && steps[59].moved > 0,
+				"V1: ...while the step itself never walks (no feet, no footsteps)",
+			);
+			d.ticks(60 * 5, 0, 0);
+			check(sim.idleSeconds(sp) > 4, "V1: five seconds coasting with no stick are idle", f1(sim.idleSeconds(sp)));
+		}
+
+		// V2: the unburnt fraction stays with the slot: getting off every 8 s does not ride for free
+		{
+			const world = W.createWorld(3000, 3000);
+			const save = fueled(30);
+			const p = Ply.createPlayer(save, 1000, 1000);
+			const sp = { slot: 0, state: p, save, userId: 1 };
+			const veh = new SV.ServerVehicles({ world });
+			park(world, 22, 1000, 1030);
+			let ridden = 0;
+			let cycles = 0;
+			for (let cycle = 0; cycle < 20; cycle++) {
+				for (let i = 0; i < 40; i++) veh.step(DT);
+				if (!veh.tryMount(sp)) break;
+				cycles += 1;
+				for (let t = 0; t < 8 * 60; t++) {
+					p.ride.speed = V.topSteps(MOTO);
+					veh.afterStep(sp, { moved: 0, walking: false, died: false }, [], DT);
+					veh.step(DT);
+					ridden += DT;
+				}
+				veh.getOff(sp);
+			}
+			const owed = ridden * (MOTO.oilIdle + MOTO.oilFull);
+			check(
+				cycles === 20 && 30 - save.oil === Math.floor(owed + 1e-6),
+				`V2: 20 rides of 8 s at top speed, off and on between them, burn the ${f1(owed)} oil they owe`,
+				`${30 - save.oil} burnt in ${cycles} rides`,
+			);
+		}
+
+		// V3: a zombie killed by the vehicle is nobody's weapon: Street Sweeper, never Long Shot for the holstered rifle
+		{
+			const { world, sim } = serverWith({ zombies: true, width: 12000, height: 6000, hour: 12 });
+			const sniper = WEAPONS.find(w => w.kind === 5);
+			const save = fueled(40);
+			save.invenWeapon[sniper.id] = 1;
+			save.equipWeapon = sniper.id;
+			const sp = addPlayer(sim, 0, 1000, 3000, save);
+			sp.state.godMode = false;
+			park(world, 22, 1000, 3040);
+			const d = driver(sim, sp);
+			d.tick(0, 0, PRESS_E);
+			d.ticks(90, 1, 0);
+			sim.horde.zombies.length = 0;
+			const z = createZombie(1, sp.state.x + 300, 3000, 1, false);
+			z.hp = 5;
+			sim.horde.zombies.push(z);
+			for (let i = 0; i < 90 && sim.vehicles.riding(0); i++) d.tick(1, 0);
+			const a = save.achievements;
+			check(
+				z.hp <= 0 && a[AchievementId.ZombieSlayer] === 1 && a[AchievementId.Sniper] === 0,
+				`V3: run over with a ${sniper.name} holstered: the kill counts, for no weapon`,
+				`hp ${z.hp}, slayer ${a[AchievementId.ZombieSlayer]}, sniper ${a[AchievementId.Sniper]}`,
+			);
+		}
+
+		// NIT: getting off never steps through a wall or a closed door (the reviewer's vestibule)
+		{
+			const world = W.createWorld(3000, 3000);
+			wall(world, 900, 1000, 200, 20); // across the way ahead
+			wall(world, 930, 880, 40, 120); // left
+			wall(world, 1030, 880, 40, 120); // right
+			wall(world, 980, 900, 40, 40); // behind
+			const save = fueled(10);
+			const p = Ply.createPlayer(save, 1000, 1300);
+			const sp = { slot: 0, state: p, save, userId: 1 };
+			const veh = new SV.ServerVehicles({ world });
+			park(world, 22, 1000, 1330);
+			check(veh.tryMount(sp), "NIT: on the motorcycle (below the wall)");
+			p.x = 1000;
+			p.y = 1000 - MOTO.radius - 0.01;
+			p.ride.heading = V.quantHeading(Math.PI / 2);
+			for (let i = 0; i < 40; i++) veh.step(DT);
+			veh.getOff(sp);
+			check(
+				!veh.riding(0) && p.y < 1000,
+				"NIT: boxed in against the wall, E leaves the rider on this side",
+				f1(p.y),
+			);
+		}
+
+		// NIT: E does not get on across a closed door (thin enough for the vehicle to be in reach behind it)
+		{
+			const { world, sim } = serverWith();
+			W.addSolid(world, {
+				kind: "door",
+				x: 900,
+				y: 1000,
+				w: 200,
+				h: 6,
+				hp: 100,
+				hpMax: 100,
+				destructible: true,
+				tags: "door",
+				open: false,
+			});
+			park(world, 21, 1000, 1000 + 6 + 1 + BIKE.width / 2);
+			const sp = addPlayer(sim, 0, 1000, 1000 - 31);
+			const d = driver(sim, sp);
+			checkEq(
+				interactTarget(world, sp.state.x, sp.state.y)?.kind,
+				"vehicle",
+				"NIT: the bike behind the door is in reach",
+			);
+			d.tick(0, 0, PRESS_E);
+			check(!sim.vehicles.riding(0), "NIT: ...and E does not get on it through the closed door");
+		}
+
+		// NIT: a new body while riding (a stand-up, a resumed body) parks the vehicle where the old body rode
+		{
+			const { world, sim, events } = serverWith();
+			const sp = addPlayer(sim, 0, 1000, 2000, fueled(40));
+			park(world, 21, 1000, 2040);
+			const d = driver(sim, sp);
+			d.tick(0, 0, PRESS_E);
+			d.ticks(60, 1, 0);
+			const rodeTo = { x: sp.state.x, y: sp.state.y };
+			sp.state = Ply.createPlayer(sp.save, 5000, 5000);
+			d.tick(0, 0);
+			const parked = vehiclesIn(world)[0];
+			const cx = parked === undefined ? NaN : parked.x + parked.w / 2;
+			check(
+				!sim.vehicles.riding(0) &&
+					sp.state.ride === undefined &&
+					Math.abs(cx - rodeTo.x) < 2 &&
+					events.some(e => e.kind === "dismounted" && e.why === "left"),
+				"NIT: the bicycle stays where it was ridden, not at the new body",
+				`${f1(cx)} vs ${f1(rodeTo.x)}`,
+			);
+			check(sp.state.x === 5000 && sp.state.y === 5000, "NIT: ...and the new body does not step aside from it");
+		}
+
+		// NIT: a parked vehicle does not take E from a door in reach, nor from the loot of the building you stand in
+		{
+			const world = W.createWorld(3000, 3000);
+			const door = W.addSolid(world, {
+				kind: "door",
+				x: 1000,
+				y: 960,
+				w: 96,
+				h: 24,
+				hp: 100,
+				hpMax: 100,
+				destructible: true,
+				tags: "door",
+				open: false,
+			});
+			park(world, 21, 1048, 1010);
+			const at = { x: 1048, y: 1010 };
+			checkEq(
+				interactTarget(world, at.x, at.y)?.kind,
+				"door",
+				"NIT: on a bike left in a doorway, E is the door's",
+			);
+			door.open = true;
+			checkEq(
+				interactTarget(world, at.x, at.y)?.solid?.id,
+				door.id,
+				"NIT: ...open or closed (it is still the door)",
+			);
+			const house = W.addSolid(world, {
+				kind: "building",
+				x: 1800,
+				y: 1800,
+				w: 400,
+				h: 400,
+				hp: 1,
+				hpMax: 1,
+				destructible: false,
+				passable: true,
+				lootItems: [{ kind: 4, id: 23, count: 1 }],
+			});
+			park(world, 21, 2000, 2000);
+			checkEq(interactTarget(world, 2000, 2000)?.kind, "search", "NIT: a bike parked indoors: E searches first");
+			house.lootItems = [];
+			checkEq(interactTarget(world, 2000, 2000)?.kind, "vehicle", "NIT: ...and rides it once the house is empty");
+		}
+	},
+);
+
 section("C1. prediction: the client replays the ride from the server's own numbers, to the bit", () => {
 	const s = predictedSession();
 	park(s.world, 22, 2000, 3040);

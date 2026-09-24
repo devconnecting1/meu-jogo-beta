@@ -33,7 +33,7 @@ import { PlayerState, applyPlayerDamage } from "shared/game/player";
 import { ZombieState } from "shared/game/entities";
 import { gameHours } from "shared/sim/clock";
 import { InputCommand } from "shared/net/protocol";
-import { stepPlayer } from "shared/sim/playerMove";
+import { stepPlayer, WALK_EPSILON } from "shared/sim/playerMove";
 import { emitSound, reactToHit } from "shared/sim/ai/zombieBrain";
 import { ServerBackpack } from "./backpack";
 import { ServerBuild } from "./build";
@@ -419,7 +419,9 @@ export class ServerSimulation {
 						else if (applyPlayerDamage(sp.state, sp.save, raw, true)) sp.state.reactionDir = dir;
 					},
 					ram: (sp, z, damage, knock, stun, away) => {
-						if (this.combat !== undefined) this.combat.hitZombieWith(sp, z, damage, knock, stun, away);
+						// weapon kind -1: a kill by the vehicle is nobody's weapon (not the holstered one), so it counts for
+						// the kill credit and Street Sweeper, never for Quiet Archer or Long Shot (review of 5874cfa, V3)
+						if (this.combat !== undefined) this.combat.hitZombieWith(sp, z, damage, knock, stun, away, -1);
 						else reactToHit(z, away, knock, stun);
 					},
 					shove: (z, dir, knock, stun) => reactToHit(z, dir, knock, stun),
@@ -785,16 +787,17 @@ export class ServerSimulation {
 			// §2.4: the backpack verbs made during this command land BEFORE it is simulated -- its movement (armour,
 			// a skill) and its weapon machine (a switch) already see them, exactly as the client predicted them
 			this.backpack.beforeCommand(sp, cmd, this.tick);
+			const rode = sp.state.ride !== undefined;
 			const res = stepPlayer(this.world, sp.state, sp.save, cmd, this.tickDt);
 			// VEI-05: what the ride cost or caused this step (a crash, a zombie ahead, fuel, noise), on the same command
 			this.vehicles?.afterStep(sp, res, this.horde?.zombies ?? EMPTY_ZOMBIES, this.tickDt);
 			noteStep(sp, cmd, res.walking);
 			// a filled tick consumes nothing (players.ts), so only a command the client really sent can count — and
-			// only a step that actually walked, or an edge: a stick held against a wall repeats itself for free
-			this.notePresence(
-				sp,
-				sp.counters.consumed > consumed && ((cmd.moveMag > 0 && res.walking) || cmd.edges !== 0),
-			);
+			// only a step that actually walked, or an edge: a stick held against a wall repeats itself for free. A
+			// rider's step never "walks" (no feet, no footsteps: VEI-05), so for them the stick moving the vehicle is the
+			// presence -- else three minutes on a motorcycle read as AFK and lost the day's credit (review V1)
+			const went = res.walking || (rode && res.moved > WALK_EPSILON);
+			this.notePresence(sp, sp.counters.consumed > consumed && ((cmd.moveMag > 0 && went) || cmd.edges !== 0));
 			// the weapon machine runs on the SAME command as the movement: the aim a shot is fired along is
 			// the one the player was holding when they walked that step, never the one two ticks later. While a
 			// construction is on the cursor the attack and reload edges are the builder's (place, rotate): the weapon

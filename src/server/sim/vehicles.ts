@@ -30,10 +30,10 @@
  * Pure module: no Instances, no services, no os.clock.
  */
 import { VehicleDef, vehicleDef, VehicleKind } from "shared/data/buildings";
-import { PLAYER_RADIUS, circleBlocked } from "shared/game/physics";
+import { PLAYER_RADIUS, circleBlocked, moveActor, segmentClear } from "shared/game/physics";
 import { PlayerState, applyPlayerDamage } from "shared/game/player";
 import { ZombieState, zombieRadius } from "shared/game/entities";
-import { Solid, WorldData, addSolid, removeSolid } from "shared/game/world";
+import { Solid, WorldData, addSolid, isBlocking, removeSolid } from "shared/game/world";
 import { SLOT_NONE } from "shared/net/mpConfig";
 import { FxEvent, FxType } from "shared/net/protocol";
 import { debrisMaterialId } from "shared/net/fxWire";
@@ -70,6 +70,8 @@ export const RAM_STUN = 1;
 /** the zombie a slow vehicle stopped against: a shove, no damage */
 export const BUMP_KNOCK = 3;
 export const BUMP_STUN = 0.3;
+/** a step-aside spot counts only if a walk from the saddle ends this close to it */
+const STEP_ASIDE_EPS = 0.5;
 /** a zombie counts as ahead within this cosine of the heading (±72°): one from behind never stops the vehicle */
 const AHEAD_COS = 0.3;
 /** seconds between two `distance` events (the Rider achievement's odometer) */
@@ -134,8 +136,11 @@ interface Ridden {
 	hp: number;
 	hpMax: number;
 	owner: number;
-	/** the fraction of an oil unit already burnt and not yet taken from the backpack */
-	fuel: number;
+	/**
+	 * The body that got on. The vehicle is wherever THIS body is: when the life code swaps the survivor's body (a
+	 * stand-up, a resumed body), the vehicle is parked where the old one rode, never teleported to the new one.
+	 */
+	body: PlayerState;
 	/** seconds to the next engine ring */
 	noiseT: number;
 	hornCd: number;
@@ -155,6 +160,12 @@ export class ServerVehicles {
 	private readonly riders = new Map<number, Ridden>();
 	/** seconds until this slot may get on or off again */
 	private readonly cooldown = new Map<number, number>();
+	/**
+	 * The fraction of an oil unit each slot has burnt and not yet paid (the save keeps whole units). Per SLOT, not per
+	 * ride, like the combat's fuel debt: kept on the ride it was dropped at every dismount, so getting off every few
+	 * seconds rode for free (security review of 5874cfa, V2). Cleared when the slot leaves the world.
+	 */
+	private readonly fuelDebt = new Map<number, number>();
 
 	constructor(options: ServerVehiclesOptions) {
 		this.world = options.world;
@@ -195,6 +206,10 @@ export class ServerVehicles {
 		if (!isRideable(s) || vehicleBroken(s)) return false;
 		const def = vehicleDef(vehicleKindOfSolid(s));
 		if (def === undefined) return false;
+		// not through a wall: the nearest point of it must be in plain sight (the interaction's own reach rule)
+		const nx = math.clamp(p.x, s.x, s.x + s.w);
+		const ny = math.clamp(p.y, s.y, s.y + s.h);
+		if (!segmentClear(this.world, p.x, p.y, nx, ny, isBlocking)) return false;
 		if ((this.cooldown.get(sp.slot) ?? 0) > 0) {
 			this.tell(sp, { kind: "refused", vehicle: def.kind, why: "cooldown" });
 			return true;
@@ -238,8 +253,9 @@ export class ServerVehicles {
 			if (p.ride !== undefined) p.ride = undefined;
 			return;
 		}
-		if (p.ride === undefined) {
-			// the body under the rider was replaced (a revive, an admin): the vehicle goes back where it stands
+		if (p !== rec.body || p.ride === undefined) {
+			// the body under the rider was replaced (a stand-up, a resumed body, an admin): the vehicle is parked where
+			// the body that rode it is, not where the new one stands
 			this.dismount(sp, "left");
 			return;
 		}
@@ -293,6 +309,7 @@ export class ServerVehicles {
 	remove(sp: ServerPlayer): void {
 		if (this.riders.has(sp.slot)) this.dismount(sp, "left");
 		this.cooldown.delete(sp.slot);
+		this.fuelDebt.delete(sp.slot);
 		for (const [, rec] of this.riders) if (rec.owner === sp.slot) rec.owner = SLOT_NONE;
 	}
 
@@ -306,7 +323,7 @@ export class ServerVehicles {
 			hp: s.hp,
 			hpMax: s.hpMax > 0 ? s.hpMax : def.hpMax,
 			owner: s.owner ?? SLOT_NONE,
-			fuel: 0,
+			body: p,
 			noiseT: 0,
 			hornCd: 0,
 			odometer: 0,
@@ -333,13 +350,15 @@ export class ServerVehicles {
 	private dismount(sp: ServerPlayer, why: DismountWhy): void {
 		const rec = this.riders.get(sp.slot);
 		if (rec === undefined) return;
-		const p = sp.state;
+		// the body that rode: where the vehicle is, even when the life code has handed the survivor a new one
+		const p = rec.body;
 		const heading = p.ride !== undefined ? rideHeading(p.ride) : 0;
 		const rot = quarterOf(heading);
 		const pdef = PLACEABLES[rec.placeable];
 		this.reportDistance(sp, rec);
 		this.riders.delete(sp.slot);
 		p.ride = undefined;
+		sp.state.ride = undefined;
 		this.cooldown.set(sp.slot, MOUNT_COOLDOWN_S);
 		if (pdef !== undefined) {
 			const r = parkedRect(rec.def, p.x, p.y, rot);
@@ -353,12 +372,17 @@ export class ServerVehicles {
 				owner: rec.owner,
 			});
 		}
-		// on their own feet beside it -- not for a death (the body lies where it fell) nor a throw (they fly on)
-		if (why === "action" || why === "broken") this.stepAside(p, rec.def, heading);
+		// on their own feet beside it -- not for a death (the body lies where it fell) nor a throw (they fly on), and
+		// only the body that is still the survivor's
+		if ((why === "action" || why === "broken") && !p.dead && p === sp.state) this.stepAside(p, rec.def, heading);
 		this.tell(sp, { kind: "dismounted", vehicle: rec.def.kind, why });
 	}
 
-	/** the rider steps off to the left of the vehicle, else the right, behind, ahead; else stays on it (passable) */
+	/**
+	 * The rider steps off to the left of the vehicle, else the right, behind, ahead; else stays on it (passable). An
+	 * offset counts only if a walk from the saddle actually gets there: a free spot on the far side of a wall or a
+	 * closed door is not beside the vehicle (security review of 5874cfa: the step used to go through them).
+	 */
 	private stepAside(p: PlayerState, def: VehicleDef, heading: number): void {
 		const side = def.width / 2 + PLAYER_RADIUS + 2;
 		const tip = def.length / 2 + PLAYER_RADIUS + 2;
@@ -377,6 +401,8 @@ export class ServerVehicles {
 			if (x < WORLD_MARGIN || y < WORLD_MARGIN) continue;
 			if (x > this.world.width - WORLD_MARGIN || y > this.world.height - WORLD_MARGIN) continue;
 			if (circleBlocked(this.world, x, y, PLAYER_RADIUS) !== undefined) continue;
+			const walk = moveActor(this.world, p.x, p.y, PLAYER_RADIUS, x - p.x, y - p.y);
+			if (math.abs(walk.x - x) > STEP_ASIDE_EPS || math.abs(walk.y - y) > STEP_ASIDE_EPS) continue;
 			p.x = x;
 			p.y = y;
 			return;
@@ -452,12 +478,14 @@ export class ServerVehicles {
 		const save = sp.save;
 		const r = sp.state.ride;
 		if (r === undefined || !engineRuns(def, save)) return;
-		rec.fuel += (def.oilIdle + (def.oilFull * rideSpeed(r)) / def.topSpeed) * dt;
-		// whole units, like the flamethrower's fuel debt (server/sim/combat.ts spendFuel): the save keeps integers
-		while (rec.fuel >= 1) {
-			rec.fuel -= 1;
+		// whole units, like the flamethrower's fuel debt (server/sim/combat.ts spendFuel): the save keeps integers, and
+		// the fraction stays with the SLOT across getting off and on
+		let debt = (this.fuelDebt.get(sp.slot) ?? 0) + (def.oilIdle + (def.oilFull * rideSpeed(r)) / def.topSpeed) * dt;
+		while (debt >= 1) {
+			debt -= 1;
 			save.oil = math.max(0, save.oil - 1);
 		}
+		this.fuelDebt.set(sp.slot, debt);
 	}
 
 	private emitNoise(sp: ServerPlayer, rec: Ridden, radius: number, source: VehicleNoise["source"]): void {

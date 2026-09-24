@@ -102,10 +102,16 @@ export function nearestGroundItem(world: WorldData, x: number, y: number): Groun
 	return best;
 }
 
-/** nearest usable solid (doors, lights, trees/cars/bins, vehicles, repairables); never a building record */
+/**
+ * Nearest usable solid (doors, lights, trees/cars/bins, vehicles, repairables); never a building record. A parked
+ * vehicle (VEI-05) yields to any door in reach: it is passable and can be ridden from anywhere around it, a door only
+ * from its threshold -- a bike left in a doorway must not take the door's E (review of 5874cfa).
+ */
 export function nearestUsableSolid(world: WorldData, x: number, y: number): Solid | undefined {
 	let best: Solid | undefined;
 	let bestD = SOLID_REACH;
+	let door: Solid | undefined;
+	let doorD = DOOR_REACH;
 	for (const s of querySolids(
 		world,
 		x - INTERACT_RADIUS,
@@ -114,13 +120,19 @@ export function nearestUsableSolid(world: WorldData, x: number, y: number): Soli
 		y + INTERACT_RADIUS,
 	)) {
 		if (s.kind === "building" || (s.passable === true && !isVehicle(s))) continue;
-		const limit = isDoor(s) ? DOOR_REACH : SOLID_REACH;
+		const isADoor = isDoor(s);
+		const limit = isADoor ? DOOR_REACH : SOLID_REACH;
 		const d = edgeDist(s, x, y);
+		if (isADoor && d < doorD) {
+			doorD = d;
+			door = s;
+		}
 		if (d < limit && d < bestD) {
 			bestD = d;
 			best = s;
 		}
 	}
+	if (best !== undefined && door !== undefined && isVehicle(best)) return door;
 	return best;
 }
 
@@ -152,7 +164,8 @@ export function bodiesOverlapRect(
 /**
  * What E acts on, by priority: ground item → door / light / tree-car-bin / anything else in reach (repair) →
  * the loot of the building you stand in. A solid in reach always wins over the building: reaching through a wall
- * to loot is not a thing.
+ * to loot is not a thing. The one exception is a parked vehicle (VEI-05), which comes after a door in reach and
+ * after the loot: it can be ridden from anywhere around it, they cannot.
  */
 export type InteractTarget =
 	| { kind: "item"; item: GroundItem }
@@ -168,8 +181,13 @@ export function interactTarget(world: WorldData, x: number, y: number): Interact
 	if (item !== undefined) return { kind: "item", item };
 	const s = nearestUsableSolid(world, x, y);
 	if (s !== undefined) {
-		// ridden (server/sim/vehicles.ts), or repaired once broken (the "solid" path, VEI-05)
-		if (isVehicle(s)) return { kind: "vehicle", solid: s };
+		// ridden (server/sim/vehicles.ts), or repaired once broken (the "solid" path, VEI-05) -- after the loot of the
+		// building you stand in: a bike parked indoors must not hide the search
+		if (isVehicle(s)) {
+			const b = buildingToSearch(world, x, y);
+			if (b !== undefined) return { kind: "search", building: b };
+			return { kind: "vehicle", solid: s };
+		}
 		if (isDoor(s)) return { kind: "door", solid: s };
 		if (isLight(s)) return { kind: "light", solid: s };
 		if (isMapItem(s)) return { kind: "mapItem", solid: s };
