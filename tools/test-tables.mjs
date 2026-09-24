@@ -52,7 +52,7 @@ const REC = require(join(SRC, "client/ui/records.ts"));
 const SB = require(join(SRC, "client/ui/scoreboard.ts"));
 const { Hud } = require(join(SRC, "client/ui/hud.ts"));
 const W = require(join(SRC, "client/ui/widgets.ts"));
-const { THEME, SURFACE, STAT, TEXT } = require(join(SRC, "client/ui/theme.ts"));
+const { THEME, SURFACE, STAT, TEXT, RARITY } = require(join(SRC, "client/ui/theme.ts"));
 const { defaultSave } = require(join(SRC, "shared/game/save.ts"));
 const TIT = require(join(SRC, "shared/data/titles.ts"));
 const { LifeState } = require(join(SRC, "shared/net/protocol.ts"));
@@ -1106,17 +1106,17 @@ check(
 );
 const mRow = rowsNow()[0];
 check(
-	"valores replicados: nome, titulo (na cor dele), nivel, dia da vida, abates",
+	"valores replicados: nome, titulo (na cor da raridade dele), nivel, dia da vida, abates",
 	cellText(mRow, "name") === "Marta" &&
 		subText(mRow, "name") === "[Horde Breaker]" &&
-		sameColor(mRow.FindFirstChild("Sname").TextColor3, STAT.effect) &&
+		sameColor(mRow.FindFirstChild("Sname").TextColor3, RARITY.uncommon) &&
 		cellText(mRow, "level") === "12" &&
 		cellText(mRow, "lifeDay") === "9" &&
 		cellText(mRow, "kills") === "137",
 );
 const byName = n => rowsNow().find(b => cellText(b, "name") === n);
 check(
-	"[Survivor] em verde sob o seu nome",
+	"[Survivor] em verde (comum) sob o seu nome",
 	subText(byName("Tester"), "name") === "[Survivor]" &&
 		sameColor(byName("Tester").FindFirstChild("Sname").TextColor3, STAT.bonus),
 );

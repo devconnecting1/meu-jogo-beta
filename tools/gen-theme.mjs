@@ -98,6 +98,24 @@ const COLOR_TOKENS = [
 	["medal", "stat-value"],
 	/** the medal's rim and the check stamped on it: the gold, darker */
 	["medal-shade", "stat-value"],
+	// the titles' rarities (docs/DESIGN_RULES MON-05): the colour a title is written in, on the wardrobe's rows and under
+	// a name over the world, from the easiest up -- green, teal, violet, orange, gold. Each reads at 4,5:1 on the rows and
+	// against the nameplate's pixel shadow (test:contrast, test:world-art 9). A theme without them falls back to the
+	// item card's voices (the three the first titles were drawn in) and the rare items' chart-4
+	/** common: the item card's green (Survivor kept the colour it always had) */
+	["title-common", "stat-bonus"],
+	/** uncommon: teal, between the green and the level's blue */
+	["title-uncommon", "stat-bonus"],
+	/** rare: violet, chart-4's hue made light enough to read over the world */
+	["title-rare", "chart-4"],
+	/** epic: the item card's orange */
+	["title-epic", "stat-effect"],
+	/** legendary: the item card's gold */
+	["title-legendary", "stat-value"],
+	// the Supporter mark (docs/DESIGN_RULES MON-07): the subscription's heart beside a name and its swing trail, in a
+	// colour no title and no game signal uses (not the damage red, LEG-02). A theme without it falls back to chart-4
+	/** the Supporter mark: rose */
+	["supporter", "chart-4"],
 ];
 
 /** navigation (sidebar) tokens, emitted as a separate group; keys drop the "sidebar-" prefix */

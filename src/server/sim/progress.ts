@@ -23,7 +23,7 @@ import { ECONOMY } from "shared/data/shop";
 import { isFiniteNumber } from "shared/net/codec";
 import { MP_PHASE } from "shared/net/mpConfig";
 import { creditBossAchievement, creditKillAchievements, creditTurretKill } from "../save/achievements";
-import { creditZombieKill } from "../save/titles";
+import { Unlocks, creditBossTitles, creditMachineTitles, creditZombieKill } from "../save/titles";
 import * as Analytics from "../analytics/events";
 
 // ---------------------------------------------------------------- constants (§3.6)
@@ -79,6 +79,41 @@ export function awardExp(save: PlayerSaveData, amount: number): number {
 }
 
 /**
+ * Coins the server paid on its own -- a midnight lived through (with its record bonus), a boss brought down -- for the
+ * survivor whose live save it is. server/main.server.ts listens, and the next pushed wallet says what was earned, so the
+ * client shows "+3 coins · Day survived ×1" (MON-06's coin toast). Before 2026-09-24 nothing listened: since the server
+ * took the pay over from the report (F2/F3) the report's `earned` was always 0, and the toast never showed.
+ */
+export interface Income {
+	coins: number;
+	/** midnights paid */
+	days: number;
+	/** bosses paid for */
+	bosses: number;
+	/** record milestones paid (a new best day that is a multiple of ECONOMY.MILESTONE_EVERY) */
+	records: number;
+}
+
+/**
+ * Who hears the coins this module pays. A list (security review of de31f47, L3): a second listener -- a second server
+ * script, a test harness -- is added beside the first, never silently replacing it; `onIncome` answers the way to leave.
+ */
+const incomeListeners: Array<(save: PlayerSaveData, income: Income) => void> = [];
+
+/** listens to the coins this module pays (server/main.server.ts); the answer stops listening */
+export function onIncome(fn: (save: PlayerSaveData, income: Income) => void): () => void {
+	incomeListeners.push(fn);
+	return () => {
+		const i = incomeListeners.indexOf(fn);
+		if (i >= 0) incomeListeners.remove(i);
+	};
+}
+
+function tellIncome(save: PlayerSaveData, income: Income): void {
+	for (const fn of incomeListeners) fn(save, income);
+}
+
+/**
  * A boss went down (§3.6): the lifetime counter, and the coins that go with it.
  *
  * Same regression as `creditDaySurvived`, same cause: `applyProgressLimits` only paid COINS_PER_BOSS when a
@@ -89,9 +124,14 @@ export function creditBossKill(save: PlayerSaveData, paid = true): number {
 	const before = save.bossKills;
 	save.bossKills = math.min(SAVE_LIMITS.COUNTER_MAX, save.bossKills + 1);
 	if (!paid || save.bossKills === before) return 0;
-	const coins = ECONOMY.COINS_PER_BOSS;
-	save.money = math.min(SAVE_LIMITS.MONEY_MAX, save.money + coins);
+	// what actually went into the purse (a full one at MONEY_MAX takes less): the analytics source and the "+8 coins"
+	// the survivor is told are that, never more than the balance moved
+	const had = save.money;
+	save.money = math.min(SAVE_LIMITS.MONEY_MAX, save.money + ECONOMY.COINS_PER_BOSS);
+	const coins = save.money - had;
+	if (coins <= 0) return 0;
 	Analytics.bossCoins(save, coins);
+	tellIncome(save, { coins, days: 0, bosses: 1, records: 0 });
 	return coins;
 }
 
@@ -142,13 +182,29 @@ export function creditDaySurvived(save: PlayerSaveData, paid = true): DayCredit 
 	const out: DayCredit = { day: save.day, advanced, coins: 0, milestone: 0 };
 	// a run stuck at DAY_MAX has not survived another day, so it is not paid for one either
 	if (!advanced || !paid) return out;
-	out.coins = ECONOMY.COINS_PER_DAY;
+	let records = 0;
 	for (let d = bestBefore + 1; d <= save.day; d++) {
-		if (d % ECONOMY.MILESTONE_EVERY === 0) out.milestone += ECONOMY.MILESTONE_BONUS;
+		if (d % ECONOMY.MILESTONE_EVERY === 0) records += 1;
 	}
-	out.coins += out.milestone;
-	save.money = math.min(SAVE_LIMITS.MONEY_MAX, save.money + out.coins);
+	// what actually went into the purse (a full one at MONEY_MAX takes less, the day's part first): the analytics
+	// sources and the survivor's toast are that, so the economy events always add up to the balance
+	const had = save.money;
+	save.money = math.min(
+		SAVE_LIMITS.MONEY_MAX,
+		save.money + ECONOMY.COINS_PER_DAY + records * ECONOMY.MILESTONE_BONUS,
+	);
+	out.coins = save.money - had;
+	out.milestone = math.max(0, out.coins - ECONOMY.COINS_PER_DAY);
+	if (out.coins <= 0) return out;
 	Analytics.dayCoins(save, out.coins, out.milestone);
+	// the toast names what was PAID (security review of de31f47, L1): a record whose bonus a full purse cut short is not
+	// told as a "Record day" -- the coins line says the amount that went in, the labels only what was paid in full
+	tellIncome(save, {
+		coins: out.coins,
+		days: 1,
+		bosses: 0,
+		records: math.min(records, math.floor(out.milestone / ECONOMY.MILESTONE_BONUS)),
+	});
 	return out;
 }
 
@@ -327,16 +383,23 @@ export interface ProgressOptions {
 	 */
 	paysRewards?: (slot: number) => boolean;
 	/**
-	 * MON-05: a killing blow just unlocked a title for this slot (Horde Breaker). The save ALREADY has it; this is
-	 * the simulation's cue to tell the survivor and have the session written.
+	 * MON-05: a killing blow, a machine's kill or a boss just unlocked a title for this slot (Horde Breaker, Tracker,
+	 * Sentry, Boss Hunter...). The save ALREADY has it; this is the simulation's cue to tell the survivor and have the
+	 * session written. Once per title per save.
 	 */
 	titleUnlocked?: (slot: number, titleId: number) => void;
+	/**
+	 * MON-05: the kill credit gave this slot a killing blow, in a run that pays (after `titleUnlocked`, if any). The
+	 * simulation keeps the night's tally from it (Untouched, Blade Dancer, Ghost: server/sim/simulation.ts `creditDawn`).
+	 */
+	killCredited?: (slot: number, zombieType: number, weaponKind: number) => void;
 }
 
 export class Progress {
 	private readonly saveOf: (slot: number) => PlayerSaveData | undefined;
 	private readonly paysRewards: (slot: number) => boolean;
 	private readonly titleUnlocked?: (slot: number, titleId: number) => void;
+	private readonly killCredited?: (slot: number, zombieType: number, weaponKind: number) => void;
 	private readonly zombies = new Map<number, Ledger>();
 	private readonly bosses = new Map<number, Ledger>();
 	private readonly stats = new Map<number, ProgressStats>();
@@ -345,6 +408,7 @@ export class Progress {
 		this.saveOf = options.saveOf;
 		this.paysRewards = options.paysRewards ?? (() => true);
 		this.titleUnlocked = options.titleUnlocked;
+		this.killCredited = options.killCredited;
 	}
 
 	// ---- zombies -----------------------------------------------------------------------------
@@ -527,17 +591,21 @@ export class Progress {
 		const save = this.saveOf(slot);
 		if (save === undefined || !this.paysRewards(slot)) return;
 		creditKillAchievements(save, zombieType, weaponKind);
-		const unlocked = creditZombieKill(save);
-		if (unlocked >= 0) this.titleUnlocked?.(slot, unlocked);
+		this.announce(slot, creditZombieKill(save, zombieType, weaponKind));
+		this.killCredited?.(slot, zombieType, weaponKind);
 		// counted for the session's WeaponKills, sent on leaving (docs/ANALYTICS.md: never an event per kill)
 		Analytics.kill(save, weaponKind);
 	}
 
-	/** CON-04 "Turret": a zombie a machine this survivor built (or a drone they fly) brought down; not when assisted */
+	/**
+	 * CON-04 "Turret" and MON-05 "Sentry": a zombie a machine this survivor built (or a drone they fly) brought down;
+	 * not when assisted
+	 */
 	private creditMachineKill(slot: number): void {
 		const save = this.saveOf(slot);
 		if (save === undefined || !this.paysRewards(slot)) return;
 		creditTurretKill(save);
+		this.announce(slot, creditMachineTitles(save));
 		Analytics.kill(save, Analytics.MACHINE_KILL);
 	}
 
@@ -546,9 +614,17 @@ export class Progress {
 		const stats = this.bump(slot);
 		const pays = this.paysRewards(slot);
 		if (save !== undefined) stats.coins += creditBossKill(save, pays);
-		// CON-04: every participant has brought it down (MP-15), not in an assisted run (§9.3)
-		if (save !== undefined && pays) creditBossAchievement(save, bossType);
+		// CON-04 / MON-05: every participant has brought it down (MP-15), not in an assisted run (§9.3)
+		if (save !== undefined && pays) {
+			creditBossAchievement(save, bossType);
+			this.announce(slot, creditBossTitles(save, bossType));
+		}
 		stats.bossKills += 1;
+	}
+
+	/** MON-05: every title one event unlocked, told once each (the save already has them) */
+	private announce(slot: number, unlocked: Unlocks): void {
+		for (const titleId of unlocked) this.titleUnlocked?.(slot, titleId);
 	}
 
 	private bump(slot: number): ProgressStats {

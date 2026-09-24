@@ -411,8 +411,9 @@ function makePlayer(userId, name) {
 	p.UserId = userId;
 	p.DisplayName = name;
 	p.kicked = false;
-	p.Kick = () => {
+	p.Kick = message => {
 		p.kicked = true;
+		p.kickMessage = message;
 	};
 	p.GetNetworkPing = () => 0.05;
 	return p;
@@ -1316,22 +1317,24 @@ section("10) the wardrobe: coins become a costume only through ShopAction, at th
 		"…and the refusal carries the wallet back",
 	);
 
-	// a request that names its own price is charged the catalogue's anyway
-	save.money = 100;
+	// a request that names its own price is charged the catalogue's anyway (the price plus some change: docs/SHOP.md
+	// sets the price, the test only knows it is the catalogue's)
+	const FUNDS = santa.price + 50;
+	save.money = FUNDS;
 	const ok = s.shop(p, { kind: "buyCostume", costumeId: santa.id, price: 0 });
 	check(
 		ok.ok === true && ok.price === santa.price,
 		"a request carrying `price: 0` pays the catalogue price",
 		JSON.stringify({ ok: ok.ok, price: ok.price }),
 	);
-	check(save.money === 100 - santa.price, "exactly that is taken from the live save", `${save.money}`);
+	check(save.money === FUNDS - santa.price, "exactly that is taken from the live save", `${save.money}`);
 	check(
 		save.costumes[santa.id] === 1 && ok.wallet?.costumes[santa.id] === 1,
 		"the costume is theirs, and the wallet says so",
 	);
 	const twice = s.shop(p, { kind: "buyCostume", costumeId: santa.id });
 	check(twice.ok === false && twice.reason === "owned", "buying it again is refused as owned");
-	check(save.money === 100 - santa.price, "…and charges nothing");
+	check(save.money === FUNDS - santa.price, "…and charges nothing");
 
 	// wearing (F3, §4.8): the wardrobe's Equip is a verb the server applies out of the world, cosmetics only; a report
 	// no longer moves the slots at all, so neither a bought outfit nor a pet nobody paid for comes from one
@@ -1347,7 +1350,7 @@ section("10) the wardrobe: coins become a costume only through ShopAction, at th
 	s.quit(p);
 	const stored = s.stored(p.UserId);
 	check(
-		stored?.money === 100 - santa.price &&
+		stored?.money === FUNDS - santa.price &&
 			stored?.costumes[santa.id] === 1 &&
 			stored?.equipOutfit === equipOf("Santa"),
 		"the save written on leaving has the costume, the coins it cost and the outfit worn",
@@ -1368,6 +1371,8 @@ section("11) the XP the server credits reaches the client: its wallet is pushed 
 	// the WALLET pushes: SAV-01's news about a write of the save rides SaveAck too (`store`), and is section 32's
 	const pushes = p => acks(p).filter(e => e.args[0]?.push === true && e.args[0]?.store === undefined);
 	const p = s.join(newUser(), "hunter");
+	// no death in the quiet minute below: the life's deaths ride the wallet too (review of 97cd734, LOW1)
+	s.immortal.add(p);
 	const sp = s.enter(p);
 	const save = s.save(p);
 	s.run(1);
@@ -1882,30 +1887,62 @@ section("16) the title record is written only when something was earned, and its
 
 // ================================================================ 17: an admin who moves the day assists the run
 
-section("17) an admin who moves a life's day has assisted that run: no coins, no title from it (§9.3, MON-05)", () => {
-	const srv = bootServer();
-	const u = newUser();
-	const p = srv.join(u, "helped");
-	const admin = srv.join(ADMIN_ID, "admin");
-	const pays = () => srv.sim.paysRewards({ userId: u });
-	check(pays(), "a run nobody helped pays");
-	const money = adminRequest(srv, admin, {
-		kind: "edit",
-		userId: u,
-		ops: [{ op: "stat", field: "money", value: 500 }],
-	});
-	check(
-		money?.ok === true && pays(),
-		"an admin setting the coins does not make it assisted",
-		JSON.stringify(money?.error),
-	);
-	const day = adminRequest(srv, admin, { kind: "edit", userId: u, ops: [{ op: "stat", field: "day", value: 8 }] });
-	check(day?.ok === true, "the admin sets the life's day to 8", JSON.stringify(day?.error));
-	check(!pays(), "…and from then the run is assisted: it pays no coins and earns no title");
-	check(srv.save(p).lifeNights === 0, "…nor did the day edit count a single night toward Week One");
-	srv.quit(p);
-	srv.quit(admin);
-});
+section(
+	"17) an admin edit that helps a life -- its day, an item, level, points, coins -- assists it (§9.3, MON-05, M1)",
+	() => {
+		const srv = bootServer();
+		const admin = srv.join(ADMIN_ID, "admin");
+		const edit = (u, ops) => adminRequest(srv, admin, { kind: "edit", userId: u, ops });
+		{
+			const u = newUser();
+			const p = srv.join(u, "helped");
+			const pays = () => srv.sim.paysRewards({ userId: u });
+			check(pays(), "a run nobody helped pays");
+			// what is not help: lowering the coins, a costume (a look, MON-01), an edit that changes nothing
+			const lower = edit(u, [{ op: "stat", field: "money", value: 0 }]);
+			const look = edit(u, [{ op: "costume", id: 0, owned: true }]);
+			const same = edit(u, [{ op: "stat", field: "level", value: srv.save(p).level }]);
+			check(
+				lower?.ok === true && look?.ok === true && same?.ok === true && pays(),
+				"an admin lowering the coins, giving a costume or changing nothing does not make it assisted",
+				JSON.stringify([lower?.error, look?.error, same?.error]),
+			);
+			const day = edit(u, [{ op: "stat", field: "day", value: 8 }]);
+			check(day?.ok === true, "the admin sets the life's day to 8", JSON.stringify(day?.error));
+			check(!pays(), "…and from then the run is assisted: it pays no coins and earns no title");
+			check(srv.save(p).lifeNights === 0, "…nor did the day edit count a single night toward Week One");
+			srv.quit(p);
+		}
+		// review of 97cd734, M1: an admin's coins, weapon, levels or points made the nights that paid easier
+		const helps = [
+			["the coins raised", [{ op: "stat", field: "money", value: 500 }]],
+			["an item given", [{ op: "item", group: "weapon", index: PISTOL, count: 1, mode: "min" }]],
+			["ammunition given", [{ op: "item", group: "ammo", index: 0, count: 200, mode: "min" }]],
+			["the level raised", [{ op: "stat", field: "level", value: 20 }]],
+			// (a survivor of level 10 with no point left: the points an admin gives must fit the level, `enforceSaveInvariants`)
+			[
+				"skill points given",
+				[{ op: "stat", field: "skillPoint", value: 9 }],
+				s => Object.assign(s, { level: 10 }),
+			],
+		];
+		for (const [what, ops, prep] of helps) {
+			const u = newUser();
+			const p = srv.join(u, "helped");
+			prep?.(srv.save(p));
+			const before = srv.sim.paysRewards({ userId: u });
+			const res = edit(u, ops);
+			const after = srv.sim.paysRewards({ userId: u });
+			check(
+				before && res?.ok === true && !after,
+				`an admin edit with ${what}: the run is assisted from here (no coins, achievements, records or titles)`,
+				JSON.stringify(res?.error),
+			);
+			srv.quit(p);
+		}
+		srv.quit(admin);
+	},
+);
 
 // ================================================================ 18: a server that lost the lock without knowing it
 
@@ -5292,6 +5329,185 @@ section("37) BEM: the dead survivor alone is told why (UI-13), and the dawn asks
 		} finally {
 			store.UpdateAsync = original;
 		}
+	}
+});
+
+// ================================================================ 38: a save newer than this server
+
+section("38) a save a NEWER build wrote is never written here: no lock, no write, player sent to rejoin (H1)", () => {
+	// the first server of the story, which the store names need (stores.ts reads the game at load)
+	const first = bootServer();
+	const { SAVE_STORE, TITLE_STORE } = require(join(SRC, "server/save/stores.ts"));
+	const { SAVE_VERSION } = require(join(SRC, "shared/game/save.ts"));
+	const saves = fakeStore(SAVE_STORE);
+	const titles = fakeStore(TITLE_STORE);
+	// every save write that LANDED, per key (the fake logs a cancelled UpdateAsync too: its transform returned nil)
+	const landed = new Map();
+	const original = saves.UpdateAsync;
+	saves.UpdateAsync = (key, transform) => {
+		const r = original(key, transform);
+		if (r[0] !== undefined) landed.set(key, (landed.get(key) ?? 0) + 1);
+		return r;
+	};
+	try {
+		// a survivor who played on a newer build: a save one version past this one, with a field this build does not
+		// know, and a title record of that build
+		const u = newUser();
+		const key = String(u);
+		{
+			const p = first.join(u, "from the future");
+			first.save(p).money += 40;
+			first.quit(p);
+		}
+		{
+			const doc = saveDocOf(u);
+			const data = JSON.parse(doc.data);
+			data.version = SAVE_VERSION + 1;
+			data.fromTheFuture = [1, 2, 3];
+			doc.data = JSON.stringify(data);
+			titles.data.set(key, { epoch: 7, titles: [1, 1, 1, 1], zombieKills: 150, future: true });
+		}
+		const docBefore = JSON.stringify(saveDocOf(u));
+		const recordBefore = JSON.stringify(titles.data.get(key));
+		const tagsBefore = JSON.stringify([saves.userIds.get(key), titles.userIds.get(key)]);
+		const from = storeLog.length;
+		landed.delete(key);
+
+		// the old server: the load, then everything that writes a save -- a report, event saves, the autosave, a Retry,
+		// BindToClose, the leave -- with the player still connected (as if the kick had not landed yet)
+		const srv = bootWithAutosave();
+		const p = srv.join(u, "old server");
+		check(
+			p.kicked && p.kickMessage === "This server is out of date. Rejoin to play.",
+			"the player is let go at once, told why in lang.ts's words: the server is out of date, rejoin",
+			JSON.stringify(p.kickMessage),
+		);
+		const acks = srv.env.services.ReplicatedStorage.FindFirstChild("Net").FindFirstChild("LoadAck").sent;
+		check(!acks.some(e => e.to === p), "no LoadAck: no save of any kind is handed to the client", `${acks.length}`);
+		const loadRequest = srv.env.services.ReplicatedStorage.FindFirstChild("Net").FindFirstChild("LoadRequest");
+		srv.report(p, { money: 99999 });
+		srv.run(20, 1 / 10);
+		srv.autosave();
+		loadRequest.OnServerEvent.Fire(p);
+		srv.run(15, 1 / 10);
+		srv.autosave();
+		const retried = storeLog.slice(from).filter(e => e.store === SAVE_STORE && e.key === key).length;
+		check(retried === 1, "…and a Retry never loads it again: one UpdateAsync, the load's, in 35 s", `${retried}`);
+		srv.shutdown();
+		srv.quit(p);
+		check(
+			(landed.get(key) ?? 0) === 0,
+			"not one save write landed: not the load's lock, the autosave, a report, a Retry, BindToClose nor the leave",
+			`${landed.get(key) ?? 0} write(s)`,
+		);
+		check(
+			JSON.stringify(saveDocOf(u)) === docBefore && JSON.parse(saveDocOf(u).data).fromTheFuture?.length === 3,
+			"the stored save is exactly as the newer build left it: its version, the field this build does not know, no lock",
+			JSON.stringify(saveDocOf(u)).slice(0, 160),
+		);
+		const recordCalls = storeLog.slice(from).filter(e => e.store === TITLE_STORE && e.key === key);
+		check(
+			recordCalls.length === 0 && JSON.stringify(titles.data.get(key)) === recordBefore,
+			"ProjectZ_Titles is never even opened for them: the newer build's title record stays as it was",
+			JSON.stringify(recordCalls),
+		);
+		check(
+			JSON.stringify([saves.userIds.get(key), titles.userIds.get(key)]) === tagsBefore,
+			"nothing re-tagged either (the UserIds of a write)",
+		);
+
+		// the newer build's server still holds the lock (the player is on their way between servers): no waiting for it
+		// (LOCK_WAIT), no taking it -- the same answer at once
+		const u2 = newUser();
+		{
+			const first = bootServer();
+			first.quit(first.join(u2, "moving"));
+		}
+		const doc2 = saveDocOf(u2);
+		const data2 = JSON.parse(doc2.data);
+		data2.version = SAVE_VERSION + 3;
+		doc2.data = JSON.stringify(data2);
+		doc2.lock = { job: "a-newer-server", sid: "their-session", t: os.time() };
+		const before2 = JSON.stringify(saveDocOf(u2));
+		landed.delete(String(u2));
+		const srv2 = bootServer();
+		const t0 = clockNow;
+		const p2 = srv2.join(u2, "moving");
+		srv2.shutdown();
+		srv2.quit(p2);
+		check(
+			p2.kicked && clockNow - t0 < 1 && JSON.stringify(saveDocOf(u2)) === before2 && !landed.has(String(u2)),
+			"a newer save still locked by its server: let go at once, the lock and the save untouched",
+			`${(clockNow - t0).toFixed(1)} s; kicked ${p2.kicked}`,
+		);
+
+		// and a save of THIS version (or older) loads as always: the rule is only "newer"
+		const u3 = newUser();
+		const srv3 = bootServer();
+		const p3 = srv3.join(u3, "today");
+		check(
+			!p3.kicked && srv3.save(p3)?.version === SAVE_VERSION,
+			"a save of this version loads and plays as always",
+		);
+		srv3.quit(p3);
+
+		// review of b0174ed, M-1: a later build that only ADDED to a table (a title, a weapon, a costume) without a
+		// SAVE_VERSION bump. Its save says this very version, and one of its arrays is longer than this build's table:
+		// this build would cut it and write it back. Newer all the same -- and never admitted to the town (L-4)
+		const { TITLES } = require(join(SRC, "shared/data/titles.ts"));
+		const { WEAPONS } = require(join(SRC, "shared/data/weapons.ts"));
+		const grown = [
+			["a title more", d => d.titles.push(1)],
+			["a weapon more", d => d.invenWeapon.push(1)],
+		];
+		for (const [what, grow] of grown) {
+			const u4 = newUser();
+			{
+				const s4 = bootServer();
+				s4.quit(s4.join(u4, "grown"));
+			}
+			const doc4 = saveDocOf(u4);
+			const data4 = JSON.parse(doc4.data);
+			grow(data4);
+			doc4.data = JSON.stringify(data4);
+			const before4 = JSON.stringify(saveDocOf(u4));
+			landed.delete(String(u4));
+			const srv4 = bootServer();
+			const p4 = srv4.join(u4, "grown");
+			const body4 = srv4.enter(p4);
+			srv4.run(5, 1 / 10);
+			srv4.shutdown();
+			srv4.quit(p4);
+			check(
+				data4.version === SAVE_VERSION &&
+					p4.kicked &&
+					body4 === undefined &&
+					JSON.stringify(saveDocOf(u4)) === before4 &&
+					!landed.has(String(u4)),
+				`M-1: same SAVE_VERSION, ${what} than this build's table: let go, never in town, nothing written`,
+				`titles ${data4.titles.length}/${TITLES.length}, weapons ${data4.invenWeapon.length}/${WEAPONS.length}; kicked ${p4.kicked}`,
+			);
+		}
+		// an EARLIER version with a longer array is not a newer build (a table that shrank since, which none ever has)
+		const u5 = newUser();
+		{
+			const s5 = bootServer();
+			s5.quit(s5.join(u5, "old"));
+		}
+		const doc5 = saveDocOf(u5);
+		const data5 = JSON.parse(doc5.data);
+		data5.version = SAVE_VERSION - 1;
+		data5.titles.push(1);
+		doc5.data = JSON.stringify(data5);
+		const srv5 = bootServer();
+		const p5 = srv5.join(u5, "old");
+		check(
+			!p5.kicked && srv5.save(p5)?.titles.length === TITLES.length,
+			"an earlier version with a longer array loads (cut to this build's table): only a newer build is refused",
+		);
+		srv5.quit(p5);
+	} finally {
+		saves.UpdateAsync = original;
 	}
 });
 

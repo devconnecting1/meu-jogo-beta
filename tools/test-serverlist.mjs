@@ -196,6 +196,11 @@ class FakeSortedMap {
 const SL = require(join(SRC, "server/match/serverList.ts"));
 /** the place every fake server of this suite runs (game.PlaceId) */
 const PLACE = 5555;
+/** and its build (review of 97cd734, H1): game.PlaceVersion and this SAVE_VERSION */
+const PLACE_VERSION = 12;
+const { SAVE_VERSION } = require(join(SRC, "shared/game/save.ts"));
+/** what every entry of that build starts with (the shape version and the build) */
+const BUILD = { v: SL.ENTRY_VERSION, pv: PLACE_VERSION, sv: SAVE_VERSION };
 const TN = require(join(SRC, "shared/net/townNet.ts"));
 const Names = require(join(SRC, "shared/data/townNames.ts"));
 
@@ -253,6 +258,8 @@ function makeServer(map, opts = {}) {
 		kind: opts.kind ?? "public",
 		jobId: server.jobId,
 		placeId: opts.placeId ?? PLACE,
+		placeVersion: opts.placeVersion ?? PLACE_VERSION,
+		saveVersion: opts.saveVersion ?? SAVE_VERSION,
 		store: opts.store === false ? undefined : portOf(map),
 		teleport: opts.teleportHook !== undefined ? (p, id) => opts.teleportHook(server, p, id) : teleport,
 		clock: () => clockNow,
@@ -318,7 +325,7 @@ section("1) quem publica: so um servidor publico e ao vivo, com alguem nele", ()
 	s.list.tick();
 	const w = map.log.find(x => x.kind === "set");
 	check(
-		"com gente: a entrada e o JobId -> semente, dia, jogadores, capacidade, hora; TTL de ENTRY_TTL_S; chave de ordem 0 (nao cheio)",
+		"com gente: a entrada e o JobId -> semente, dia, jogadores, capacidade, hora; TTL de ENTRY_TTL_S; chave de ordem -2 x PlaceVersion (o build mais novo primeiro; nao cheio)",
 		w !== undefined &&
 			w.key === s.jobId &&
 			w.value.seed === 777 &&
@@ -327,7 +334,7 @@ section("1) quem publica: so um servidor publico e ao vivo, com alguem nele", ()
 			w.value.max === 6 &&
 			w.value.kind === "public" &&
 			w.expiration === SL.ENTRY_TTL_S &&
-			w.sortKey === 0,
+			w.sortKey === -2 * PLACE_VERSION,
 		JSON.stringify(w),
 	);
 	check(
@@ -385,7 +392,11 @@ section("2) com que frequencia: mudou -> no maximo a cada 15 s; parado -> a cada
 	clockNow += SL.PUBLISH_MIN_GAP_S;
 	s.list.tick();
 	const last = map.log.filter(x => x.kind === "set").at(-1);
-	check("cheio: chave de ordem 1 (os abertos vem antes numa leitura)", last.sortKey === 1 && last.value.n === 6);
+	check(
+		"cheio: a chave de ordem um acima da do aberto do mesmo build (os abertos vem antes numa leitura)",
+		last.sortKey === -2 * PLACE_VERSION + 1 && last.value.n === 6,
+		`${last.sortKey}`,
+	);
 	// the server dies: no more writes, and after the TTL nobody sees it
 	clockNow += SL.ENTRY_TTL_S - 1;
 	map.purge();
@@ -440,25 +451,34 @@ section(
 		map.SetAsync("job-junk", { v: 99, seed: 5 }, 60, 0);
 		map.SetAsync(
 			"not a job id!",
-			{ v: 1, kind: "public", place: PLACE, seed: 5, day: 1, n: 1, max: 6, t: 1_700_000_000 + clockNow },
+			{ ...BUILD, kind: "public", place: PLACE, seed: 5, day: 1, n: 1, max: 6, t: 1_700_000_000 + clockNow },
 			60,
 			0,
 		);
 		map.SetAsync(
 			"job-private",
-			{ v: 1, kind: "private", place: PLACE, seed: 5, day: 1, n: 1, max: 6, t: 1_700_000_000 + clockNow },
+			{ ...BUILD, kind: "private", place: PLACE, seed: 5, day: 1, n: 1, max: 6, t: 1_700_000_000 + clockNow },
 			60,
 			0,
 		);
 		map.SetAsync(
 			"job-overfull",
-			{ v: 1, kind: "public", place: PLACE, seed: 5, day: 1, n: 9, max: 6, t: 1_700_000_000 + clockNow },
+			{ ...BUILD, kind: "public", place: PLACE, seed: 5, day: 1, n: 9, max: 6, t: 1_700_000_000 + clockNow },
 			60,
 			0,
 		);
 		map.SetAsync(
 			"job-stale",
-			{ v: 1, kind: "public", place: PLACE, seed: 5, day: 1, n: 1, max: 6, t: 1_700_000_000 + clockNow - 500 },
+			{
+				...BUILD,
+				kind: "public",
+				place: PLACE,
+				seed: 5,
+				day: 1,
+				n: 1,
+				max: 6,
+				t: 1_700_000_000 + clockNow - 500,
+			},
 			600,
 			0,
 		);
@@ -588,19 +608,19 @@ section("4) entrar: o servidor le a entrada de novo e decide; depois TeleportAsy
 	// an entry that is still in the map but stale (its server stopped writing and the clock moved on)
 	map.SetAsync(
 		"job-old",
-		{ v: 1, kind: "public", place: PLACE, seed: 5, day: 1, n: 1, max: 6, t: 1_700_000_000 + clockNow - 1000 },
+		{ ...BUILD, kind: "public", place: PLACE, seed: 5, day: 1, n: 1, max: 6, t: 1_700_000_000 + clockNow - 1000 },
 		600,
 		0,
 	);
 	cases.push(["uma entrada velha (o servidor parou de publicar)", reason(join(here, me, "job-old")), "gone"]);
 	map.SetAsync(
 		"job-priv",
-		{ v: 1, kind: "private", place: PLACE, seed: 5, day: 1, n: 1, max: 6, t: 1_700_000_000 + clockNow },
+		{ ...BUILD, kind: "private", place: PLACE, seed: 5, day: 1, n: 1, max: 6, t: 1_700_000_000 + clockNow },
 		60,
 		0,
 	);
 	cases.push(["uma entrada que nao e publica", reason(join(here, me, "job-priv")), "gone"]);
-	map.SetAsync("job-bad", { v: 1, kind: "public", place: PLACE, seed: "x", day: 1, n: 1, max: 6, t: 1 }, 60, 0);
+	map.SetAsync("job-bad", { ...BUILD, kind: "public", place: PLACE, seed: "x", day: 1, n: 1, max: 6, t: 1 }, 60, 0);
 	cases.push(["uma entrada malformada", reason(join(here, me, "job-bad")), "gone"]);
 	const wrong = cases.filter(([, got, want]) => got !== want);
 	check(
@@ -611,7 +631,7 @@ section("4) entrar: o servidor le a entrada de novo e decide; depois TeleportAsy
 	// another place of the experience: never listed, never joined (review of 0b44458, L6)
 	map.SetAsync(
 		"job-otherplace",
-		{ v: 1, kind: "public", place: PLACE + 1, seed: 5, day: 1, n: 1, max: 6, t: 1_700_000_000 + clockNow },
+		{ ...BUILD, kind: "public", place: PLACE + 1, seed: 5, day: 1, n: 1, max: 6, t: 1_700_000_000 + clockNow },
 		60,
 		0,
 	);
@@ -622,6 +642,77 @@ section("4) entrar: o servidor le a entrada de novo e decide; depois TeleportAsy
 		!other.ok && other.reason === "gone" && here.teleports.length === 0,
 		JSON.stringify(other),
 	);
+	// another BUILD (review of 97cd734, H1): an old server left running after a publish would rewrite a newer save
+	// without what it does not know -- never listed, never joined, from either side. So is a v1 entry (an older build
+	// that did not say which it was)
+	const t = 1_700_000_000 + clockNow;
+	const town = { kind: "public", place: PLACE, seed: 5, day: 1, n: 1, max: 6, t };
+	map.SetAsync("job-oldplace", { ...BUILD, pv: PLACE_VERSION - 1, ...town }, 60, 0);
+	map.SetAsync("job-oldsave", { ...BUILD, sv: SAVE_VERSION - 1, ...town }, 60, 0);
+	map.SetAsync("job-newsave", { ...BUILD, sv: SAVE_VERSION + 1, ...town }, 60, 0);
+	map.SetAsync("job-v1", { v: 1, ...town }, 60, 0);
+	const builds = [];
+	for (const id of ["job-oldplace", "job-oldsave", "job-newsave", "job-v1"]) {
+		builds.push(`${id}: ${reason(here.list.join(me, id))}`);
+		clockNow += SL.JOIN_GAP_S;
+	}
+	// (`there` writes its entry again: the joins above moved the clock on)
+	there.list.tick();
+	const listedBuilds = (here.list.list(me).servers ?? []).map(r => r.jobId);
+	check(
+		"uma entrada de OUTRO build (PlaceVersion, SAVE_VERSION ou a entrada v1 de antes): gone, nenhum teleporte, fora da lista",
+		builds.every(b => b.endsWith(": gone")) &&
+			here.teleports.length === 0 &&
+			!listedBuilds.some(id => ["job-oldplace", "job-oldsave", "job-newsave", "job-v1"].includes(id)) &&
+			listedBuilds.includes(there.jobId),
+		`${builds.join("; ")} | lista: ${listedBuilds.join(", ")}`,
+	);
+	// and the other way round: a server of the old build does not see this one
+	const oldBuild = makeServer(map, { placeVersion: PLACE_VERSION - 1, saveVersion: SAVE_VERSION - 1 });
+	const [oldP] = oldBuild.add(1);
+	oldBuild.list.tick();
+	const fromOld = oldBuild.list.list(oldP);
+	const joinOld = oldBuild.list.join(oldP, there.jobId);
+	clockNow += SL.READ_CACHE_S;
+	const fromNew = (here.list.list(me).servers ?? []).map(r => r.jobId);
+	check(
+		"um servidor do build velho nao lista nem entra num do build novo, e o novo nao ve o velho",
+		fromOld.ok &&
+			fromOld.servers.length === 0 &&
+			!joinOld.ok &&
+			joinOld.reason === "gone" &&
+			oldBuild.teleports.length === 0 &&
+			map.items.has(oldBuild.jobId) &&
+			!fromNew.includes(oldBuild.jobId),
+		JSON.stringify({ fromOld, joinOld, fromNew }),
+	);
+	there.list.tick();
+	// L-5 (review of b0174ed): a publish without a restart leaves a page of old servers in the map. The read takes the
+	// first READ_COUNT entries only, and the map's order (`sortKeyOf`) puts the newest build first: the new build's
+	// towns are never cut off by old ones nobody here may join
+	{
+		const crowd = new FakeSortedMap();
+		const reader = makeServer(crowd);
+		const [r] = reader.add(1);
+		for (let i = 0; i < SL.READ_COUNT + 20; i++) {
+			const old = makeServer(crowd, { placeVersion: PLACE_VERSION - 1, seed: 500 + i });
+			old.add(1);
+			old.list.tick();
+		}
+		const fresh = [];
+		for (let i = 0; i < 3; i++) {
+			const f = makeServer(crowd, { seed: 900 + i });
+			f.add(2);
+			f.list.tick();
+			fresh.push(f.jobId);
+		}
+		const rows = (reader.list.list(r).servers ?? []).map(x => x.jobId);
+		check(
+			`L-5: ${SL.READ_COUNT + 20} servidores do build velho e 3 deste: a leitura de ${SL.READ_COUNT} traz os 3 deste build primeiro`,
+			fresh.every(id => rows.includes(id)) && rows.length === 3,
+			`${rows.length} linhas`,
+		);
+	}
 	const ok = here.list.join(me, there.jobId);
 	check(
 		"uma cidade aberta: TeleportAsync para ESSE servidor (o JoinedFromList e contado na chegada, no destino)",
@@ -879,6 +970,7 @@ section("7) o lado Roblox: startServerList com as chamadas como a API as pede", 
 			PrivateServerId: privateId,
 			PrivateServerOwnerId: owner,
 			PlaceId: 5555,
+			PlaceVersion: PLACE_VERSION,
 			BindToClose: fn => closers.push(fn),
 		};
 	};
@@ -916,19 +1008,24 @@ section("7) o lado Roblox: startServerList com as chamadas como a API as pede", 
 	const live = SL.startServerList(gameSide, (p, why) => notices.push({ p, why }));
 	const set = map.log.find(x => x.kind === "set");
 	check(
-		`publico: GetSortedMap("${SL.SERVER_LIST_MAP}"), e o laco do tique publica logo: SetAsync(JobId, entrada, ${SL.ENTRY_TTL_S}, 0)`,
+		`publico: GetSortedMap("${SL.SERVER_LIST_MAP}"), e o laco do tique publica logo: SetAsync(JobId, entrada, ${SL.ENTRY_TTL_S}, chave -2 x PlaceVersion)`,
 		asked.includes(`map:${SL.SERVER_LIST_MAP}`) &&
 			set?.key === "live-job-1" &&
 			set.expiration === SL.ENTRY_TTL_S &&
-			set.sortKey === 0 &&
+			set.sortKey === -2 * PLACE_VERSION &&
 			set.value.seed === 31337 &&
 			spawned.length === 1,
 		JSON.stringify(set),
 	);
+	check(
+		"a entrada diz o build do servidor: game.PlaceVersion (pv) e o SAVE_VERSION (sv) (revisao de 97cd734, H1)",
+		set?.value.v === SL.ENTRY_VERSION && set.value.pv === PLACE_VERSION && set.value.sv === SAVE_VERSION,
+		JSON.stringify(set?.value),
+	);
 	// another server's entry, then a read and a join through the real adapters
 	map.SetAsync(
 		"other-job",
-		{ v: 1, kind: "public", place: PLACE, seed: 7, day: 4, n: 2, max: 6, t: 1_700_000_000 + clockNow },
+		{ ...BUILD, kind: "public", place: PLACE, seed: 7, day: 4, n: 2, max: 6, t: 1_700_000_000 + clockNow },
 		60,
 		0,
 	);

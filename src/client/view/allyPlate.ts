@@ -15,6 +15,7 @@ import { GAME, RADIUS, TEXT, THEME, TRANSPARENCY, fontOf, space } from "../ui/th
 import { addStroke, onLayoutChange, reducedMotion, uiScale } from "../ui/widgets";
 import { Nameplate, profileOf } from "../ui/nameplate";
 import { RemotePlayerView } from "../net/netTypes";
+import { isSupporterUser } from "../systems/supporterClient";
 import { SURVIVOR_R } from "./survivorView";
 
 const Players = game.GetService("Players");
@@ -186,7 +187,8 @@ export class AllyPlate {
 		const at = cam.worldToScreen(rp.x, rp.y + SURVIVOR_R + PLATE_GAP);
 		const x = math.round(at.x);
 		const y = math.round(at.y);
-		this.nameplate.update(x, y, rp.level, true, rp.title);
+		// MON-07: the Supporter heart, by the server's attribute on that ally's Player (a Set lookup, no Players call)
+		this.nameplate.update(x, y, rp.level, true, rp.title, isSupporterUser(this.userId));
 
 		const life = rp.hpMax > 0 ? clamp(rp.hp / rp.hpMax, 0, 1) : 0;
 		const downed = rp.downed;

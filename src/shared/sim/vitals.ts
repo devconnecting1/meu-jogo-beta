@@ -122,6 +122,8 @@ export function stepVitals(p: PlayerState, save: PlayerSaveData, dt: number): vo
 	}
 	const since = hurt && p.godMode !== true ? 0 : math.min(REGEN_RESTED_S, (p.sinceHurt ?? REGEN_RESTED_S) + dt);
 	p.sinceHurt = since;
+	// a step of hunger or poison is a hurt of the body (the night's tally, MON-05: PlayerState.hurts)
+	if (hurt && p.godMode !== true) p.hurts = (p.hurts ?? 0) + 1;
 	if (p.hp >= p.hpMax || !fedEnough(p.hungry)) return;
 	const k = regenRamp(since);
 	if (k <= 0) return;

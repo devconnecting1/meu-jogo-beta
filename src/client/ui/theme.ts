@@ -331,6 +331,25 @@ export const OVER_WORLD = {
 	level: TOKENS.statLevel,
 	/** the shadow every line casts: the page's near-black */
 	shadow: TOKENS.background,
+	/**
+	 * MON-07: the Supporter mark -- the pixel heart beside a subscriber's name, and their swing trail. Rose, a colour no
+	 * title rarity, no game signal and no damage flash uses (LEG-02's red is the hit)
+	 */
+	supporter: TOKENS.supporter,
+};
+
+/**
+ * The titles' rarities (DESIGN_RULES MON-05, client/ui/titleStyle.ts): the colour a title is written in -- on the
+ * wardrobe's rows (4,5:1 on both faces, `npm run test:contrast`) and under a name straight over the world, with the
+ * nameplate's pixel shadow (`npm run test:world-art` section 9). Green, teal, violet, orange, gold, from the easiest up;
+ * the wardrobe also writes the word, so the colour is never the only cue.
+ */
+export const RARITY = {
+	common: TOKENS.titleCommon,
+	uncommon: TOKENS.titleUncommon,
+	rare: TOKENS.titleRare,
+	epic: TOKENS.titleEpic,
+	legendary: TOKENS.titleLegendary,
 };
 
 /**

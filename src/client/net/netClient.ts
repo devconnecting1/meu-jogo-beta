@@ -324,6 +324,8 @@ const TOWN_GUARD_S = 2;
 /** who wants to hear about the town (client/main.client.ts); called INSIDE the World event, in order */
 const townListeners = new Array<(notice: TownNotice) => void>();
 const titleListeners = new Array<(titleId: number) => void>();
+/** §9.3: who hears that this survivor took an admin's drop (`netOnAdminItem`) */
+const adminItemListeners = new Array<() => void>();
 let queueDropped = 0;
 let malformed = 0;
 let lastSelfTick = -math.huge;
@@ -571,6 +573,14 @@ function applyWorldEvent(e: WorldEvent, batchTick: number): void {
 		// BEM-04: the dawn card's break line, decided by the server for this survivor alone -- never a banner
 		if (e.msg === AnnounceKind.BreakNudge) {
 			breakNudge = true;
+			return;
+		}
+		// §9.3: an admin's drop this survivor took -- their toast (client/ui/titleNotice.ts), never a banner
+		if (e.msg === AnnounceKind.AdminItem) {
+			for (const fn of adminItemListeners) {
+				const [ok, err] = pcall(() => fn());
+				if (!ok) warn(`[${GAME_NAME}] admin item notice failed: ${tostring(err)}`);
+			}
 			return;
 		}
 		pendingAnnounce.push(announceText(e.msg, e.arg));
@@ -1007,6 +1017,14 @@ export function netSelfHp(): number | undefined {
  */
 export function netOnTitle(fn: (titleId: number) => void): void {
 	titleListeners.push(fn);
+}
+
+/**
+ * §9.3 (review of b0174ed, L-1): `fn` hears each time this survivor picked up an item an admin dropped -- the server's
+ * `Announce{AdminItem}`, sent to this client alone: from then on the run is assisted. client/ui/titleNotice.ts says so.
+ */
+export function netOnAdminItem(fn: () => void): void {
+	adminItemListeners.push(fn);
 }
 
 /** a new world (a new run, a rebirth): forget the session state but keep the connection and the roster */

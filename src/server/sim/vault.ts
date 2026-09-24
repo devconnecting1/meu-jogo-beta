@@ -39,7 +39,10 @@ export interface ServerVaultOptions {
 	onSolidChanged?: (x: number, y: number, w: number, h: number) => void;
 	/** may this body still work this door: within the door's reach, a clear line to it (the E press's own rule) */
 	reach: (body: PlayerState, door: Solid) => boolean;
-	/** a vault gave way, cracked by the survivor in `slot` (for the tests and the logs) */
+	/**
+	 * A vault gave way: called once for EVERY survivor working it at that moment (`slot`), since two at one door crack
+	 * it together (the titles' Safecracker, the tests and the logs; review of 97cd734, LOW3)
+	 */
 	onCracked?: (door: Solid, slot: number) => void;
 }
 
@@ -74,6 +77,8 @@ export class ServerVaults {
 	private readonly alarms = new Array<Alarm>();
 	/** scratch: the doors worked this tick */
 	private readonly worked = new Map<Solid, number>();
+	/** scratch: who was working a door when it gave way */
+	private readonly crew = new Array<number>();
 	/** each bank's portico by the bank's id (listed once: the town is static) */
 	private porticos?: Map<number, Solid>;
 
@@ -191,12 +196,20 @@ export class ServerVaults {
 		this.fx?.({ t: FxType.Sound, sound: wireSoundId("ironDoorClose"), x, y, volume: 0.8 });
 	}
 
-	/** the door gives way: open for good, a bang, and the bank's alarm bell */
+	/** the door gives way: open for good, a bang, and the bank's alarm bell. `slot`: the worker the step counted */
 	private crack(door: Solid, slot: number): void {
 		door.open = true;
 		this.progress.delete(door);
 		this.clank.delete(door);
-		for (const [s, w] of this.workers) if (w.door === door) this.workers.delete(s);
+		// everybody at this door cracked it, not only the one the step happened to count (review of 97cd734, LOW3)
+		const crew = this.crew;
+		crew.clear();
+		for (const [s, w] of this.workers) {
+			if (w.door !== door) continue;
+			crew.push(s);
+			this.workers.delete(s);
+		}
+		if (!crew.includes(slot)) crew.push(slot);
 		this.onSolidChanged?.(door.x, door.y, door.w, door.h);
 		// GLOBAL, like every door (§4.5): whoever predicts a walk through that doorway has to know it is open
 		this.out.queue({ t: WorldEv.DoorSet, id: door.id, state: SolidState.Open });
@@ -211,7 +224,7 @@ export class ServerVaults {
 			this.out.queue({ t: WorldEv.LightSet, id: portico.id, powered: true });
 			this.alarms.push({ portico, left: V.VAULT_ALARM_S, pulse: 0 });
 		}
-		this.onCracked?.(door, slot);
+		for (const s of crew) this.onCracked?.(door, s);
 	}
 
 	/** the portico of the bank this door belongs to */

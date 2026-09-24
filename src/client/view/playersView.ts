@@ -40,6 +40,7 @@ import { PetLook, petFlies } from "shared/data/cosmetics";
 import { drawPet } from "./cosmeticsView";
 import { drawVehicle } from "./vehicleView";
 import { PetFollower, createPetFollower, stepPetFollower } from "./petFollow";
+import { isSupporterUser } from "../systems/supporterClient";
 
 /** a plate whose ally has been out of the snapshot this long is destroyed (§4.4's despawn, with slack) */
 const RETIRE_S = 3;
@@ -116,6 +117,8 @@ export class PlayersView {
 			look.y = rp.y;
 			look.angle = rp.angle;
 			look.outfit = rp.outfit;
+			// MON-07: an ally the server marks a Supporter swings a rose trail
+			look.supporter = isSupporterUser(rp.userId);
 			look.weapon = weaponById(rp.weaponId);
 			// ITM-06: an ally whose weapon is put away is drawn empty-handed (the wire's reserved byte, note 20)
 			look.holstered = rp.weaponId === WEAPON_HOLSTERED;

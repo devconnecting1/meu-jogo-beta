@@ -1595,8 +1595,13 @@ export const AnnounceKind = {
 	 * lived standing); sent only to them, once per session. The client shows the line because the server said so
 	 */
 	BreakNudge: 8,
+	/**
+	 * (§9.3, review of b0174ed L-1) arg = 0: this survivor just picked up an item an admin dropped, and their run is
+	 * assisted from now on (it earns no coins, achievements, records or titles). Sent only to them, at the pickup
+	 */
+	AdminItem: 9,
 } as const;
-const ANNOUNCE_KIND_MAX = 8;
+const ANNOUNCE_KIND_MAX = 9;
 
 export interface WSolidAdd {
 	t: typeof WorldEv.SolidAdd;
@@ -2054,6 +2059,7 @@ function readWorldEvent(r: NetReader): WorldEvent | undefined {
 		if (msg === AnnounceKind.Died && deathFromWire(arg) === undefined) return undefined;
 		// ...and the break line carries nothing: any other arg is malformed
 		if (msg === AnnounceKind.BreakNudge && arg !== 0) return undefined;
+		if (msg === AnnounceKind.AdminItem && arg !== 0) return undefined;
 		return { t: WorldEv.Announce, msg, arg };
 	} else if (t === WorldEv.ZombieDied) {
 		const netId = r.u16();

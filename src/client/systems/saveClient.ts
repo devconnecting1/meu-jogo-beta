@@ -2,6 +2,7 @@ import { applyWallet, PlayerSaveData, sanitizeStoredSave } from "shared/game/sav
 import {
 	LoadStatus,
 	MAX_SAVE_PAYLOAD,
+	NET_FOLDER,
 	NetRemotes,
 	SAVE_MIN_INTERVAL,
 	SaveAckPayload,
@@ -13,6 +14,14 @@ import {
 	waitRemotes,
 } from "shared/net/net";
 import { newShopBucket, SHOP_NONCE_MAX, takesShopToken, takeShopToken } from "shared/net/shopGuard";
+import { REBIRTH_FREE_ATTR, rebirthCharge } from "shared/data/shop";
+import {
+	decodeCostumeList,
+	decodeRobuxOffer,
+	ROBUX_OFFER_ATTR,
+	ROBUX_PENDING_ATTR,
+	ROBUX_REJOIN_ATTR,
+} from "shared/data/robuxProducts";
 
 /*
  * Client side of the save protocol (see shared/net/net.ts).
@@ -77,7 +86,11 @@ export function onLoad(fn: (info: LoadInfo) => void): () => void {
 	return subscribe(loadListeners, fn);
 }
 
-/** the server's answer to a report (coins earned, a refusal) */
+/**
+ * The server's answer to a report (coins earned, a refusal) -- and ALSO a pushed wallet that says coins were earned
+ * (`push` with `earned` > 0: a midnight's or a boss's pay, MON-06), so a listener must not read every ack as the answer
+ * to a report it sent. Other pushes (XP, the bag, a write's news) never reach these listeners.
+ */
 export function onSaveAck(fn: (ack: SaveAckPayload) => void): () => void {
 	return subscribe(ackListeners, fn);
 }
@@ -151,6 +164,7 @@ function parseAck(raw: unknown): SaveAckPayload | undefined {
 		earned: num(r.earned),
 		earnedDays: num(r.earnedDays),
 		earnedBosses: num(r.earnedBosses),
+		earnedRecords: num(r.earnedRecords),
 		clamped: r.clamped === true,
 		wallet: r.wallet as SaveAckPayload["wallet"],
 		push: r.push === true,
@@ -192,6 +206,8 @@ export function startNet(): void {
 				const store = ack.store;
 				const answersDawn = ack.answersDawn === true;
 				if (store !== undefined) for (const fn of storeListeners) task.spawn(fn, store, answersDawn);
+				// MON-06: coins the server paid on its own (a midnight, a boss) are told like a report's: the coin toast
+				if (ack.ok && ack.earned > 0) for (const fn of ackListeners) task.spawn(fn, ack);
 				return;
 			}
 			if (ack.wallet !== undefined) applyServerWallet(ack.wallet);
@@ -255,11 +271,25 @@ export function savingPersistent(): boolean {
 	return savingEnabled() && persistEnabled;
 }
 
+/**
+ * A report's JSON: the whole save but its Robux receipts (save v8). Those are the server's alone -- no report moves them
+ * (shared/game/save.ts `readProgress` keeps the server's) -- so they are not sent, and never count against
+ * MAX_SAVE_PAYLOAD. The live table lends its field for the encode and gets it back at once (nothing yields between).
+ */
+export function reportJson(save: PlayerSaveData): string {
+	const receipts = save.robuxReceipts;
+	save.robuxReceipts = [];
+	const [ok, json] = pcall(() => HttpService.JSONEncode(save));
+	save.robuxReceipts = receipts;
+	if (!ok) throw json;
+	return json;
+}
+
 function sendNow(): void {
 	const r = remotes;
 	const token = activeToken;
 	if (!savingEnabled() || r === undefined || token === undefined || getSave === undefined) return;
-	const json = HttpService.JSONEncode(getSave());
+	const json = reportJson(getSave());
 	// nothing new since the last report: the server already has it
 	if (json === lastSentJson) return;
 	if (json.size() > MAX_SAVE_PAYLOAD) {
@@ -302,6 +332,64 @@ export function requestSave(reason: SaveReason): boolean {
 	return true;
 }
 
+/**
+ * What a Rebirth costs right now, as the server will charge it: nothing once this survivor's daybreak came while they
+ * waited in the lobby (the server says so on the Player, REBIRTH_FREE_ATTR), else the continue's price.
+ */
+export function rebirthPriceNow(deathCount: number): number {
+	return rebirthCharge(deathCount, rebirthShownFree());
+}
+
+/** does the server say this survivor's Rebirth is free right now (what the lobby shows, and the request says it expects) */
+export function rebirthShownFree(): boolean {
+	const me = game.GetService("Players").LocalPlayer as Player | undefined;
+	return me !== undefined && me.GetAttribute(REBIRTH_FREE_ATTR) === true;
+}
+
+/**
+ * The costumes a Robux payment of this player's may be on its way for (the server's ROBUX_PENDING_ATTR on the Player):
+ * the wardrobe shows them as Pending, and the server sells them neither for coins nor in a second prompt meanwhile.
+ */
+export function robuxPending(): Set<number> {
+	const me = game.GetService("Players").LocalPlayer as Player | undefined;
+	return decodeCostumeList(me?.GetAttribute(ROBUX_PENDING_ATTR));
+}
+
+/** of those, the ones only a rejoin can settle (ROBUX_REJOIN_ATTR): the wardrobe says "Rejoin to receive it" */
+export function robuxRejoin(): Set<number> {
+	const me = game.GetService("Players").LocalPlayer as Player | undefined;
+	return decodeCostumeList(me?.GetAttribute(ROBUX_REJOIN_ATTR));
+}
+
+/** `fn` runs when either list changes */
+export function onRobuxPendingChanged(fn: () => void): () => void {
+	const me = game.GetService("Players").LocalPlayer as Player | undefined;
+	if (me === undefined) return () => {};
+	const a = me.GetAttributeChangedSignal(ROBUX_PENDING_ATTR).Connect(fn);
+	const b = me.GetAttributeChangedSignal(ROBUX_REJOIN_ATTR).Connect(fn);
+	return () => {
+		a.Disconnect();
+		b.Disconnect();
+	};
+}
+
+/**
+ * The costumes this server sells for Robux, and at what price (costume id -> Robux): what server/save/robux.ts checked
+ * against Roblox's own and published on the Net folder. Empty = none: the wardrobe shows no Robux button at all.
+ */
+export function robuxOffer(): Map<number, number> {
+	const folder = game.GetService("ReplicatedStorage").FindFirstChild(NET_FOLDER);
+	return decodeRobuxOffer(folder?.GetAttribute(ROBUX_OFFER_ATTR));
+}
+
+/** `fn` runs when the server publishes a new offer (its price check runs at boot and every few minutes) */
+export function onRobuxOfferChanged(fn: () => void): () => void {
+	const folder = game.GetService("ReplicatedStorage").FindFirstChild(NET_FOLDER);
+	if (folder === undefined) return () => {};
+	const conn = folder.GetAttributeChangedSignal(ROBUX_OFFER_ATTR).Connect(fn);
+	return () => conn.Disconnect();
+}
+
 const ACTION_REASONS = new Set<string>([
 	"funds",
 	"owned",
@@ -312,6 +400,8 @@ const ACTION_REASONS = new Set<string>([
 	"readonly",
 	"outdated",
 	"network",
+	"pending",
+	"price",
 ]);
 
 /**

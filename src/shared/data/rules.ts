@@ -47,9 +47,20 @@ export function kickMessage(lang: number, filteredReason: string | undefined): s
 	return filteredReason !== undefined && filteredReason !== "" ? `${head}: ${filteredReason}` : sentence(head);
 }
 
-/** the automatic kick for flooding the remotes (docs/MULTIPLAYER.md §9.2, level 2): the only one the game makes */
+/**
+ * The automatic kick for flooding the remotes (docs/MULTIPLAYER.md §9.2, level 2): the only one the game makes for
+ * something the player did (the other, `outOfDateKickMessage`, is about the server)
+ */
 export function floodKickMessage(lang: number): string {
 	return sentence(langGet("Disconnected for sending too many network messages", lang));
+}
+
+/**
+ * The kick of a server older than the player's save (server/save/newerSave.ts, review of 97cd734 H1): it must not
+ * write that save, so it lets the player go to a server of the new build. Nothing the player did.
+ */
+export function outOfDateKickMessage(lang: number): string {
+	return langGet("This server is out of date. Rejoin to play.", lang);
 }
 
 /** where a banned player reads the rules and how to appeal: the experience page, the one place they can still open */

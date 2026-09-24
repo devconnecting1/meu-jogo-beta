@@ -1,9 +1,10 @@
-import { enforceSaveInvariants, PlayerSaveData, SAVE_LIMITS } from "shared/game/save";
+import { enforceSaveInvariants, PlayerSaveData, robuxPaid, SAVE_LIMITS } from "shared/game/save";
 import { WEAPONS } from "shared/data/weapons";
 import { EQUIPS } from "shared/data/equips";
 import { USABLES } from "shared/data/usables";
 import { ETC_ITEMS } from "shared/data/etcItems";
 import { COSTUMES } from "shared/data/shop";
+import { cosmeticSlotOf } from "shared/data/cosmetics";
 
 /*
  * Admin save edits as operations. The SAME function applies them on the server (its copy of the save) and on
@@ -183,7 +184,9 @@ export function applyAdminOps(save: PlayerSaveData, ops: Array<AdminOp>): void {
 			const now = itemCount(save, o.group, o.index);
 			setItem(save, o.group, o.index, o.mode === "min" ? math.max(now, o.count) : o.count);
 		} else if (o.op === "costume") {
-			save.costumes[o.id] = o.owned ? 1 : 0;
+			// a costume bought with Robux is never taken back (docs/SHOP.md): the server refuses such an edit whole
+			// (server/main.server.ts `adminEdit`), and this side keeps it too -- so does `enforceSaveInvariants`
+			if (o.owned || !robuxPaid(save, o.id)) save.costumes[o.id] = o.owned ? 1 : 0;
 		} else {
 			let spent = 0;
 			for (let i = 0; i < save.skillLevels.size(); i++) {
@@ -194,6 +197,38 @@ export function applyAdminOps(save: PlayerSaveData, ops: Array<AdminOp>): void {
 		}
 	}
 	enforceSaveInvariants(save);
+}
+
+/** some count in `after` above `before`'s; `skip` leaves out an index that is not help (a cosmetic) */
+function raisedAny(before: Array<number>, after: Array<number>, skip?: (i: number) => boolean): boolean {
+	for (let i = 0; i < after.size(); i++) {
+		if ((after[i] ?? 0) > (before[i] ?? 0) && skip?.(i) !== true) return true;
+	}
+	return false;
+}
+
+/**
+ * Did an admin save edit HELP the run (§9.3; review of 97cd734, M1)? It raised what a run is played or paid with: an
+ * item or its ammunition, the level or the XP toward it, the skill points (counted with the ones already spent, so a
+ * `resetSkills` that only hands the same points back is not help), or the coins. The server then marks the run
+ * assisted (server/main.server.ts `adminEdit`), like a world tool that helped it: no coins, achievements, records or
+ * titles from it. Lowering anything, a costume or a cosmetic item, or an edit that changes nothing is not help. (The
+ * life's day is `adminEdit`'s own check.)
+ */
+export function adminEditHelps(before: PlayerSaveData, after: PlayerSaveData): boolean {
+	if (after.money > before.money || after.level > before.level || after.exp > before.exp) return true;
+	let spentBefore = 0;
+	for (const v of before.skillLevels) spentBefore += v;
+	let spentAfter = 0;
+	for (const v of after.skillLevels) spentAfter += v;
+	if (after.skillPoint + spentAfter > before.skillPoint + spentBefore) return true;
+	// an outfit or a pet is a look (MON-01): given by the item op too, it is not help
+	const cosmetic = (i: number): boolean => cosmeticSlotOf(i) !== 0;
+	if (raisedAny(before.invenWeapon, after.invenWeapon)) return true;
+	if (raisedAny(before.invenEquip, after.invenEquip, cosmetic)) return true;
+	if (raisedAny(before.invenUse, after.invenUse) || raisedAny(before.invenEtc, after.invenEtc)) return true;
+	for (const f of AMMO_FIELDS) if (after[f] > before[f]) return true;
+	return false;
 }
 
 /** short human description of an op list (audit log) */

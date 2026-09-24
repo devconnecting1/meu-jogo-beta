@@ -13,7 +13,7 @@ Last Town:
 | DataStores do servidor | `ProjectZ_AdminLog`, `ProjectZ_Worlds`, `ProjectZ_PrivateTowns` (+ `_studio`) | `server/save/stores.ts` |
 | MemoryStore (lista Servers) | `ProjectZ_Servers` | `server/match/serverList.ts` |
 | RTBF e `cloud -- erase` | as mesmas chaves acima; os seis modelos de RTBF desta página | `tools/rtbf.mjs`, `tools/cloud.mjs` |
-| Atributos entre servidor e cliente | `pz_*` (`pz_world_seed`, `pz_world_day`…), `PZAdmin`, `PZTownNet`, `PZAdminNet` | `shared/net/*`, `shared/admin/*` |
+| Atributos entre servidor e cliente | `pz_*` (`pz_world_seed`, `pz_world_day`…, `pz_supporter`), `PZAdmin`, `PZTownNet`, `PZAdminNet` | `shared/net/*`, `shared/admin/*`, `shared/data/supporter.ts` |
 | Analytics | nomes e campos dos eventos e funis, a config `pz_welcome_pack` | `server/analytics/events.ts`, `docs/ANALYTICS.md` |
 | Teleporte | as chaves do TeleportData | `server/match/rules.ts` |
 
@@ -99,7 +99,8 @@ O "jogar sozinho" que você pediu é o **Play solo** da tela Survivor: um servid
 (`TeleportService:ReserveServerAsync` + `TeleportAsync`), com as mesmas regras do público e a cidade no **dia da vida do
 dono** (MP-13; um save novo: dia 1; `docs/MULTIPLAYER.md` §7.4, MP-25). Não precisa de configuração nenhuma aqui, e **só funciona no jogo publicado**: no
 Studio a tela explica que não há teleporte. Teste numa experiência de teste separada (o roteiro está na §7.4). O
-servidor privado (VIP) é independente: ligue se quiser vendê-lo ou dá-lo; o jogo o reconhece sozinho
+servidor privado (VIP) é independente e **decidido: grátis** (2026-09-24): Audience › **Access Settings** › ligue
+**Allow private servers** e **desligue Requires Robux** › Save Changes; o jogo o reconhece sozinho
 (`pz_server_kind = private`). O que **não** pode acontecer continua sendo o solo virar um modo pior que o co-op — MP-14.
 
 ### Permissions / Collaborators — **só você, por enquanto**
@@ -193,6 +194,39 @@ Cada gravação do save e do registro de títulos leva o UserId do dono (`Update
 o próprio Data Stores Manager mostra de quem é cada chave. O sufixo `_studio` (feito) separa os playtests do
 Studio dos saves de produção.
 
+### Publicar — **todo publish reinicia os servidores**
+
+**A cada publish**, mude o save ou não, **publique e reinicie todos os servidores na hora**: Creator Hub → a
+experiência → **Restart servers** (o antigo "Migrate to latest update"; basta "só os desatualizados", **sem**
+bleed-off) ou **Shut down all servers**. Nunca "deixe esvaziar".
+
+Por quê: um servidor antigo que continua no ar só conhece o que o código dele conhece. Quem jogou num servidor novo e
+entra num antigo (pelo amigo, por um servidor privado, por um que ainda não esvaziou) tem o save reescrito sem o que
+é novo: um campo novo some (no v7, os títulos novos e os contadores deles, no save **e** no `ProjectZ_Titles`), e
+cada lista é cortada ao tamanho das tabelas **dele** — uma arma, um traje, um título ou uma conquista acrescentados
+sem mudar o `SAVE_VERSION` se perdem, e a arma na mão com eles (revisão de b0174ed, M-1). Não é só um risco de
+rollback. Do código deste PR em diante o servidor se defende (revisões de 97cd734, H1, e b0174ed, M-1): um servidor
+que carrega um save de versão maior, ou da mesma versão com uma lista mais longa que a tabela dele, não escreve nada
+daquele jogador e o manda entrar de novo ("This server is out of date. Rejoin to play."), e a lista de servidores do
+lobby só mostra servidores do mesmo build (o filtro `pv` supõe exatamente este reinício). Mas o servidor que já está
+no ar é o código **anterior**, e esse não sabe disso: só o reinício o tira do caminho. Detalhes:
+`docs/MULTIPLAYER.md` §6.7b, `docs/DESIGN_RULES.md` MON-05 ("Save v7").
+
+O outro lado da mesma proteção (revisão de b0174ed, L-3):
+
+- **Rollback que desce o `SAVE_VERSION`:** todo mundo que jogou no build mais novo tem um save de versão maior que a
+  do código de volta — e esse código o recusa: **cada entrada** dessas pessoas é um kick com "This server is out of
+  date". Um rollback abaixo de um `SAVE_VERSION` já publicado só serve para o jogador que nunca entrou no build novo;
+  um defeito num build que subiu a versão se corrige **para frente**, com outro publish.
+- **No Studio:** o save de playtest fica no `ProjectZ_Save_v2_studio` (os `_studio` são separados dos de produção).
+  Um playtest numa branch com `SAVE_VERSION` maior grava ali um save que a `main` recusa: o desenvolvedor passa a
+  levar o kick no Studio da `main`. Para voltar, apague **só a chave de Studio** do seu UserId: no **Data Stores
+  Manager** (Configure → Data Stores Manager → `ProjectZ_Save_v2_studio` → a chave do seu UserId → Delete; o próprio
+  painel permite desfazer durante a espera), ou pela barra de comandos do Studio (View → Command Bar, com Game
+  Settings → Security → Enable Studio Access to API Services ligado):
+  `game:GetService("DataStoreService"):GetDataStore("ProjectZ_Save_v2_studio"):RemoveAsync("<seu UserId>")`.
+  **Nunca** `npm run cloud -- erase`: ele apaga também as chaves **de produção** do jogador.
+
 ### Leaderboard — **depois da F2**
 
 Recorde de dias sobrevividos, via `OrderedDataStore`. Depende do XP e do progresso já serem do servidor
@@ -256,11 +290,51 @@ Você foi explícito: **não quero pay-to-win**. Isso se traduz assim:
 | --- | --- |
 | Passes / Developer products | **Só cosmético e conveniência.** Skin, roupa, cor de nameplate: sim. Arma, munição, dano, XP, vida: **não**. |
 | Shop / Managed pricing | Não antes de publicar. |
-| Subscriptions | Não. Assinatura num jogo de sobrevivência cria pressão para tornar o jogo pior para quem não assina. |
+| Subscriptions | **Uma, de apoio: "Last Town Supporter"** (MON-07, 2026-09-24). Só um coração no nome e o rastro do golpe na cor Supporter; nada que uma noite sinta, nenhum título. Passo a passo em "Assinatura Supporter", abaixo. |
 | Ads | **Desligado** enquanto privado. Reavaliar só depois de o jogo estar bom. |
 | Third-party avatar commissions | Pode ligar: é receita que não afeta equilíbrio nenhum. |
 
 A regra prática para qualquer item futuro: **se dá vantagem numa noite, não se vende.**
+
+### Trajes e pets por Robux
+
+**A criar aqui:** os 9 produtos de desenvolvedor dos trajes e pets por Robux (49 / 149 / 349 R$, um por traje;
+nome, preço exato, descrição e configurações em `docs/SHOP.md`, "Os produtos que o dono cria": **Unlisted**, **sem**
+"Allow external purchases"), e depois colar os ids em `src/shared/data/robuxProducts.ts`. Sem id, nada é oferecido.
+A tabela de todo produto, o modelo de horas de jogo por trás de cada preço e as decisões de Robux (2026-09-24:
+servidor privado **grátis**) estão em `docs/SHOP.md`.
+
+### Assinatura Supporter — **o código está pronto e escondido; faça isto para ligar**
+
+O jogo já tem tudo (MON-07): o servidor pergunta ao Roblox quem assina (`server/supporter/supporter.ts`), marca o
+jogador com o atributo `pz_supporter`, e a aba **Supporter** do guarda-roupa aparece com a oferta. Enquanto
+`SUPPORTER_SUBSCRIPTION_ID` estiver vazio em `src/shared/data/supporter.ts`, nada disso liga.
+
+1. **Creator Hub → a experiência → Monetization → Subscriptions → Create Subscription.** (Exige conta com e-mail
+   verificado e 30+ dias, como qualquer venda em Robux; o Roblox pode pedir mais — siga o que o painel mostrar.)
+2. **Imagem de capa:** o coração Supporter sobre o logo (512 × 512; pode partir do ícone em `docs/promo/icon/`).
+3. **Nome** (único na experiência): `Last Town Supporter`.
+4. **Descrição** (cole exatamente; diz tudo o que dá e o que não dá, como pedem as diretrizes do Roblox):
+
+   > Support Last Town and wear it. While your subscription is active: a heart beside your name on your nameplate,
+   > for everyone to see, and your melee swing trail in the Supporter rose. That's all it does: no coins, no XP, no
+   > items, no titles and nothing that changes a night. Titles are always earned by playing. Renews monthly until you
+   > cancel; cancel any time in your Roblox settings.
+
+5. **Pagamento:** *Subscribers pay Robux*, **99 Robux/mês** (o mínimo é 49; o Regional Pricing vem ligado e não se
+   desliga). **Tipo de produto:** *Durable* (um benefício que dura enquanto a assinatura dura; nada consumível, nenhuma
+   moeda). Salve.
+6. **Copie o id** da assinatura (começa com `EXP-`) e cole em `src/shared/data/supporter.ts`:
+   `export const SUPPORTER_SUBSCRIPTION_ID = "EXP-...";` — depois `npm run build`, `npm run test:titles` e um PR
+   (ou peça à sessão da nuvem para colar e abrir o PR).
+7. **Teste no jogo publicado** (o `GetUserSubscriptionStatusAsync` e o prompt só funcionam de verdade publicado): abra
+   o guarda-roupa → Supporter → See price; assine com uma conta de teste; o coração aparece em até ~10 s (o servidor
+   pergunta de novo depois do prompt) e a página diz ACTIVE. Cancele: ao fim do período o coração some (o servidor
+   pergunta a cada 10 min e a cada mudança de status).
+8. **Números:** Monetization → Subscriptions → Analytics (assinantes, receita, cancelamentos). O jogo só manda o
+   evento custom `Supporter` (quem assinou ou venceu **durante** uma sessão, `docs/ANALYTICS.md` §5).
+
+Não há DataStore novo nem modelo de RTBF a criar: o status é do Roblox e fica só na memória do servidor.
 
 ---
 
@@ -454,8 +528,15 @@ O que foi conferido na documentação do Roblox (Context7, `/websites/create_rob
 4. **Server management**: decidir como será o "jogar sozinho".
 5. **Alerts**: ligar assim que tiver 100+ DAU (lista na §13 de `docs/ANALYTICS.md`).
 6. **Access settings**: manter privado até a F2 fechar.
-7. Depois do próximo publish: conferir o **Ban history** no painel de admin (bans ligados).
+7. **Todo publish**: publicar e logo **Restart servers** ou **Shut down all servers** (seção "Publicar"). Depois do
+   próximo publish: conferir o **Ban history** no painel de admin (bans ligados).
 8. **Open Cloud na CI**: a chave só de Assets (IP `0.0.0.0/0`, 90 dias) e os secrets `ROBLOX_API_KEY` +
    `ROBLOX_CREATOR_USER_ID` no GitHub; depois Actions → CI → Run workflow na `main` (seção acima). Trocou de conta:
    a experiência na conta nova, os dois secrets novos e Run workflow; a CI reenvia tudo como a conta nova
    ("Mudou de conta").
+9. **Private servers: Free** — Audience › Access Settings › Allow private servers ligado, Requires Robux desligado
+   (decisão de 2026-09-24). **Monetization › Developer Products:** criar os 9 produtos de `docs/SHOP.md` ("Os
+   produtos que o dono cria": preço exato, Unlisted, sem "Allow external purchases"), colar os ids em
+   `src/shared/data/robuxProducts.ts`, `npm run build` e commit; refazer o questionário (Paid random items: No).
+10. **Assinatura Supporter** (quando quiser ligar): criar em Monetization → Subscriptions com o nome, a descrição e o
+    preço da seção "Assinatura Supporter" e colar o id `EXP-…` em `src/shared/data/supporter.ts`.

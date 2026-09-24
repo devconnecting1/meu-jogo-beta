@@ -5,10 +5,9 @@ import { EQUIPS, EquipSlot } from "shared/data/equips";
 import { ItemKind } from "shared/data/kinds";
 import { iconKeys } from "shared/data/itemIcons";
 import { langGet } from "shared/data/lang";
-import { rebirthPrice } from "shared/data/shop";
 import { DAY_BREAK_HOUR, isNightAt, secondsUntilHour } from "shared/sim/clock";
 import { PetLook } from "shared/data/cosmetics";
-import { requestSave } from "../systems/saveClient";
+import { rebirthPriceNow, requestSave } from "../systems/saveClient";
 import { countdown } from "../onboarding/gameOver";
 import { SurvivorPreview } from "../view/cosmeticPreview";
 import { IconView, clearIcon, drawItemIcon, maxFrameCount } from "./itemIcon";
@@ -625,7 +624,8 @@ export class SurvivorScreen {
 		const lines: Array<string> = [];
 		if (over) {
 			this.layoutRow(canWait ? 3 : 2);
-			const price = rebirthPrice(save.deathCount);
+			// the server's price right now: 0 once the daybreak came while they waited here (REBIRTH_FREE_ATTR)
+			const price = rebirthPriceNow(save.deathCount);
 			this.rebirth.Text = `${tr("Rebirth")}  ·  ${fmtInt(price)}`;
 			setButtonVariant(this.rebirth, "default");
 			let words =
@@ -685,7 +685,7 @@ export class SurvivorScreen {
 			autoFocus(this.enter);
 			return;
 		}
-		const affordable = this.ctx.save.money >= rebirthPrice(this.ctx.save.deathCount);
+		const affordable = this.ctx.save.money >= rebirthPriceNow(this.ctx.save.deathCount);
 		if (affordable) autoFocus(this.rebirth);
 		else autoFocus(s.canWait === true ? this.wait : this.newGame);
 	}

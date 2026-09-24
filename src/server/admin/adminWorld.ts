@@ -45,7 +45,8 @@ import type { ServerSimulation } from "../sim/simulation";
  * of whatever body the admin stands in is marked, every tick: a new run (a reset, a New game) does not pay either.
  *
  * What an admin drops pays nobody but the item itself (`GroundItem.unpaid`): whoever picks it up gets no collector
- * credit, and the pickup is logged (`world:taken`). Cosmetics (outfits, pets) are never dropped: the shop sells them.
+ * credit, the pickup is logged (`world:taken`), and the run of whoever took it is assisted from then (review of
+ * 97cd734, M1). Cosmetics (outfits, pets) are never dropped: the shop sells them.
  */
 
 const Players = game.GetService("Players");
@@ -153,11 +154,17 @@ export function startAdminWorld(deps: AdminWorldDeps): AdminWorldTools {
 
 	/**
 	 * who picked up an admin's drop (`GroundItem.unpaid`): one server-written audit line, with what they took (the
-	 * save's ceiling can leave part of it on the ground, ITM-07)
+	 * save's ceiling can leave part of it on the ground, ITM-07) -- and THEIR run is assisted from here (§9.3; review of
+	 * 97cd734, M1): a weapon an admin handed over is a night made easier, like the same weapon given by a save edit
 	 */
 	function taken(sim: ServerSimulation, slot: number, item: GroundItem, count: number): void {
 		const sp = sim.get(slot);
 		deps.note("world:taken", sp?.userId ?? 0, `kind ${item.kind} item ${item.itemId} ×${count} an admin dropped`);
+		const player = sp !== undefined ? Players.GetPlayerByUserId(sp.userId) : undefined;
+		if (player !== undefined) deps.markAssisted(player);
+		// ...and told so, at once (review of b0174ed, L-1): it is never a surprise. Only an E press takes an admin's drop
+		// (shared/sim/pickupRule.ts `walkPickupTarget` passes it over), so nobody walks into it
+		if (sp !== undefined) deps.host()?.replicator.adminItem(slot);
 	}
 
 	/**

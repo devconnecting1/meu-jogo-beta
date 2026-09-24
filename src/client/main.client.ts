@@ -6,7 +6,6 @@ import { CRAFT_RECIPES } from "shared/data/crafts";
 import { DeathNote, deathKindOf } from "shared/data/deathCause";
 import { EQUIPS, EquipSlot } from "shared/data/equips";
 import { langGet } from "shared/data/lang";
-import { rebirthPrice } from "shared/data/shop";
 import { USABLES } from "shared/data/usables";
 import { MP_PHASE } from "shared/net/mpConfig";
 import { ShopActionRequest, ShopActionResult } from "shared/net/net";
@@ -50,7 +49,7 @@ import * as Match from "./net/matchClient";
 import { showLogo } from "./ui/logo";
 import { LobbyHandle, LobbyPage, LobbyStatus, RunState, showLobby } from "./ui/lobby";
 import * as Flyover from "./view/townFlyover";
-import { actionErrorText, showShop } from "./ui/shop";
+import { actionErrorText, earnedText, showShop, welcomeText } from "./ui/shop";
 import { showWardrobe } from "./ui/wardrobe";
 import { startServerNotices } from "./ui/serverNotices";
 import * as PackNotice from "./ui/packNotice";
@@ -213,7 +212,7 @@ function showLoadNotice(info: net.LoadInfo): void {
 	} else if (info.status === "unavailable") {
 		toast(ctx, tr("Saving is unavailable in this environment"), "error");
 	} else if (info.status === "new") {
-		toast(ctx, tr("Welcome, survivor! Here are 20 coins to start"), "coin");
+		toast(ctx, welcomeText(ctx.save.settings.langType), "coin");
 	}
 }
 
@@ -267,12 +266,8 @@ net.onStoreState((state, answersDawn) => hud.dawnStoreNotice(state, answersDawn)
 
 net.onSaveAck(ack => {
 	if (ack.ok) {
-		if (ack.earned > 0) {
-			const parts: Array<string> = [];
-			if (ack.earnedDays > 0) parts.push(`${tr("Day survived")} ×${ack.earnedDays}`);
-			if (ack.earnedBosses > 0) parts.push(`${tr("Boss defeated")} ×${ack.earnedBosses}`);
-			toast(ctx, `+${fmtInt(ack.earned)} ${tr("coins")}   ${parts.join("  ·  ")}`, "coin");
-		}
+		// MON-06: a midnight's or a boss's coins, as the server's pushed wallet says it paid them (or a report's)
+		if (ack.earned > 0) toast(ctx, earnedText(ack, ctx.save.settings.langType), "coin");
 	} else if (ack.reason === "readonly" || ack.reason === "stale") {
 		toast(ctx, `${tr("Could not save")}: ${tr("Progress not loaded")}`, "error");
 	}
@@ -1055,8 +1050,14 @@ function revive(): void {
  * move, so a genuine disagreement can never turn into a loop.
  */
 function invokeRunAction(kind: "rebirth" | "newRun"): ShopActionResult {
+	// a Rebirth the lobby showed at 0 says so: the server then never charges a price the player did not see
+	const expectFree = kind === "rebirth" && net.rebirthShownFree();
 	const request = (runRev: number): ShopActionRequest =>
-		kind === "rebirth" ? { kind: "rebirth", runRev } : { kind: "newRun", runRev };
+		kind === "rebirth"
+			? expectFree
+				? { kind: "rebirth", runRev, expectFree: true }
+				: { kind: "rebirth", runRev }
+			: { kind: "newRun", runRev };
 	const asked = ctx.save.runRev;
 	const first = net.invokeShopAction(request(asked));
 	if (first.ok || first.reason !== "outdated") return first;
@@ -1070,7 +1071,8 @@ function doRebirth(): void {
 	// MP-21 (owner's rule, 23 Sep 2026): a paid Rebirth is legal on every server kind; the server checks the death
 	// the Rebirth button stays clickable even when it's styled as "can't afford" (destructive) -
 	// check locally first so the player gets an exact, instant reason instead of just nothing happening
-	const price = rebirthPrice(ctx.save.deathCount);
+	// the server's price right now: nothing once the daybreak came while they waited in the lobby
+	const price = net.rebirthPriceNow(ctx.save.deathCount);
 	if (ctx.save.money < price) {
 		toast(ctx, `${tr("Not enough coins")}: ${fmtInt(price - ctx.save.money)} ${tr("more needed")}`, "error");
 		return;

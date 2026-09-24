@@ -5,9 +5,9 @@ import { EQUIPS, EquipSlot } from "shared/data/equips";
 import { USABLES } from "shared/data/usables";
 import { ETC_ITEMS } from "shared/data/etcItems";
 import { ItemKind } from "shared/data/kinds";
-import { COSTUMES, ECONOMY, SHOP_PACKS, costumeForEquip } from "shared/data/shop";
+import { COSTUMES, ECONOMY, SHOP_PACKS, costumeForEquip, petOfPack } from "shared/data/shop";
 import { OutfitLook, PetLook, cosmeticSlotOf, outfitLookOfEquip, petLookOfEquip } from "shared/data/cosmetics";
-import { TITLES, titleToWire } from "shared/data/titles";
+import { TITLES, TITLE_STAT_COUNT, titleStatIsBits, titleStatMax, titleToWire, unionBits } from "shared/data/titles";
 import { MP_PHASE } from "shared/net/mpConfig";
 
 /**
@@ -51,8 +51,28 @@ import { MP_PHASE } from "shared/net/mpConfig";
  * already died as far as it can tell (`deathCount > 0` -- where the old rule stopped -- or `runOver`), else 0; a v5 death
  * answered by waiting for daybreak left no record. A server rolled back to v5 drops it and takes achievements from
  * reports again; nothing earned is lost.
+ *
+ * v7 (MON-05, the titles that followed the first three): one new server-owned field, same document, additive:
+ * `titleStats`, TITLE_STAT_COUNT lifetime numbers only titles read (whole nights lived, the zombie and boss kinds put
+ * down, firearm and turret kills, constructions placed, items crafted: shared/data/titles.ts `TitleStat`). The flags
+ * of the new titles live in `titles`, whose length follows TITLES. A v6 document has no `titleStats`: every number
+ * starts at 0 -- the truth, since no server counted any of them before v7.
+ *   - a server rolled back to v6 code drops `titleStats` AND the flags of every title past the first three, in the save
+ *     and in the title record (v6 code opens it and rewrites it with the three it knows): a rollback below v7 costs the
+ *     titles earned since, and their counters. The three v5 titles and `zombieKills` survive it as before, and the kill
+ *     titles come back by themselves at the next kill (their goal is a `zombieKills` count). So a v7 build is never
+ *     rolled back: a fault in it is fixed forward (docs/DESIGN_RULES.md MON-05, "Save v7").
+ *
+ * v8 (Robux, docs/SHOP.md "Robux: decisões e desenho"): `robuxReceipts`, the developer-product purchases the SERVER
+ * granted, as `{ c: costumeId, p: PurchaseId }` (at most ROBUX_RECEIPTS_MAX, the oldest dropped first -- never a
+ * costume's only one). It makes a receipt Roblox delivers twice grant
+ * once (server/save/robux.ts), keeps a costume paid in real money owned whatever an admin edit says
+ * (`enforceSaveInvariants`), and survives an admin reset (`carryRobuxPurchases`). Same document, additive: a v7 document
+ * has none (nothing was ever sold for Robux before v8); a server rolled back to v7 drops the list when it writes, which
+ * costs nothing -- the costume stays in `costumes`, and granting a costume twice is granting it once (a receipt Roblox
+ * asks about again is then granted again and its PurchaseId kept again). Below v7 the v7 rule above applies.
  */
-export const SAVE_VERSION = 6;
+export const SAVE_VERSION = 8;
 /** the first version that carries `runHp` / `runHunger`; below it those two fields are absent, not zero */
 export const SAVE_VERSION_RUN_BODY = 3;
 /** the first version with `equipOutfit` / `equipPet`; below it the one cosmetic lives in `equipDeco` */
@@ -61,6 +81,24 @@ export const SAVE_VERSION_COSMETIC_SLOTS = 4;
 export const SAVE_VERSION_TITLES = 5;
 /** the first version whose `achievements` are server-owned and that carries `lifeDeaths` (CON-04) */
 export const SAVE_VERSION_SERVER_ACHIEVEMENTS = 6;
+/** the first version with `titleStats` (MON-05, the titles past the first three) */
+export const SAVE_VERSION_TITLE_STATS = 7;
+/** the first version that carries `robuxReceipts` (Robux purchases of the wardrobe's costumes) */
+export const SAVE_VERSION_ROBUX = 8;
+/** Robux receipts kept per save: each costume can be bought once, so the list stays far below this */
+export const ROBUX_RECEIPTS_MAX = 64;
+/**
+ * The longest PurchaseId kept. Roblox's are GUID-like (about 32-36 characters) and any character may be in one: the
+ * entry keeps it as its own field, so only its length is bounded -- far above any real id, far below what a save holds
+ * (64 of them are 16 KB of a 4 MB document; the client's report never carries them: client/systems/saveClient.ts)
+ */
+export const PURCHASE_ID_MAX = 256;
+
+/** one Robux purchase the server granted (save v8): the costume (COSTUMES index) and Roblox's PurchaseId */
+export interface RobuxReceipt {
+	c: number;
+	p: string;
+}
 
 /** hard sanity limits applied to every save the server reads or accepts */
 export const SAVE_LIMITS = {
@@ -147,7 +185,7 @@ export function defaultSettings(): SettingsData {
  * Field ownership:
  * - server-owned (the client copy is display-only and is ignored when reported):
  *   money, deathCount, bestDay, packsBought, costumes, runRev, version, titles, zombieKills, lifeNights, titleEpoch,
- *   achievements and lifeDeaths (v6)
+ *   achievements and lifeDeaths (v6), titleStats (v7)
  * - client-simulated, validated/clamped by the server: everything else
  *   (day, level, bossKills and packsOpened additionally have time/ordering limits on the server)
  * - from PROGRESS_SERVER_PHASE the progress (level, exp, skillPoint, bossKills, day) is the server's, and from
@@ -232,12 +270,22 @@ export interface PlayerSaveData {
 	 */
 	lifeDeaths: number;
 	/**
+	 * v8: the Robux purchases the server granted, `{ c, p }`, newest last (at most ROBUX_RECEIPTS_MAX).
+	 * Server-owned (server/save/robux.ts): a report never moves it, and it never rides the wallet.
+	 */
+	robuxReceipts: Array<RobuxReceipt>;
+	/**
 	 * v5 (MON-05): which title HISTORY this save is. 0 for a save that came from v4 (or went through a v4 server);
 	 * otherwise the os.time() it was started at (a new save) or an admin last edited or reset it at. A title record
 	 * (server/save/titleRecord.ts) from an OLDER epoch belongs to a history that was reset or deleted on purpose and is
 	 * never merged back. Server-owned: written only by server/main.server.ts.
 	 */
 	titleEpoch: number;
+	/**
+	 * v7 (MON-05): the numbers only titles read, one per shared/data/titles.ts `TitleStat` -- counts that only grow and
+	 * sets of bits that only gain bits. Lifetime (a new life keeps them), written only by server/save/titles.ts.
+	 */
+	titleStats: Array<number>;
 }
 
 /** the server-owned part of the save, pushed to the client after every economy change */
@@ -257,6 +305,13 @@ export interface Wallet {
 	lifeNights?: number;
 	/** v6 (CON-04): the achievement counters, the server's. Optional: a wallet from an older server has none */
 	achievements?: Array<number>;
+	/** v7 (MON-05): the title counters (`TitleStat`), a locked title's progress. Optional: older servers */
+	titleStats?: Array<number>;
+	/**
+	 * v6 (CON-04): the deaths of this life the server decided -- a locked Unbroken's progress in the wardrobe reads it
+	 * (review of 97cd734, LOW1). Optional: older servers
+	 */
+	lifeDeaths?: number;
 	/**
 	 * The day of this life (MP-13), from PROGRESS_SERVER_PHASE on the SERVER's (its midnight credits it, or refuses
 	 * to: dead, absent, AFK). Optional so a wallet from an older server still parses.
@@ -442,9 +497,117 @@ function copyArray(src: Array<number>): Array<number> {
 }
 
 /** overwrites `dst` with `src`'s contents, in place (the array identity is what callers rely on) */
-function copyInto(dst: Array<number>, src: Array<number>): void {
+function copyInto<T extends defined>(dst: Array<T>, src: Array<T>): void {
 	dst.clear();
 	for (const v of src) dst.push(v);
+}
+
+// ---------------------------------------------------------------- v8: Robux receipts
+
+/** a PurchaseId this save can keep: a non-empty string of at most PURCHASE_ID_MAX characters (any character) */
+export function isPurchaseId(v: unknown): v is string {
+	return typeIs(v, "string") && v.size() > 0 && v.size() <= PURCHASE_ID_MAX;
+}
+
+/** the costume a receipt entry (`{ c, p }`) names, or -1 when the entry is not one */
+export function receiptCostume(entry: unknown): number {
+	if (!typeIs(entry, "table")) return -1;
+	const e = entry as Record<string, unknown>;
+	const id = e.c;
+	if (!typeIs(id, "number") || id !== id || id % 1 !== 0 || id < 0 || id >= COSTUMES.size()) return -1;
+	return isPurchaseId(e.p) ? id : -1;
+}
+
+/** the receipt entry of `purchaseId` in this save, or undefined */
+export function robuxReceiptOf(save: PlayerSaveData, purchaseId: string): RobuxReceipt | undefined {
+	for (const entry of save.robuxReceipts) {
+		if (entry.p === purchaseId) return entry;
+	}
+	return undefined;
+}
+
+/** was COSTUMES[costumeId] paid for in Robux in this save? (an admin never takes it back: shared/admin/ops.ts) */
+export function robuxPaid(save: PlayerSaveData, costumeId: number): boolean {
+	for (const entry of save.robuxReceipts) {
+		if (entry.c === costumeId) return true;
+	}
+	return false;
+}
+
+/**
+ * Keeps at most ROBUX_RECEIPTS_MAX entries, in place: the oldest go first, but never the only receipt of a costume --
+ * that one is what keeps a costume paid in real money the player's (`enforceSaveInvariants`) and out of an admin's
+ * reach. Each costume can be bought once, so the list only grows past the cap through receipts for costumes already
+ * owned (a purchase from outside the game), and those always have a twin to drop.
+ */
+export function trimReceipts(list: Array<RobuxReceipt>): void {
+	let excess = list.size() - ROBUX_RECEIPTS_MAX;
+	if (excess <= 0) return;
+	// one pass, oldest first (review of dbbb73c, L1: the old search was quadratic): an entry goes while the list is still
+	// over the cap and its costume has another receipt left -- which, scanning from the oldest, is a later one
+	const left = new Map<number, number>();
+	for (const e of list) left.set(e.c, (left.get(e.c) ?? 0) + 1);
+	const kept: Array<RobuxReceipt> = [];
+	for (const e of list) {
+		const n = left.get(e.c) ?? 0;
+		if (excess > 0 && n > 1) {
+			left.set(e.c, n - 1);
+			excess -= 1;
+			continue;
+		}
+		kept.push(e);
+	}
+	// every entry left its costume's only one: more costumes than the cap, which COSTUMES never has -- the oldest go
+	const from = math.max(0, kept.size() - ROBUX_RECEIPTS_MAX);
+	list.clear();
+	for (let i = from; i < kept.size(); i++) list.push(kept[i]);
+}
+
+/** a copy of each entry (the receipts of two saves never share a table) */
+function copyReceipts(src: Array<RobuxReceipt>): Array<RobuxReceipt> {
+	const out: Array<RobuxReceipt> = [];
+	for (const e of src) out.push({ c: e.c, p: e.p });
+	return out;
+}
+
+/**
+ * An admin reset makes a new player's save (server/main.server.ts `adminEdit`), but what was bought with real money is
+ * still theirs: the receipts go over, and with them the costumes they paid for (`enforceSaveInvariants`).
+ */
+export function carryRobuxPurchases(from: PlayerSaveData, to: PlayerSaveData): void {
+	copyInto(to.robuxReceipts, copyReceipts(from.robuxReceipts));
+	for (const entry of to.robuxReceipts) to.costumes[entry.c] = 1;
+}
+
+/**
+ * The most raw entries a stored list is read for. A save never holds more than ROBUX_RECEIPTS_MAX (every write trims
+ * it), so a longer list is a hostile or broken document: it is read this far and no further, whatever its size (review
+ * of dbbb73c, L1: 200k entries used to stall the load).
+ */
+export const ROBUX_RECEIPTS_READ_MAX = 256;
+
+/**
+ * A stored list, entry by entry: at most ROBUX_RECEIPTS_READ_MAX raw entries looked at, well-formed ones only, each
+ * PurchaseId once (the first kept), and at most ROBUX_RECEIPTS_MAX of them (`trimReceipts`: never a costume's only
+ * receipt). Linear in what it reads.
+ */
+function readReceipts(v: unknown): Array<RobuxReceipt> {
+	const out: Array<RobuxReceipt> = [];
+	if (!typeIs(v, "table")) return out;
+	const seen = new Set<string>();
+	let read = 0;
+	for (const entry of v as Array<unknown>) {
+		read += 1;
+		if (read > ROBUX_RECEIPTS_READ_MAX) break;
+		const c = receiptCostume(entry);
+		if (c < 0) continue;
+		const p = (entry as RobuxReceipt).p;
+		if (seen.has(p)) continue;
+		seen.add(p);
+		out.push({ c, p });
+	}
+	trimReceipts(out);
+	return out;
 }
 
 function idByName(list: Array<{ id: number; name: string }>, name: string): number {
@@ -502,7 +665,8 @@ export function declineTutorial(save: PlayerSaveData): void {
 /**
  * Starts a new run after a game over: back to day 1 with the starter kit and a fresh continue price.
  * Kept: level/exp/skills, achievements, records, coins, packs, costumes (and the outfit / pet a costume unlocked),
- * titles, the kill count and the title shown (MON-05: what was earned is the survivor's, not the run's), and
+ * titles, the kill count, the title counters (`titleStats`, v7) and the title shown (MON-05: what was earned is the
+ * survivor's, not the run's), and
  * settings. The server applies it on the "newRun" action and when a world ends (MP-22, server/sim/life.ts
  * `restartWorld`); the client applies the same to its copy.
  */
@@ -567,6 +731,8 @@ function emptySave(): PlayerSaveData {
 		equipTitle: -1,
 		titleEpoch: 0,
 		lifeDeaths: 0,
+		titleStats: zeros(TITLE_STAT_COUNT),
+		robuxReceipts: [],
 	};
 }
 
@@ -706,6 +872,25 @@ export function totalPendingPacks(save: PlayerSaveData): number {
 	return n;
 }
 
+/**
+ * A pet pack (shared/data/shop.ts `petOfPack`) this survivor has no use for: the pet is already theirs -- for good (the
+ * costume), in this life's backpack, or on its way in a pack of that pet still pending. One pet is worn at a time
+ * (MON-04), so a second copy delivers nothing: the SERVER refuses the purchase as "owned" (server/main.server.ts) and
+ * the shop's card says so (client/ui/shop.ts). Until 2026-09-24 only the card knew, and the server charged a request
+ * that went round it. False for any other pack.
+ */
+export function packPetOwned(save: PlayerSaveData, packId: number): boolean {
+	const pack = SHOP_PACKS[packId];
+	if (pack === undefined) return false;
+	const pet = petOfPack(pack);
+	if (pet < 0) return false;
+	if (ownsEquip(save, pet)) return true;
+	for (const other of SHOP_PACKS) {
+		if (petOfPack(other) === pet && pendingPacks(save, other.id) > 0) return true;
+	}
+	return false;
+}
+
 export function walletOf(save: PlayerSaveData): Wallet {
 	return {
 		money: save.money,
@@ -720,6 +905,8 @@ export function walletOf(save: PlayerSaveData): Wallet {
 		zombieKills: save.zombieKills,
 		lifeNights: save.lifeNights,
 		achievements: copyArray(save.achievements),
+		titleStats: copyArray(save.titleStats),
+		lifeDeaths: save.lifeDeaths,
 		day: save.day,
 		level: save.level,
 		exp: save.exp,
@@ -760,6 +947,14 @@ function readIntArray(
 		out.push(readInt(src !== undefined ? src[i] : undefined, fb, 0, maxOf(i)));
 	}
 	return out;
+}
+
+/** the widest set of bits a title stat holds (the zombie kinds: 5), with room to spare */
+const TITLE_STAT_BITS = 8;
+
+/** v7 `titleStats`: TITLE_STAT_COUNT whole numbers, each within its stat's own range (a count, or its bits) */
+function readTitleStats(v: unknown, fallback: Array<number> | undefined): Array<number> {
+	return readIntArray(v, TITLE_STAT_COUNT, i => titleStatMax(i, SAVE_LIMITS.COUNTER_MAX), fallback);
 }
 
 function readSettings(v: unknown, fb: SettingsData): SettingsData {
@@ -848,6 +1043,10 @@ function readProgress(r: Record<string, unknown>, fb: PlayerSaveData): PlayerSav
 		equipTitle: readInt(r.equipTitle, fb.equipTitle, -1, TITLES.size() - 1),
 		titleEpoch: fb.titleEpoch,
 		lifeDeaths: fb.lifeDeaths,
+		// v7: the SERVER's (copied, never read from `r`), like `titles`
+		titleStats: copyArray(fb.titleStats),
+		// v8: the SERVER's (copied, never read from `r`); `sanitizeStoredSave` reads the stored list
+		robuxReceipts: copyReceipts(fb.robuxReceipts),
 	};
 }
 
@@ -901,6 +1100,11 @@ export function enforceSaveInvariants(s: PlayerSaveData, previous?: PlayerSaveDa
 	s.zombieKills = math.clamp(math.floor(s.zombieKills), 0, L.COUNTER_MAX);
 	s.lifeNights = math.clamp(math.floor(s.lifeNights), 0, L.DAY_MAX);
 	s.lifeDeaths = math.clamp(math.floor(s.lifeDeaths), 0, L.COUNTER_MAX);
+	s.titleStats = readTitleStats(s.titleStats, undefined);
+	// v8: a costume paid in real money is owned, whatever else happened to the save (an admin edit included)
+	for (const entry of s.robuxReceipts) {
+		if (receiptCostume(entry) >= 0) s.costumes[entry.c] = 1;
+	}
 	// v3 run body: a stored 0 means "not recorded" and the session starts at full, so the only rule here is
 	// that neither number may be negative or absurd. Hunger is capped at its own bar by the player state.
 	s.runHp = math.clamp(math.floor(s.runHp), 0, L.RUN_HP_MAX);
@@ -917,6 +1121,47 @@ export function storedVersion(raw: unknown): number {
 	if (!typeIs(raw, "table")) return 0;
 	const v = (raw as Record<string, unknown>).version;
 	return isFiniteNumber(v) ? math.max(0, math.floor(v)) : 0;
+}
+
+/**
+ * Every array of the save that is sized to a table, with that table's size in THIS build (review of b0174ed, M-1).
+ * The save is written with each array at its table's full size, and read back cut to it (`readIntArray`): so a stored
+ * array LONGER than its table was written by a later build whose table grew -- a weapon, a skill, a pack, a costume, a
+ * title, an achievement added, with or without a SAVE_VERSION bump -- and this build would cut it (and the equipped
+ * ids pointing past it) and write it back. The server treats such a save as newer than itself
+ * (server/save/newerSave.ts). `robuxReceipts` is a list, not a table: its entries name costumes, which `costumes`
+ * covers. tools/test-save.mjs pins every array of the save to this list, so an array added to the save without it
+ * fails CI.
+ */
+export const SAVE_TABLE_ARRAYS: ReadonlyArray<[keyof PlayerSaveData, number]> = [
+	["skillLevels", SKILLS.size()],
+	["achievements", ACHIEVEMENTS.size()],
+	["packsBought", SHOP_PACKS.size()],
+	["packsOpened", SHOP_PACKS.size()],
+	["costumes", COSTUMES.size()],
+	["invenWeapon", WEAPONS.size()],
+	["invenEquip", EQUIPS.size()],
+	["invenUse", USABLES.size()],
+	["invenEtc", ETC_ITEMS.size()],
+	["titles", TITLES.size()],
+	["titleStats", TITLE_STAT_COUNT],
+];
+
+/**
+ * The first array of a stored document longer than its table in this build ("titles 26 > 25"), or undefined. Asked
+ * only of a document of THIS SAVE_VERSION (a later one is newer on its face): one of an earlier version with a longer
+ * array would be a table that shrank since, which is not a newer build -- and none ever has.
+ */
+export function longerThanTables(raw: unknown): string | undefined {
+	if (!typeIs(raw, "table")) return undefined;
+	const r = raw as Record<string, unknown>;
+	for (const [field, size] of SAVE_TABLE_ARRAYS) {
+		const a = r[field];
+		if (typeIs(a, "table") && (a as Array<unknown>).size() > size) {
+			return `${field} ${(a as Array<unknown>).size()} > ${size}`;
+		}
+	}
+	return undefined;
 }
 
 /**
@@ -976,6 +1221,8 @@ export function copySaveInto(dst: PlayerSaveData, src: PlayerSaveData): PlayerSa
 	dst.equipTitle = src.equipTitle;
 	dst.titleEpoch = src.titleEpoch;
 	dst.lifeDeaths = src.lifeDeaths;
+	copyInto(dst.titleStats, src.titleStats);
+	copyInto(dst.robuxReceipts, copyReceipts(src.robuxReceipts));
 	return dst;
 }
 
@@ -1006,6 +1253,10 @@ export function sanitizeStoredSave(raw: unknown): PlayerSaveData {
 	// daybreak left no record at all
 	s.achievements = readIntArray(r.achievements, ACHIEVEMENTS.size(), i => ACHIEVEMENTS[i].max, undefined);
 	s.lifeDeaths = readInt(r.lifeDeaths, s.deathCount > 0 || s.runOver ? 1 : 0, 0, L.COUNTER_MAX);
+	// v7 (MON-05): absent in a v6 document -- nothing counted, which is the truth
+	s.titleStats = readTitleStats(r.titleStats, undefined);
+	// v8: absent in a v7 (or older) document -- nothing was sold for Robux before
+	s.robuxReceipts = readReceipts(r.robuxReceipts);
 	const packMax = (): number => L.COUNTER_MAX;
 	if (r.packsBought !== undefined) {
 		s.packsBought = readIntArray(r.packsBought, SHOP_PACKS.size(), packMax, undefined);
@@ -1097,6 +1348,15 @@ export function applyWallet(save: PlayerSaveData, raw: unknown): boolean {
 			save.achievements[i] = math.max(save.achievements[i] ?? 0, got[i]);
 		}
 	}
+	// v7 (MON-05): the title counters only grow -- a count keeps the larger, a set of bits the union -- so a wallet
+	// that arrives out of order never takes progress back
+	if (w.titleStats !== undefined) {
+		const got = readTitleStats(w.titleStats, save.titleStats);
+		for (let i = 0; i < TITLE_STAT_COUNT; i++) {
+			const mine = save.titleStats[i] ?? 0;
+			save.titleStats[i] = titleStatIsBits(i) ? unionBits(mine, got[i], TITLE_STAT_BITS) : math.max(mine, got[i]);
+		}
+	}
 	// the nights this life has lived are the server's alone (no client ever counts them): the wardrobe reads them;
 	// and so is the life's day, from the phase the server counts days: its midnight may have refused this survivor
 	// one (dead, absent, AFK), which a client that counted its own midnight would never know. Both go back to 0 / 1
@@ -1104,6 +1364,11 @@ export function applyWallet(save: PlayerSaveData, raw: unknown): boolean {
 	// one: a push from the old life landing after the New game's reply (another remote) would hand its day back
 	if (thisLife && isFiniteNumber(w.lifeNights)) {
 		save.lifeNights = readInt(w.lifeNights, save.lifeNights, 0, L.DAY_MAX);
+	}
+	// the life's deaths (CON-04), the same way: the server's, back to 0 with a new life, so replaced by a wallet of this
+	// life or a newer one -- the wardrobe's Unbroken reads them (review of 97cd734, LOW1)
+	if (thisLife && isFiniteNumber(w.lifeDeaths)) {
+		save.lifeDeaths = readInt(w.lifeDeaths, save.lifeDeaths, 0, L.COUNTER_MAX);
 	}
 	if (thisLife && MP_PHASE >= PROGRESS_SERVER_PHASE && isFiniteNumber(w.day)) {
 		save.day = readInt(w.day, save.day, 1, L.DAY_MAX);

@@ -44,6 +44,12 @@ export interface ThemeColors {
 	coinShine: Color3;
 	medal: Color3;
 	medalShade: Color3;
+	titleCommon: Color3;
+	titleUncommon: Color3;
+	titleRare: Color3;
+	titleEpic: Color3;
+	titleLegendary: Color3;
+	supporter: Color3;
 }
 
 export const THEME_NAME = "Meu tema global";
@@ -128,6 +134,18 @@ export const DARK: ThemeColors = {
 	medal: Color3.fromRGB(240, 192, 78),
 	/** medal-shade: oklch(0.5800 0.1100 78.0000) #9e711e */
 	medalShade: Color3.fromRGB(158, 113, 30),
+	/** title-common: oklch(0.7600 0.1500 155.0000) #52cd86 */
+	titleCommon: Color3.fromRGB(82, 205, 134),
+	/** title-uncommon: oklch(0.8000 0.1100 205.0000) #56d2df */
+	titleUncommon: Color3.fromRGB(86, 210, 223),
+	/** title-rare: oklch(0.7600 0.1400 300.0000) #bf9bfc */
+	titleRare: Color3.fromRGB(191, 155, 252),
+	/** title-epic: oklch(0.7400 0.1500 50.0000) #f58b4b */
+	titleEpic: Color3.fromRGB(245, 139, 75),
+	/** title-legendary: oklch(0.8800 0.1500 95.0000) #f6d653 */
+	titleLegendary: Color3.fromRGB(246, 214, 83),
+	/** supporter: oklch(0.7800 0.1300 355.0000) #f893bc */
+	supporter: Color3.fromRGB(248, 147, 188),
 };
 
 /** :root (light) tokens */
@@ -210,6 +228,18 @@ export const LIGHT: ThemeColors = {
 	medal: Color3.fromRGB(26, 26, 26),
 	/** medal-shade: var(--stat-value) #1a1a1a */
 	medalShade: Color3.fromRGB(26, 26, 26),
+	/** title-common: var(--stat-bonus) #399560 */
+	titleCommon: Color3.fromRGB(57, 149, 96),
+	/** title-uncommon: var(--stat-bonus) #399560 */
+	titleUncommon: Color3.fromRGB(57, 149, 96),
+	/** title-rare: var(--chart-4) #ac57ff */
+	titleRare: Color3.fromRGB(172, 87, 255),
+	/** title-epic: var(--stat-effect) #d2691e */
+	titleEpic: Color3.fromRGB(210, 105, 30),
+	/** title-legendary: var(--stat-value) #1a1a1a */
+	titleLegendary: Color3.fromRGB(26, 26, 26),
+	/** supporter: var(--chart-4) #ac57ff */
+	supporter: Color3.fromRGB(172, 87, 255),
 };
 
 /** sidebar (navigation) tokens: --sidebar-* without the prefix */

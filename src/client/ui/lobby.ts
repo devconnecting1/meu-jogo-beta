@@ -1,6 +1,6 @@
 import { GameContext } from "shared/game/context";
 import { ownsEquip, outfitLookOf, petLookOf, totalPendingPacks } from "shared/game/save";
-import { COSTUMES } from "shared/data/shop";
+import { COSTUMES, REBIRTH_FREE_ATTR } from "shared/data/shop";
 import { cosmeticSlotOf, PetLook } from "shared/data/cosmetics";
 import { langGet } from "shared/data/lang";
 import { townNameOf } from "shared/data/townNames";
@@ -713,7 +713,11 @@ export function showLobby(
 	];
 	// the server marks the town's keeper (MP-26): Restart town shows the moment it does
 	const localPlayer = game.GetService("Players").LocalPlayer as Player | undefined;
-	if (localPlayer !== undefined) conns.push(localPlayer.GetAttributeChangedSignal(TOWN_KEEPER_ATTR).Connect(onWorld));
+	if (localPlayer !== undefined) {
+		conns.push(localPlayer.GetAttributeChangedSignal(TOWN_KEEPER_ATTR).Connect(onWorld));
+		// ...and says when the Rebirth became free (the daybreak came while they waited here): the price shown follows
+		conns.push(localPlayer.GetAttributeChangedSignal(REBIRTH_FREE_ATTR).Connect(onWorld));
+	}
 	// the survivor previews breathe (a dog's tail); only the page on screen is drawn
 	const t0 = os.clock();
 	conns.push(
