@@ -68,6 +68,16 @@ export interface MatchHostOptions {
 	 * has entered (server/net/mpHost.ts `startTownOn`). False when it is too late (a body already stood in the town).
 	 */
 	startTown: (day: number) => boolean;
+	/**
+	 * A private server's owner's life day, read from their stored save WITHOUT the session lock (it yields; a
+	 * GetAsync): undefined when it could not be read, or there is no save to read (second review, LOW 4)
+	 */
+	ownerLifeDay: (userId: number) => number | undefined;
+	/**
+	 * §8.2: every Match message counts toward the connection's flood limits, like every other remote
+	 * (server/main.server.ts `floodDrop`); true when it must be dropped (the player is being kicked, or has left)
+	 */
+	floodDrop: (player: Player, malformed: boolean) => boolean;
 }
 
 export interface MatchHost {
@@ -75,7 +85,8 @@ export interface MatchHost {
 	/**
 	 * May this player's body be admitted into the city now? Not while a trip of theirs is in flight (review M2: a body
 	 * admitted under a TeleportAsync that goes through would be yanked out of a run), and not before a solo or private
-	 * town knows the day it opens on (MP-13: the first player to load settles it, within a scan).
+	 * town knows the day it opens on (MP-13: settled by the first READABLE load, or the private owner's save read at
+	 * boot). server/net/mpHost.ts asks it right before a body is admitted -- never to hide the save.
 	 */
 	admits(player: Player): boolean;
 	/** the trips' audit ring (oldest first) and the remote's counters */
@@ -235,44 +246,83 @@ export function startMatch(options: MatchHostOptions): MatchHost {
 	const offers = new Map<Player, { at: number; worldDay: number }>();
 	/** who was offered a town on this server: once per ACCOUNT, a rejoin is not asked again (review LOW 1) */
 	const offeredUsers = new Set<number>();
-	/** the day this town opens on is settled: at once on a public server, by the first to load on a solo / private one */
+	/** the day this town opens on is settled: at once on a public server; on a solo / private one, see `settleFrom` */
 	let townSettled = kind !== "solo" && kind !== "private";
+	const [ownerOk, ownerValue] = pcall(() => game.PrivateServerOwnerId);
+	/** a private server's owner (0 elsewhere) */
+	const privateOwner = kind === "private" && ownerOk && typeIs(ownerValue, "number") ? ownerValue : 0;
+	/** a private server's boot read of its owner's save is still out: a guest does not settle the town meanwhile */
+	let ownerReadPending = false;
 
-	/**
-	 * MP-13: a solo or private town opens on its OWNER's life day -- the run's `save.day`, which is day 1 for a fresh
-	 * save. The owner is the ticket's in a reserved town (server/match/rules.ts `readTicket`, checked against the
-	 * player) and PrivateServerOwnerId in a private one. The first player to load settles it: the owner, on their day;
-	 * anybody else (a private server's guest who came first), or a save that could not be read, on day 1. Only the
-	 * DataStore's save says the day: nothing the client sends does.
-	 */
-	const settleTown = (player: Player, save: PlayerSaveData, owner: boolean, readable: boolean): void => {
+	/** a save's life day, as the town's first day (a fresh save is on day 1) */
+	const lifeDayOf = (day: number): number => math.max(1, math.floor(day));
+
+	/** restarts the town's clock on `day`, once, before any body enters it (admission waits for it: `admits`) */
+	const settleTown = (userId: number, day: number, why: string): void => {
 		if (townSettled) return;
 		townSettled = true;
-		const day = owner && readable ? math.max(1, math.floor(save.day)) : 1;
 		const applied = options.startTown(day);
-		const why = !readable ? "save not read" : owner ? "the owner's life day" : "not the owner";
 		audit.add({
 			t: os.clock(),
-			userId: player.UserId,
+			userId,
 			route: "-",
 			what: "town",
 			detail: `day ${day} (${why})${applied ? "" : ", too late"}`,
 		});
 	};
 
+	/**
+	 * MP-13: a solo or private town opens on its OWNER's life day -- the run's `save.day`, which is day 1 for a fresh
+	 * save -- and only a save READ FROM THE DATASTORE says it: nothing the client sends does, the TeleportData least
+	 * of all (it passes through the client: second review, MEDIUM).
+	 *   - solo (reserved): the owner is the first player whose save loads readably. Nobody else CAN be first: only the
+	 *     trip's player is ever teleported into a reservation, and its access code never leaves the server
+	 *     (server/match/travel.ts). The ticket only closes the funnel.
+	 *   - private (VIP): the owner's save is read at boot, without the lock (`ownerLifeDay`), whoever loads first
+	 *     (second review, LOW 4); the owner's own readable load settles it too. If that read fails, the first readable
+	 *     load settles it: the owner on their day, a guest on day 1 (the owner's day is not known).
+	 * A read-only load (the save could not be read) settles NOTHING: `admits` stays false until a readable one arrives
+	 * -- its retry, or the next player on a private server (second review, LOW 1).
+	 */
+	const settleFrom = (player: Player, save: PlayerSaveData): void => {
+		if (kind === "solo") {
+			settleTown(player.UserId, lifeDayOf(save.day), "the first readable load, the trip's player");
+		} else if (kind === "private") {
+			if (player.UserId === privateOwner) settleTown(player.UserId, lifeDayOf(save.day), "the owner's life day");
+			else if (!ownerReadPending) settleTown(player.UserId, 1, "a guest first, the owner's save not read");
+		}
+	};
+
+	if (privateOwner !== 0) {
+		ownerReadPending = true;
+		task.spawn(() => {
+			const [ok, day] = pcall(() => options.ownerLifeDay(privateOwner));
+			ownerReadPending = false;
+			if (ok && typeIs(day, "number")) {
+				settleTown(privateOwner, lifeDayOf(day), "the owner's life day, read at boot");
+			} else {
+				audit.add({ t: os.clock(), userId: privateOwner, route: "-", what: "owner", detail: "save not read" });
+			}
+		});
+	}
+
 	const examine = (player: Player): void => {
 		const s = options.sessionOf(player);
 		if (s === undefined || !s.loaded) return;
 		const now = os.clock();
-		const readable = s.status !== "error";
+		// a read-only load settles nothing and is looked at again once a retry has read the real save (reviews of
+		// f25727a LOW 2 and of 0634b43 LOW 1)
+		if (s.status === "error") return;
+		if (!townSettled) {
+			settleFrom(player, s.save);
+			// a private server's guest while the owner's save is still being read: looked at again on the next scan
+			if (!townSettled) return;
+		}
+		examined.add(player);
 		if (kind === "solo") {
 			// P0-2: a survivor arriving in a town of their own -- the funnel's last step, for the ticket's own player
 			const [ok, join] = pcall(() => player.GetJoinData());
 			const reading = readTicket(ok ? join : undefined, game.PlaceId, player.UserId, kind);
-			settleTown(player, s.save, reading.ok, readable);
-			// a read-only load is looked at again once a retry has read the real save (review LOW 2)
-			if (!readable) return;
-			examined.add(player);
 			if (reading.ok) {
 				audit.add({ t: now, userId: player.UserId, route: reading.route, what: "arrived", detail: "" });
 				Analytics.townTrip(player, 3, reading.trip, reading.route);
@@ -281,12 +331,6 @@ export function startMatch(options: MatchHostOptions): MatchHost {
 			}
 			return;
 		}
-		if (kind === "private") {
-			const [ownerOk, ownerId] = pcall(() => game.PrivateServerOwnerId);
-			settleTown(player, s.save, ownerOk && ownerId === player.UserId, readable);
-		}
-		if (!readable) return;
-		examined.add(player);
 		if (offeredUsers.has(player.UserId)) return;
 		const [followOk, follow] = pcall(() => player.FollowUserId);
 		const worldDay = options.worldDay();
@@ -312,8 +356,11 @@ export function startMatch(options: MatchHostOptions): MatchHost {
 	conns.push(
 		remote.OnServerEvent.Connect((player, raw) => {
 			const now = os.clock();
-			if (!messages.take(player.UserId, now)) return;
 			const req = readMatchRequest(raw);
+			// FIRST, before anything is acted on: the connection's flood limits, shared with every remote -- a flood of
+			// Match messages ends in the same automatic kick as any other (§8.2; second review, LOW 3)
+			if (options.floodDrop(player, req === undefined)) return;
+			if (!messages.take(player.UserId, now)) return;
 			if (req === undefined) {
 				messages.malformed += 1;
 				return;

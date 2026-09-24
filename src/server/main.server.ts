@@ -1714,11 +1714,12 @@ if (MP_PHASE >= 1) {
 			// in single player. A session that is still loading, or already closing, is not admitted yet — nor one
 			// whose retry is queued: the save it is about to load is the one its next body must come from (R3b)
 			if (s === undefined || s.closed || !s.loaded || s.retryQueued) return undefined;
-			// ...nor a player whose trip to a town of their own is in flight (review M2: the teleport would yank the new
-			// body out of a run), nor anybody before a solo / private town knows the day it opens on (MP-13)
-			if (match !== undefined && !match.admits(player)) return undefined;
 			return s.save;
 		},
+		// nobody enters the city while their trip to a town of their own is in flight (review M2: the teleport would yank
+		// the new body out of a run), nor before a solo / private town knows the day it opens on (MP-13). Asked only
+		// at the admission: the save stays visible to rule 6 and the kept body meanwhile (second review, LOW 2)
+		mayEnter: player => match === undefined || match.admits(player),
 		// a death, a stand-up or a body banked on the way out wrote `runOver` / `runHp` / `runHunger` (§6.1) — and a
 		// world that ended gave its fallen a new life (MP-22): `resetRun` and a new `runRev` in the live save
 		saveChanged: userId => markDirty(userId),
@@ -1809,6 +1810,24 @@ match = startMatch({
 	keptInDanger: player => mpHost !== undefined && mpHost.keptInDanger(player),
 	// MP-13: a solo or private town opens on its owner's life day (without a host there is no town to start)
 	startTown: day => mpHost !== undefined && mpHost.startTownOn(day),
+	// ...and a private server reads its owner's life day at boot, whoever loads first (second review, LOW 4): one
+	// GetAsync, WITHOUT the session lock (the owner may be playing elsewhere; this reads, it never writes). A failed
+	// read, no save, or data that is not a save: undefined, and the first readable load settles the day instead
+	ownerLifeDay: userId => {
+		const store = dataStore;
+		if (store === undefined) return undefined;
+		const [ok, value] = pcall((): unknown => store.GetAsync<unknown>(tostring(userId))[0]);
+		if (!ok) {
+			print(`[${GAME_NAME}] the private server owner's save could not be read at boot: ${tostring(value)}`);
+			return undefined;
+		}
+		const data = readDoc(value)?.data;
+		if (data === undefined) return undefined;
+		const [decoded, decodedValue] = decodeData(data);
+		return decoded ? sanitizeStoredSave(decodedValue).day : undefined;
+	},
+	// §8.2: the Match remote counts toward the connection's flood limits, like every remote this file owns
+	floodDrop: (player, malformed) => floodDrop(player, malformed),
 	prepare: player => {
 		const s = sessions.get(player);
 		if (s === undefined || s.closed || !s.loaded) return;

@@ -109,6 +109,13 @@ export interface MpHostOptions {
 	 * server/main.server.ts owns the sessions; the host never reads the DataStore itself.
 	 */
 	saveOf: (player: Player) => PlayerSaveData | undefined;
+	/**
+	 * May this player's body enter the city now (asked right before `lives.enter`, only there)? server/main.server.ts
+	 * asks server/match/matchHost.ts: not while a trip of theirs is in flight, not before a solo / private town knows
+	 * the day it opens on. A hold here never hides the save: rule 6 and the kept body still see it (second review,
+	 * LOW 2 -- a hold inside `saveOf` let a world end without the traveller, whose kept body was lost). Omitted: yes.
+	 */
+	mayEnter?: (player: Player) => boolean;
 	/** the shared town; generated from `seed` when omitted (client and server build the same map, §4.5) */
 	world?: WorldData;
 	/** the seed of the first town (DESIGN.TOWN_SEED by default): InitBegin tells every client which it is (MP-22) */
@@ -436,6 +443,9 @@ export function startMpHost(options: MpHostOptions): MpHost {
 			return;
 		}
 		if (save === undefined) return;
+		// held by where the survivor plays (a trip in flight, a town whose day is not settled): the next pass tries again
+		const mayEnter = options.mayEnter;
+		if (mayEnter !== undefined && !mayEnter(player)) return;
 		const sp = lives.enter({ userId: player.UserId, name: player.DisplayName }, save);
 		if (sp === undefined) return; // server full: try again next pass
 		townEntered = true;

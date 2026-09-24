@@ -29,14 +29,20 @@
  *                       NewTown funnel, TownOffered and TripFailed with their closed fields.
  *   4. THE SOLO TOWN    a reserved server: the kind "solo", no matchmaking, no offer, no Play solo; the owner's ticket
  *                       logs the funnel's arrival with the SAME id, a forged or foreign one logs nothing; the town
- *                       opens on the OWNER's life day (MP-13; a fresh save: day 1), and a world that ends there is
- *                       followed by a new town on day 1 whose record counts the days it lasted; a private (VIP) server
- *                       opens on its owner's day when the owner loads first, on day 1 when a guest does.
- *   6. THE REVIEW       of f25727a: a living body kept in danger (a zombie near, a hit a moment ago) cannot buy a trip
+ *                       opens on the OWNER's life day (MP-13; a fresh save: day 1) -- the first READABLE load's, a
+ *                       ticket stripped or naming another owner changes nothing, an unreadable load settles nothing
+ *                       and holds the admission until its Retry --, and a world that ends there is followed by a new
+ *                       town on day 1 whose record counts the days it lasted; a private (VIP) server opens on its
+ *                       owner's day read at boot whoever loads first, on day 1 when that read fails and a guest loads
+ *                       first, and an unreadable guest settles nothing.
+ *   6. THE REVIEWS      of f25727a: a living body kept in danger (a zombie near, a hit a moment ago) cannot buy a trip
  *                       (H1); a trip the player called off keeps its place in the gate (M1); nobody is admitted into
  *                       the city while their trip is in flight (M2); no second offer on a rejoin, a read-only load is
- *                       looked at again after its retry, a repeated refusal is one counted row, a solo town writes
- *                       the shared world log at most once per gap (LOW 1, 2, 4, 5).
+ *                       looked at again after its retry (joined as the real client joins), a repeated refusal is one
+ *                       counted row, a solo town writes the shared world log at most once per gap (LOW 1, 2, 4, 5).
+ *                       Of 0634b43: refusals counted per player and reason, interleaved or not (LOW 5); the Match
+ *                       remote in the connection's flood kick (LOW 3); a world that ends while a trip is in flight
+ *                       still counts the traveller and keeps their body (LOW 2).
  *
  * Pure Node (>= 18) plus the project's TypeScript through tools/luau-shim.mjs, with the fake Roblox of
  * tools/test-analytics.mjs (copied: each suite carries its own) plus the two services this needs.
@@ -249,7 +255,13 @@ function fakeStore(name) {
 			}
 			return [next];
 		},
+		/** GetAsync throws this many more times (the private server's boot read of its owner's save) */
+		failGet: 0,
 		GetAsync(key) {
+			if (s.failGet > 0) {
+				s.failGet -= 1;
+				throw new Error("HTTP 502 (DataStore)");
+			}
 			return [clone(data.get(key))];
 		},
 		SetAsync: (key, v) => data.set(key, clone(v)),
@@ -448,6 +460,21 @@ function bootServer(opts = {}) {
 			Players.PlayerAdded.Fire(p);
 			remote("LoadRequest").OnServerEvent.Fire(p);
 			return p;
+		},
+		/**
+		 * A join as the real client makes it: PlayerAdded starts the load, and the client's LoadRequest comes later
+		 * (`retry`). The server can look at the player while the load it has is read-only (review of 0634b43, LOW 6).
+		 */
+		joinQuiet(userId, name = `p${userId}`, extra = {}) {
+			const p = makePlayer(userId, name, extra);
+			p._parent = Players;
+			Players.list.push(p);
+			Players.PlayerAdded.Fire(p);
+			return p;
+		},
+		/** the client's LoadRequest: on a read-only session, the Retry */
+		retry(p) {
+			remote("LoadRequest").OnServerEvent.Fire(p);
 		},
 		quit(p) {
 			Players.list = Players.list.filter(x => x !== p);
@@ -1264,7 +1291,7 @@ section("3) the real server: attributes, the offer, New town and Play solo, refu
 // ================================================================ 4: the solo town
 
 section(
-	"4) the solo town: its own kind, the arrival, day 1 whatever the owner's life, no offer; a private server",
+	"4) the solo town: its own kind, the arrival, the owner's life day from a readable save, no offer; a private server",
 	() => {
 		const owner = newUser();
 		let s = bootServer({ privateServerId: "psid-7", ownerId: 0 });
@@ -1374,6 +1401,71 @@ section(
 		s.run(1.2);
 		check(s.sim.clock.day === 1, "a fresh save's town opens on day 1 (a new player's life day)");
 
+		// the ticket passes through the client: the day NEVER rides on it (review of 0634b43, MEDIUM). Only the trip's
+		// player can be teleported into a reservation, so the first readable load is the owner's
+		const { SAVE_STORE } = require(join(SRC, "server/save/stores.ts"));
+		const lifeOn = day => {
+			const v = defaultSave();
+			Object.assign(v, { level: 9, day, bestDay: day, tutorialDone: true, firstInstall: false });
+			return v;
+		};
+		const byTicket = [];
+		for (const [label, join, day] of [
+			["stripped", { SourcePlaceId: 4242 }, 23],
+			[
+				"another owner",
+				{
+					SourcePlaceId: 4242,
+					TeleportData: { pz: 1, route: "solo", trip: "{0000abcd-feed-beef}", owner: 1 },
+				},
+				30,
+			],
+		]) {
+			s = bootServer({ privateServerId: `psid-r1-${byTicket.length}`, ownerId: 0 });
+			const u = newUser();
+			s.storeSave(u, lifeOn(day));
+			const p = s.join(u, label, { _join: join });
+			s.run(1.2);
+			const sp = s.enter(p);
+			byTicket.push({
+				label,
+				life: day,
+				world: s.sim.clock.day,
+				inCity: sp !== undefined,
+				arrived: s.rows(u, "funnel").some(r => r.funnel === "NewTown"),
+			});
+		}
+		check(
+			byTicket.every(r => r.world === r.life && r.inCity && !r.arrived),
+			"a ticket stripped, or naming another owner: the town still opens on the life day of the first readable load (23, 30), never day 1 -- the ticket only closes the funnel, and a bad one closes nothing",
+			JSON.stringify(byTicket),
+		);
+
+		// an unreadable first load settles nothing: nobody is admitted until a readable one says the day (LOW 1)
+		s = bootServer({ privateServerId: "psid-r2", ownerId: 0 });
+		const ro = newUser();
+		fakeStore(SAVE_STORE).data.set(String(ro), { data: "{not json", lock: undefined });
+		const pRo = s.joinQuiet(ro, "unreadable-owner", {
+			_join: {
+				SourcePlaceId: 4242,
+				TeleportData: { pz: 1, route: "solo", trip: "{000002aa-feed-beef}", owner: ro },
+			},
+		});
+		s.run(1.2);
+		const heldRo = s.enter(pRo) === undefined; // "Play without saving": the town's day is not known yet
+		const unsettled = !prints.some(l => l.includes(`[PZ-MATCH] ${ro} - town`));
+		s.leave(pRo);
+		fakeStore(SAVE_STORE).data.set(String(ro), { data: JSON.stringify(lifeOn(23)), lock: undefined });
+		s.run(10);
+		s.retry(pRo);
+		s.run(12);
+		const spRo = s.enter(pRo);
+		check(
+			heldRo && unsettled && s.sim.clock.day === 23 && spRo !== undefined && spRo.save.day === 23,
+			"the owner's save unreadable on arrival: not admitted and nothing settled; the Retry reads the day-23 life and the town opens on day 23",
+			JSON.stringify({ heldRo, unsettled, world: s.sim.clock.day, inCity: spRo !== undefined }),
+		);
+
 		// a private (VIP) server: the owner first -> the owner's day
 		const vipOwner = newUser();
 		s = bootServer({ privateServerId: "vip-0", ownerId: vipOwner });
@@ -1383,19 +1475,52 @@ section(
 		s.join(vipOwner, "vip-owner");
 		s.run(1.2);
 		check(s.sim.clock.day === 12, "a private server whose owner loads first opens on the owner's life day (12)");
-		// ...a guest first -> day 1
-		s = bootServer({ privateServerId: "vip-1", ownerId: 555 });
+		// ...a guest first: the owner's save is read at boot, without the lock, so it is still the owner's day (LOW 4)
+		const vipO = newUser();
+		fakeStore(SAVE_STORE).data.set(String(vipO), { data: JSON.stringify(lifeOn(17)), lock: undefined });
+		s = bootServer({ privateServerId: "vip-4", ownerId: vipO });
+		const g4 = newUser();
+		s.storeSave(g4, lifeOn(30));
+		const pG4 = s.join(g4, "first-guest");
+		s.run(1.5);
+		const g4In = s.enter(pG4) !== undefined;
+		check(
+			s.sim.clock.day === 17 &&
+				g4In &&
+				prints.some(l => l.includes(`[PZ-MATCH] ${vipO} - town day 17 (the owner's life day, read at boot)`)) &&
+				fakeStore(SAVE_STORE).data.get(String(vipO))?.lock === undefined,
+			"a guest who loads first: the town opens on the OWNER's life day (17, read at boot, the owner's lock untouched), never the guest's (30)",
+			`world ${s.sim.clock.day}`,
+		);
+		// ...the boot read fails: as before, the first readable load -- a guest's -- opens it on day 1
+		fakeStore(SAVE_STORE).failGet = 1;
+		s = bootServer({ privateServerId: "vip-1", ownerId: vipO });
 		check(s.Workspace.GetAttribute("pz_server_kind") === "private", "a private (VIP) server says 'private'");
 		const early = newUser();
-		const es = defaultSave();
-		Object.assign(es, { day: 30, bestDay: 30, tutorialDone: true, firstInstall: false });
-		s.storeSave(early, es);
+		s.storeSave(early, lifeOn(30));
 		s.join(early, "early-guest");
 		s.run(1.5);
 		check(
 			s.sim.clock.day === 1,
-			"...a guest who loads first (not the owner) opens it on day 1, never on the guest's day",
+			"...the owner's save not read at boot: a guest who loads first opens it on day 1, never on the guest's day",
 		);
+		// ...and an unreadable guest first settles nothing: the next readable player does -- here the owner (LOW 1)
+		fakeStore(SAVE_STORE).failGet = 1;
+		const s6 = bootServer({ privateServerId: "vip-6", ownerId: vipO });
+		const g6 = newUser();
+		fakeStore(SAVE_STORE).data.set(String(g6), { data: "{not json", lock: undefined });
+		const pG6 = s6.joinQuiet(g6, "unreadable-guest");
+		s6.run(1.5);
+		const g6Held = s6.enter(pG6) === undefined;
+		const g6Silent = !prints.some(l => l.includes(`[PZ-MATCH] ${g6} - town`));
+		s6.join(vipO, "vip-owner-6");
+		s6.run(1.5);
+		check(
+			g6Held && g6Silent && s6.sim.clock.day === 17,
+			"an unreadable guest first: held, nothing settled; the owner's readable load then opens it on their day (17)",
+			JSON.stringify({ g6Held, g6Silent, world: s6.sim.clock.day }),
+		);
+		s = bootServer({ privateServerId: "vip-7", ownerId: 555 });
 		check(s.mm.sets.length === 0, "...publishes no matchmaking attribute");
 		s.sim.clock.setClock(7, 40);
 		const guest = newUser();
@@ -1416,7 +1541,7 @@ section(
 
 // ================================================================ 6: the review of f25727a
 
-section("6) the review: danger (H1), the cancel loop (M1), admission in flight (M2), LOW 1, 2, 4, 5", () => {
+section("6) the reviews: danger (H1), the cancel loop (M1), admission in flight (M2), the LOWs of both", () => {
 	const { createZombie } = require(join(SRC, "shared/game/entities.ts"));
 	const KEPT_HURT_S = require(join(SRC, "server/net/mpHost.ts")).KEPT_HURT_S;
 
@@ -1574,18 +1699,21 @@ section("6) the review: danger (H1), the cancel loop (M1), admission in flight (
 	const u6 = newUser();
 	const { SAVE_STORE } = require(join(SRC, "server/save/stores.ts"));
 	fakeStore(SAVE_STORE).data.set(String(u6), { data: "{not json", lock: undefined });
-	const p6 = s.join(u6, "unreadable");
-	s.run(1);
+	// as the real client joins (review of 0634b43, LOW 6): PlayerAdded loads, and the scans look at the player WHILE
+	// the session is read-only -- the LoadRequest (the Retry) comes later. An immediate LoadRequest queued the retry
+	// and hid the player from the scans, so the old test passed with the fix reverted
+	const p6 = s.joinQuiet(u6, "unreadable");
+	s.run(1.2);
+	const lookedAtReadOnly = s.env.services.Players.list.includes(p6);
 	const before = s.notices(p6).filter(n => n.k === "offer").length;
 	const fresh = defaultSave();
 	fakeStore(SAVE_STORE).data.set(String(u6), { data: JSON.stringify(fresh), lock: undefined });
-	s.run(10);
-	s.env.services.ReplicatedStorage.FindFirstChild("Net").FindFirstChild("LoadRequest").OnServerEvent.Fire(p6);
-	s.run(1.5);
+	s.retry(p6);
+	s.run(12);
 	const after = s.notices(p6).filter(n => n.k === "offer").length;
 	check(
-		before === 0 && after === 1,
-		"a read-only load (the save unreadable) is not offered; after the retry reads the real save, it is",
+		lookedAtReadOnly && before === 0 && after === 1,
+		"a read-only load (the save unreadable), scanned as such, is not offered; after the Retry reads the real save, it is",
 		JSON.stringify({ before, after }),
 	);
 
@@ -1600,6 +1728,93 @@ section("6) the review: danger (H1), the cancel loop (M1), admission in flight (
 	for (let i = 0; i < 6; i++) s.ask(p7, { k: "solo" });
 	const lines = prints.filter(l => l.includes(`[PZ-MATCH] ${u7} solo refused inWorld`)).length - lines0;
 	check(lines === 1, "six identical refusals: one log line (the audit row counts the rest)", `${lines} lines`);
+
+	// ---- the review of 0634b43
+
+	// LOW 5: the same refusal of two players pressing in turn: one row per player and reason, not one per press
+	const u7b = newUser();
+	const p7b = s.join(u7b, "presser-b");
+	s.run(1);
+	s.enter(p7b);
+	s.run(11); // a fresh message window for both
+	const refusedLines = () => prints.filter(l => l.includes("[PZ-MATCH]") && l.includes("solo refused inWorld"));
+	const i0 = refusedLines().length;
+	for (let i = 0; i < 6; i++) {
+		s.ask(p7, { k: "solo" });
+		s.ask(p7b, { k: "solo" });
+	}
+	const interleaved = refusedLines().length - i0;
+	const rowOf = u => refusedLines().filter(l => l.includes(`] ${u} `)).length;
+	check(
+		interleaved === 1 && rowOf(u7b) === 1,
+		"two players pressing in turn, 12 refusals: one line per player and reason (the rows count the rest)",
+		`${interleaved} new lines`,
+	);
+	const { REFUSAL_WINDOW_S } = require(join(SRC, "server/match/rules.ts"));
+	s.run(REFUSAL_WINDOW_S + 1);
+	s.ask(p7b, { k: "solo" });
+	check(
+		refusedLines().length - i0 === 2,
+		"...and a refusal that goes on past the window is a new line (the log still shows it)",
+	);
+
+	// LOW 3: the Match remote is in the connection's flood kick, like every other remote (§8.2)
+	s = bootServer();
+	s.run(1.2);
+	const u8 = newUser();
+	let kicked = 0;
+	const p8 = s.join(u8, "match-flooder", { Kick: () => (kicked += 1) });
+	s.run(1);
+	const reserves8 = s.tp.reserves;
+	for (let i = 0; i < 60; i++) s.ask(p8, i % 2 === 0 ? "teleport me" : 42);
+	check(
+		kicked === 1 && s.tp.reserves === reserves8,
+		"60 malformed Match messages in a moment: the automatic kick ('network flood'), once, and nothing reserved",
+		`kicks ${kicked}`,
+	);
+	s.ask(p8, { k: "solo" });
+	s.run(0.2);
+	check(s.tp.reserves === reserves8, "...and what the kicked player still sends is dropped before it is read");
+
+	// LOW 2: a world that ends while a living survivor's trip is in flight -- the hold is at the admission only, so
+	// rule 6 still sees the traveller (the save is not hidden) and the kept body is not lost
+	const worldEndsWith = travel => {
+		const w = bootServer();
+		w.run(12);
+		const a = newUser();
+		const b = newUser();
+		const pA = w.join(a, "falls");
+		const pB = w.join(b, "travels");
+		w.run(1.5);
+		w.enter(pA);
+		w.enter(pB);
+		w.intent(pB, w.P.IntentKind.LeaveWorld); // B waits in the lobby, the living body kept
+		w.sim.horde.zombies.length = 0;
+		w.run(1);
+		w.kill(pA);
+		if (travel) {
+			w.tp.failTeleport = 99; // every TeleportAsync fails: the trip stays in flight through its tries
+			w.ask(pB, { k: "solo" });
+			w.run(0.1);
+		}
+		const world0 = w.host.simulation.world;
+		w.intent(pA, w.P.IntentKind.LeaveWorld); // the dead one walks home: declined (rule 6)
+		w.run(0.6);
+		const inFlight = w.notices(pB).some(n => n.s === "start") && !w.notices(pB).some(n => n.s === "failed");
+		w.run(5);
+		return {
+			inFlight,
+			ended: w.host.simulation.world !== world0,
+			bKept: w.host.lives.keptBody(b) !== undefined,
+		};
+	};
+	const stay = worldEndsWith(false);
+	const trip = worldEndsWith(true);
+	check(
+		trip.inFlight && trip.ended === stay.ended && !trip.ended && trip.bKept,
+		"a trip in flight changes nothing about the world's end: a living traveller in the lobby keeps it going, and their kept body stays",
+		JSON.stringify({ stay, trip }),
+	);
 
 	// LOW 5: a solo town writes the shared world log at most once per gap, the town that lasted longest
 	const G = require(join(SRC, "server/match/soloWorldLog.ts"));

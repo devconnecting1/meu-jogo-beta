@@ -236,38 +236,52 @@ export interface TripAuditRow {
 	what: string;
 	/** a refusal, a failure, a TeleportResult's name or a ticket's reading */
 	detail: string;
-	/** how many times this very row happened in a row (a repeated refusal is counted here, not logged again) */
+	/** how many times this refusal happened within its window (a repeated refusal is counted here, not logged again) */
 	count?: number;
 }
 
 export const AUDIT_ROWS = 100;
+/** the same refusal of the same player (and route) is one row, counted, for this long from its first line (s) */
+export const REFUSAL_WINDOW_S = 60;
 
 /** the last AUDIT_ROWS rows, oldest first; each one is also a line of the server log (`log`) */
 export class TripAudit {
 	readonly rows = new Array<TripAuditRow>();
 	private readonly log: (line: string) => void;
+	/** the counted refusal row of each (player, route, reason), and when its window opened (review 2, LOW 5) */
+	private readonly refusals = new Map<string, { row: TripAuditRow; since: number }>();
 
 	constructor(log: (line: string) => void) {
 		this.log = log;
 	}
 
+	private static refusalKey(row: TripAuditRow): string {
+		return `${row.userId}|${row.route}|${row.detail}`;
+	}
+
 	add(row: TripAuditRow): void {
-		// the same refusal again (a client pressing on): one row, counted -- never a log line per press (review LOW 4)
-		const last = this.rows.size() > 0 ? this.rows[this.rows.size() - 1] : undefined;
-		if (
-			row.what === "refused" &&
-			last !== undefined &&
-			last.what === row.what &&
-			last.userId === row.userId &&
-			last.route === row.route &&
-			last.detail === row.detail
-		) {
-			last.count = (last.count ?? 1) + 1;
-			last.t = row.t;
-			return;
+		// the same refusal again (a client pressing on, or two players pressing in turn): one row per player and reason,
+		// counted -- never a log line per press, interleaved or not (reviews of f25727a LOW 4 and of 0634b43 LOW 5).
+		// A new window opens a new line: the log still shows a refusal that goes on
+		if (row.what === "refused") {
+			const key = TripAudit.refusalKey(row);
+			const open = this.refusals.get(key);
+			if (open !== undefined && row.t - open.since < REFUSAL_WINDOW_S) {
+				open.row.count = (open.row.count ?? 1) + 1;
+				open.row.t = row.t;
+				return;
+			}
+			this.refusals.set(key, { row, since: row.t });
 		}
 		this.rows.push(row);
-		while (this.rows.size() > AUDIT_ROWS) this.rows.remove(0);
+		while (this.rows.size() > AUDIT_ROWS) {
+			const gone = this.rows.remove(0);
+			// a row that left the ring is not counted into any more: the next refusal of its kind is a new line
+			if (gone !== undefined && gone.what === "refused") {
+				const key = TripAudit.refusalKey(gone);
+				if (this.refusals.get(key)?.row === gone) this.refusals.delete(key);
+			}
+		}
 		const detail = row.detail !== "" ? ` ${row.detail}` : "";
 		this.log(`[PZ-MATCH] ${row.userId} ${row.route} ${row.what}${detail}`);
 	}
