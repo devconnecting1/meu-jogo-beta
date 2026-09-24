@@ -59,7 +59,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { installUiShims } from "./ui-shim.mjs";
@@ -1716,9 +1716,14 @@ section(
 			const envFile = join(tmp, "fake.env");
 			writeFileSync(envFile, "ROBLOX_API_KEY=sk-test-never-print\nROBLOX_CREATOR_USER_ID=4242\n");
 			const statePath = join(tmp, "state.json");
+			const assetsState = join(tmp, "fake-assets.json");
 			const tsOut = join(tmp, "audioAssets.ts");
+			/** one owner's run (no --ci) against the fake Open Cloud; `uploads`: the assets THIS run created */
 			const run = extra => {
 				writeFileSync(statePath, "{}");
+				const known = existsSync(assetsState)
+					? Object.keys(JSON.parse(readFileSync(assetsState, "utf8")).byId ?? {})
+					: [];
 				const r = spawnSync(
 					process.execPath,
 					[
@@ -1735,16 +1740,20 @@ section(
 							),
 							PZ_CLOUD_ENV: envFile,
 							PZ_FAKE_CLOUD_STATE: statePath,
+							PZ_FAKE_ASSETS_STATE: assetsState,
 							PZ_AUDIO_DIR: dir,
 							PZ_AUDIO_TS: tsOut,
 							...extra,
 						},
 					},
 				);
+				const byId = JSON.parse(readFileSync(assetsState, "utf8")).byId ?? {};
 				return {
 					status: r.status,
 					out: `${r.stdout}\n${r.stderr}`,
-					...JSON.parse(readFileSync(statePath, "utf8")),
+					uploads: Object.entries(byId)
+						.filter(([id]) => !known.includes(id))
+						.map(([, a]) => a),
 				};
 			};
 			const first = run();
@@ -1805,7 +1814,7 @@ section(
 			);
 			// moderation: a rejected bank keeps no id
 			rmSync(join(dir, "assets.json"));
-			const rejected = run({ PZ_FAKE_CLOUD_MODERATION: "REJECTED:weapons" });
+			const rejected = run({ PZ_FAKE_ASSETS: JSON.stringify({ weapons: "reject" }) });
 			const after = JSON.parse(readFileSync(join(dir, "assets.json"), "utf8"));
 			check(
 				rejected.status !== 0 && after.ids.weapons === undefined && after.ids.ui !== undefined,
