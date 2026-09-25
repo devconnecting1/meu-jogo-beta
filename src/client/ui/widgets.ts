@@ -1264,7 +1264,7 @@ export interface ProgressProps {
 	color?: Color3;
 	/** 0..1 (default 1) */
 	value?: number;
-	/** value text inside the bar (BuilderMono) */
+	/** value text inside the bar (RobotoMono) */
 	label?: boolean;
 	textSize?: number;
 	zIndex?: number;

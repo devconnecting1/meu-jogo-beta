@@ -13,7 +13,7 @@
  *         button beside the table. No per-row "..." menu: a dropdown is poor with a pad. No multi-select, no bulk
  *         action;
  *   - scrolling, never pages; an EMPTY state that says why the table is empty.
- *   - numbers in the kit's "numeric" role (BuilderMono Bold), right-aligned, so the digits line up.
+ *   - numbers in the kit's "numeric" role (RobotoMono Bold), right-aligned, so the digits line up.
  *
  * Look (all tokens, UI-01; text light and never outlined, UI-04 / UI-05):
  *   - the bed: the kit's Groove (`SURFACE.groove`);

@@ -313,10 +313,10 @@ export const SHADOW_OPACITY = 0;
 
 /** Roblox font families (use with Font.new(family, weight)) */
 export const FONT_FAMILIES = {
-	/** font-sans: Geist -> BuilderSans */
-	sans: "rbxasset://fonts/families/BuilderSans.json",
-	/** font-mono: Geist is proportional -> its monospace sibling BuilderMono */
-	mono: "rbxasset://fonts/families/BuilderMono.json",
-	/** font-serif: Geist -> BuilderSans */
-	serif: "rbxasset://fonts/families/BuilderSans.json",
+	/** font-sans: Roboto -> Roboto */
+	sans: "rbxasset://fonts/families/Roboto.json",
+	/** font-mono: Roboto is proportional -> its monospace sibling RobotoMono */
+	mono: "rbxasset://fonts/families/RobotoMono.json",
+	/** font-serif: Roboto -> Roboto */
+	serif: "rbxasset://fonts/families/Roboto.json",
 };
