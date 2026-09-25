@@ -1,5 +1,5 @@
 {
-	"uploadedAt": "2026-09-24",
+	"uploadedAt": "2026-09-25",
 	"source": "tools/gen-world-art.mjs + npm run cloud -- upload-art (Open Cloud Assets API)",
 	"owner": "user:8424325451",
 	"ids": {
@@ -151,7 +151,7 @@
 		"signFire": "rbxassetid://116507123751868",
 		"signPolice": "rbxassetid://96252173679028",
 		"signOffice": "rbxassetid://127811014893506",
-		"townProps": "rbxassetid://112108955248177",
+		"townProps": "rbxassetid://134027712396620",
 		"puddle0": "rbxassetid://133449956224871",
 		"puddle0V": "rbxassetid://133768820371427",
 		"puddle1": "rbxassetid://118856175608293",
@@ -313,7 +313,7 @@
 		"signFire": "8c265994b95357c6cb39ac0bb1666a2cc8cbc555",
 		"signPolice": "309e4feaacc20b921d618f4af6db31fc255b7cf6",
 		"signOffice": "ed07161bb02d9d2702db0130ae4bbbc3c3970d34",
-		"townProps": "00452ae50d20e647ab54fb9c3e40c9b226fbc49f",
+		"townProps": "05573ed372392b3ffbb877e2f4ac8f700d9ebeda",
 		"puddle0": "36b6615c6c3f10daac0e5afe9809bfe29d114fe7",
 		"puddle0V": "e86feaa86f5850ed262de8340279002d65cb7cfe",
 		"puddle1": "9476b542e64edad1a0bb194e71b2b8b2ff61107c",
