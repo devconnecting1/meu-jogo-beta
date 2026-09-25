@@ -42,6 +42,66 @@ playtest de 2 clientes no Studio):
   prenda o jogador contra a vontade (BEM-01..08). Métricas em Creator Dashboard → Monetization → Creator Rewards;
   ligar ao funil do `docs/ANALYTICS.md` (sessões de 10+ minutos).
 
+## 0.2 Teleporte no painel de admin (pedido do dono, 2026-09-25)
+
+Hoje o admin só se teleporta para um ponto do mapa (`teleport` em `shared/admin/worldOps.ts`). Faltam:
+
+- **Eu → um jogador** (ir até ele), **um jogador → eu** (trazer), **jogador A → jogador B**, e **todos os jogadores
+  do servidor → eu** (reunir).
+- **Regras recomendadas:** só o admin (`src/shared/admin/config.ts`), feito **pelo servidor** como as outras ops do
+  §10/F6-6B (validado, com taxa e auditoria no `ProjectZ_AdminLog`); o destino é o ponto livre mais perto (nunca dentro
+  de parede, móvel ou carro, e o telhado do prédio segue a EDI-04); quem estava montado desce (VEI-05); quem está
+  morto ou esperando o amanhecer não é movido; e mover **outro** jogador marca a run dele como **assistida** (como a
+  M1 dos títulos: ajuda do admin não rende título nem moeda). Mostrar ao jogador movido um aviso curto ("Moved by an
+  admin").
+- **No painel:** botões na linha de cada jogador da tabela (UI-12: "Go to", "Bring") e um "Bring everyone" com
+  confirmação. Testes em `test:admin` (cada op aceita para o admin e "forbidden" para os outros).
+
+## 0.3 Não enxergar através das paredes (pedido do dono, 2026-09-25) — recomendações
+
+Hoje o telhado esconde o interior de quem está **fora** (EDI-04), mas quem está **dentro** vê o prédio inteiro, todos
+os cômodos, e de fora da rua para dentro de outro prédio pela linha dos olhos nada é cortado. Os zumbis já **não**
+enxergam através de paredes (IA-01, `perception.ts blocksSight`); o sobrevivente deveria seguir a mesma regra.
+
+- **Linha de visão do sobrevivente (recomendado):** calcular o que ele vê a partir do corpo (o mesmo `blocksSight`
+  dos zumbis: parede e porta fechada tapam; **janela deixa ver** (EDI-18), móvel baixo não tapa). O que está fora da
+  visão fica **escurecido** e **sem zumbis, itens soltos e outros atores** desenhados; o chão e as paredes continuam
+  visíveis como memória (o jogador não se perde). Dentro de casa, o cômodo em que ele está e o que se vê pela porta
+  aberta; os outros cômodos ficam escuros até ele entrar.
+- **Aliados:** a placa de nome e o ponto do aliado continuam sempre visíveis (é co-op), mas o que o aliado vê não
+  passa para mim.
+- **Como desenhar:** usar a camada de luz da noite que já existe (o mapa de luz, `test:light`) como máscara da
+  visão, para não criar Instance por quadro; sombra calculada em grade (shadowcasting) poucas vezes por segundo, só
+  perto do jogador. Respeitar Reduzir Movimento (sem piscar) e a legibilidade LEG-03.
+- **Anti-trapaça (depois):** o servidor pode deixar de mandar zumbis que o jogador não vê (§4.3 interesse), para
+  ninguém "tirar" a máscara no cliente. Começar pelo cliente, medir, e só então mexer no fio.
+- **Por que faz sentido:** dá medo de verdade ao abrir uma porta, deixa a lanterna e as janelas importantes, e é o
+  mesmo que os zumbis já sentem. Documentar como regra nova na bíblia (visão do sobrevivente) e testar em
+  `test:world-art`/`test:light` (sem churn, contraste) e num playtest.
+
+## 0.4 Construir em qualquer lugar, com rotação (pedido do dono, 2026-09-25) — recomendações
+
+Hoje barricadas, torretas e outras peças se põem **por tile** (grade), sempre na mesma direção. O pedido: pôr em
+qualquer lugar e poder girar.
+
+- **Posição livre, com ajuda:** a peça segue o cursor/dedo com passo fino de **8 u** (livre de verdade vira
+  frestas de meio corpo, EDI-11), e **encaixa sozinha** quando chega perto de uma parede, de outra peça ou de uma
+  porta (alinha de ponta a ponta — a barricada em fila fecha sem vão). Segurar Shift (ou um botão no toque) desliga
+  o encaixe.
+- **Rotação:** tecla **R** (e Q/E para os dois sentidos), botão de girar no toque e no controle (um gatilho).
+  **Começar com 90°** — o corpo da peça continua um retângulo alinhado, sem mexer na física (`moveActor`, raycast,
+  flow field e o mapa de luz já tratam retângulos). **45°** só depois de medir: pede colisão por caixa girada (OBB) em
+  movimento, tiro, visão dos zumbis (`blocksSight`), flow field e construção, com custo por tick.
+- **Torreta:** a rotação escolhe para onde ela aponta de início e o **arco que vigia** (por exemplo 180° à frente),
+  e aparece como um leque transparente enquanto se posiciona — decisão tática de verdade, não só visual.
+- **Regras (o servidor decide, como hoje):** a pré-visualização mostra verde/vermelho; o servidor valida a mesma
+  coisa (dentro do alcance, sem sobrepor corpo, carro, móvel ou outra peça, sem fechar a única saída de um prédio
+  nem prender outro sobrevivente, sem bloquear porta de quem não é do grupo) e recusa com o motivo. O fio: o verbo
+  `Place` do Bag (nota 26 do protocolo) ganha x/y finos e um byte de ângulo; `test:world`, `test:backpack`,
+  `test:net`, `test:ai` (a horda contorna e ataca a peça girada) e um teste de fresta EDI-11 com peças livres.
+- **Desfazer:** recolher a peça recém-posta devolve o material inteiro por alguns segundos (erro de clique não
+  custa caro); depois, o valor normal.
+
 ## 1. A partida por servidor (pedido do dono, 2026-09-24)
 
 O servidor público vira **uma partida**: a cidade nasce, os sobreviventes vivem nela e ela cai. Decisões já tomadas:

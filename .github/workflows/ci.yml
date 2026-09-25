@@ -1,9 +1,15 @@
 name: CI
 
+# Minutes (the repo can go private: ~2,000 free Actions minutes a month there). A change is tested in full ONCE, on its
+# pull request; the push to main that merges it only uploads the assets, rebuilds the place and re-runs the fast checks
+# (the suites already passed on the same code). Run workflow on main still runs everything. A newer push to the same
+# pull request cancels the older run. A roadmap-only edit runs nothing.
 on:
   push:
     branches: [main, master]
+    paths-ignore: ["docs/ROADMAP.md"]
   pull_request:
+    paths-ignore: ["docs/ROADMAP.md"]
   # Actions -> CI -> Run workflow (branch main): uploads whatever is still missing and builds the place again; an id
   # of another creator than the secrets' (the account changed) is uploaded again on its own, push or button alike
   workflow_dispatch:
@@ -16,6 +22,11 @@ on:
 # least privilege: every job only reads, except `assets`, which commits the new asset ids to main
 permissions:
   contents: read
+
+# a newer push to the same pull request cancels its older run; main is never cancelled (each push there uploads)
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # The Roblox assets (docs/CREATOR_HUB.md, "Open Cloud na CI"), BEFORE the place is built, so the place of this same
@@ -143,6 +154,8 @@ jobs:
   # EDI-11, CID-05, MOB-05, EDI-21, INT-01 in 11 of their 120 swept towns, none of them among the 20 above; fixed).
   # New spreads every night: .github/workflows/world-sweep.yml
   world-sweep:
+    # on the pull request (and Run workflow), not again on the push that merges it
+    if: github.event_name != 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -172,6 +185,10 @@ jobs:
     needs: assets
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
+    # the Node suites run on the pull request and on Run workflow; the push that merges an already-green pull request
+    # skips them (same code) and keeps the typecheck, the Luau limits, lint, format, the world rules and the place
+    env:
+      FULL: ${{ github.event_name != 'push' }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -225,56 +242,71 @@ jobs:
           git diff --exit-code -- src/client/ui/themeTokens.ts
 
       - name: Colour contrast (WCAG 4,5:1 for text, 3:1 for outlines and bars)
+        if: env.FULL == 'true'
         run: npm run test:contrast
 
       - name: The Bag is built once (tab switches and actions create no Instances)
+        if: env.FULL == 'true'
         run: npm run test:backpack
 
       - name: The HUD console (600 frames without creating an Instance, hotbar = keys 1-5, click = key, touch uncovered)
+        if: env.FULL == 'true'
         run: npm run test:hud
 
       # UI-06: no menu pauses the world -- the client's own input with the Bag open, against the real server
       - name: No menu pauses the world (Bag open, the horde, the clock and the damage go on; the hit flash)
+        if: env.FULL == 'true'
         run: npm run test:menus
 
       - name: Cosmetics are drawn (outfits, pets that follow, the wardrobe preview; MON-04)
+        if: env.FULL == 'true'
         run: npm run test:cosmetics
 
       # IA-05: the blue dot, the gold "?" and the red "!" over the horde, measured on every ground and at night
       - name: Zombie awareness marks (shape + colour, LEG-03 contrast, never over a survivor, Reduce Motion, no churn)
+        if: env.FULL == 'true'
         run: npm run test:awareness
 
       - name: Night light map (cost per frame, High looks the same, lightAt agrees, Low never tears, Auto hysteresis)
+        if: env.FULL == 'true'
         run: npm run test:light
 
       - name: A struck tree or car stops shaking (every client-side flinch is aged by one clock)
+        if: env.FULL == 'true'
         run: npm run test:flinch
 
       # UI-07 / UI-10 / UI-06: windows centred on the full screen, the town behind every menu, the world behind a run's
       - name: Menu screens (centred clear of the Roblox buttons; the town flyover pinned behind every menu)
+        if: env.FULL == 'true'
         run: npm run test:screens
 
       - name: Lobby and Survivor screen (UI-10; the town behind them without creating Instances once warm)
+        if: env.FULL == 'true'
         run: npm run test:lobby
 
       # every Settings row followed to its real effect: the mixer, the HUD size, the touch geometry, the keys, the save
       - name: Settings do what they say (audio, HUD size, touch layout, every SCHEMES key, Defaults, persistence)
+        if: env.FULL == 'true'
         run: npm run test:settings
 
       # every menu walked as a player would; the pad; achievements and records; every string in lang.ts and the CSV
       - name: Menus and strings (open / close / focus without leaks, the pad, achievements, lang.ts and the locale CSV)
+        if: env.FULL == 'true'
         run: npm run test:nav
 
       # UI-12 / MP-23: the kit's Table and forms, the admin panel, Records and the match scoreboard
       - name: Tables and forms (row pools without churn, nothing sent while a field is wrong, the scoreboard)
+        if: env.FULL == 'true'
         run: npm run test:tables
 
       # MON-05 / MON-07: every earned title through the server's real paths, nobody else grants one, an admin's help
       # makes a run assisted, and the Supporter mark is only the server's word
       - name: Earned titles and the Supporter mark (each trigger once, only titles.ts grants, the assisted run)
+        if: env.FULL == 'true'
         run: npm run test:titles
 
       - name: Item icon atlas (cell = the Frames drawing, no id = the same Frames, with an id one image, no churn)
+        if: env.FULL == 'true'
         run: npm run test:icons
 
       # ART-01..06: the generated art (PNGs, manifest, worldArtAssets.ts, itemIconAtlas.ts) is what the generator
@@ -284,110 +316,142 @@ jobs:
         run: |
           npm run art:world -- --no-sheet
           node tools/assets-ci.mjs drift
-          npm run test:world-art
+          if [ "$FULL" = "true" ]; then npm run test:world-art; fi
 
       # the `assets` job's logic offline, against the fake Open Cloud and throwaway git repos: missing secrets skip,
       # moderation waits, a rejection fails and is never re-sent, only approved ids are written, main moving mid-run
       - name: CI asset uploads (skip without secrets, moderation, rejection, partial success, rebase, the workflow)
+        if: env.FULL == 'true'
         run: npm run test:assets-ci
 
       # the world renderer's pool: one sub-pool per ZIndex, no ZIndex write in steady state, the lobby warm-up
       - name: Renderer pool (same draw order, a birth or death costs O(1), no ZIndex writes, warm-up without churn)
+        if: env.FULL == 'true'
         run: npm run test:pool
 
       - name: Net protocol tests (round-trip, limits, fuzz)
+        if: env.FULL == 'true'
         run: npm run test:net
 
       - name: Simulation determinism (client prediction must match the server)
+        if: env.FULL == 'true'
         run: npm run test:sim
 
       - name: Server simulation (authority, input abuse, hostile payloads)
+        if: env.FULL == 'true'
         run: npm run test:server-sim
 
       - name: Client prediction (divergence under latency, loss and reordering)
+        if: env.FULL == 'true'
         run: npm run test:predict
 
       - name: Input queue (how often the server's queue runs dry with the real sender over a jittery link)
+        if: env.FULL == 'true'
         run: npm run test:input
 
       - name: Replication (three clients, one horde; interest, bandwidth and tick cost)
+        if: env.FULL == 'true'
         run: npm run test:replication
 
       - name: Zombie AI (perception, alert, flanking, pace director, cost)
+        if: env.FULL == 'true'
         run: npm run test:ai
 
       - name: Authoritative combat (hit validation, rewind, cadence, server-side progress)
+        if: env.FULL == 'true'
         run: npm run test:combat
 
       - name: Match clock and night waves (one server clock, lossy client, the original headcount)
+        if: env.FULL == 'true'
         run: npm run test:clock
 
       - name: World day vs life day, the daybreak wait and the runRev retry (MP-13, MP-20, MP-21)
+        if: env.FULL == 'true'
         run: npm run test:life
 
       - name: The body is the server's (Leave/Enter, reconnect, Rebirth, New game, daybreak, the world wipe)
+        if: env.FULL == 'true'
         run: npm run test:body
 
       - name: Admin world tools on the server (auth, validation, every op, audit, flood kick, reset body, the panel)
+        if: env.FULL == 'true'
         run: npm run test:admin
 
       - name: The world ends when everyone is dead (MP-22 -- a new town on day 1, the world log; New game is a new life)
+        if: env.FULL == 'true'
         run: npm run test:reset
 
       - name: Night waves end to end (queue -> real spawner -> zombie, the sterile world, the daybreak revive)
+        if: env.FULL == 'true'
         run: npm run test:waves
 
       - name: Analytics (onboarding funnel once and in order, economy balances, no per-kill event, under the rate cap)
+        if: env.FULL == 'true'
         run: npm run test:analytics
 
       - name: Where a survivor plays (the fresh-town offer, Play solo's reserved town, TeleportData, matchmaking attributes)
+        if: env.FULL == 'true'
         run: npm run test:match
 
       - name: World on the server (items, doors, building, loot, the outbox and its audiences; F3)
+        if: env.FULL == 'true'
         run: npm run test:world
 
       - name: Vehicles (top speeds, handling, riding on the server, the odometer, drawn without churn; VEI-05)
+        if: env.FULL == 'true'
         run: npm run test:vehicles
 
       - name: Power and defence (every machine a build, the grid, turrets and lamps on the server)
+        if: env.FULL == 'true'
         run: npm run test:power
 
       # MP-26: the server's seed IS the town -- server = client seed by seed, sliced = whole, no clock/random/Map
       # order/libm read -- and the lobby's town, generated a slice per frame, handed to the match with no regeneration
       - name: One seed, one town everywhere (server = client, sliced = whole, any libm)
+        if: env.FULL == 'true'
         run: npm run test:seed
 
       - name: The lobby's town goes to the match (sliced generation, zero regeneration, preload plan, warm-up)
+        if: env.FULL == 'true'
         run: npm run test:cache
 
       # MP-26: the lobby's Servers list -- MemoryStore publish / read / join validation and the quota, on fakes
       - name: The Servers list (who publishes, the list, the join checks, the MemoryStore quota)
+        if: env.FULL == 'true'
         run: npm run test:serverlist
 
       - name: Save v3 (migration from v2, rollback, and every field survives copySaveInto)
+        if: env.FULL == 'true'
         run: npm run test:save
 
       - name: Every item row by row (weapons, equipment, usables, recipes, skills, loot, shop; known bugs listed)
+        if: env.FULL == 'true'
         run: npm run test:items
 
       # MON-07 / docs/SHOP.md: the price a screen shows is the price the server takes, what is bought is unlocked (and
       # still there on another server), and every price sits in its tier's band of hours of play
       - name: The shop end to end (shown = charged, bought = unlocked, the economy model's price bands)
+        if: env.FULL == 'true'
         run: npm run test:shop
 
       - name: Footstep cadence (the walk cycle drives the sound)
+        if: env.FULL == 'true'
         run: npm run test:footsteps
 
       - name: Audio (the catalogue, world sounds on the wire, loops that always end, no spam, 10 minutes without churn, our own SFX banks, upload-audio)
+        if: env.FULL == 'true'
         run: npm run test:audio
 
       - name: Remote smoothing (an ally is drawn continuously, not in snapshot steps)
+        if: env.FULL == 'true'
         run: npm run test:smoothness
 
       - name: The horde as drawn (server -> wire -> client -> camera -> pixel; clean link, WAN, Studio frames)
+        if: env.FULL == 'true'
         run: npm run test:zombie-motion
 
       - name: Proximity chat (earshot, presence and the bubble stack)
+        if: env.FULL == 'true'
         run: npm run test:chat
 
       - name: Upload compiled Luau
