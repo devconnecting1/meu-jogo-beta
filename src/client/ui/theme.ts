@@ -425,8 +425,9 @@ export interface TextStyle {
 }
 
 /**
- * Typography roles. BuilderSans Regular / Medium / Bold / ExtraBold ship with the client (instant); SemiBold is
- * streamed on first use. BuilderMono has Light / Regular / Bold only.
+ * Typography roles, in the theme's families (design/tweakcn-theme.json -> FONT_FAMILIES): Roboto for text, RobotoMono
+ * for the tabular numbers (the owner's choice, 2026-09-25; BuilderSans / BuilderMono before). A weight a family lacks
+ * is drawn in its nearest weight by the engine.
  */
 export const TYPE: Record<TextRole, TextStyle> = {
 	/** logo, round banners */

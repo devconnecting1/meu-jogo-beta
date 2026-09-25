@@ -113,7 +113,7 @@ const BUILT_HINTS = 3;
 const RULES = 3;
 
 /**
- * Height of the notes at TEXT.sm in `w` design units. BuilderSans averages about half an em a character; 0.56
+ * Height of the notes at TEXT.sm in `w` design units. Roboto averages a little over half an em a character; 0.56
  * leaves room for the word that wraps early. An estimate: if it comes up short, the label's TextScaled shrinks the
  * text a step instead of cutting it.
  */
