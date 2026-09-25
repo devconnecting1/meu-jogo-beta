@@ -42,6 +42,43 @@ playtest de 2 clientes no Studio):
   prenda o jogador contra a vontade (BEM-01..08). Métricas em Creator Dashboard → Monetization → Creator Rewards;
   ligar ao funil do `docs/ANALYTICS.md` (sessões de 10+ minutos).
 
+## 0.2 Teleporte no painel de admin (pedido do dono, 2026-09-25)
+
+Hoje o admin só se teleporta para um ponto do mapa (`teleport` em `shared/admin/worldOps.ts`). Faltam:
+
+- **Eu → um jogador** (ir até ele), **um jogador → eu** (trazer), **jogador A → jogador B**, e **todos os jogadores
+  do servidor → eu** (reunir).
+- **Regras recomendadas:** só o admin (`src/shared/admin/config.ts`), feito **pelo servidor** como as outras ops do
+  §10/F6-6B (validado, com taxa e auditoria no `ProjectZ_AdminLog`); o destino é o ponto livre mais perto (nunca dentro
+  de parede, móvel ou carro, e o telhado do prédio segue a EDI-04); quem estava montado desce (VEI-05); quem está
+  morto ou esperando o amanhecer não é movido; e mover **outro** jogador marca a run dele como **assistida** (como a
+  M1 dos títulos: ajuda do admin não rende título nem moeda). Mostrar ao jogador movido um aviso curto ("Moved by an
+  admin").
+- **No painel:** botões na linha de cada jogador da tabela (UI-12: "Go to", "Bring") e um "Bring everyone" com
+  confirmação. Testes em `test:admin` (cada op aceita para o admin e "forbidden" para os outros).
+
+## 0.3 Não enxergar através das paredes (pedido do dono, 2026-09-25) — recomendações
+
+Hoje o telhado esconde o interior de quem está **fora** (EDI-04), mas quem está **dentro** vê o prédio inteiro, todos
+os cômodos, e de fora da rua para dentro de outro prédio pela linha dos olhos nada é cortado. Os zumbis já **não**
+enxergam através de paredes (IA-01, `perception.ts blocksSight`); o sobrevivente deveria seguir a mesma regra.
+
+- **Linha de visão do sobrevivente (recomendado):** calcular o que ele vê a partir do corpo (o mesmo `blocksSight`
+  dos zumbis: parede e porta fechada tapam; **janela deixa ver** (EDI-18), móvel baixo não tapa). O que está fora da
+  visão fica **escurecido** e **sem zumbis, itens soltos e outros atores** desenhados; o chão e as paredes continuam
+  visíveis como memória (o jogador não se perde). Dentro de casa, o cômodo em que ele está e o que se vê pela porta
+  aberta; os outros cômodos ficam escuros até ele entrar.
+- **Aliados:** a placa de nome e o ponto do aliado continuam sempre visíveis (é co-op), mas o que o aliado vê não
+  passa para mim.
+- **Como desenhar:** usar a camada de luz da noite que já existe (o mapa de luz, `test:light`) como máscara da
+  visão, para não criar Instance por quadro; sombra calculada em grade (shadowcasting) poucas vezes por segundo, só
+  perto do jogador. Respeitar Reduzir Movimento (sem piscar) e a legibilidade LEG-03.
+- **Anti-trapaça (depois):** o servidor pode deixar de mandar zumbis que o jogador não vê (§4.3 interesse), para
+  ninguém "tirar" a máscara no cliente. Começar pelo cliente, medir, e só então mexer no fio.
+- **Por que faz sentido:** dá medo de verdade ao abrir uma porta, deixa a lanterna e as janelas importantes, e é o
+  mesmo que os zumbis já sentem. Documentar como regra nova na bíblia (visão do sobrevivente) e testar em
+  `test:world-art`/`test:light` (sem churn, contraste) e num playtest.
+
 ## 1. A partida por servidor (pedido do dono, 2026-09-24)
 
 O servidor público vira **uma partida**: a cidade nasce, os sobreviventes vivem nela e ela cai. Decisões já tomadas:
