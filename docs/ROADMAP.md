@@ -79,6 +79,29 @@ enxergam através de paredes (IA-01, `perception.ts blocksSight`); o sobrevivent
   mesmo que os zumbis já sentem. Documentar como regra nova na bíblia (visão do sobrevivente) e testar em
   `test:world-art`/`test:light` (sem churn, contraste) e num playtest.
 
+## 0.4 Construir em qualquer lugar, com rotação (pedido do dono, 2026-09-25) — recomendações
+
+Hoje barricadas, torretas e outras peças se põem **por tile** (grade), sempre na mesma direção. O pedido: pôr em
+qualquer lugar e poder girar.
+
+- **Posição livre, com ajuda:** a peça segue o cursor/dedo com passo fino de **8 u** (livre de verdade vira
+  frestas de meio corpo, EDI-11), e **encaixa sozinha** quando chega perto de uma parede, de outra peça ou de uma
+  porta (alinha de ponta a ponta — a barricada em fila fecha sem vão). Segurar Shift (ou um botão no toque) desliga
+  o encaixe.
+- **Rotação:** tecla **R** (e Q/E para os dois sentidos), botão de girar no toque e no controle (um gatilho).
+  **Começar com 90°** — o corpo da peça continua um retângulo alinhado, sem mexer na física (`moveActor`, raycast,
+  flow field e o mapa de luz já tratam retângulos). **45°** só depois de medir: pede colisão por caixa girada (OBB) em
+  movimento, tiro, visão dos zumbis (`blocksSight`), flow field e construção, com custo por tick.
+- **Torreta:** a rotação escolhe para onde ela aponta de início e o **arco que vigia** (por exemplo 180° à frente),
+  e aparece como um leque transparente enquanto se posiciona — decisão tática de verdade, não só visual.
+- **Regras (o servidor decide, como hoje):** a pré-visualização mostra verde/vermelho; o servidor valida a mesma
+  coisa (dentro do alcance, sem sobrepor corpo, carro, móvel ou outra peça, sem fechar a única saída de um prédio
+  nem prender outro sobrevivente, sem bloquear porta de quem não é do grupo) e recusa com o motivo. O fio: o verbo
+  `Place` do Bag (nota 26 do protocolo) ganha x/y finos e um byte de ângulo; `test:world`, `test:backpack`,
+  `test:net`, `test:ai` (a horda contorna e ataca a peça girada) e um teste de fresta EDI-11 com peças livres.
+- **Desfazer:** recolher a peça recém-posta devolve o material inteiro por alguns segundos (erro de clique não
+  custa caro); depois, o valor normal.
+
 ## 1. A partida por servidor (pedido do dono, 2026-09-24)
 
 O servidor público vira **uma partida**: a cidade nasce, os sobreviventes vivem nela e ela cai. Decisões já tomadas:
