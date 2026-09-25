@@ -130,6 +130,15 @@ interface Bucket {
 	wantImage: number;
 }
 
+/** what a dry pass (`beginDry`) counted at one ZIndex: sprites, and whether any of them is rounded, outlined, an image */
+interface DryCount {
+	z: number;
+	n: number;
+	corner: boolean;
+	stroke: boolean;
+	image: boolean;
+}
+
 const DEFAULT_COLOR = Color3.fromRGB(200, 200, 200);
 const BLACK = Color3.fromRGB(0, 0, 0);
 const WHITE = Color3.fromRGB(255, 255, 255);
@@ -182,6 +191,11 @@ export class Renderer {
 	private made = 0;
 	private viewW = 1120;
 	private viewH = 630;
+	/** a dry pass is on (`beginDry`): draws are counted, not drawn */
+	private dry = false;
+	private dryByZ = new Map<number, DryCount>();
+	private dryList: Array<DryCount> = [];
+	private dryLast: DryCount | undefined;
 
 	constructor(parent: GuiObject, name: string) {
 		this.layer = new Instance("Frame");
@@ -342,6 +356,55 @@ export class Renderer {
 	}
 
 	/**
+	 * Starts a DRY pass, for a pool that grows by drawing (client/view/townFlyover.ts): until `endDry()`, `drawRect`,
+	 * `drawCircle` and `drawSegment` take no slot, write nothing and create nothing -- they only count, per ZIndex, the
+	 * sprites a frame drawing them would take (and whether any is rounded, outlined or an image). Drawing what several
+	 * frames would show at once (a view stretched over the stretch of a glide they span) counts at least what any of those
+	 * frames takes at each ZIndex; `endDry()` reserves that, for `warm()` to build. Not with `acquire()`.
+	 */
+	beginDry(): void {
+		this.dry = true;
+		for (const c of this.dryList) {
+			c.n = 0;
+			c.corner = false;
+			c.stroke = false;
+			c.image = false;
+		}
+	}
+
+	/**
+	 * Ends a dry pass: each ZIndex it counted is reserved (`reserve`) to what it counted, every slot rounded, outlined or
+	 * with its image when any sprite of it was (the slot such a sprite lands on shifts with the view, as in
+	 * `warmModifiers`). Creates nothing: `warm()` does.
+	 */
+	endDry(): void {
+		this.dry = false;
+		for (const c of this.dryList) {
+			if (c.n === 0) continue;
+			this.reserve(c.z, c.n, c.corner ? c.n : 0, c.stroke ? c.n : 0, c.image ? c.n : 0);
+		}
+	}
+
+	/** a dry pass's count of one draw at `opts` (see drawRect: a picture has no corner of its own) */
+	private tally(opts: SpriteOpts): void {
+		const z = opts.zIndex ?? 1;
+		let c = this.dryLast;
+		if (c === undefined || c.z !== z) {
+			c = this.dryByZ.get(z);
+			if (c === undefined) {
+				c = { z, n: 0, corner: false, stroke: false, image: false };
+				this.dryByZ.set(z, c);
+				this.dryList.push(c);
+			}
+			this.dryLast = c;
+		}
+		c.n++;
+		if (opts.image !== undefined) c.image = true;
+		else if (opts.circle === true || (opts.cornerRadius !== undefined && opts.cornerRadius > 0)) c.corner = true;
+		if (opts.stroke !== undefined) c.stroke = true;
+	}
+
+	/**
 	 * A visible Frame with every property reset to defaults (white-ish, opaque, square corners,
 	 * no outline, no rotation, ZIndex 1, 32×32 at 0,0). Valid until the next beginFrame().
 	 */
@@ -376,6 +439,10 @@ export class Renderer {
 	 * to whole pixels edge-by-edge so adjacent tiles/walls never leave seams.
 	 */
 	drawRect(cam: Camera, wx: number, wy: number, opts: SpriteOpts): Frame {
+		if (this.dry) {
+			this.tally(opts);
+			return this.layer;
+		}
 		const sp = this.next(opts.zIndex ?? 1);
 		const fade = this.alphaScale;
 		let ww = opts.w ?? 32;

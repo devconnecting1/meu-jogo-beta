@@ -34,8 +34,8 @@
  *   5. GAMEPAD         START has the first focus; the Survivor screen focuses the action that works; every plate is
  *                      selectable.
  *   6. THE FLYOVER     the real town of the seed; after a warm-up over every landmark, 600 frames (and 600 more with
- *                      cuts) create no Instance; the camera glides at 25-60 u/s and only jumps while the page is
- *                      opaque; the night tint; a phone draws less and pans slower; Reduce Motion is a still frame;
+ *                      cuts, and a whole loop at 60 fps) create no Instance; the camera glides at 25-60 u/s and only
+ *                      jumps while the page is opaque; the night tint; a phone draws less and pans slower; Reduce Motion is a still frame;
  *                      a new town (MP-22) is cross-faded to by the SAME flyover in its own pool (the page dips, the
  *                      town swaps behind it, the new one fades in; called off halfway, the page lifts again; Reduce
  *                      Motion swaps at once); with no seed known, the page colour and no town; the run releases every
@@ -1864,6 +1864,28 @@ r = measure(() => {
 	for (let i = 0; i < 600; i++) frame(0.25);
 });
 check("600 quadros com cortes de plano (150 s): nenhuma Instance criada nem destruida", zero(r), cost(r));
+// a whole loop at 60 fps, every landmark once: every frame between the ones the warm-up drew (1 s apart). A pool that
+// only grew by drawing held the busiest frame it DREW, and a frame between two of them could show one more shadow than
+// either (a downtown square's, MOB-07): after this warm-up, two such loops made a few Instances in 18 of 20 towns (this
+// one included: 4 in this loop). Now each stretch of the glide is counted ahead, stretched over its length
+// (townFlyover.ts WARM_STEP, Renderer.beginDry).
+{
+	let loopCuts = 0;
+	let at = fly.cameraAt();
+	r = measure(() => {
+		for (let i = 0; i < 60 * 60 * 40 && loopCuts < landmarks.length; i++) {
+			frame(1 / 60);
+			const now = fly.cameraAt();
+			if (Math.hypot(now[0] - at[0], now[1] - at[1]) > 200) loopCuts++;
+			at = now;
+		}
+	});
+	check(
+		"uma volta inteira a 60 fps, todo quadro entre os do aquecimento: nenhuma Instance criada nem destruida",
+		zero(r) && loopCuts >= landmarks.length,
+		`${cost(r)}, ${loopCuts} cortes`,
+	);
+}
 
 // the glide: speed and cuts
 {
