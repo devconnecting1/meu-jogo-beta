@@ -52,6 +52,10 @@
  *      half and Reduce Motion none; the drops sit still with Reduce Motion (the camera still: no write at all) and
  *      move on their beat without it; every puddle on the texel grid, the four shapes all used; the streets dry and
  *      stop drawing.
+ *  17. A DRY PASS (the lobby's town, client/view/townFlyover.ts). `beginDry` / `endDry` count what a stretched view
+ *      would draw at each ZIndex without writing, creating or drawing anything (the frame on screen stays); `warm()`
+ *      then builds exactly that, rounded, outlined and with pictures where it drew them; every frame of the stretch,
+ *      1 u apart, creates nothing; a smaller count never shrinks the pool.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -1822,6 +1826,74 @@ section("16) the weather (LUZ-05): a storm's streaks and a wet street's puddles 
 		);
 	}
 	WA.overrideWorldArt(undefined);
+}
+
+// ================================================================ 17. a dry pass
+
+section("17) a dry pass (the lobby's town, townFlyover.ts): counted per ZIndex, nothing drawn, then built ahead");
+{
+	const root = gui.make("Frame");
+	const r = new Renderer(root, "Sprites");
+	const cam = new Camera();
+	cam.setView(640, 360);
+	r.setView(640, 360);
+	const IMG = "rbxassetid://1";
+	// a street seen from x0 on: a row of 40 u tiles, round shadows, outlined boxes and pictures, as many as fall in view
+	const street = (x0, x1) => {
+		for (let x = 0; x < 2000; x += 40) {
+			if (x + 40 < x0 || x > x1) continue;
+			r.drawRect(cam, x, 0, { w: 40, h: 40, zIndex: 2 });
+			if (x % 80 === 0) r.drawCircle(cam, x, 30, 20, { zIndex: 6, color: Color3.fromRGB(0, 0, 0) });
+			if (x % 120 === 0) r.drawRect(cam, x, 60, { w: 30, h: 30, zIndex: 20, stroke: Color3.fromRGB(0, 0, 0) });
+			if (x % 200 === 0) r.drawRect(cam, x, 90, { w: 30, h: 30, zIndex: 21, image: IMG });
+		}
+	};
+	// the frame on screen before the pass: what it shows must not move
+	r.beginFrame();
+	street(0, 300);
+	r.endFrame();
+	const before = r.layer.GetChildren().filter(f => f.Visible).length;
+	const made0 = r.instancesMade();
+	const drawn0 = r.drawCount();
+	const w = watch(() => {
+		r.beginDry();
+		// the view stretched over a stretch of the glide: from 0 to 700 u, every frame in it is inside
+		street(0, 1000);
+		r.endDry();
+	});
+	check(
+		w.writes === 0 && w.created === 0 && r.instancesMade() === made0 && r.drawCount() === drawn0,
+		"a dry pass writes nothing, creates nothing and draws nothing",
+		`${w.writes} writes, ${w.created} Instances, ${r.drawCount() - drawn0} drawn`,
+	);
+	check(r.layer.GetChildren().filter(f => f.Visible).length === before, "...and the frame on screen stays as it was");
+	const w2 = watch(() => r.warm(math.huge));
+	const byZ = z => r.layer.GetChildren().filter(f => f.ZIndex === z);
+	check(
+		byZ(2).length === 26 && byZ(6).length === 13 && byZ(20).length === 9 && byZ(21).length === 6,
+		"warm() then builds what it counted at each ZIndex (26 tiles, 13 shadows, 9 boxes, 6 pictures)",
+		`${byZ(2).length}, ${byZ(6).length}, ${byZ(20).length}, ${byZ(21).length}; ${w2.created} Instances`,
+	);
+	check(
+		byZ(6).every(f => f.FindFirstChildOfClass("UICorner") !== undefined) &&
+			byZ(20).every(f => f.FindFirstChildOfClass("UIStroke") !== undefined) &&
+			byZ(21).every(f => f.FindFirstChildOfClass("ImageLabel") !== undefined) &&
+			byZ(2).every(f => f.FindFirstChildOfClass("UICorner") === undefined),
+		"...rounded, outlined and with a picture where it drew them, plain where it did not",
+	);
+	// every frame of the glide the pass stood for, 1 u apart: into slots that exist
+	const w3 = watch(() => {
+		for (let x = 0; x <= 700; x++) {
+			r.beginFrame();
+			street(x, x + 300);
+			r.endFrame();
+		}
+	});
+	check(w3.created === 0, "every frame of that stretch, 1 u apart, creates nothing", `${w3.created} Instances`);
+	r.beginDry();
+	street(0, 300);
+	r.endDry();
+	check(r.warm(math.huge) === 0 && byZ(2).length === 26, "a smaller count never shrinks the pool");
 }
 
 WA.overrideWorldArt(undefined);

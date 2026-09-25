@@ -471,8 +471,8 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	furniture: { id: "rbxassetid://107932658085342", w: 1024, h: 923 },
 	/** atlas: combat blood: 44 cells of drops, splats and smears, matte and wet (client/view/bloodView.ts) */
 	blood: { id: "rbxassetid://138018740222052", w: 96, h: 264 },
-	/** atlas: the town's fixtures: 306 cells of market, street, park, backyard and building-site pieces and their ground (client/view/townPropArt.ts) */
-	townProps: { id: "rbxassetid://112108955248177", w: 1024, h: 662 },
+	/** atlas: the town's fixtures: 362 cells of market, street, park, backyard and building-site pieces and their ground (client/view/townPropArt.ts) */
+	townProps: { id: "", w: 1024, h: 702 },
 	/** atlas: the buildings' entrances: 836 cells of stoops, door leaves, frames and lintels, each side baked on its own (client/view/entranceArt.ts) */
 	entrances: { id: "rbxassetid://133379865386550", w: 1024, h: 176 },
 	/** ui: the LAST TOWN wordmark: three 86 x 13 cells top to bottom, the ink (tint: background), the fill of LAST (tint: brand) and of TOWN (tint: foreground) (client/ui/logo.ts) */

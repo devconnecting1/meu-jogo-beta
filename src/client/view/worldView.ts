@@ -81,6 +81,9 @@ const GROUND = {
 	ramp: COLORS.uiYellow.Lerp(COLORS.sidewalk, 0.35),
 	porch: COLORS.floorWood.Lerp(COLORS.furnDark, 0.2),
 	patio: COLORS.sidewalk.Lerp(WHITE, 0.06),
+	/** a downtown square's planted bed and a cleared lot's bare earth (MOB-07); a cafe's deck is a porch's boards */
+	bed: COLORS.grass,
+	waste: COLORS.dirtPath.Lerp(COLORS.sidewalk, 0.35),
 	zebra: WHITE.Lerp(COLORS.road, 0.12),
 	lane: WHITE.Lerp(COLORS.road, 0.3),
 	island: COLORS.sidewalk.Lerp(WHITE, 0.2),
@@ -161,8 +164,12 @@ const ZEBRA_STEP = 48;
 const PARK_TINT = Color3.fromRGB(228, 246, 231);
 const DRIVE_TINT = Color3.fromRGB(235, 235, 235);
 const PATH_TINT = Color3.fromRGB(211, 198, 172);
+/** a cleared lot's earth (MOB-07): the path's dirt, greyer with the concrete dust */
+const WASTE_TINT = Color3.fromRGB(196, 190, 176);
 /** a porch deck is the house's floor boards, weathered */
 const PORCH_TINT = Color3.fromRGB(214, 206, 196);
+/** a cafe's terrace deck (MOB-07): the same boards, bleached by the sun */
+const DECK_TINT = Color3.fromRGB(240, 232, 222);
 /** the paint and body of a burnt-out car */
 const BURNT = Color3.fromRGB(66, 60, 56);
 const DOOR_GAP = Color3.fromRGB(28, 28, 30);
@@ -490,7 +497,9 @@ export class WorldView {
 		}
 		let color = GROUND.ramp;
 		if (k === "verge") color = GROUND.verge;
-		else if (k === "porch") color = GROUND.porch;
+		else if (k === "porch" || k === "terrace") color = GROUND.porch;
+		else if (k === "bed") color = GROUND.bed;
+		else if (k === "waste") color = GROUND.waste;
 		else if (k === "patio") color = GROUND.patio;
 		else if (k === "walk") color = GROUND.walk;
 		else if (k === "drive") color = GROUND.drive;
@@ -1628,6 +1637,10 @@ export class WorldView {
 		}
 		if (k === "verge") return this.tiled(r, cam, g, v, "grass", z);
 		if (k === "porch") return this.tiled(r, cam, g, v, "floorWood", z, PORCH_TINT);
+		if (k === "terrace") return this.tiled(r, cam, g, v, "floorWood", z, DECK_TINT);
+		// a square's planted bed, a cleared lot's bare earth (MOB-07)
+		if (k === "bed") return this.tiled(r, cam, g, v, "grass", z);
+		if (k === "waste") return this.tiled(r, cam, g, v, "dirt", z, WASTE_TINT);
 		if (k === "walk" || k === "patio") return this.tiled(r, cam, g, v, "pavers", z);
 		if (k === "drive") return this.tiled(r, cam, g, v, "concrete", z, DRIVE_TINT);
 		if (k === "apron") return this.tiled(r, cam, g, v, "apron", z);

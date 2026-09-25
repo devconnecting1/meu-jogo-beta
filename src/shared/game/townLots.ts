@@ -21,6 +21,7 @@
  * bodies at least (EDI-11's rule, outdoors: nobody is cornered in a slot).
  */
 import { TOWN } from "shared/engine/constants";
+import type { TreeSite } from "shared/data/trees";
 import type { DoorSide, GroundKind, Lot, LotEdge, Rect, Solid, WorldData } from "./world";
 
 // ---------------------------------------------------------------------------------------------- the kit
@@ -80,6 +81,13 @@ export interface TownKit {
 	solidsIn: (x: number, y: number, w: number, h: number) => Array<Solid>;
 	/** the street trees' lattice along a road (world.ts streetTrees): both sides of a street line up on it */
 	treeLattice: (road: number) => { pitch: number; phase: number };
+	/**
+	 * a tree whose trunk is centred at (x, y), of what grows at `site` (world.ts addTree, VEG-06: its kind and look from
+	 * an exact hash of where it stands); the caller has checked the ground is free (MOB-07's squares)
+	 */
+	tree: (x: number, y: number, site: TreeSite) => Solid;
+	/** a litter bin (TOWN.TRASH square, world.ts addTrash) with its corner at (x, y); the caller has checked the ground */
+	bin: (x: number, y: number) => Solid;
 }
 
 // ---------------------------------------------------------------------------------------------- geometry
@@ -116,7 +124,7 @@ function snap8(v: number): number {
 }
 
 /** a fixture of the town (see the header): indestructible, `low` ones let bullets by */
-function prop(kit: TownKit, tags: string, r: Rect, low: boolean, extra?: Partial<Solid>): Solid {
+export function prop(kit: TownKit, tags: string, r: Rect, low: boolean, extra?: Partial<Solid>): Solid {
 	return kit.add({
 		kind: "prop",
 		x: r.x,
@@ -309,7 +317,7 @@ export function pinches(a: Rect, b: Rect): boolean {
 }
 
 /** does this solid stand in a body's way (a building's box until its walls are planned, a tree, a car, a fixture)? */
-function standing(s: Solid): boolean {
+export function standing(s: Solid): boolean {
 	if (s.removed === true || s.kind === "canopy" || s.kind === "window") return false;
 	return s.kind === "building" || s.passable !== true;
 }
@@ -347,7 +355,7 @@ export function cutAcross(g: Rect, o: Rect, alongY: boolean): boolean {
  * Would something standing at `r` pinch a slot with anything standing near it? A gap a third thing fills right across
  * (the table between the food truck and the crates behind the table) is no slot: the pairs either side of it count.
  */
-function pinchesAny(kit: TownKit, r: Rect): boolean {
+export function pinchesAny(kit: TownKit, r: Rect): boolean {
 	const near = kit.solidsIn(r.x - PATH, r.y - PATH, r.w + PATH * 2, r.h + PATH * 2);
 	for (const s of near) {
 		if (!standing(s) || !pinches(r, s)) continue;
@@ -479,7 +487,7 @@ function pkFlood(cols: number, rows: number, blocked: number, also: number): num
  * of `r` (two thirds of the time nothing does): alone, `r`'s cells are a convex blob, with no cell shut in beside it --
  * but one neighbour is enough, a trunk corner to corner with a shed 36-47 u off shuts in the one cell between them.
  */
-function closesPocket(kit: TownKit, r: Rect): boolean {
+export function closesPocket(kit: TownKit, r: Rect): boolean {
 	const C = REACH_CELL;
 	const R = REACH_BODY;
 	const x0 = math.floor((r.x - POCKET_REACH) / C) * C;

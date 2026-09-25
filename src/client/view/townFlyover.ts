@@ -24,10 +24,11 @@
  *   - Between the town and the menus: the page colour at TRANSPARENCY.backdrop (UI-10), so every label keeps its
  *     contrast; the fade of a cut is the same colour going opaque.
  *
- * Cost: one Renderer pool, warmed on the first frames and then only rewritten (no Instance after warm-up, npm run
- * test:lobby counts them); nothing below allocates per frame except the SpriteOpts tables the shared world
- * drawing passes, exactly as the run does. Phones get a slower pan and fewer walkers, and the zoom never lets a
- * big screen draw more than ~1920 x 1080 units of town. Reduce Motion (GuiService.ReducedMotionEnabled) gets a
+ * Cost: one Renderer pool, warmed on the first loop -- each stretch of a shot counted ahead of the camera, stretched over
+ * its length (WARM_STEP), so no frame in it, however far apart they come, finds a slot missing -- and then only
+ * rewritten (no Instance after warm-up, npm run test:lobby counts them); nothing below allocates per frame except the
+ * SpriteOpts tables the shared world drawing passes, exactly as the run does. Phones get a slower pan and fewer walkers,
+ * and the zoom never lets a big screen draw more than ~1920 x 1080 units of town. Reduce Motion (GuiService.ReducedMotionEnabled) gets a
  * still frame: no drift, no walkers moving, no fades.
  *
  * Lifecycle (client/ui/lobby.ts, client/main.client.ts): it is the backdrop of ALL the menus, not of one screen. The
@@ -43,7 +44,7 @@
  * go of it first, and the next menu draws a freshly generated one -- never a street the match changed.
  */
 import { BuildingType, isCampusType } from "shared/data/buildings";
-import { Camera } from "shared/engine/camera";
+import { Camera, ViewRect } from "shared/engine/camera";
 import { COLORS, Z } from "shared/engine/colors";
 import { Renderer, SpriteOpts } from "shared/engine/renderer";
 import { ZOMBIE_BASE_RADIUS } from "shared/game/entities";
@@ -97,6 +98,18 @@ const SMALL_W = 1000;
 const SMALL_H = 520;
 /** the largest area of town one frame draws, in world units: bigger screens zoom in instead of drawing more */
 const MAX_VIEW_H = 1080;
+/**
+ * The glide is warmed a stretch ahead (no Instance after the warm-up, UI-10). Each shot is cut into WARM_STEP-long
+ * cells along its street, and the first time the camera enters one, a dry pass (Renderer.beginDry) counts what the
+ * view stretched over the whole cell draws -- at least what any frame in the cell takes at each ZIndex, every walker in
+ * -- and the pool is built to that before the frame draws. A pool that only grew by drawing held the busiest frame it
+ * DREW, and a frame between two drawn ones could show one more shadow than either (the static shadows round a downtown
+ * square, MOB-07): a glide long after the warm-up still made a sprite. 64 u: the stretched view is that much longer
+ * than the screen (a few sprites more in the pool, ~2 %), and a dry pass comes every ~1,7 s of the first loop only.
+ */
+const WARM_STEP = 64;
+/** cells a shot has at most (SHOT_LEN / WARM_STEP, rounded up, and room to spare): the key of a warmed cell */
+const WARM_CELLS = 32;
 /** the ZIndex layers inside the backdrop */
 const Z_TOWN = 1;
 const Z_NIGHT = 2;
@@ -226,6 +239,12 @@ export class TownFlyover {
 	private lmY = 0;
 	/** the pool's Instance count when its modifiers were last completed (Renderer.warmModifiers): see draw() */
 	private madeSeen = -1;
+	/** the cells of the glide the pool is built for (shot * WARM_CELLS + cell), in this town and this view: warmAhead() */
+	private readonly warmed = new Set<number>();
+	/** the last cell of this shot warmed (-1: none yet) */
+	private warmedCell = -1;
+	/** the view stretched over a cell (the dry pass's), refilled in place */
+	private readonly dryView = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
 	private clock = 0;
 	private dayTime: number | undefined;
 	private small = false;
@@ -295,6 +314,8 @@ export class TownFlyover {
 		this.leaving = false;
 		this.swapCover = 0;
 		this.stillDrawn = false;
+		// another town, other streets: its cells are warmed as the camera first enters them
+		this.warmed.clear();
 		this.nextShot();
 	}
 
@@ -328,9 +349,15 @@ export class TownFlyover {
 	private fit(): void {
 		// it hangs in the world's ScreenGui (ScreenInsets.None): the whole screen, under a notch too
 		const v = screenSize();
+		const zoom = math.max(1, v.Y / MAX_VIEW_H);
+		// a view of another size shows more (or less) of every cell: they are warmed again, the pool only grows
+		if (v.X !== this.cam.viewW || v.Y !== this.cam.viewH || zoom !== this.cam.zoom) {
+			this.warmed.clear();
+			this.warmedCell = -1;
+		}
 		this.renderer.setView(v.X, v.Y);
 		this.cam.setView(v.X, v.Y);
-		this.cam.zoom = math.max(1, v.Y / MAX_VIEW_H);
+		this.cam.zoom = zoom;
 		this.small = v.X < SMALL_W || v.Y < SMALL_H;
 		this.stillDrawn = false;
 	}
@@ -407,6 +434,7 @@ export class TownFlyover {
 		this.lmY = lm.y;
 		this.shotT = 0;
 		this.shotDur = SHOT_LEN / (this.small ? SPEED_SMALL : SPEED);
+		this.warmedCell = -1;
 		this.place(0);
 		// the walkers along the whole glide: round its middle
 		const mid = (after - SHOT_LEAD) / 2;
@@ -515,33 +543,63 @@ export class TownFlyover {
 			const t = math.min(shotClear, 1 - this.swapCover);
 			if (this.fade.BackgroundTransparency !== t) this.fade.BackgroundTransparency = t;
 		}
-		this.draw();
+		this.draw(!still);
 	}
 
-	private draw(): void {
-		const world = this.world;
-		if (world === undefined) return;
-		const hour = this.dayTime ?? DUSK;
-		const cam = this.cam;
-		// shadows: the sun's direction for the hour, held at the low evening sun after dark (no light to run from)
-		updateSun(this.sun, math.clamp(hour, 6.5, 17.5), cam.x, cam.y);
-		const halfW = cam.viewW / 2 / cam.zoom;
-		const halfH = cam.viewH / 2 / cam.zoom;
-		const v = this.view;
-		v.minX = cam.x - halfW - 32;
-		v.maxX = cam.x + halfW + 32;
-		v.minY = cam.y - halfH - 32;
-		v.maxY = cam.y + halfH + 32;
+	/**
+	 * The pool, built ahead for the cells of this shot the camera has entered and none of which is warm yet (WARM_STEP):
+	 * a dry pass over the view stretched along the whole cell -- from where the camera stands at its near end to its
+	 * far end, the screen's half size and the frame's margin round both -- with every walker in, then the sprites it
+	 * counted. Frames anywhere in the cell, however far apart they are sampled, draw into slots that exist.
+	 */
+	private warmAhead(world: WorldData, halfW: number, halfH: number): void {
+		const ex = this.toX - this.fromX;
+		const ey = this.toY - this.fromY;
+		const len = math.sqrt(ex * ex + ey * ey);
+		const ux = len > 0 ? ex / len : 0;
+		const uy = len > 0 ? ey / len : 0;
+		const along = (this.cam.x - this.fromX) * ux + (this.cam.y - this.fromY) * uy;
+		const last = math.floor(len / WARM_STEP);
+		const cell = math.clamp(math.floor(along / WARM_STEP), 0, last);
+		if (cell <= this.warmedCell) return;
 		const r = this.renderer;
-		r.beginFrame();
-		this.town.clock = this.clock;
-		this.town.drawGround(r, cam, v, world);
-		this.town.drawSolids(r, cam, v, world);
+		const dv = this.dryView;
+		for (let c = this.warmedCell + 1; c <= cell; c++) {
+			const key = this.shot * WARM_CELLS + math.min(c, WARM_CELLS - 1);
+			if (this.warmed.has(key)) continue;
+			this.warmed.add(key);
+			// the cell's ends (the last one ends where the glide does)
+			const a = c * WARM_STEP;
+			const b = c >= last ? len : (c + 1) * WARM_STEP;
+			const x0 = this.fromX + ux * a;
+			const y0 = this.fromY + uy * a;
+			const x1 = this.fromX + ux * b;
+			const y1 = this.fromY + uy * b;
+			dv.minX = math.min(x0, x1) - halfW - 32;
+			dv.maxX = math.max(x0, x1) + halfW + 32;
+			dv.minY = math.min(y0, y1) - halfH - 32;
+			dv.maxY = math.max(y0, y1) + halfH + 32;
+			r.beginDry();
+			this.town.drawGround(r, this.cam, dv, world);
+			this.town.drawSolids(r, this.cam, dv, world);
+			this.drawWalkers(r, undefined);
+			r.endDry();
+		}
+		this.warmedCell = cell;
+		r.warm(math.huge);
+	}
+
+	/** the walkers in view `v` (all of them without one: a dry pass counts every one that may walk in) */
+	private drawWalkers(r: Renderer, v: ViewRect | undefined): void {
+		const cam = this.cam;
 		const sc = WALKER_RADIUS / 18;
 		const so = this.shadowOpts;
 		for (const wk of this.walkers) {
 			if (!wk.on) continue;
-			if (wk.x < v.minX - 60 || wk.x > v.maxX + 60 || wk.y < v.minY - 60 || wk.y > v.maxY + 60) continue;
+			const out =
+				v !== undefined &&
+				(wk.x < v.minX - 60 || wk.x > v.maxX + 60 || wk.y < v.minY - 60 || wk.y > v.maxY + 60);
+			if (out) continue;
 			const off = shadowOffset(this.sun, wk.x, wk.y, 10);
 			so.alpha = 0.3;
 			so.zIndex = Z.actorShadow;
@@ -566,6 +624,30 @@ export class TownFlyover {
 				false,
 			);
 		}
+	}
+
+	/** one frame of the town; `ahead`: the glide goes on, its pool is built ahead of it first (warmAhead) */
+	private draw(ahead: boolean): void {
+		const world = this.world;
+		if (world === undefined) return;
+		const hour = this.dayTime ?? DUSK;
+		const cam = this.cam;
+		// shadows: the sun's direction for the hour, held at the low evening sun after dark (no light to run from)
+		updateSun(this.sun, math.clamp(hour, 6.5, 17.5), cam.x, cam.y);
+		const halfW = cam.viewW / 2 / cam.zoom;
+		const halfH = cam.viewH / 2 / cam.zoom;
+		const v = this.view;
+		v.minX = cam.x - halfW - 32;
+		v.maxX = cam.x + halfW + 32;
+		v.minY = cam.y - halfH - 32;
+		v.maxY = cam.y + halfH + 32;
+		const r = this.renderer;
+		this.town.clock = this.clock;
+		if (ahead) this.warmAhead(world, halfW, halfH);
+		r.beginFrame();
+		this.town.drawGround(r, cam, v, world);
+		this.town.drawSolids(r, cam, v, world);
+		this.drawWalkers(r, v);
 		r.endFrame();
 		// modifiers ahead of need (no Instance after the warm-up, UI-10): a frame that created anything (a sprite, or a
 		// modifier on an old one) completes its layers there and then -- every slot of a layer that draws rounded,
