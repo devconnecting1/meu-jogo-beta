@@ -4,6 +4,8 @@
 
 **Nomes que continuam "ProjectZ" de propósito — nunca renomeie.** O nome do jogo mudou, os identificadores guardados não: os DataStores (`ProjectZ_Save_v2`, `ProjectZ_Save_v1`, `ProjectZ_Titles`, `ProjectZ_AdminLog`, `ProjectZ_Worlds`, `ProjectZ_PrivateTowns` e as cópias `_studio`, `server/save/stores.ts`), o mapa do MemoryStore (`ProjectZ_Servers`), as chaves do RTBF e do `cloud -- erase` (`tools/rtbf.mjs`), os atributos `pz_*` / `PZ*` entre servidor e cliente, os nomes e campos dos eventos de analytics e as chaves do TeleportData. Trocar qualquer um apaga ou divide o progresso dos jogadores (um store novo nasce vazio) ou quebra as ferramentas e os modelos de RTBF do Creator Hub. Lista e motivo em `docs/CREATOR_HUB.md` → "Nomes de armazenamento".
 
+**O que está na fila:** `docs/ROADMAP.md` — os pedidos do dono ainda não feitos, em ordem de prioridade, com as decisões já tomadas. Leia antes de começar; quem termina um item o tira de lá no mesmo PR.
+
 ## Regras de conteúdo
 
 - Antes de mexer em mapa, sprites, spawns ou UI, siga `docs/DESIGN_RULES.md` (bíblia de ambientação). Regras `[auto]` são checadas por `npm run validate:world` (na CI também em 120 cidades por push, job `world-sweep`, e em 600 cidades novas por noite, `.github/workflows/world-sweep.yml`: um run vermelho lista as sementes que falharam).
