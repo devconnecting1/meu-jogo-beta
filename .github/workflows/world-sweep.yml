@@ -1,14 +1,15 @@
 name: World sweep
 
-# Every [auto] rule of docs/DESIGN_RULES.md (npm run validate:world) over 600 towns the CI has never seen, every night:
+# Every [auto] rule of docs/DESIGN_RULES.md (npm run validate:world) over 200 towns the CI has never seen, once a week
+# (Sunday; 600 a night was ~1,800 Actions minutes a month, the whole free allowance of a private repo):
 # a world reset (MP-22) lands on ANY seed, and the CI's fixed spreads (ci.yml `build` and `world-sweep`, 145 towns) only
-# ever look at the same ones. Four shards of 150 towns, each from its own spread of that day (the date, UTC), so a red
+# ever look at the same ones. Two shards of 100 towns, each from its own spread of that day (the date, UTC), so a red
 # run names the seeds and each one repeats with `npm run validate:world -- <seed>`. Never on a push or a pull request:
 # a town that fails here is the generator's, not the change's -- fix it, then add its spread to ci.yml if it teaches
 # something. Run workflow (Actions -> World sweep) takes a spread and a count of your own.
 on:
   schedule:
-    - cron: "17 4 * * *"
+    - cron: "17 4 * * 0"
   workflow_dispatch:
     inputs:
       base:
@@ -16,9 +17,9 @@ on:
         type: string
         default: ""
       count:
-        description: "Towns per shard (four shards)"
+        description: "Towns per shard (two shards)"
         type: number
-        default: 150
+        default: 100
 
 permissions:
   contents: read
@@ -30,7 +31,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        shard: [0, 1]
     steps:
       - uses: actions/checkout@v5
 
@@ -50,7 +51,7 @@ jobs:
           SHARD: ${{ matrix.shard }}
         run: |
           base="${BASE_INPUT:-$(date -u +%Y%m%d)}"
-          count="${COUNT_INPUT:-150}"
+          count="${COUNT_INPUT:-100}"
           case "$base$count" in
             *[!0-9]*) echo "::error::base and count must be whole numbers"; exit 1 ;;
           esac

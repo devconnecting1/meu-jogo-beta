@@ -8,7 +8,7 @@
 
 ## Regras de conteúdo
 
-- Antes de mexer em mapa, sprites, spawns ou UI, siga `docs/DESIGN_RULES.md` (bíblia de ambientação). Regras `[auto]` são checadas por `npm run validate:world` (na CI também em 120 cidades por push, job `world-sweep`, e em 600 cidades novas por noite, `.github/workflows/world-sweep.yml`: um run vermelho lista as sementes que falharam).
+- Antes de mexer em mapa, sprites, spawns ou UI, siga `docs/DESIGN_RULES.md` (bíblia de ambientação). Regras `[auto]` são checadas por `npm run validate:world` (na CI também em 120 cidades por push, job `world-sweep`, no PR, e em 200 cidades novas por semana, `.github/workflows/world-sweep.yml`: um run vermelho lista as sementes que falharam).
 - O nosso tem que ser melhor que o original e fazer sentido: copie o que o Dead Town faz bem, corrija o que ele faz mal e documente as exceções.
 - UI: cores, fontes e raios só via tema (`design/tweakcn-theme.json` → `npm run theme` → `src/client/ui/themeTokens.ts`). Não rode `npx shadcn` aqui.
 - Textos do jogo em inglês via `src/shared/data/lang.ts`.
@@ -47,6 +47,8 @@ Testes em Node rodam o TypeScript real com shims de Luau (`npm run test:<nome>`)
 - analytics: `analytics` (o servidor real com um AnalyticsService falso: funil de onboarding uma vez e em ordem, eventos de economia que somam cada moeda, nenhum evento por abate, vidas e mundos encerrados uma vez, uma hora de 6 jogadores e uma enxurrada de compras abaixo do limite; catálogo em `docs/ANALYTICS.md`)
 - onde se joga: `match` (MP-25, `server/match/*`: o tipo do servidor, a oferta de cidade nova ao novato num mundo de dia alto, o Play solo em servidor reservado — ReserveServerAsync, TeleportAsync com o código, retentativas e TeleportInitFailed, nunca no meio da partida nem com o corpo guardado em perigo —, o TeleportData lido e validado no destino, a cidade própria no dia da vida do dono (MP-13), os atributos de matchmaking e o funil NewTown; o servidor real com TeleportService, MatchmakingService e AnalyticsService falsos. O teleporte de verdade só no jogo publicado: `docs/MULTIPLAYER.md` §7.4)
 - CI e ferramentas: `assets-ci` (o job `assets` offline, contra o Open Cloud falso e repositórios git descartáveis: sem secrets pula sem falhar, moderação em análise espera e vira `pending`, recusado falha e não é reenviado, só id aprovado é gravado mesmo com falha parcial, a troca de conta (tudo reenviado como o criador novo, o id antigo até o novo ser aprovado, `--reupload-all`), 429/5xx com backoff, a chave só no `::add-mask::`, o gerador real escreve todo id aprovado, `drift`/`untouched`/`commit` com o rebase quando a `main` anda, e as promessas do `ci.yml`)
+
+**Minutos de CI** (o repositório pode ficar privado: ~2.000 minutos grátis por mês): as suítes rodam **no PR** (um push novo no mesmo PR cancela o run anterior); o push na `main` que o mergeia só sobe os assets, monta o place e repete as checagens rápidas (build, Luau, lint, format, regras do mundo, drift da arte). **Actions → CI → Run workflow** na `main` roda tudo. Mudança só no `docs/ROADMAP.md` não roda nada.
 
 O que Node não pega (limite de registradores, asset que não carrega, remote) só aparece no Studio: rode `check:registers` e, com o Studio conectado ao MCP, um playtest.
 
