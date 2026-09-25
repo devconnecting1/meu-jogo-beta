@@ -4,6 +4,44 @@ Lista viva do que o dono pediu e ainda não foi feito, em ordem de prioridade. *
 começar**, e quem terminar um item o tira daqui no mesmo PR (e registra a regra nova em `docs/DESIGN_RULES.md`).
 Criada em 2026-09-25, antes de uma pausa de 2–4 dias do dono; tudo o que foi feito até ali já está na `main` (#48–#57).
 
+## 0. O multiplayer tem de parecer instantâneo (playtest do dono com um amigo, 2026-09-25) — PRIMEIRO
+
+O dono jogou com um amigo e relatou três coisas. Hipóteses a verificar **antes** de mexer (medir com `test:predict`,
+`test:replication`, `test:smoothness`, `test:zombie-motion`, `test:input` sob latência de WAN e, se possível, um
+playtest de 2 clientes no Studio):
+
+- **O golpe no inimigo não é instantâneo** (o meu e o do amigo). O dano é do servidor (§2.3 do MULTIPLAYER.md), então
+  o retorno visual espera a ida e volta. Recomendação: **o golpe se sente na hora no cliente** — o flinch, o sangue, o
+  som e o número aparecem no quadro do golpe (predição de acerto), e o servidor só confirma ou desfaz (raro, com a
+  rebobinagem que já existe); o golpe do aliado chega pelo fio sem esperar o próximo snapshot. Nunca dar dano
+  pelo cliente (o servidor continua a fonte da verdade).
+- **Voltar depois de morrer deixa o sobrevivente mais rápido.** Provável que **não** seja bug: a velocidade cai com
+  fome (FOOD perto de 0 tira até 1,5), com dor de golpe recente (−1,5) e em poça (×0,5, LUZ-05); o corpo novo
+  volta alimentado e sem dor, então parece "mais rápido". Confirmar pelos números (`recalcMoveSpeed`,
+  `shared/game/player.ts`) e, se for isso, **mostrar a causa** na HUD (um ícone de fome/dor/lama quando a velocidade
+  cai) em vez de mudar a regra.
+- **Às vezes anda lento ou é "puxado" em certos pontos explorando.** Três suspeitos, em ordem: (1) **poça de chuva**
+  (×0,5, invisível demais?); (2) **reconciliação** da predição puxando de volta (cliente e servidor discordando da
+  colisão — por exemplo um sólido do mundo que só um dos lados tem, ou o streaming da cidade); (3) queda de quadro
+  no renderer ao entrar num trecho pesado. Medir cada um e corrigir a causa, não mascarar.
+
+## 0.1 Creator Rewards (lembrar sempre; o dono pediu, 2026-09-25)
+
+<https://create.roblox.com/docs/creator-rewards> — o Roblox paga o criador por engajamento, sem venda:
+
+- **Daily Engagement:** 5 Robux por dia por **Active Spender** (quem gastou ≥ US$ 9,99 em 60 dias) que joga **10+
+  minutos** no dia, se o jogo for uma das **3 primeiras** experiências que ele abre naquele dia. Automático desde
+  2025-07-24.
+- **Audience Expansion:** 35% das compras em Robux (até US$ 100) de quem é **novo ou volta** ao Roblox por um **link
+  direto ou busca** que leva ao jogo e joga 10+ minutos. Exige conta com ID verificado e DevEx válido (conferir no
+  Creator Dashboard → Settings → Eligibility).
+- **O que isso pede do jogo (decisões de design que ajudam, sem truques):** a primeira sessão tem de passar de 10
+  minutos com gosto (onboarding curto, o primeiro dia divertido, a primeira noite como meta); motivo para abrir o
+  jogo **cedo** todo dia (a cidade do servidor avança, recompensa diária honesta, eventos); link de convite para
+  amigos (Audience Expansion vem de link/busca: o botão de convidar amigos e a página da loja bem feita). Nada que
+  prenda o jogador contra a vontade (BEM-01..08). Métricas em Creator Dashboard → Monetization → Creator Rewards;
+  ligar ao funil do `docs/ANALYTICS.md` (sessões de 10+ minutos).
+
 ## 1. A partida por servidor (pedido do dono, 2026-09-24)
 
 O servidor público vira **uma partida**: a cidade nasce, os sobreviventes vivem nela e ela cai. Decisões já tomadas:
