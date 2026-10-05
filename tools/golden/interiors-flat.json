@@ -1,6 +1,6 @@
 {
 	"note": "draw-call digests of each building type's first building seen from inside with no world art (tools/test-world-art.mjs --golden-interiors); noTrees: the same with the trees' drawing stubbed out (the town round the building, VEG-06), in the town without its downtown squares; noSquares: the town without its downtown squares (MOB-07), drawn whole",
-	"recordedFrom": "the downtown squares (MOB-07, 2026-09-24) over 450bbf2: the interiors are untouched, the town round eight downtown buildings is not -- a square in the view of the market, the gun shop, the hardware store, the electronics store, the bakery, the bank, the police station and the office; with the squares taken out (noSquares) each of the 24 buildings is the golden before's, call for call, and noTrees is digested on that town, unchanged. The golden before it: the parks' groves on the open lawn (VEG-06, 2026-09-24) over d15fda3: the interiors are untouched, the town round the college and the library is not -- the park beside the campus has its trees in groves seated on its open lawn; with the trees' drawing stubbed out (noTrees) each of the 24 buildings is the golden before's, call for call (unchanged). The golden before it: the trees' kinds (VEG-06) over 71ff847, whose noTrees was 71ff847's call for call (recorded with PZ_SRC on 71ff847 and compared); the one before: the entrances (ART-17), re-recorded on c638602: the flat entrance outside each doorway by its type",
+	"recordedFrom": "the src it was run on",
 	"scenes": {
 		"type1": {
 			"building": 51,
@@ -22,14 +22,14 @@
 			"x": 712,
 			"y": 2776,
 			"count": 1217,
-			"sha1": "40ff0ed8a03271f6543419d3f2624145117c95c5",
+			"sha1": "3f5f6485ecc09bc3a82a3cd4ab5d4f44cac8a39b",
 			"noTrees": {
 				"count": 1161,
-				"sha1": "3aa4a6526800561386265879822f5ee60e89eeeb"
+				"sha1": "548b6e26c4c83828b4c1a2a6efb4ebee7f283ef2"
 			},
 			"noSquares": {
 				"count": 1217,
-				"sha1": "40ff0ed8a03271f6543419d3f2624145117c95c5"
+				"sha1": "3f5f6485ecc09bc3a82a3cd4ab5d4f44cac8a39b"
 			}
 		},
 		"type3": {
@@ -37,14 +37,14 @@
 			"x": 4632,
 			"y": 2800,
 			"count": 1883,
-			"sha1": "7b3e4576f930a9ffa334c38b2c3696723f6ce510",
+			"sha1": "f54350d1763c6c8106226fd45c588f8e25c819e5",
 			"noTrees": {
 				"count": 1743,
-				"sha1": "c84770402213dc30e9e822b12f96a649318e6d3e"
+				"sha1": "bc9ba8a2d8db6688c8f3e34a41102a1e1f791b2b"
 			},
 			"noSquares": {
 				"count": 1883,
-				"sha1": "7b3e4576f930a9ffa334c38b2c3696723f6ce510"
+				"sha1": "f54350d1763c6c8106226fd45c588f8e25c819e5"
 			}
 		},
 		"type4": {
@@ -52,14 +52,14 @@
 			"x": 2816,
 			"y": 8952,
 			"count": 1380,
-			"sha1": "1432046ecde39535ed5e68f1e8828f60d3676dde",
+			"sha1": "b0a99763ae9c15514dae2a52ecfd77999a70231e",
 			"noTrees": {
 				"count": 1296,
-				"sha1": "4863ee4d07c384cea9fbcb7788786c2649cf6ae4"
+				"sha1": "dd01f3fb77dba0f43e33083e731a1289df751372"
 			},
 			"noSquares": {
 				"count": 1380,
-				"sha1": "1432046ecde39535ed5e68f1e8828f60d3676dde"
+				"sha1": "b0a99763ae9c15514dae2a52ecfd77999a70231e"
 			}
 		},
 		"type5": {
@@ -67,14 +67,14 @@
 			"x": 1260,
 			"y": 6988,
 			"count": 1610,
-			"sha1": "f344991156287d69d65de3fb1aee78fdb7282235",
+			"sha1": "d847a89a51ed0a9d3f2a023f8dfdf53a3c5de839",
 			"noTrees": {
 				"count": 1398,
-				"sha1": "aacc0f8c11753241f33b1e0c83ce546958ffe700"
+				"sha1": "82b4cf6adab07084dd1d84a056c50143927a7893"
 			},
 			"noSquares": {
 				"count": 1610,
-				"sha1": "f344991156287d69d65de3fb1aee78fdb7282235"
+				"sha1": "d847a89a51ed0a9d3f2a023f8dfdf53a3c5de839"
 			}
 		},
 		"type6": {
@@ -82,14 +82,14 @@
 			"x": 696,
 			"y": 8904,
 			"count": 1288,
-			"sha1": "9e9ff5c8585d42a72df3cd66a16f205fd72646b6",
+			"sha1": "35e174ae9633b8b8fc1e00f980dd8a8dfaead0b6",
 			"noTrees": {
 				"count": 1064,
-				"sha1": "4c8f0ac6a2989a72b2093281a7b65d31599fa55b"
+				"sha1": "400d703f2aa9585e76ddee5216482e25dfc03418"
 			},
 			"noSquares": {
 				"count": 1288,
-				"sha1": "9e9ff5c8585d42a72df3cd66a16f205fd72646b6"
+				"sha1": "35e174ae9633b8b8fc1e00f980dd8a8dfaead0b6"
 			}
 		},
 		"type7": {
@@ -97,14 +97,14 @@
 			"x": 6592,
 			"y": 8896,
 			"count": 1331,
-			"sha1": "3cf788a73e41dfb1922716d63f0e58eaea2b8eb5",
+			"sha1": "a350abedafafeb9cd1f182c9f38817910af1bc40",
 			"noTrees": {
 				"count": 1215,
-				"sha1": "555cd9c058cd9b44d3ea3cd77a74fe46a674e675"
+				"sha1": "ca6226770a270ba4165e51d7a713e99c6e45a224"
 			},
 			"noSquares": {
 				"count": 1331,
-				"sha1": "3cf788a73e41dfb1922716d63f0e58eaea2b8eb5"
+				"sha1": "a350abedafafeb9cd1f182c9f38817910af1bc40"
 			}
 		},
 		"type8": {
@@ -112,14 +112,14 @@
 			"x": 6568,
 			"y": 7308,
 			"count": 2042,
-			"sha1": "a9ed137ff69a7fa5211ffde4a2267d6cddf5793f",
+			"sha1": "2301ce76df4e579a96ae1908a91976f064c5ff28",
 			"noTrees": {
 				"count": 1738,
-				"sha1": "8c22311ad05c514969cd353791aedef2c9bdef52"
+				"sha1": "aa4acd46a2a4dbbef963cb22201fdac331c80a1f"
 			},
 			"noSquares": {
 				"count": 1902,
-				"sha1": "6dea1195e7ac0c83c56b5d958abbb12044b881b0"
+				"sha1": "2a8f46712c04d493c3230748da4900def0048f43"
 			}
 		},
 		"type9": {
@@ -127,14 +127,14 @@
 			"x": 7100,
 			"y": 6600,
 			"count": 1622,
-			"sha1": "9128bb4f7bde93409396cf4aa333d736a27b269f",
+			"sha1": "4976107d7160ae623ea7d0f63bc3e2dcdc26c2ff",
 			"noTrees": {
 				"count": 1394,
-				"sha1": "dd3f8f9a568fff57b8ebf0b07a36c11c0f43d781"
+				"sha1": "dc8aa4eb2ed7adf5fecbbcc08fa6437341067822"
 			},
 			"noSquares": {
 				"count": 1510,
-				"sha1": "440fb49ec2aec95da1b387a756d726f1cbd0dc64"
+				"sha1": "003bc1f1bfb2b0e90433b3a261644ffcb111e486"
 			}
 		},
 		"type10": {
@@ -142,14 +142,14 @@
 			"x": 18504,
 			"y": 7300,
 			"count": 1622,
-			"sha1": "dbb052e79751db1916d488b5fdaa185857fae71c",
+			"sha1": "415eb4cfca23098629291646c3c817c3dba39830",
 			"noTrees": {
 				"count": 1462,
-				"sha1": "302255a1873dcb3d7a612756b8983f6fcf2047ec"
+				"sha1": "3943e54a7154b2bc2d07b04fdad254f285c611b1"
 			},
 			"noSquares": {
 				"count": 1622,
-				"sha1": "dbb052e79751db1916d488b5fdaa185857fae71c"
+				"sha1": "415eb4cfca23098629291646c3c817c3dba39830"
 			}
 		},
 		"type11": {
@@ -157,14 +157,14 @@
 			"x": 10704,
 			"y": 4632,
 			"count": 1486,
-			"sha1": "604bab267d2d59f65ceae66a72bbfcabeef7bdda",
+			"sha1": "52b99f72e844d639823a62059dba28606ad72ebd",
 			"noTrees": {
 				"count": 1390,
-				"sha1": "64c4b5cdbc0cbdaf47fb4efbe2cb2b5079b45cb3"
+				"sha1": "5a01fcf302b4ae3f2812a7c0341de745bb340a27"
 			},
 			"noSquares": {
 				"count": 1486,
-				"sha1": "604bab267d2d59f65ceae66a72bbfcabeef7bdda"
+				"sha1": "52b99f72e844d639823a62059dba28606ad72ebd"
 			}
 		},
 		"type12": {
@@ -172,14 +172,14 @@
 			"x": 15120,
 			"y": 3464,
 			"count": 2065,
-			"sha1": "78749c354f5eb8da440f2a4688343db922fed127",
+			"sha1": "ce4c854b62bcce148e8e4c0f013e4aabd2b56b17",
 			"noTrees": {
 				"count": 1929,
-				"sha1": "832eb39f1ac6cda6bc88190392cd2c3b13e90e02"
+				"sha1": "0c3cd596543859b49f89a115012515b6c98d1bda"
 			},
 			"noSquares": {
 				"count": 2065,
-				"sha1": "78749c354f5eb8da440f2a4688343db922fed127"
+				"sha1": "ce4c854b62bcce148e8e4c0f013e4aabd2b56b17"
 			}
 		},
 		"type13": {
@@ -187,14 +187,14 @@
 			"x": 15528,
 			"y": 2704,
 			"count": 1882,
-			"sha1": "cc1ea46948a59da2dfb1aab46bd1d7bc5fa21704",
+			"sha1": "38fec26b823f795a8800dd0dabd7e33b22940651",
 			"noTrees": {
 				"count": 1574,
-				"sha1": "91bbe12e48950594798fa670b8fd4ade3ed2f4c7"
+				"sha1": "e27cd1638d25f861f397c136270806f570624e81"
 			},
 			"noSquares": {
 				"count": 1882,
-				"sha1": "cc1ea46948a59da2dfb1aab46bd1d7bc5fa21704"
+				"sha1": "38fec26b823f795a8800dd0dabd7e33b22940651"
 			}
 		},
 		"type14": {
@@ -217,14 +217,14 @@
 			"x": 14624,
 			"y": 2704,
 			"count": 1869,
-			"sha1": "c0713989e493ec7a1b995f1200553ddc2e1140ac",
+			"sha1": "1deb7646368a76d4f0018b2c40c5e2fd0263a953",
 			"noTrees": {
 				"count": 1701,
-				"sha1": "8435a57b056587a5daa5ad47b5047ad1352653ef"
+				"sha1": "fd76a8561842a335a911b8c5a7eaf1533be336dd"
 			},
 			"noSquares": {
 				"count": 1869,
-				"sha1": "c0713989e493ec7a1b995f1200553ddc2e1140ac"
+				"sha1": "1deb7646368a76d4f0018b2c40c5e2fd0263a953"
 			}
 		},
 		"type16": {
@@ -232,14 +232,14 @@
 			"x": 8520,
 			"y": 9548,
 			"count": 1602,
-			"sha1": "99509a263fb3d4eef8de59ed53a4308411f38bad",
+			"sha1": "8882f84ff1682f57a9bf28812420f4c7c348ba08",
 			"noTrees": {
 				"count": 1399,
-				"sha1": "b0637f060d8edc80c39786900fc2d8fd0a38f0da"
+				"sha1": "37b05ae12d4a95ad0266d6d38759d45fa750ef0d"
 			},
 			"noSquares": {
 				"count": 1483,
-				"sha1": "c8713fa62e91058f4a600b6daab660df506985e4"
+				"sha1": "7ec76f5a5a467a8baba9c8e0ec2f0395e2187421"
 			}
 		},
 		"type17": {
@@ -247,14 +247,14 @@
 			"x": 16656,
 			"y": 7292,
 			"count": 1494,
-			"sha1": "307425a215a8f116bf6e4463b3183e5c9a9ebfa4",
+			"sha1": "92525f173e118806f823943fe69150d1409dabb9",
 			"noTrees": {
 				"count": 1230,
-				"sha1": "6531bb75f9dda6443df5813eab21e58cf27e946b"
+				"sha1": "9ffa6e6eb51ce55dd63a45e2cedbd7ff13a2629c"
 			},
 			"noSquares": {
 				"count": 1494,
-				"sha1": "307425a215a8f116bf6e4463b3183e5c9a9ebfa4"
+				"sha1": "92525f173e118806f823943fe69150d1409dabb9"
 			}
 		},
 		"type18": {
@@ -262,14 +262,14 @@
 			"x": 10704,
 			"y": 8984,
 			"count": 1648,
-			"sha1": "26c6d819dbd9b13bbc0279ad673bd59dfdc62bf7",
+			"sha1": "4ed04c37440a4b8db40d354195655f8157dea289",
 			"noTrees": {
 				"count": 1384,
-				"sha1": "1e82bf47f127314ca171b58b2111f69ef2b466d4"
+				"sha1": "b56a98c5ad987ce1cb4ccbd4ed864c149de34494"
 			},
 			"noSquares": {
 				"count": 1556,
-				"sha1": "7333b0c42023aa2de2053a36d0b64494a5d87a3d"
+				"sha1": "5f7f8f259d59f100b4a893a9aa98a12f8855c030"
 			}
 		},
 		"type19": {
@@ -277,14 +277,14 @@
 			"x": 8440,
 			"y": 10832,
 			"count": 1733,
-			"sha1": "3fc533b03baa36a2d8ee814d0bb13089992917ed",
+			"sha1": "085d4b0a24f1758bc49bf8c25408c692f88396f0",
 			"noTrees": {
 				"count": 1543,
-				"sha1": "ce6367ed09d9abf56762748449018d1804dbeaac"
+				"sha1": "3781491dcbd1fcf20ded86011f7ac97f9647597b"
 			},
 			"noSquares": {
 				"count": 1715,
-				"sha1": "fb5d1d1e6d74351c7762c6da3b6d9e90fa06300e"
+				"sha1": "9e2f0fbb81537ba58f860b232eba9010a6668601"
 			}
 		},
 		"type22": {
@@ -292,14 +292,14 @@
 			"x": 8956,
 			"y": 7008,
 			"count": 2132,
-			"sha1": "2f3888894fa702e42da9a6fd499cb3d151a9c708",
+			"sha1": "6727d73bb4f426d681b58481379fd477ab9736f5",
 			"noTrees": {
 				"count": 1821,
-				"sha1": "ef552f35b02b2ba82dffb21e2c5381640e6e89d1"
+				"sha1": "a571b3fa1ae6610fa4f3bbe1e5b1d9967110c1ea"
 			},
 			"noSquares": {
 				"count": 1985,
-				"sha1": "bb783c8db787b6f8469850c331fd0b6f634b99dc"
+				"sha1": "e496745864457040144116d805d4b2a5e7a96419"
 			}
 		},
 		"type23": {
@@ -307,14 +307,14 @@
 			"x": 6632,
 			"y": 4600,
 			"count": 1548,
-			"sha1": "1f0e69bba29d220a8a53f1a1881fb95d6e18fcac",
+			"sha1": "572d91e5830d8a075025c1528ff5c616f4b6abf5",
 			"noTrees": {
 				"count": 1320,
-				"sha1": "bd2303a398193e0a4f7f440c7a7f1d3a4540e206"
+				"sha1": "3a21436f92039edfd8f943431d93a93584fe6edf"
 			},
 			"noSquares": {
 				"count": 1548,
-				"sha1": "1f0e69bba29d220a8a53f1a1881fb95d6e18fcac"
+				"sha1": "572d91e5830d8a075025c1528ff5c616f4b6abf5"
 			}
 		},
 		"type24": {
@@ -322,14 +322,14 @@
 			"x": 20456,
 			"y": 6924,
 			"count": 880,
-			"sha1": "0c82bf78381fdda7ef3dc0f12455e7c8684409cd",
+			"sha1": "1bbb2ef5607749334d1a852595f923bc9ead39ca",
 			"noTrees": {
 				"count": 768,
-				"sha1": "563bcfafc8791d9ec520c17401bc33d6969efe0a"
+				"sha1": "f1d13090c790a7903cb19761eacdf67555601e32"
 			},
 			"noSquares": {
 				"count": 880,
-				"sha1": "0c82bf78381fdda7ef3dc0f12455e7c8684409cd"
+				"sha1": "1bbb2ef5607749334d1a852595f923bc9ead39ca"
 			}
 		},
 		"type25": {
@@ -337,14 +337,14 @@
 			"x": 8520,
 			"y": 8896,
 			"count": 1738,
-			"sha1": "7a09e7baf7d1b7d37d6396d2ff0548e98b65e015",
+			"sha1": "36c4c06b4ae2228d60e1656bad9b6c079e524ad8",
 			"noTrees": {
 				"count": 1543,
-				"sha1": "efb6e40cc349c44325662e4d00c0daad60eff14f"
+				"sha1": "04414746d2d80a3a53e3c13ec43d3290a72ceae8"
 			},
 			"noSquares": {
 				"count": 1647,
-				"sha1": "304227f3e73dc4422d36154795544ac22d29e151"
+				"sha1": "f2aaa5322814318a22e2997d500842e3e0e0cbf9"
 			}
 		},
 		"type26": {
@@ -352,14 +352,14 @@
 			"x": 9108,
 			"y": 10840,
 			"count": 1747,
-			"sha1": "fbc84f512ec847ce94509b13fc8a3ab5a8d6a531",
+			"sha1": "938a0e038ca27a16a33b3421e74d8776eb4dbb6f",
 			"noTrees": {
 				"count": 1577,
-				"sha1": "2a0e3e03001452a541b665ed39e18e1c4415930e"
+				"sha1": "c185ef056db53c31e8d06b7b5496152d39e2d797"
 			},
 			"noSquares": {
 				"count": 1729,
-				"sha1": "199cc0c8ccd7af169b4acf0b02e9f0576f5fef25"
+				"sha1": "6174fe2b60dae95869a70d9d4471e5ad3022ef14"
 			}
 		}
 	}

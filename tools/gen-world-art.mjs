@@ -826,16 +826,40 @@ const CAR_STYLES = [
 	{ name: "hatch", rearGlass: [4, 8], windshield: [28, 33], front: 34, wheels: [8, 37] },
 	{ name: "pickup", bed: [2, 20], rearGlass: [21, 22], windshield: [31, 36], front: 37, wheels: [9, 39] },
 	{ name: "suv", rearGlass: [3, 6], windshield: [34, 38], front: 39, wheels: [9, 39], rails: true },
+	{
+		name: "van",
+		rearGlass: [2, 5],
+		windshield: [34, 38],
+		front: 39,
+		wheels: [9, 39],
+		van: true,
+		panel: true,
+		boxy: true,
+	},
+	{ name: "taxi", rearGlass: [11, 15], windshield: [30, 35], front: 36, wheels: [9, 38], livery: "taxi" },
+	{ name: "police", rearGlass: [11, 15], windshield: [30, 35], front: 36, wheels: [9, 38], livery: "police" },
+	{
+		name: "ambulance",
+		rearGlass: [2, 5],
+		windshield: [34, 38],
+		front: 39,
+		wheels: [9, 39],
+		van: true,
+		panel: true,
+		dual: true,
+		boxy: true,
+		livery: "ambulance",
+	},
 ];
 const CAR_L = 50;
 const CAR_W = 25;
 const TYRE = [30, 30, 32];
 const TYRE_HI = [64, 64, 68];
 
-/** the painted body: y 1..23 with rounded ends (radius 4 at the rear, 5 at the nose) */
-function carBody(x, y) {
+/** the painted body: y 1..23 with rounded ends (radius 4 at the rear, 5 at the nose; boxy vans: square back) */
+function carBody(x, y, boxy = false) {
 	if (x < 0 || x >= CAR_L || y < 1 || y > 23) return false;
-	const r = x < CAR_L / 2 ? 4 : 5;
+	const r = x < CAR_L / 2 ? (boxy ? 1.5 : 4) : 5;
 	const cx = x < CAR_L / 2 ? r - 0.5 : CAR_L - r - 0.5;
 	const cy = y < 12 ? 1 + r - 0.5 : 23 - r + 0.5;
 	const inX = x < CAR_L / 2 ? x < cx : x > cx;
@@ -849,7 +873,8 @@ function carArt(style, seed) {
 	const [g0, g1] = style.rearGlass;
 	const [w0, w1] = style.windshield;
 	const mirror = w0 + 1;
-	const inMask = (x, y) => carBody(x, y) || ((y === 0 || y === 24) && (x === mirror || x === mirror + 1));
+	const boxy = style.boxy === true;
+	const inMask = (x, y) => carBody(x, y, boxy) || ((y === 0 || y === 24) && (x === mirror || x === mirror + 1));
 	const mask = new Tex(CAR_L, CAR_W);
 	for (let y = 0; y < CAR_W; y++) for (let x = 0; x < CAR_L; x++) if (inMask(x, y)) mask.set(x, y, WHITE);
 
@@ -867,7 +892,7 @@ function carArt(style, seed) {
 	// body form, symmetric (any heading reads the same): darker shoulders, a lit spine
 	for (let x = 0; x < CAR_L; x++) {
 		for (let y = 1; y <= 23; y++) {
-			if (!carBody(x, y)) continue;
+			if (!carBody(x, y, boxy)) continue;
 			const edge = Math.min(y - 1, 23 - y);
 			if (edge === 0) trim.set(x, y, BLACK, 70);
 			else if (edge === 1) trim.set(x, y, BLACK, 34);
@@ -878,7 +903,9 @@ function carArt(style, seed) {
 	// the greenhouse: side windows, roof, windshield and rear glass (trapezoids narrowing towards the roof)
 	const roofLo = 6;
 	const roofHi = 18;
-	for (let x = g0; x <= w1; x++) {
+	// panel vans carry people or cargo, not glass: side windows on the cab only, a full high roof behind it
+	const cabX0 = style.panel === true ? w0 - 8 : g0;
+	for (let x = cabX0; x <= w1; x++) {
 		for (const y of [4, 5, 19, 20]) trim.set(x, y, y === 4 || y === 20 ? glassLo : glass);
 	}
 	for (let x = g1 + 1; x < w0; x++) {
@@ -924,6 +951,100 @@ function carArt(style, seed) {
 			trim.set(x, 4, BLACK, 200);
 		}
 		for (let y = 4; y <= 20; y++) trim.set(style.bed[1], y, [44, 44, 48]);
+	}
+	if (style.van === true) {
+		// high-roof panel van: transverse roof ribs, sliding-door seam + rail, rear double doors, flat-face grille
+		for (let x = g1 + 4; x < w0 - 1; x += 6) {
+			for (let y = 7; y <= 17; y++) trim.set(x, y, BLACK, 18);
+		}
+		for (const y of [6, 18]) {
+			for (let x = 14; x <= 30; x++) trim.set(x, y, BLACK, 26);
+		}
+		trim.set(22, 6, BLACK, 60);
+		trim.set(22, 18, BLACK, 60);
+		for (let y = 2; y <= 22; y++) trim.set(3, y, BLACK, 60);
+		trim.set(4, 10, [200, 200, 205]);
+		trim.set(4, 14, [200, 200, 205]);
+		for (let x = 45; x <= 48; x++) {
+			for (let y = 7; y <= 17; y++) trim.set(x, y, BLACK, x % 2 === 0 ? 55 : 25);
+		}
+	}
+	if (style.dual === true) {
+		// dual rear wheels of a heavy van: a second axle behind the driver's
+		for (let x = 18; x < 23; x++) {
+			trim.set(x, 0, x === 18 || x === 22 ? TYRE : TYRE_HI);
+			trim.set(x, 24, TYRE);
+		}
+	}
+	if (style.livery === "taxi") {
+		// checker band on both flanks + a tall amber roof sign (symmetric top-down)
+		for (let x = 12; x <= 29; x++) {
+			for (const y of [2, 3, 21, 22]) {
+				const dark = (x + y) % 2 === 0;
+				trim.set(x, y, dark ? [20, 20, 22] : [235, 235, 230]);
+			}
+		}
+		for (let x = 21; x <= 25; x++) for (let y = 10; y <= 14; y++) trim.set(x, y, [240, 210, 120]);
+		trim.set(23, 10, [255, 240, 190]);
+		trim.set(23, 14, [120, 90, 40]);
+		for (let y = 5; y <= 19; y++) trim.set(20, y, BLACK, 50);
+		trim.set(21, 8, [30, 30, 32]);
+		trim.set(21, 16, [30, 30, 32]);
+	} else if (style.livery === "police") {
+		// black-and-white two-tone (dark hood and trunk, pale doors) + red/blue lightbar + push bar
+		for (let x = 0; x <= 10; x++) {
+			for (let y = 1; y <= 23; y++) if (carBody(x, y)) trim.set(x, y, BLACK, 110);
+		}
+		for (let x = 37; x < CAR_L; x++) {
+			for (let y = 1; y <= 23; y++) if (carBody(x, y)) trim.set(x, y, BLACK, 110);
+		}
+		for (let y = 5; y <= 19; y++) trim.set(20, y, BLACK, 50);
+		trim.set(21, 8, [30, 30, 32]);
+		trim.set(21, 16, [30, 30, 32]);
+		for (const x of [46, 47]) {
+			for (let y = 6; y <= 18; y++) if (carBody(x, y)) trim.set(x, y, [25, 25, 28], 150);
+		}
+		for (let x = 10; x <= 32; x++) {
+			for (const y of [2, 3, 20, 21]) trim.set(x, y, [225, 225, 228]);
+		}
+		for (let x = 22; x <= 25; x++) {
+			trim.set(x, 11, [180, 30, 30]);
+			trim.set(x, 13, [40, 80, 180]);
+			trim.set(x, 12, [200, 200, 205]);
+		}
+		trim.set(22, 10, [255, 150, 150]);
+		trim.set(25, 14, [150, 180, 255]);
+	} else if (style.livery === "ambulance") {
+		// Type-III box: white-edged compartment with ribs, red beltline stripe, roof AC + cross, rear-door cross
+		for (let x = 3; x <= 29; x++) {
+			trim.set(x, 2, [225, 225, 228]);
+			trim.set(x, 22, [225, 225, 228]);
+		}
+		for (let x = 3; x <= 29; x++) {
+			trim.set(x, 3, [170, 30, 30]);
+			trim.set(x, 21, [170, 30, 30]);
+		}
+		for (let x = 6; x <= 28; x += 5) {
+			for (let y = 4; y <= 20; y++) trim.set(x, y, BLACK, 22);
+		}
+		for (let x = 13; x <= 23; x++) for (let y = 9; y <= 15; y++) trim.set(x, y, [150, 150, 155]);
+		for (let x = 13; x <= 23; x++) {
+			trim.set(x, 9, BLACK, 80);
+			trim.set(x, 15, BLACK, 80);
+		}
+		const cross = (cx, cy, s) => {
+			for (let dx = -s; dx <= s; dx++) {
+				trim.set(cx + dx, cy, [170, 30, 30]);
+				trim.set(cx, cy + dx, [170, 30, 30]);
+			}
+		};
+		for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) trim.set(18 + dx, 5 + dy, [230, 230, 230]);
+		cross(18, 5, 1);
+		for (let dx = -3; dx <= 3; dx++) for (let dy = -3; dy <= 3; dy++) trim.set(21 + dx, 12 + dy, [230, 230, 230]);
+		cross(21, 12, 2);
+		for (const y of [2, 3, 21, 22]) for (let dx = -1; dx <= 1; dx++) trim.set(20 + dx, y, [170, 30, 30]);
+		trim.set(45, 3, [40, 80, 180]);
+		trim.set(45, 21, [180, 30, 30]);
 	}
 	// lights: headlights at the nose, tail lights at the back, dark bumpers between them
 	for (const [y0, y1] of [
@@ -996,7 +1117,7 @@ function carArt(style, seed) {
 	);
 	for (let y = 0; y < CAR_W; y++) {
 		for (let x = 0; x < CAR_L; x++) {
-			if (!carBody(x, y)) continue;
+			if (!carBody(x, y, boxy)) continue;
 			const v = soot[y * 64 + x];
 			if (v > 0.2) wreck.set(x, y, [128, 66, 30], 160);
 			else if (v < -0.25) wreck.set(x, y, [10, 10, 10], 160);

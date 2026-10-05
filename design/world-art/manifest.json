@@ -398,6 +398,134 @@
 			"description": "suv: burnt out"
 		},
 		{
+			"name": "car4",
+			"file": "car4.png",
+			"kind": "mask",
+			"w": 50,
+			"h": 25,
+			"description": "van: body (tint: paint)"
+		},
+		{
+			"name": "carTrim4",
+			"file": "carTrim4.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "van: glass, lights, wheels, outline"
+		},
+		{
+			"name": "carDamage4",
+			"file": "carDamage4.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "van: smashed windshield, scratches"
+		},
+		{
+			"name": "carWreck4",
+			"file": "carWreck4.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "van: burnt out"
+		},
+		{
+			"name": "car5",
+			"file": "car5.png",
+			"kind": "mask",
+			"w": 50,
+			"h": 25,
+			"description": "taxi: body (tint: paint)"
+		},
+		{
+			"name": "carTrim5",
+			"file": "carTrim5.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "taxi: glass, lights, wheels, outline"
+		},
+		{
+			"name": "carDamage5",
+			"file": "carDamage5.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "taxi: smashed windshield, scratches"
+		},
+		{
+			"name": "carWreck5",
+			"file": "carWreck5.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "taxi: burnt out"
+		},
+		{
+			"name": "car6",
+			"file": "car6.png",
+			"kind": "mask",
+			"w": 50,
+			"h": 25,
+			"description": "police: body (tint: paint)"
+		},
+		{
+			"name": "carTrim6",
+			"file": "carTrim6.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "police: glass, lights, wheels, outline"
+		},
+		{
+			"name": "carDamage6",
+			"file": "carDamage6.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "police: smashed windshield, scratches"
+		},
+		{
+			"name": "carWreck6",
+			"file": "carWreck6.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "police: burnt out"
+		},
+		{
+			"name": "car7",
+			"file": "car7.png",
+			"kind": "mask",
+			"w": 50,
+			"h": 25,
+			"description": "ambulance: body (tint: paint)"
+		},
+		{
+			"name": "carTrim7",
+			"file": "carTrim7.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "ambulance: glass, lights, wheels, outline"
+		},
+		{
+			"name": "carDamage7",
+			"file": "carDamage7.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "ambulance: smashed windshield, scratches"
+		},
+		{
+			"name": "carWreck7",
+			"file": "carWreck7.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "ambulance: burnt out"
+		},
+		{
 			"name": "bin",
 			"file": "bin.png",
 			"kind": "sprite",

@@ -1,117 +1,117 @@
 {
 	"note": "draw-call digests of WorldView.drawGround + drawSolids with no world art (tools/test-world-art.mjs --golden); noSigns: the same with the building-signage hook stubbed out; noTrees: the same with the trees' drawing stubbed out (VEG-06); both in the town without its downtown squares, and noSquares: that town drawn whole (MOB-07)",
-	"recordedFrom": "the downtown squares (MOB-07, 2026-09-24) over 450bbf2: the paving Main Street's shops left empty is a square with a program (a fountain, the memorial, a garden, a court of trees, a cafe, a newsstand, a cleared lot) laid last from its own streams -- the flat drawing of everything else unchanged, only the downtown scene changes (1846 -> 1957 calls); with the squares taken out (noSquares) every scene is the golden before's call for call, and noSigns / noTrees are digested on that town, unchanged; the golden before it: the parks' groves on the open lawn (VEG-06, 2026-09-24) over d15fda3: each grove seated on the park's open lawn and of its own kind, spreading when its middle is packed, the trees it had no room for the kind of the grove nearest, the loners a fifth -- the flat drawing unchanged, only the park and overview scenes change (their park trees stand elsewhere); with the trees' drawing stubbed out (noTrees) every scene is the golden before's, call for call (unchanged), so only the trees moved; the golden before it: the trees' kinds (VEG-06) over 71ff847, whose noTrees was 71ff847's call for call (recorded with PZ_SRC on 71ff847 and compared); the one before: the entrances (ART-17), re-recorded on c638602 with each doorway's flat entrance by its type; noSigns = the same without the signage hook",
+	"recordedFrom": "the src it was run on",
 	"scenes": {
 		"street": {
 			"count": 1163,
-			"sha1": "b0d2df694284150f1f93d8415d6fc43d064787ca",
+			"sha1": "b0aa5a40b12c77eb730518c1774b134360db9ef4",
 			"noSigns": {
 				"count": 1163,
-				"sha1": "b0d2df694284150f1f93d8415d6fc43d064787ca"
+				"sha1": "b0aa5a40b12c77eb730518c1774b134360db9ef4"
 			},
 			"noTrees": {
 				"count": 1111,
-				"sha1": "c1bf038505313c484dce4a8552e2fe66d45c16ea"
+				"sha1": "eb95411d989163e79136b5dd883c3f1c92b9bdbd"
 			},
 			"noSquares": {
 				"count": 1163,
-				"sha1": "b0d2df694284150f1f93d8415d6fc43d064787ca"
+				"sha1": "b0aa5a40b12c77eb730518c1774b134360db9ef4"
 			}
 		},
 		"downtown": {
 			"count": 1957,
-			"sha1": "1bd8ba8d39dcd1287831d83ef2a972dfc09d5dac",
+			"sha1": "a146a2030e2a19a1a98f63ed36f65e2736045a58",
 			"noSigns": {
 				"count": 1495,
-				"sha1": "ec85f653d5bf63b394f4b430fd63927efa7482b2"
+				"sha1": "922f4a771d51461f643ea880d19e817618886314"
 			},
 			"noTrees": {
 				"count": 1482,
-				"sha1": "2d971de2172e5096826a68a9b9875fdcbb2fbd26"
+				"sha1": "878ce3ebc4137efff9ae7f77f77cc5057381acfd"
 			},
 			"noSquares": {
 				"count": 1846,
-				"sha1": "7fb3f9c1fb190f62e971f5bd01336e428e5f18fb"
+				"sha1": "e546e03626a390ed521f0edfe4f0856b2ea29e7d"
 			}
 		},
 		"park": {
 			"count": 1631,
-			"sha1": "d66bb37c9e835a563475b4110c492424cd4a2d07",
+			"sha1": "d2276eb1ece90ecb2a00160e69ccd5cd832cc67a",
 			"noSigns": {
 				"count": 1631,
-				"sha1": "d66bb37c9e835a563475b4110c492424cd4a2d07"
+				"sha1": "d2276eb1ece90ecb2a00160e69ccd5cd832cc67a"
 			},
 			"noTrees": {
 				"count": 463,
-				"sha1": "2bb9d1bfbb760545f0e5ea7adfb4350d5a439db7"
+				"sha1": "67db40414291597ff8ce6755623ed0bb61caf25c"
 			},
 			"noSquares": {
 				"count": 1631,
-				"sha1": "d66bb37c9e835a563475b4110c492424cd4a2d07"
+				"sha1": "d2276eb1ece90ecb2a00160e69ccd5cd832cc67a"
 			}
 		},
 		"school": {
 			"count": 1177,
-			"sha1": "c72ed67def33fb267251e6c372ccbca9ca1704c6",
+			"sha1": "17076c8bc46198fc14511ecd851eff73cf6e2853",
 			"noSigns": {
 				"count": 865,
-				"sha1": "4fcf71364484e0ea29d5b7833c85c63547f13649"
+				"sha1": "6ae32a8357844d3c13134270aca64b6960762dbf"
 			},
 			"noTrees": {
 				"count": 953,
-				"sha1": "bb0c1583e3a2e85dbef2552c859ff2af9d39a8ef"
+				"sha1": "7bfeae05997f7193de1d78ee6cc1e4f6c4eb360c"
 			},
 			"noSquares": {
 				"count": 1177,
-				"sha1": "c72ed67def33fb267251e6c372ccbca9ca1704c6"
+				"sha1": "17076c8bc46198fc14511ecd851eff73cf6e2853"
 			}
 		},
 		"gas": {
 			"count": 2520,
-			"sha1": "9b2deb49127c9641275bd85a4251cb6cd9a387c4",
+			"sha1": "fe3d9e9eb98722f790f8c369aad9f3aba09f7a72",
 			"noSigns": {
 				"count": 2273,
-				"sha1": "cca5d6a150621edca53d5799529e6f475ca4e953"
+				"sha1": "0d03bdf5700de24b6f6604a73fb8f82d801e7f93"
 			},
 			"noTrees": {
 				"count": 2500,
-				"sha1": "91cb84db08645513592355cef0783d23268be4ac"
+				"sha1": "2326899801b1c5f116866f08e6246360bf67525b"
 			},
 			"noSquares": {
 				"count": 2520,
-				"sha1": "9b2deb49127c9641275bd85a4251cb6cd9a387c4"
+				"sha1": "fe3d9e9eb98722f790f8c369aad9f3aba09f7a72"
 			}
 		},
 		"street-night": {
 			"count": 1158,
-			"sha1": "a5d77256d32bd57769bb5c15ea17cfb7b0eed117",
+			"sha1": "09ced562e06477c57e9a38375befa486edd42f07",
 			"noSigns": {
 				"count": 1158,
-				"sha1": "a5d77256d32bd57769bb5c15ea17cfb7b0eed117"
+				"sha1": "09ced562e06477c57e9a38375befa486edd42f07"
 			},
 			"noTrees": {
 				"count": 1106,
-				"sha1": "11755db9de6e9358de1e673ddcfff7ff7e10f1b8"
+				"sha1": "656f6d7c7d6339b8d527aaa50689445332bcd571"
 			},
 			"noSquares": {
 				"count": 1158,
-				"sha1": "a5d77256d32bd57769bb5c15ea17cfb7b0eed117"
+				"sha1": "09ced562e06477c57e9a38375befa486edd42f07"
 			}
 		},
 		"overview": {
 			"count": 4616,
-			"sha1": "c10453f813a0e7ef25d335ecf5b8e2108ab91508",
+			"sha1": "6fc50266c44fb3ae882b9ff80fe78c8929326597",
 			"noSigns": {
 				"count": 4434,
-				"sha1": "2c0ae661613be78ba224456ba5fe67451a1aa72a"
+				"sha1": "f0376b86cdf665b90109c58ae7a55df40d937dca"
 			},
 			"noTrees": {
 				"count": 3624,
-				"sha1": "c29e50b0289abca9bef4dcbabac7ffb92c3c997f"
+				"sha1": "d665a1c6fff470eea05e7443be72e344ddc18a15"
 			},
 			"noSquares": {
 				"count": 4616,
-				"sha1": "c10453f813a0e7ef25d335ecf5b8e2108ab91508"
+				"sha1": "6fc50266c44fb3ae882b9ff80fe78c8929326597"
 			}
 		},
 		"border": {

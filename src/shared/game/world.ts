@@ -662,6 +662,51 @@ function deadTownHsv(x: number, y: number, salt: number): Color3 {
 	return Color3.fromHSV(hue, 70 / 255, 190 / 255);
 }
 
+/**
+ * An exact 0..1 hash for service-vehicle tints (same integer discipline as `treeHash`: every intermediate under
+ * 2^53, so the server and every client agree to the bit, MP-26). Salts 91..95 live far from the tints (17, 27),
+ * the pump (83, 84) and the view (21, 23, 25, 26): paint is paint, never a rect, an id or a heading.
+ */
+function carHash(x: number, y: number, salt: number): number {
+	let s = (math.floor(x) * 5059 + math.floor(y) * 3083 + salt * 69557 + 7) % TREE_P;
+	s = (s * s + 3) % TREE_P;
+	s = (s * 27061 + 5) % TREE_P;
+	s = (s * s + 11) % TREE_P;
+	return s / TREE_P;
+}
+
+/** Where a parked car stands: the depot decides which service colours may show (VEI, ROADMAP item 6). */
+export type CarDepot = "curb" | "public" | "hospital" | "police" | "shop" | "construction" | "pump" | "campus";
+
+export interface CarCtx {
+	depot: CarDepot;
+	avenue: boolean;
+	commercial: boolean;
+}
+
+/**
+ * A car's paint (visual only, never physics or seed): a dessaturated base per VEI-04 (S 42, V 178, never neon)
+ * plus rare service colours that only show where they make sense -- white ambulances at the hospital, white-blue
+ * cruisers by the station, yellow cabs on avenues, commercial streets and public/shop lots. Pumps and the campus
+ * always wear the base (students' cars, fill-ups in progress).
+ */
+function carTint(x: number, y: number, ctx: CarCtx): Color3 {
+	if (ctx.depot !== "pump" && ctx.depot !== "campus") {
+		if (ctx.depot === "hospital" && carHash(x, y, 91) < 0.12) return Color3.fromHSV(0, 0, 232 / 255);
+		if (ctx.depot === "police" && carHash(x, y, 92) < 0.12) return Color3.fromHSV(145 / 255, 18 / 255, 225 / 255);
+		if (
+			(ctx.depot === "public" ||
+				ctx.depot === "shop" ||
+				(ctx.depot === "curb" && (ctx.avenue || ctx.commercial))) &&
+			carHash(x, y, 93) < 0.05
+		) {
+			return Color3.fromHSV(50 / 255, 180 / 255, 210 / 255);
+		}
+	}
+	const hue = (math.floor(hash01(x, y, 17) * 26) * 10) / 255;
+	return Color3.fromHSV(hue, 42 / 255, 178 / 255);
+}
+
 interface BuildingDef {
 	type: number;
 	w: number;
@@ -1484,7 +1529,15 @@ function freeFrontRect(grid: YardGrid, e: LotEdge, minAlong: number, minDepth: n
 	return best;
 }
 
-function addCar(w: WorldData, x: number, y: number, cw: number, ch: number, heading: number): Solid {
+function addCar(
+	w: WorldData,
+	x: number,
+	y: number,
+	cw: number,
+	ch: number,
+	heading: number,
+	ctx: CarCtx = { depot: "curb", avenue: false, commercial: false },
+): Solid {
 	const q = math.floor(heading / (math.pi / 2) + 0.5);
 	return addSolid(w, {
 		kind: "car",
@@ -1498,7 +1551,7 @@ function addCar(w: WorldData, x: number, y: number, cw: number, ch: number, head
 		tags: "car",
 		rot: q - math.floor(q / 4) * 4,
 		heading,
-		tint: deadTownHsv(x, y, 17),
+		tint: carTint(x, y, ctx),
 	});
 }
 
@@ -1544,7 +1597,7 @@ function bestFrontRect(
 }
 
 /** Head-in parking lot opening onto edge `e` (one or two stall rows behind an aisle). */
-function addParking(g: Gen, lot: Lot, e: LotEdge, free: FrontRect): boolean {
+function addParking(g: Gen, lot: Lot, e: LotEdge, free: FrontRect, depot: CarDepot = "public"): boolean {
 	const SW = 112;
 	const SD = 224;
 	const AISLE = 200;
@@ -1575,7 +1628,11 @@ function addParking(g: Gen, lot: Lot, e: LotEdge, free: FrontRect): boolean {
 			const r = edgeRect(e, su + 6, su + 6 + TOWN.CAR_W, row.v0 + 12, row.v0 + 12 + TOWN.CAR_L);
 			if (!g.placer.canPlace(r.x, r.y, r.w, r.h, 4)) continue;
 			const nose = g.rng.chance(0.3) ? row.nose + math.pi : row.nose;
-			addCar(g.w, r.x, r.y, r.w, r.h, math.atan2(math.sin(nose), math.cos(nose)));
+			addCar(g.w, r.x, r.y, r.w, r.h, math.atan2(math.sin(nose), math.cos(nose)), {
+				depot,
+				avenue: false,
+				commercial: depot === "public" || depot === "shop",
+			});
 		}
 	}
 	cutsOf(g, e).push({ a: mid - 120, b: mid + 120, kind: "drive" });
@@ -1647,7 +1704,11 @@ function placeGas(g: Gen, lot: Lot, e1: LotEdge, e2: LotEdge, atA: boolean): boo
 				? { x: mid - TOWN.CAR_L / 2, y: c.y, w: TOWN.CAR_L, h: TOWN.CAR_W }
 				: { x: c.x, y: mid - TOWN.CAR_L / 2, w: TOWN.CAR_W, h: TOWN.CAR_L };
 			const heading = inwardHeading(e1) - math.pi / 2;
-			const parked = addCar(g.w, car.x, car.y, car.w, car.h, math.atan2(math.sin(heading), math.cos(heading)));
+			const parked = addCar(g.w, car.x, car.y, car.w, car.h, math.atan2(math.sin(heading), math.cos(heading)), {
+				depot: "pump",
+				avenue: false,
+				commercial: false,
+			});
 			parked.variant = hash01(island.x, island.y, 84) < PUMP_FILLING_SHARE ? PUMP_CAR_FILLING : PUMP_CAR_PARKED;
 		}
 	}
@@ -1736,7 +1797,7 @@ function placeCivicOn(
 		// hospital: a parking lot if one fits; otherwise (and for schools) a paved yard
 		const grid = yardGrid(g, lot);
 		const park = def === HOSPITAL_DEF ? bestFrontRect(lot, grid, 360, 424) : undefined;
-		if (park !== undefined && addParking(g, lot, park.e, park.r)) return true;
+		if (park !== undefined && addParking(g, lot, park.e, park.r, "hospital")) return true;
 		const best = bestFrontRect(lot, grid, 288, 224);
 		if (best !== undefined) {
 			const f = best.r;
@@ -2374,6 +2435,17 @@ function lotAt(w: WorldData, x: number, y: number): Lot | undefined {
 	return undefined;
 }
 
+/** the service depot of a curb from the buildings that stand on its lot (hospital 4, station 25) */
+function curbDepot(g: Gen, probe: Lot | undefined): CarDepot {
+	if (probe !== undefined) {
+		for (const p of g.placed.get(probe) ?? []) {
+			if (p.def.type === 4) return "hospital";
+			if (p.def.type === 25) return "police";
+		}
+	}
+	return "curb";
+}
+
 /** Parallel parking (right-hand traffic) and a few abandoned cars per street segment. */
 function parkCars(g: Gen): void {
 	const w = g.w;
@@ -2430,7 +2502,13 @@ function parkCars(g: Gen): void {
 					const y = v ? at : across;
 					const cw = v ? W : L;
 					const ch = v ? L : W;
-					if (g.placer.canPlace(x, y, cw, ch, 8, true)) addCar(w, x, y, cw, ch, heading);
+					if (g.placer.canPlace(x, y, cw, ch, 8, true)) {
+						addCar(w, x, y, cw, ch, heading, {
+							depot: curbDepot(g, probe),
+							avenue: road.avenue,
+							commercial: probe !== undefined && probe.zone === "commercial",
+						});
+					}
 				}
 			}
 			// abandoned: askew in a travel lane, only if a lane stays free beside it
@@ -2464,7 +2542,9 @@ function parkCars(g: Gen): void {
 				if (span0 > c0 + 4 && span1 < c1 - 4 && g.placer.canPlace(x, y, cw, ch, 24, true)) {
 					const spans = laneSpans(w, road, t - 24, t + L + 24, c0, c1);
 					spans.push([span0, span1]);
-					if (freeWidth(spans, c0, c1) >= TOWN.LANE_FREE) addCar(w, x, y, cw, ch, heading);
+					if (freeWidth(spans, c0, c1) >= TOWN.LANE_FREE) {
+						addCar(w, x, y, cw, ch, heading, { depot: "curb", avenue: road.avenue, commercial: false });
+					}
 				}
 			}
 		}
@@ -2846,7 +2926,9 @@ function campusCurbParking(g: Gen, lot: Lot, doors: Array<{ e: LotEdge; u: numbe
 			const size = v ? road.w : road.h;
 			const spans = laneSpans(w, road, at - 24, at + L + 24, base, base + size);
 			spans.push(v ? [x, x + cw] : [y, y + ch]);
-			if (freeWidth(spans, base, base + size) >= TOWN.LANE_FREE) addCar(w, x, y, cw, ch, heading);
+			if (freeWidth(spans, base, base + size) >= TOWN.LANE_FREE) {
+				addCar(w, x, y, cw, ch, heading, { depot: "campus", avenue: false, commercial: false });
+			}
 		}
 	}
 }
