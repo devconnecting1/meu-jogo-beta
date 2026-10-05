@@ -79,6 +79,14 @@ export type WorldArtName =
 	| "carTrim7"
 	| "carDamage7"
 	| "carWreck7"
+	| "car8"
+	| "carTrim8"
+	| "carDamage8"
+	| "carWreck8"
+	| "car9"
+	| "carTrim9"
+	| "carDamage9"
+	| "carWreck9"
 	| "bin"
 	| "litter0"
 	| "litter1"
@@ -313,6 +321,22 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	carDamage7: { id: "", w: 50, h: 25 },
 	/** overlay: ambulance: burnt out */
 	carWreck7: { id: "", w: 50, h: 25 },
+	/** mask: boxtruck: body (tint: paint) */
+	car8: { id: "", w: 50, h: 25 },
+	/** overlay: boxtruck: glass, lights, wheels, outline */
+	carTrim8: { id: "", w: 50, h: 25 },
+	/** overlay: boxtruck: smashed windshield, scratches */
+	carDamage8: { id: "", w: 50, h: 25 },
+	/** overlay: boxtruck: burnt out */
+	carWreck8: { id: "", w: 50, h: 25 },
+	/** mask: garbage: body (tint: paint) */
+	car9: { id: "", w: 50, h: 25 },
+	/** overlay: garbage: glass, lights, wheels, outline */
+	carTrim9: { id: "", w: 50, h: 25 },
+	/** overlay: garbage: smashed windshield, scratches */
+	carDamage9: { id: "", w: 50, h: 25 },
+	/** overlay: garbage: burnt out */
+	carWreck9: { id: "", w: 50, h: 25 },
 	/** sprite: wheelie bin */
 	bin: { id: "rbxassetid://140632839899508", w: 9, h: 9 },
 	/** sprite: spilled litter (flat) */
@@ -592,6 +616,14 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"carTrim7",
 	"carDamage7",
 	"carWreck7",
+	"car8",
+	"carTrim8",
+	"carDamage8",
+	"carWreck8",
+	"car9",
+	"carTrim9",
+	"carDamage9",
+	"carWreck9",
 	"bin",
 	"litter0",
 	"litter1",

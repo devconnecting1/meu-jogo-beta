@@ -191,15 +191,15 @@ const OVERGROWN = 0.3;
 const CAR_INTACT = 0;
 const CAR_BROKEN = 1;
 const CAR_BURNT = 2;
-/** car body styles in the art (sedan, hatchback, pickup, SUV, van, taxi, police, ambulance) */
-const CAR_STYLES = 8;
+/** car body styles in the art (sedan, hatchback, pickup, SUV, van, taxi, police, ambulance, box truck, garbage) */
+const CAR_STYLES = 10;
 /**
  * A shrub's crown (VEG-06): lower than a person, so under every body (a survivor beside a shrub stands over its
  * leaves; it never hides a zombie, LEG-03), over the ground and the trunks' layer's shadows; its light one layer up.
  */
 const Z_SHRUB = Z.structure;
 /** the named textures, typed once (template strings would allocate a string per car per frame) */
-const CAR_MASK: Array<WorldArtName> = ["car0", "car1", "car2", "car3", "car4", "car5", "car6", "car7"];
+const CAR_MASK: Array<WorldArtName> = ["car0", "car1", "car2", "car3", "car4", "car5", "car6", "car7", "car8", "car9"];
 const CAR_TRIM: Array<WorldArtName> = [
 	"carTrim0",
 	"carTrim1",
@@ -209,6 +209,8 @@ const CAR_TRIM: Array<WorldArtName> = [
 	"carTrim5",
 	"carTrim6",
 	"carTrim7",
+	"carTrim8",
+	"carTrim9",
 ];
 const CAR_DAMAGE: Array<WorldArtName> = [
 	"carDamage0",
@@ -219,6 +221,8 @@ const CAR_DAMAGE: Array<WorldArtName> = [
 	"carDamage5",
 	"carDamage6",
 	"carDamage7",
+	"carDamage8",
+	"carDamage9",
 ];
 const CAR_WRECK: Array<WorldArtName> = [
 	"carWreck0",
@@ -229,6 +233,8 @@ const CAR_WRECK: Array<WorldArtName> = [
 	"carWreck5",
 	"carWreck6",
 	"carWreck7",
+	"carWreck8",
+	"carWreck9",
 ];
 const LITTER: Array<WorldArtName> = ["litter0", "litter1", "litter2"];
 const BLOOD: Array<WorldArtName> = ["blood0", "blood1"];
@@ -2170,7 +2176,10 @@ export class WorldView {
 	 * the windshield smashed or burnt out, some with dried blood by the door (APO-01).
 	 */
 	private drawCarArt(r: Renderer, cam: Camera, s: Solid): boolean {
-		const style = math.floor(hash01(s.x, s.y, 21) * CAR_STYLES) % CAR_STYLES;
+		// the first eight keep their exact spread (no golden churn); ~6% of cars are box or refuse trucks instead
+		const townCars = CAR_STYLES - 2;
+		const base = math.floor(hash01(s.x, s.y, 21) * townCars) % townCars;
+		const style = hash01(s.x, s.y, 94) < 0.06 ? townCars + (math.floor(hash01(s.x, s.y, 95) * 2) % 2) : base;
 		const mask = artId(CAR_MASK[style]);
 		const trim = artId(CAR_TRIM[style]);
 		if (mask === undefined || trim === undefined) return false;

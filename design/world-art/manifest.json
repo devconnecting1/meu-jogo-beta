@@ -526,6 +526,70 @@
 			"description": "ambulance: burnt out"
 		},
 		{
+			"name": "car8",
+			"file": "car8.png",
+			"kind": "mask",
+			"w": 50,
+			"h": 25,
+			"description": "boxtruck: body (tint: paint)"
+		},
+		{
+			"name": "carTrim8",
+			"file": "carTrim8.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "boxtruck: glass, lights, wheels, outline"
+		},
+		{
+			"name": "carDamage8",
+			"file": "carDamage8.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "boxtruck: smashed windshield, scratches"
+		},
+		{
+			"name": "carWreck8",
+			"file": "carWreck8.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "boxtruck: burnt out"
+		},
+		{
+			"name": "car9",
+			"file": "car9.png",
+			"kind": "mask",
+			"w": 50,
+			"h": 25,
+			"description": "garbage: body (tint: paint)"
+		},
+		{
+			"name": "carTrim9",
+			"file": "carTrim9.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "garbage: glass, lights, wheels, outline"
+		},
+		{
+			"name": "carDamage9",
+			"file": "carDamage9.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "garbage: smashed windshield, scratches"
+		},
+		{
+			"name": "carWreck9",
+			"file": "carWreck9.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "garbage: burnt out"
+		},
+		{
 			"name": "bin",
 			"file": "bin.png",
 			"kind": "sprite",

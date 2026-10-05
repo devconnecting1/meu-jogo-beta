@@ -850,6 +850,30 @@ const CAR_STYLES = [
 		boxy: true,
 		livery: "ambulance",
 	},
+	{
+		name: "boxtruck",
+		rearGlass: [4, 7],
+		windshield: [38, 42],
+		front: 43,
+		wheels: [8, 30],
+		van: true,
+		panel: true,
+		dual: true,
+		boxy: true,
+		livery: "boxtruck",
+	},
+	{
+		name: "garbage",
+		rearGlass: [4, 7],
+		windshield: [38, 42],
+		front: 43,
+		wheels: [8, 30],
+		van: true,
+		panel: true,
+		dual: true,
+		boxy: true,
+		livery: "garbage",
+	},
 ];
 const CAR_L = 50;
 const CAR_W = 25;
@@ -1045,6 +1069,44 @@ function carArt(style, seed) {
 		for (const y of [2, 3, 21, 22]) for (let dx = -1; dx <= 1; dx++) trim.set(20 + dx, y, [170, 30, 30]);
 		trim.set(45, 3, [40, 80, 180]);
 		trim.set(45, 21, [180, 30, 30]);
+	} else if (style.livery === "boxtruck") {
+		// city box truck: tall ribbed cargo box with a rollup rear door, short cab, mudflaps
+		for (let x = 4; x <= 34; x++) {
+			trim.set(x, 2, [215, 215, 218]);
+			trim.set(x, 22, [215, 215, 218]);
+		}
+		for (let x = 8; x <= 32; x += 6) {
+			for (let y = 4; y <= 20; y++) trim.set(x, y, BLACK, 22);
+		}
+		for (let y = 3; y <= 21; y++) trim.set(4, y, BLACK, 60);
+		for (let y = 6; y <= 18; y += 3) trim.set(4, y, [190, 190, 193]);
+		for (let x = 35; x <= 37; x++) {
+			for (let y = 4; y <= 20; y++) trim.set(x, y, BLACK, 45);
+		}
+		for (let x = 44; x <= 46; x++) {
+			trim.set(x, 0, [20, 20, 22]);
+			trim.set(x, 24, [20, 20, 22]);
+		}
+	} else if (style.livery === "garbage") {
+		// refuse truck: dark hopper throat at the back, packer ribs, faded orange band, dusty cab
+		for (let x = 2; x <= 10; x++) {
+			for (let y = 3; y <= 21; y++) trim.set(x, y, [28, 26, 24]);
+		}
+		for (let y = 3; y <= 21; y++) trim.set(10, y, BLACK, 90);
+		for (let x = 3; x <= 9; x++) {
+			trim.set(x, 5, [60, 58, 55]);
+			trim.set(x, 19, [60, 58, 55]);
+		}
+		for (let x = 12; x <= 34; x++) {
+			trim.set(x, 2, [190, 120, 60]);
+			trim.set(x, 22, [190, 120, 60]);
+		}
+		for (let x = 14; x <= 32; x += 6) {
+			for (let y = 4; y <= 20; y++) trim.set(x, y, BLACK, 22);
+		}
+		for (let x = 35; x <= 37; x++) {
+			for (let y = 4; y <= 20; y++) trim.set(x, y, BLACK, 45);
+		}
 	}
 	// lights: headlights at the nose, tail lights at the back, dark bumpers between them
 	for (const [y0, y1] of [
