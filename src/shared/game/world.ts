@@ -699,8 +699,9 @@ function carTint(x: number, y: number, ctx: CarCtx): Color3 {
 				ctx.depot === "shop" ||
 				(ctx.depot === "curb" && (ctx.avenue || ctx.commercial))) &&
 			carHash(x, y, 93) < 0.05
-		)
+		) {
 			return Color3.fromHSV(50 / 255, 180 / 255, 210 / 255);
+		}
 	}
 	const hue = (math.floor(hash01(x, y, 17) * 26) * 10) / 255;
 	return Color3.fromHSV(hue, 42 / 255, 178 / 255);
@@ -2501,12 +2502,13 @@ function parkCars(g: Gen): void {
 					const y = v ? at : across;
 					const cw = v ? W : L;
 					const ch = v ? L : W;
-					if (g.placer.canPlace(x, y, cw, ch, 8, true))
+					if (g.placer.canPlace(x, y, cw, ch, 8, true)) {
 						addCar(w, x, y, cw, ch, heading, {
 							depot: curbDepot(g, probe),
 							avenue: road.avenue,
 							commercial: probe !== undefined && probe.zone === "commercial",
 						});
+					}
 				}
 			}
 			// abandoned: askew in a travel lane, only if a lane stays free beside it
@@ -2540,8 +2542,9 @@ function parkCars(g: Gen): void {
 				if (span0 > c0 + 4 && span1 < c1 - 4 && g.placer.canPlace(x, y, cw, ch, 24, true)) {
 					const spans = laneSpans(w, road, t - 24, t + L + 24, c0, c1);
 					spans.push([span0, span1]);
-					if (freeWidth(spans, c0, c1) >= TOWN.LANE_FREE)
+					if (freeWidth(spans, c0, c1) >= TOWN.LANE_FREE) {
 						addCar(w, x, y, cw, ch, heading, { depot: "curb", avenue: road.avenue, commercial: false });
+					}
 				}
 			}
 		}
@@ -2923,8 +2926,9 @@ function campusCurbParking(g: Gen, lot: Lot, doors: Array<{ e: LotEdge; u: numbe
 			const size = v ? road.w : road.h;
 			const spans = laneSpans(w, road, at - 24, at + L + 24, base, base + size);
 			spans.push(v ? [x, x + cw] : [y, y + ch]);
-			if (freeWidth(spans, base, base + size) >= TOWN.LANE_FREE)
+			if (freeWidth(spans, base, base + size) >= TOWN.LANE_FREE) {
 				addCar(w, x, y, cw, ch, heading, { depot: "campus", avenue: false, commercial: false });
+			}
 		}
 	}
 }
