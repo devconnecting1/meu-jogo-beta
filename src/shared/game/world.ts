@@ -656,10 +656,16 @@ export function treeHash(x: number, y: number, salt: number): number {
 	return s / TREE_P;
 }
 
-/** Dead Town colour recipe: make_colour_hsv(floor(irandom(250)/10)*10, 70, 190) */
+/** Dead Town colour recipe, dessaturated per VEI-04 + service variants (visual only, never physics/seed).
+ * Base: hue floor(hash*26)*10, S 42, V 178 (was 70/190, too neon). ~10% service: 5% taxi yellow,
+ * 3% police white-blue, 2% ambulance white. Salt 27/28 only drive tint, solid/rect unchanged (MP-26). */
 function deadTownHsv(x: number, y: number, salt: number): Color3 {
+	const service = hash01(x, y, 27);
+	if (service < 0.05) return Color3.fromHSV(50 / 255, 180 / 255, 210 / 255);
+	if (service < 0.08) return Color3.fromHSV(145 / 255, 18 / 255, 225 / 255);
+	if (service < 0.1) return Color3.fromHSV(0, 0, 232 / 255);
 	const hue = (math.floor(hash01(x, y, salt) * 26) * 10) / 255;
-	return Color3.fromHSV(hue, 70 / 255, 190 / 255);
+	return Color3.fromHSV(hue, 42 / 255, 178 / 255);
 }
 
 interface BuildingDef {
