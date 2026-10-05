@@ -826,6 +826,18 @@ const CAR_STYLES = [
 	{ name: "hatch", rearGlass: [4, 8], windshield: [28, 33], front: 34, wheels: [8, 37] },
 	{ name: "pickup", bed: [2, 20], rearGlass: [21, 22], windshield: [31, 36], front: 37, wheels: [9, 39] },
 	{ name: "suv", rearGlass: [3, 6], windshield: [34, 38], front: 39, wheels: [9, 39], rails: true },
+	{ name: "van", rearGlass: [2, 5], windshield: [34, 38], front: 39, wheels: [9, 39], van: true },
+	{ name: "taxi", rearGlass: [11, 15], windshield: [30, 35], front: 36, wheels: [9, 38], livery: "taxi" },
+	{ name: "police", rearGlass: [11, 15], windshield: [30, 35], front: 36, wheels: [9, 38], livery: "police" },
+	{
+		name: "ambulance",
+		rearGlass: [2, 5],
+		windshield: [34, 38],
+		front: 39,
+		wheels: [9, 39],
+		van: true,
+		livery: "ambulance",
+	},
 ];
 const CAR_L = 50;
 const CAR_W = 25;
@@ -924,6 +936,46 @@ function carArt(style, seed) {
 			trim.set(x, 4, BLACK, 200);
 		}
 		for (let y = 4; y <= 20; y++) trim.set(style.bed[1], y, [44, 44, 48]);
+	}
+	if (style.van === true) {
+		// sliding-door seam + rail on both flanks (symmetric, reads from any heading)
+		for (const y of [6, 18]) {
+			for (let x = 14; x <= 30; x++) trim.set(x, y, BLACK, 26);
+		}
+		trim.set(22, 6, BLACK, 60);
+		trim.set(22, 18, BLACK, 60);
+	}
+	if (style.livery === "taxi") {
+		// checker band on both flanks + roof sign (symmetric top-down)
+		for (let x = 12; x <= 29; x++) {
+			for (const y of [2, 3, 21, 22]) {
+				const dark = (x + y) % 2 === 0;
+				trim.set(x, y, dark ? [20, 20, 22] : [235, 235, 230]);
+			}
+		}
+		for (let x = 22; x <= 24; x++) for (let y = 11; y <= 13; y++) trim.set(x, y, [240, 210, 120]);
+	} else if (style.livery === "police") {
+		// pale stripe on both flanks + red/blue lightbar on the roof centre
+		for (let x = 10; x <= 32; x++) {
+			for (const y of [2, 3, 4, 20, 21, 22]) trim.set(x, y, [225, 225, 228]);
+		}
+		trim.set(23, 11, [180, 30, 30]);
+		trim.set(23, 13, [40, 80, 180]);
+		trim.set(24, 11, [180, 30, 30]);
+		trim.set(24, 13, [40, 80, 180]);
+		trim.set(23, 12, [200, 200, 205]);
+		trim.set(24, 12, [200, 200, 205]);
+	} else if (style.livery === "ambulance") {
+		// red cross on the roof + small crosses on both flanks
+		const cross = (cx, cy, s) => {
+			for (let dx = -s; dx <= s; dx++) {
+				trim.set(cx + dx, cy, [170, 30, 30]);
+				trim.set(cx, cy + dx, [170, 30, 30]);
+			}
+		};
+		for (let dx = -3; dx <= 3; dx++) for (let dy = -3; dy <= 3; dy++) trim.set(21 + dx, 12 + dy, [230, 230, 230]);
+		cross(21, 12, 2);
+		for (const y of [3, 21]) for (let dx = -1; dx <= 1; dx++) trim.set(20 + dx, y, [170, 30, 30]);
 	}
 	// lights: headlights at the nose, tail lights at the back, dark bumpers between them
 	for (const [y0, y1] of [

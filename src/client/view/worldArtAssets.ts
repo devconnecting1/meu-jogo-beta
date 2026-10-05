@@ -63,6 +63,22 @@ export type WorldArtName =
 	| "carTrim3"
 	| "carDamage3"
 	| "carWreck3"
+	| "car4"
+	| "carTrim4"
+	| "carDamage4"
+	| "carWreck4"
+	| "car5"
+	| "carTrim5"
+	| "carDamage5"
+	| "carWreck5"
+	| "car6"
+	| "carTrim6"
+	| "carDamage6"
+	| "carWreck6"
+	| "car7"
+	| "carTrim7"
+	| "carDamage7"
+	| "carWreck7"
 	| "bin"
 	| "litter0"
 	| "litter1"
@@ -265,6 +281,38 @@ export const WORLD_ART: Record<WorldArtName, WorldArtAsset> = {
 	carDamage3: { id: "rbxassetid://117701098851376", w: 50, h: 25 },
 	/** overlay: suv: burnt out */
 	carWreck3: { id: "rbxassetid://118498588242035", w: 50, h: 25 },
+	/** mask: van: body (tint: paint) */
+	car4: { id: "", w: 50, h: 25 },
+	/** overlay: van: glass, lights, wheels, outline */
+	carTrim4: { id: "", w: 50, h: 25 },
+	/** overlay: van: smashed windshield, scratches */
+	carDamage4: { id: "", w: 50, h: 25 },
+	/** overlay: van: burnt out */
+	carWreck4: { id: "", w: 50, h: 25 },
+	/** mask: taxi: body (tint: paint) */
+	car5: { id: "", w: 50, h: 25 },
+	/** overlay: taxi: glass, lights, wheels, outline */
+	carTrim5: { id: "", w: 50, h: 25 },
+	/** overlay: taxi: smashed windshield, scratches */
+	carDamage5: { id: "", w: 50, h: 25 },
+	/** overlay: taxi: burnt out */
+	carWreck5: { id: "", w: 50, h: 25 },
+	/** mask: police: body (tint: paint) */
+	car6: { id: "", w: 50, h: 25 },
+	/** overlay: police: glass, lights, wheels, outline */
+	carTrim6: { id: "", w: 50, h: 25 },
+	/** overlay: police: smashed windshield, scratches */
+	carDamage6: { id: "", w: 50, h: 25 },
+	/** overlay: police: burnt out */
+	carWreck6: { id: "", w: 50, h: 25 },
+	/** mask: ambulance: body (tint: paint) */
+	car7: { id: "", w: 50, h: 25 },
+	/** overlay: ambulance: glass, lights, wheels, outline */
+	carTrim7: { id: "", w: 50, h: 25 },
+	/** overlay: ambulance: smashed windshield, scratches */
+	carDamage7: { id: "", w: 50, h: 25 },
+	/** overlay: ambulance: burnt out */
+	carWreck7: { id: "", w: 50, h: 25 },
 	/** sprite: wheelie bin */
 	bin: { id: "rbxassetid://140632839899508", w: 9, h: 9 },
 	/** sprite: spilled litter (flat) */
@@ -528,6 +576,22 @@ export const WORLD_ART_NAMES: Array<WorldArtName> = [
 	"carTrim3",
 	"carDamage3",
 	"carWreck3",
+	"car4",
+	"carTrim4",
+	"carDamage4",
+	"carWreck4",
+	"car5",
+	"carTrim5",
+	"carDamage5",
+	"carWreck5",
+	"car6",
+	"carTrim6",
+	"carDamage6",
+	"carWreck6",
+	"car7",
+	"carTrim7",
+	"carDamage7",
+	"carWreck7",
 	"bin",
 	"litter0",
 	"litter1",

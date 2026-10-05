@@ -191,18 +191,45 @@ const OVERGROWN = 0.3;
 const CAR_INTACT = 0;
 const CAR_BROKEN = 1;
 const CAR_BURNT = 2;
-/** car body styles in the art (sedan, hatchback, pickup, SUV) */
-const CAR_STYLES = 4;
+/** car body styles in the art (sedan, hatchback, pickup, SUV, van, taxi, police, ambulance) */
+const CAR_STYLES = 8;
 /**
  * A shrub's crown (VEG-06): lower than a person, so under every body (a survivor beside a shrub stands over its
  * leaves; it never hides a zombie, LEG-03), over the ground and the trunks' layer's shadows; its light one layer up.
  */
 const Z_SHRUB = Z.structure;
 /** the named textures, typed once (template strings would allocate a string per car per frame) */
-const CAR_MASK: Array<WorldArtName> = ["car0", "car1", "car2", "car3"];
-const CAR_TRIM: Array<WorldArtName> = ["carTrim0", "carTrim1", "carTrim2", "carTrim3"];
-const CAR_DAMAGE: Array<WorldArtName> = ["carDamage0", "carDamage1", "carDamage2", "carDamage3"];
-const CAR_WRECK: Array<WorldArtName> = ["carWreck0", "carWreck1", "carWreck2", "carWreck3"];
+const CAR_MASK: Array<WorldArtName> = ["car0", "car1", "car2", "car3", "car4", "car5", "car6", "car7"];
+const CAR_TRIM: Array<WorldArtName> = [
+	"carTrim0",
+	"carTrim1",
+	"carTrim2",
+	"carTrim3",
+	"carTrim4",
+	"carTrim5",
+	"carTrim6",
+	"carTrim7",
+];
+const CAR_DAMAGE: Array<WorldArtName> = [
+	"carDamage0",
+	"carDamage1",
+	"carDamage2",
+	"carDamage3",
+	"carDamage4",
+	"carDamage5",
+	"carDamage6",
+	"carDamage7",
+];
+const CAR_WRECK: Array<WorldArtName> = [
+	"carWreck0",
+	"carWreck1",
+	"carWreck2",
+	"carWreck3",
+	"carWreck4",
+	"carWreck5",
+	"carWreck6",
+	"carWreck7",
+];
 const LITTER: Array<WorldArtName> = ["litter0", "litter1", "litter2"];
 const BLOOD: Array<WorldArtName> = ["blood0", "blood1"];
 const OIL: Array<WorldArtName> = ["oil0", "oil1"];
