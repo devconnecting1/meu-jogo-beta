@@ -316,7 +316,7 @@ export interface TownSquare extends Rect {
  * (EDI-21), a public parking lot (MOB-05) or, on a residential block, a house going up among the others (EDI-22; the
  * campus never takes a block with a program). A lot without one is the ordinary block its zone says.
  */
-export type LotProgram = "market" | "parking" | "construction";
+export type LotProgram = "market" | "parking" | "construction" | "gated";
 
 export interface GroundRect extends Rect {
 	kind: GroundKind;
@@ -3678,6 +3678,31 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 		if (lot.kind === "block" && lot.zone === "residential") TL.furnishBackyards(kit, lot);
 	}
 	for (const lot of w.lots) TL.furnishStreets(kit, lot);
+
+	// --- the gated community (EDI-25): one quiet block ringed after its houses stand, before interiors are drawn ---
+	for (const need of [2, 1]) {
+		let done = false;
+		for (const lot of w.lots) {
+			if (lot.kind !== "block" || lot.zone !== "residential" || lot.program !== undefined) continue;
+			if (lot.edges.size() < 3 || math.min(lot.w, lot.h) < 800) continue;
+			let avenue = false;
+			for (const e of lot.edges) {
+				if (w.roads[e.road] !== undefined && w.roads[e.road].avenue) avenue = true;
+			}
+			if (avenue) continue;
+			let houses = 0;
+			for (const p of g.placed.get(lot) ?? []) {
+				if (p.def.type === 1 || p.def.type === 2) houses++;
+			}
+			if (houses < need) continue;
+			if (TL.placeGated(kit, lot)) {
+				lot.program = "gated";
+				done = true;
+				break;
+			}
+		}
+		if (done) break;
+	}
 
 	// --- the inside of every building, now that nothing else is placed on the blocks round it ---
 	planInteriors(g);

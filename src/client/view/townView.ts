@@ -559,6 +559,7 @@ const TENT_STRIPES: ReadonlyArray<Color3> = [
 const TRUCK_BODY = Color3.fromRGB(230, 226, 212);
 /** the building site: the pile's lumber, bricks and steel; the toilet's blue, the mixer's orange, the dumpster's green */
 const BRICK = Color3.fromRGB(160, 78, 58);
+const BRICK_CAP = Color3.fromRGB(198, 158, 138);
 const STEEL_BAR = Color3.fromRGB(110, 116, 124);
 const TOILET_BLUE = Color3.fromRGB(58, 104, 168);
 const MIXER_ORANGE = Color3.fromRGB(214, 120, 40);
@@ -853,6 +854,32 @@ export function drawTownProp(r: Renderer, cam: Camera, s: Solid, world: WorldDat
 	// ---- the building site (EDI-22)
 	if (t === "fence") {
 		r.drawRect(cam, cx, cy, { w: s.w, h: s.h, color: GALV, stroke: IRON, strokeThickness: 1, zIndex: Z.structure });
+		return true;
+	}
+	// ---- the gated community (EDI-25): brickwork with a light cap; broken stretches are soot-dark with no cap
+	if (t === "condo_wall" || t === "condo_broken" || t === "condo_post") {
+		const broken = t === "condo_broken";
+		const body = broken ? BRICK.Lerp(INK, 0.45) : BRICK;
+		r.drawRect(cam, cx, cy, { w: s.w, h: s.h, color: body, stroke: INK, strokeThickness: 1, zIndex: Z.structure });
+		if (!broken) {
+			if (wide) {
+				r.drawRect(cam, cx, cy - s.h / 2 + 3, {
+					w: s.w - 4,
+					h: 6,
+					color: BRICK_CAP,
+					zIndex: Z.structure + 1,
+				});
+			} else {
+				r.drawRect(cam, cx - s.w / 2 + 3, cy, {
+					w: 6,
+					h: s.h - 4,
+					color: BRICK_CAP,
+					zIndex: Z.structure + 1,
+				});
+			}
+		} else {
+			r.drawRect(cam, cx, cy, { w: s.w - 8, h: 2, color: INK, zIndex: Z.structure + 1 });
+		}
 		return true;
 	}
 	if (t === "studs") {

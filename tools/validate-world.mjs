@@ -1190,6 +1190,41 @@ function everydayChecks(w, buildings, reach, fail) {
 		for (const p of piles)
 			if (!reachable(p)) fail("EDI-22", `pile #${p.id} cannot be reached on foot`, cx(p), cy(p));
 	}
+	// --- EDI-25: a gated community
+	const gated = w.lots.filter(l => l.program === "gated");
+	stats.gated = gated.length;
+	if (gated.length > 1)
+		fail("EDI-25", `${gated.length} gated communities in one town (one)`, cx(gated[1]), cy(gated[1]));
+	for (const lot of gated) {
+		if (lot.zone !== "residential" || lot.kind !== "block")
+			fail("EDI-25", "the gated lot is not an ordinary residential block", cx(lot), cy(lot));
+		const inLot = s => lotOf(s) === lot;
+		const walls = S.filter(
+			s => (s.tags === "condo_wall" || s.tags === "condo_broken" || s.tags === "condo_post") && inLot(s),
+		);
+		if (walls.length === 0) fail("EDI-25", "the gated lot has no wall", cx(lot), cy(lot));
+		const walks = (lot.ground ?? []).filter(g => g.kind === "walk" || g.kind === "drive");
+		for (const m of walls) {
+			if (m.x < lot.x || m.y < lot.y || m.x + m.w > lot.x + lot.w || m.y + m.h > lot.y + lot.h)
+				fail("EDI-25", "a wall module stands off the lot", cx(m), cy(m));
+			if (walks.some(g => overlap(g, m))) fail("EDI-25", "a wall module blocks a footpath", cx(m), cy(m));
+		}
+		// a way out: wall-line runs of 88+ on at least two sides
+		const gapped = new Set();
+		for (const e of lot.edges) {
+			let run = 0;
+			for (let u = e.a + 40; u < e.b - 40; u += 8) {
+				const cell = edgeRect(e, u, u + 8, SW + 16, SW + 40);
+				if (walls.some(m => overlap(m, cell))) run = 0;
+				else {
+					run += 8;
+					if (run >= 88) gapped.add(e.side);
+				}
+			}
+		}
+		if (gapped.size < 2)
+			fail("EDI-25", `the wall leaves a way out on ${gapped.size} side(s), need 2`, cx(lot), cy(lot));
+	}
 	// --- MOB-04: the street furniture, in the service strip (CID-02), off every cut, a car's length from a corner (CID-03)
 	const street = [
 		...mine.filter(s => STREET_TAGS.includes(s.tags)),

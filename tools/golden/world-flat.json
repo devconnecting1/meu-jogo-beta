@@ -115,19 +115,19 @@
 			}
 		},
 		"border": {
-			"count": 867,
-			"sha1": "b323f42b473e356908e49b92e800e3ff839add33",
+			"count": 913,
+			"sha1": "dc64e4fccd80d50d2fc60be91126f1311090b60e",
 			"noSigns": {
-				"count": 867,
-				"sha1": "b323f42b473e356908e49b92e800e3ff839add33"
+				"count": 913,
+				"sha1": "dc64e4fccd80d50d2fc60be91126f1311090b60e"
 			},
 			"noTrees": {
-				"count": 763,
-				"sha1": "49e579fb038cf4c711206568cb5e6fc9d44c0807"
+				"count": 809,
+				"sha1": "b57171301b70ba5c2e28f36dc9b0e6c59a1254ea"
 			},
 			"noSquares": {
-				"count": 867,
-				"sha1": "b323f42b473e356908e49b92e800e3ff839add33"
+				"count": 913,
+				"sha1": "dc64e4fccd80d50d2fc60be91126f1311090b60e"
 			}
 		}
 	}
