@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="pt-BR">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Variedade de veículos — beta</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:960px;margin:24px auto;padding:0 16px}
+img{max-width:100%;image-rendering:pixelated;background:#222}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.card{border:1px solid #ccc;padding:8px}.sw{display:inline-block;width:14px;height:14px;vertical-align:-2px;border:1px solid #000}
+code{background:#eee;padding:1px 4px}
+</style>
+<h1>Variedade de veículos (beta, PR #1)</h1>
+<p><a href="../">← previews</a> · Mudança só em <code>src/shared/game/world.ts:deadTownHsv</code> — só tint, física/seed iguais. Formato segue <code>200x100</code> (VEI/COL/ESC-01).</p>
+<h2>Na rua e no posto (atuais, antes da nova paleta)</h2>
+<div class="grid">
+<div class="card"><h3>Rua</h3><img src="../art/after/street.png" alt="rua com 3 carros"></div>
+<div class="card"><h3>Posto</h3><img src="../art/after/gas.png" alt="posto com 2 carros"></div>
+</div>
+<h2>4 máscaras (pintadas em runtime via ImageColor3)</h2>
+<div class="grid">
+<div class="card"><h3>car0 sedan</h3><img src="img/car0.png" alt="car0"></div>
+<div class="card"><h3>car1 hatch</h3><img src="img/car1.png" alt="car1"></div>
+<div class="card"><h3>car2 pickup</h3><img src="img/car2.png" alt="car2"></div>
+<div class="card"><h3>car3 SUV</h3><img src="img/car3.png" alt="car3"></div>
+</div>
+<h2>Cores novas do PR #1</h2>
+<ul>
+<li><span class="sw" style="background:#d4a017"></span> táxi 5% — HSV 50/180/210</li>
+<li><span class="sw" style="background:#dfe8f0"></span> polícia 3% — HSV 145/18/225</li>
+<li><span class="sw" style="background:#e8e8e8"></span> ambulância 2% — branco</li>
+<li>base 90% dessaturada VEI-04 — S42/V178 (era S70/V190 neon)</li>
+</ul>
+<p>Via <code>hash01(x,y,27)</code>, só tint. Rerender com o código novo (<code>render:map</code>) mostra amarelos/brancos no lugar de alguns coloridos.</p>
