@@ -3,131 +3,131 @@
 	"recordedFrom": "the src it was run on",
 	"scenes": {
 		"street": {
-			"count": 1163,
-			"sha1": "b0aa5a40b12c77eb730518c1774b134360db9ef4",
+			"count": 1184,
+			"sha1": "afd16f9956b35d870e24cc937c7d3014deccda47",
 			"noSigns": {
-				"count": 1163,
-				"sha1": "b0aa5a40b12c77eb730518c1774b134360db9ef4"
+				"count": 1184,
+				"sha1": "afd16f9956b35d870e24cc937c7d3014deccda47"
 			},
 			"noTrees": {
-				"count": 1111,
-				"sha1": "eb95411d989163e79136b5dd883c3f1c92b9bdbd"
+				"count": 1028,
+				"sha1": "4e53085a9aaee2a85c14de3f1cf4da34b6354d24"
 			},
 			"noSquares": {
-				"count": 1163,
-				"sha1": "b0aa5a40b12c77eb730518c1774b134360db9ef4"
+				"count": 1184,
+				"sha1": "afd16f9956b35d870e24cc937c7d3014deccda47"
 			}
 		},
 		"downtown": {
-			"count": 1957,
-			"sha1": "a146a2030e2a19a1a98f63ed36f65e2736045a58",
+			"count": 1935,
+			"sha1": "c099bea83595ec388b3f303c20f3ef5c001621cf",
 			"noSigns": {
-				"count": 1495,
-				"sha1": "922f4a771d51461f643ea880d19e817618886314"
+				"count": 1392,
+				"sha1": "2083d6feff235e1674860f4dcaab24e3f264ae86"
 			},
 			"noTrees": {
-				"count": 1482,
-				"sha1": "878ce3ebc4137efff9ae7f77f77cc5057381acfd"
+				"count": 1519,
+				"sha1": "9dbac770ed6d32a75d51c19989ceb38952849124"
 			},
 			"noSquares": {
-				"count": 1846,
-				"sha1": "e546e03626a390ed521f0edfe4f0856b2ea29e7d"
+				"count": 1743,
+				"sha1": "daff9803898457c3166a461f2b003ca7b076b367"
 			}
 		},
 		"park": {
-			"count": 1631,
-			"sha1": "d2276eb1ece90ecb2a00160e69ccd5cd832cc67a",
+			"count": 1630,
+			"sha1": "da9fca842f67c0d9f8281f7d88e99d5b84f56e01",
 			"noSigns": {
-				"count": 1631,
-				"sha1": "d2276eb1ece90ecb2a00160e69ccd5cd832cc67a"
+				"count": 1630,
+				"sha1": "da9fca842f67c0d9f8281f7d88e99d5b84f56e01"
 			},
 			"noTrees": {
-				"count": 463,
-				"sha1": "67db40414291597ff8ce6755623ed0bb61caf25c"
+				"count": 510,
+				"sha1": "23fdc4ae0522808cb312b407390cd3a370dd5f34"
 			},
 			"noSquares": {
-				"count": 1631,
-				"sha1": "d2276eb1ece90ecb2a00160e69ccd5cd832cc67a"
+				"count": 1630,
+				"sha1": "da9fca842f67c0d9f8281f7d88e99d5b84f56e01"
 			}
 		},
 		"school": {
-			"count": 1177,
-			"sha1": "17076c8bc46198fc14511ecd851eff73cf6e2853",
+			"count": 1292,
+			"sha1": "6fd176ad7cf32cf9a6c691bfe41f3688da1cce60",
 			"noSigns": {
-				"count": 865,
-				"sha1": "6ae32a8357844d3c13134270aca64b6960762dbf"
+				"count": 1061,
+				"sha1": "dec0b485096e0a81ab59a236b55eee2b6c494dfc"
 			},
 			"noTrees": {
-				"count": 953,
-				"sha1": "7bfeae05997f7193de1d78ee6cc1e4f6c4eb360c"
+				"count": 1156,
+				"sha1": "7d7de66db616a9b200ede9fa662b91770dc78ece"
 			},
 			"noSquares": {
-				"count": 1177,
-				"sha1": "17076c8bc46198fc14511ecd851eff73cf6e2853"
+				"count": 1292,
+				"sha1": "6fd176ad7cf32cf9a6c691bfe41f3688da1cce60"
 			}
 		},
 		"gas": {
-			"count": 2520,
-			"sha1": "fe3d9e9eb98722f790f8c369aad9f3aba09f7a72",
+			"count": 2535,
+			"sha1": "034afb2f4bb598ebdfa25034d201bff47695e45d",
 			"noSigns": {
-				"count": 2273,
-				"sha1": "0d03bdf5700de24b6f6604a73fb8f82d801e7f93"
+				"count": 2288,
+				"sha1": "624f189c7ca7cd67d378c0d9f18303ecc39c90ee"
 			},
 			"noTrees": {
-				"count": 2500,
-				"sha1": "2326899801b1c5f116866f08e6246360bf67525b"
+				"count": 2515,
+				"sha1": "6f7dae3967079df5ee00d52aaed66ccc1b8af6a3"
 			},
 			"noSquares": {
-				"count": 2520,
-				"sha1": "fe3d9e9eb98722f790f8c369aad9f3aba09f7a72"
+				"count": 2535,
+				"sha1": "034afb2f4bb598ebdfa25034d201bff47695e45d"
 			}
 		},
 		"street-night": {
-			"count": 1158,
-			"sha1": "09ced562e06477c57e9a38375befa486edd42f07",
+			"count": 1179,
+			"sha1": "68cfcc6c0519afa8e7bd0e06c3e6c41994d46cde",
 			"noSigns": {
-				"count": 1158,
-				"sha1": "09ced562e06477c57e9a38375befa486edd42f07"
+				"count": 1179,
+				"sha1": "68cfcc6c0519afa8e7bd0e06c3e6c41994d46cde"
 			},
 			"noTrees": {
-				"count": 1106,
-				"sha1": "656f6d7c7d6339b8d527aaa50689445332bcd571"
+				"count": 1023,
+				"sha1": "4edc523c7ae7a10a75bc825047bb7fe0ad08c5e2"
 			},
 			"noSquares": {
-				"count": 1158,
-				"sha1": "09ced562e06477c57e9a38375befa486edd42f07"
+				"count": 1179,
+				"sha1": "68cfcc6c0519afa8e7bd0e06c3e6c41994d46cde"
 			}
 		},
 		"overview": {
-			"count": 4616,
-			"sha1": "6fc50266c44fb3ae882b9ff80fe78c8929326597",
+			"count": 4949,
+			"sha1": "9a0f645b031711aace0bf871810adac074a38da6",
 			"noSigns": {
-				"count": 4434,
-				"sha1": "f0376b86cdf665b90109c58ae7a55df40d937dca"
+				"count": 4689,
+				"sha1": "b9a95fa5abf672bc629991cb2004b54dd46b9f40"
 			},
 			"noTrees": {
-				"count": 3624,
-				"sha1": "d665a1c6fff470eea05e7443be72e344ddc18a15"
+				"count": 4265,
+				"sha1": "de6104ae93f9734cdf9fbdda9732a657e568a814"
 			},
 			"noSquares": {
-				"count": 4616,
-				"sha1": "6fc50266c44fb3ae882b9ff80fe78c8929326597"
+				"count": 4949,
+				"sha1": "9a0f645b031711aace0bf871810adac074a38da6"
 			}
 		},
 		"border": {
-			"count": 867,
-			"sha1": "b323f42b473e356908e49b92e800e3ff839add33",
+			"count": 653,
+			"sha1": "9d677362f60808a0b229119ef24b4a881e911ced",
 			"noSigns": {
-				"count": 867,
-				"sha1": "b323f42b473e356908e49b92e800e3ff839add33"
+				"count": 653,
+				"sha1": "9d677362f60808a0b229119ef24b4a881e911ced"
 			},
 			"noTrees": {
-				"count": 763,
-				"sha1": "49e579fb038cf4c711206568cb5e6fc9d44c0807"
+				"count": 369,
+				"sha1": "a7ffac0a557f3c38ec86931e1e3710074b509958"
 			},
 			"noSquares": {
-				"count": 867,
-				"sha1": "b323f42b473e356908e49b92e800e3ff839add33"
+				"count": 653,
+				"sha1": "9d677362f60808a0b229119ef24b4a881e911ced"
 			}
 		}
 	}

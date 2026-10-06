@@ -268,6 +268,11 @@ export type GroundKind =
 	/** a construction site's poured slab (EDI-22), and the churned earth round it inside the fence */
 	| "pad"
 	| "site"
+	/**
+	 * fallen masonry in front of a collapsed condo wall (EDI-25): brick chips on the grass, flat, never solid
+	 * (COL-02), smaller and darker than anything a survivor picks up (LEG-03)
+	 */
+	| "rubble"
 	/** a backyard vegetable bed */
 	| "garden"
 	/** the bank's broad stone steps, from the sidewalk up to its portico (EDI-24) */
@@ -316,7 +321,7 @@ export interface TownSquare extends Rect {
  * (EDI-21), a public parking lot (MOB-05) or, on a residential block, a house going up among the others (EDI-22; the
  * campus never takes a block with a program). A lot without one is the ordinary block its zone says.
  */
-export type LotProgram = "market" | "parking" | "construction";
+export type LotProgram = "market" | "parking" | "construction" | "gated";
 
 export interface GroundRect extends Rect {
 	kind: GroundKind;
@@ -3081,6 +3086,213 @@ function planInteriors(g: Gen): void {
 
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+
+/**
+ * Row capacity of a lot for the gated community (pure geometry, no placement): entry = longest edge, drive 320
+ * wide down its middle, 428x552 row houses at setback 128 on fixed slots. Counts slots inside the yard.
+ */
+function gatedCapacity(lot: Lot): number {
+	let entry: LotEdge | undefined;
+	let entryLen = 0;
+	for (const e of lot.edges) {
+		const span = yardSpan(lot, e);
+		if (span.b - span.a > entryLen) {
+			entryLen = span.b - span.a;
+			entry = e;
+		}
+	}
+	if (entry === undefined) return 0;
+	const E = entry;
+	const depth = yardDepth(lot, E);
+	const vertical = isAlongX(E.side);
+	const c = vertical ? lot.yard.x + lot.yard.w / 2 : lot.yard.y + lot.yard.h / 2;
+	const driveLen = depth - 200;
+	if (driveLen < 900) return 0;
+	let n = 0;
+	for (const s of [-1, 1]) {
+		const lo = vertical ? lot.yard.x : lot.yard.y;
+		const hi = vertical ? lot.yard.x + lot.yard.w : lot.yard.y + lot.yard.h;
+		const front = c + s * 248;
+		const far = front + s * 428;
+		if (math.min(front, far) < lo || math.max(front, far) > hi) continue;
+		for (let i = 0; i < 3; i++) {
+			const v0 = 320 + i * 672;
+			if (v0 + 552 + 96 > driveLen) continue;
+			n++;
+		}
+	}
+	return n;
+}
+
+/**
+ * A planned gated community (EDI-25 v2): an internal drive off the longest quiet edge, house rows facing it,
+ * continuous perimeter walls (gate mouth + pillars + guardhouse, one rear exit), fully deterministic (fixed
+ * slots, identical small footprints, no rng draws). Rows face the drive through synthetic edges (their cuts
+ * stay isolated per object); walls go through TL.fixture (EDI-11), the guardhouse is best effort.
+ */
+function placeGatedV2(g: Gen, kit: TL.TownKit, lot: Lot): void {
+	// entry: longest edge
+	let entry: LotEdge | undefined;
+	let entryLen = 0;
+	for (const e of lot.edges) {
+		const span = yardSpan(lot, e);
+		if (span.b - span.a > entryLen) {
+			entryLen = span.b - span.a;
+			entry = e;
+		}
+	}
+	if (entry === undefined) return;
+	const E = entry;
+	const depth = yardDepth(lot, E);
+	const vertical = isAlongX(E.side);
+	// drive and rows center on the yard (not the span): rows must mirror exactly to fit
+	const c = vertical ? lot.yard.x + lot.yard.w / 2 : lot.yard.y + lot.yard.h / 2;
+	const driveLen = depth - 200;
+	if (driveLen < 900) return;
+	// the internal drive: 264 wide off the yard center (ground, cut and reserve go in once rows fit)
+	const drive = edgeRect(E, c - 132, c + 132, 0, driveLen);
+	// house rows facing the drive: identical small houses on fixed slots, no rng (footprint == def, as placed)
+	const def = HOUSE_DEFS[0];
+	const across = 428;
+	const along = 552;
+	interface RowSpot {
+		r: Rect;
+		fake: LotEdge;
+		doorU: number;
+	}
+	const spots: Array<RowSpot> = [];
+	for (const s of [-1, 1]) {
+		// rows stay inside the yard (clear of every sidewalk band, EDI-05)
+		const lo = vertical ? lot.yard.x : lot.yard.y;
+		const hi = vertical ? lot.yard.x + lot.yard.w : lot.yard.y + lot.yard.h;
+		const front = c + s * 248;
+		const far = front + s * across;
+		if (math.min(front, far) < lo || math.max(front, far) > hi) continue;
+		for (let i = 0; i < 3; i++) {
+			const v0 = 320 + i * (along + 120);
+			if (v0 + along + 96 > driveLen) continue;
+			const f0 = 132 + 116;
+			const r =
+				s < 0
+					? edgeRect(E, c - f0 - across, c - f0, v0, v0 + along)
+					: edgeRect(E, c + f0, c + f0 + across, v0, v0 + along);
+			if (!g.placer.canPlace(r.x, r.y, r.w, r.h, TOWN.BUILDING_GAP)) continue;
+			const fake: LotEdge = vertical
+				? {
+						side: s < 0 ? "right" : "left",
+						curb: c + s * 132,
+						inward: s,
+						a: r.y,
+						b: r.y + r.h,
+						road: -1,
+						cornerA: false,
+						cornerB: false,
+					}
+				: {
+						side: s < 0 ? "bottom" : "top",
+						curb: c + s * 132,
+						inward: s,
+						a: r.x,
+						b: r.x + r.w,
+						road: -1,
+						cornerA: false,
+						cornerB: false,
+					};
+			// doorU in the fake edge's (absolute) along units, at the house centre facing the drive
+			const doorU = vertical ? r.y + r.h / 2 : r.x + r.w / 2;
+			// never face the map border across open ground (the door would open onto the fence)
+			const fdx = fake.side === "left" ? -1 : fake.side === "right" ? 1 : 0;
+			const fdy = fake.side === "top" ? -1 : fake.side === "bottom" ? 1 : 0;
+			const doorX = r.x + r.w / 2 + fdx * (r.w / 2);
+			const doorY = r.y + r.h / 2 + fdy * (r.h / 2);
+			if (fdx < 0 && doorX < 800) continue;
+			if (fdx > 0 && doorX > g.w.width - 800) continue;
+			if (fdy < 0 && doorY < 800) continue;
+			if (fdy > 0 && doorY > g.w.height - 800) continue;
+			spots.push({ r, fake, doorU });
+		}
+	}
+	if (spots.size() === 0) {
+		lot.program = undefined;
+		print(`gated-v2 empty ${lot.x},${lot.y}`);
+		return;
+	}
+	lot.ground.push({ ...drive, kind: "drive" });
+	kit.cut(E, c - 132, c + 132, "drive");
+	kit.noParking(E, c - 172, c + 172);
+	kit.reserve(drive);
+	for (const spot of spots) {
+		addBuilding(g, lot, def, spot.r, spot.fake, spot.doorU, 140);
+	}
+	// perimeter walls: continuous except the gate mouth (160 + pillars + guardhouse) and one rear exit (128)
+	const opposite = (side: DoorSide): DoorSide =>
+		side === "top" ? "bottom" : side === "bottom" ? "top" : side === "left" ? "right" : "left";
+	const skips: Array<{ e: LotEdge; u0: number; u1: number }> = [{ e: E, u0: c - 132, u1: c + 132 }];
+	for (const e of lot.edges) {
+		if (e.side === opposite(E.side)) skips.push({ e, u0: c - 64, u1: c + 64 });
+	}
+	const V0 = TOWN.SIDEWALK + TL.GATED_INSET;
+	const V1 = V0 + TL.GATED_THICK;
+	let raised = 0;
+	for (const e of lot.edges) {
+		const sp = yardSpan(lot, e);
+		const a = sp.a + 40;
+		const b = sp.b - 40;
+		if (b - a < TL.GATED_MIN_SIDE) continue;
+		const mine = skips.filter(k => k.e === e);
+		for (let u = a; u < b; u += TL.GATED_MODULE) {
+			const s0 = u;
+			const s1 = math.min(u + TL.GATED_MODULE, b);
+			let open = s1 - s0 < 64;
+			for (const k of mine) {
+				if (k.u0 < s1 && s0 < k.u1) open = true;
+			}
+			if (open) continue;
+			const rect = edgeRect(e, s0, s1, V0, V1);
+			if (TL.fixture(kit, "condo_wall", rect, false, { face: e.side }, 0) !== undefined) {
+				raised++;
+				kit.reserve(rect);
+			}
+		}
+		if (mine.size() > 0) {
+			for (const k of mine) {
+				for (const [p0, p1] of [
+					[k.u0 - 24, k.u0],
+					[k.u1, k.u1 + 24],
+				]) {
+					if (p1 <= a || p0 >= b) continue;
+					const post = edgeRect(e, math.max(p0, a), math.min(p1, b), V0, V1);
+					if (TL.fixture(kit, "condo_post", post, false, { face: e.side }, 0) !== undefined) {
+						kit.reserve(post);
+					}
+				}
+			}
+		}
+	}
+	if (raised === 0) return;
+	// the guardhouse beside the gate mouth: first clear slot wins, else no hut (best effort, never in a sidewalk)
+	for (const du of [140, -140, 268, -268]) {
+		const hut = edgeRect(E, c + du - 48, c + du + 48, V1 + 88, V1 + 152);
+		let inBand = false;
+		for (const q of lot.edges) {
+			const band = edgeRect(q, q.a, q.b, 0, TOWN.SIDEWALK);
+			if (
+				hut.x < band.x + band.w &&
+				band.x < hut.x + hut.w &&
+				hut.y < band.y + band.h &&
+				band.y < hut.y + hut.h
+			) {
+				inBand = true;
+			}
+		}
+		if (!inBand && TL.fixture(kit, "condo_guard", hut, false, { face: E.side }, 0) !== undefined) {
+			kit.reserve(hut);
+			break;
+		}
+	}
+}
+
 /**
  * Procedural town: avenues and streets, sidewalks, zoned lots with enterable buildings, trees, cars, bins.
  *
@@ -3421,6 +3633,26 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 		[],
 	);
 	for (const l of siteLots) l.program = "construction";
+	// the gated community (EDI-25): the quiet residential block with the most row slots, picked deterministically
+	// (no rng draws, so the rest of the town keeps its shuffle), built whole below instead of house by house
+	let gated: Lot | undefined;
+	let gatedSlots = 0;
+	for (const lot of w.lots) {
+		if (lot.kind !== "block" || lot.zone !== "residential" || lot.program !== undefined) continue;
+		if (hallLots.includes(lot) || fireLots.includes(lot)) continue;
+		if (lot.edges.size() < 3 || math.min(lot.w, lot.h) < 1100) continue;
+		let avenue = false;
+		for (const e of lot.edges) {
+			if (w.roads[e.road] !== undefined && w.roads[e.road].avenue) avenue = true;
+		}
+		if (avenue) continue;
+		const slots = gatedCapacity(lot);
+		if (slots > gatedSlots) {
+			gatedSlots = slots;
+			gated = lot;
+		}
+	}
+	if (gated !== undefined) gated.program = "gated";
 	const kit = townKit(g);
 
 	// --- parks: dirt paths (kept free of trees) ---
@@ -3537,7 +3769,7 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 			// a parking lot in the back if there is room
 			const park = bestFrontRect(lot, yardGrid(g, lot), 360, 424);
 			if (park !== undefined) addParking(g, lot, park.e, park.r);
-		} else if (lot.zone === "residential") {
+		} else if (lot.zone === "residential" && lot.program !== "gated") {
 			// the fire station takes one end of the avenue's face (EDI-23), the town hall one end of a residential
 			// street's (EDI-19); the houses fill the rest
 			if (fireLots.includes(lot)) {
@@ -3592,6 +3824,11 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 		// must not meet one long stretch before the first interior. `pace` draws nothing from `rng` and touches
 		// nothing of the town, so where it is called can never change the town (npm run test:seed)
 		if (g.pace !== undefined) g.pace();
+	}
+
+	// --- the gated community (EDI-25 v2): the picked block built whole below, before trees and backyards learn it
+	for (const lot of w.lots) {
+		if (lot.program === "gated") placeGatedV2(g, kit, lot);
 	}
 
 	// --- trees: street trees in the service strip, the rest in yards, parks and plazas ---
@@ -3675,7 +3912,9 @@ export function generateTown(seed = 0, pace?: () => void): WorldData {
 
 	// --- the backyards and the street furniture, once everything else stands (MOB-04, MOB-06) ---
 	for (const lot of w.lots) {
-		if (lot.kind === "block" && lot.zone === "residential") TL.furnishBackyards(kit, lot);
+		if (lot.kind === "block" && lot.zone === "residential" && lot.program !== "gated") {
+			TL.furnishBackyards(kit, lot);
+		}
 	}
 	for (const lot of w.lots) TL.furnishStreets(kit, lot);
 

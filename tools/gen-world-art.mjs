@@ -850,6 +850,53 @@ const CAR_STYLES = [
 		boxy: true,
 		livery: "ambulance",
 	},
+	{
+		name: "boxtruck",
+		rearGlass: [4, 7],
+		windshield: [38, 42],
+		front: 43,
+		wheels: [8, 30],
+		van: true,
+		panel: true,
+		dual: true,
+		boxy: true,
+		livery: "boxtruck",
+	},
+	{
+		name: "garbage",
+		rearGlass: [4, 7],
+		windshield: [38, 42],
+		front: 43,
+		wheels: [8, 30],
+		van: true,
+		panel: true,
+		dual: true,
+		boxy: true,
+		livery: "garbage",
+	},
+	{
+		name: "tanker",
+		rearGlass: [4, 7],
+		windshield: [38, 42],
+		front: 43,
+		wheels: [8, 30],
+		van: true,
+		panel: true,
+		dual: true,
+		boxy: true,
+		livery: "tanker",
+	},
+	{
+		name: "bus",
+		rearGlass: [3, 6],
+		windshield: [40, 44],
+		front: 45,
+		wheels: [8, 33],
+		van: true,
+		dual: true,
+		boxy: true,
+		livery: "bus",
+	},
 ];
 const CAR_L = 50;
 const CAR_W = 25;
@@ -1045,6 +1092,91 @@ function carArt(style, seed) {
 		for (const y of [2, 3, 21, 22]) for (let dx = -1; dx <= 1; dx++) trim.set(20 + dx, y, [170, 30, 30]);
 		trim.set(45, 3, [40, 80, 180]);
 		trim.set(45, 21, [180, 30, 30]);
+	} else if (style.livery === "boxtruck") {
+		// city box truck: tall ribbed cargo box with a rollup rear door, short cab, mudflaps
+		for (let x = 4; x <= 34; x++) {
+			trim.set(x, 2, [215, 215, 218]);
+			trim.set(x, 22, [215, 215, 218]);
+		}
+		for (let x = 8; x <= 32; x += 6) {
+			for (let y = 4; y <= 20; y++) trim.set(x, y, BLACK, 22);
+		}
+		for (let y = 3; y <= 21; y++) trim.set(4, y, BLACK, 60);
+		for (let y = 6; y <= 18; y += 3) trim.set(4, y, [190, 190, 193]);
+		for (let x = 35; x <= 37; x++) {
+			for (let y = 4; y <= 20; y++) trim.set(x, y, BLACK, 45);
+		}
+		for (let x = 44; x <= 46; x++) {
+			trim.set(x, 0, [20, 20, 22]);
+			trim.set(x, 24, [20, 20, 22]);
+		}
+	} else if (style.livery === "garbage") {
+		// refuse truck: dark hopper throat at the back, packer ribs, faded orange band, dusty cab
+		for (let x = 2; x <= 10; x++) {
+			for (let y = 3; y <= 21; y++) trim.set(x, y, [28, 26, 24]);
+		}
+		for (let y = 3; y <= 21; y++) trim.set(10, y, BLACK, 90);
+		for (let x = 3; x <= 9; x++) {
+			trim.set(x, 5, [60, 58, 55]);
+			trim.set(x, 19, [60, 58, 55]);
+		}
+		for (let x = 12; x <= 34; x++) {
+			trim.set(x, 2, [190, 120, 60]);
+			trim.set(x, 22, [190, 120, 60]);
+		}
+		for (let x = 14; x <= 32; x += 6) {
+			for (let y = 4; y <= 20; y++) trim.set(x, y, BLACK, 22);
+		}
+		for (let x = 35; x <= 37; x++) {
+			for (let y = 4; y <= 20; y++) trim.set(x, y, BLACK, 45);
+		}
+	} else if (style.livery === "tanker") {
+		// fuel tanker: a silver elliptical tank over the paint, walkway, dome lids, hazmat diamonds, rear ladder
+		for (let x = 5; x <= 34; x++) {
+			for (let y = 3; y <= 21; y++) trim.set(x, y, [205, 205, 208]);
+		}
+		for (let x = 5; x <= 34; x++) {
+			for (let y = 11; y <= 13; y++) trim.set(x, y, WHITE, 18);
+		}
+		for (let x = 6; x <= 33; x++) trim.set(x, 12, [70, 70, 75]);
+		for (const dx of [12, 20, 28]) {
+			for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) trim.set(dx + a, 12 + b, [40, 40, 44]);
+			trim.set(dx, 12, [230, 230, 230]);
+		}
+		for (let x = 6; x <= 33; x++) {
+			if (x % 3 !== 0) continue;
+			trim.set(x, 3, [190, 190, 193]);
+			trim.set(x, 21, [190, 190, 193]);
+		}
+		for (let y = 10; y <= 14; y++) trim.set(4, y, BLACK, 80);
+		for (const y of [3, 21]) {
+			trim.set(9, y, [220, 110, 30]);
+			trim.set(8, y, BLACK, 150);
+			trim.set(10, y, BLACK, 150);
+		}
+	} else if (style.livery === "bus") {
+		// city shuttle: white roof, continuous window band, twin AC pods, amber destination board, folding doors
+		for (let x = 3; x <= 42; x++) {
+			for (let y = 3; y <= 21; y++) trim.set(x, y, [225, 225, 228]);
+		}
+		for (let x = 3; x <= 42; x++) {
+			for (const y of [4, 5, 19, 20]) trim.set(x, y, y === 4 || y === 20 ? glassLo : glass);
+		}
+		for (const [ax, bx] of [
+			[14, 22],
+			[26, 34],
+		]) {
+			for (let x = ax; x <= bx; x++) for (let y = 9; y <= 15; y++) trim.set(x, y, [150, 150, 155]);
+			for (let x = ax; x <= bx; x++) {
+				trim.set(x, 9, BLACK, 80);
+				trim.set(x, 15, BLACK, 80);
+			}
+		}
+		for (let x = 44; x <= 45; x++) for (let y = 11; y <= 13; y++) trim.set(x, y, [240, 180, 80]);
+		for (const dx of [18, 28]) {
+			for (let y = 2; y <= 3; y++) trim.set(dx, y, BLACK, 60);
+			for (let y = 21; y <= 22; y++) trim.set(dx, y, BLACK, 60);
+		}
 	}
 	// lights: headlights at the nose, tail lights at the back, dark bumpers between them
 	for (const [y0, y1] of [

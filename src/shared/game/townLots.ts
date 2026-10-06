@@ -541,7 +541,7 @@ function nearBuilding(kit: TownKit, r: Rect, d: number): boolean {
  * A fixture at `r` if it is free (`canPlace` with `pad`: nothing within it, no reserved zone, no road) and pinches no
  * slot with what stands round it (EDI-11); undefined otherwise.
  */
-function fixture(
+export function fixture(
 	kit: TownKit,
 	tags: string,
 	r: Rect,
@@ -1058,6 +1058,14 @@ export function placeConstruction(kit: TownKit, lot: Lot, e: LotEdge): boolean {
 	kit.reserve(grown(plot, PATH));
 	return true;
 }
+
+// ---------------------------------------------------------------------------------------------- a gated community (EDI-25)
+
+/** how far inside the lot the wall stands, its thickness, its module, the shortest walled side */
+export const GATED_INSET = 16;
+export const GATED_THICK = 24;
+export const GATED_MODULE = 128;
+export const GATED_MIN_SIDE = 2 * GATED_MODULE + 80;
 
 // ---------------------------------------------------------------------------------------------- a public parking lot (MOB-05)
 
