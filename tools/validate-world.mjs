@@ -1203,6 +1203,11 @@ function everydayChecks(w, buildings, reach, fail) {
 			s => (s.tags === "condo_wall" || s.tags === "condo_broken" || s.tags === "condo_post") && inLot(s),
 		);
 		if (walls.length === 0) fail("EDI-25", "the gated lot has no wall", cx(lot), cy(lot));
+		const houses = buildings.filter(b => (b.buildingType === 1 || b.buildingType === 2) && lotOf(b) === lot);
+		if (houses.length === 0) fail("EDI-25", "the gated lot has no houses", cx(lot), cy(lot));
+		const drives = (lot.ground ?? []).filter(g => g.kind === "drive");
+		if (!drives.some(g => g.w * g.h >= 100000))
+			fail("EDI-25", "the gated lot has no internal drive", cx(lot), cy(lot));
 		const walks = (lot.ground ?? []).filter(g => g.kind === "walk" || g.kind === "drive");
 		for (const m of walls) {
 			if (m.x < lot.x || m.y < lot.y || m.x + m.w > lot.x + lot.w || m.y + m.h > lot.y + lot.h)
@@ -2052,11 +2057,22 @@ function validate(seed) {
 
 	// door approach per building: the corridor from the door to the curb, and the curb in front of it
 	const doors = [];
+	const gatedDrives = [];
+	for (const l of w.lots) {
+		if (l.program !== "gated") continue;
+		for (const gr of l.ground ?? []) {
+			if (gr.kind === "drive") gatedDrives.push(gr);
+		}
+	}
+	const onGatedDrive = (x, y) => gatedDrives.some(g => x >= g.x && x < g.x + g.w && y >= g.y && y < g.y + g.h);
 	for (const b of buildings) {
 		const n = NORMAL[b.doorSide];
 		let reach;
 		for (let d = 0; d <= 1200; d += 4) {
-			if (W.isOnRoad(w, b.doorX + n[0] * d, b.doorY + n[1] * d)) {
+			if (
+				W.isOnRoad(w, b.doorX + n[0] * d, b.doorY + n[1] * d) ||
+				onGatedDrive(b.doorX + n[0] * d, b.doorY + n[1] * d)
+			) {
 				reach = d;
 				break;
 			}
@@ -2295,12 +2311,14 @@ function validate(seed) {
 			left: b.doorX - T2 - b.x,
 			right: b.x + b.w - (b.doorX + T2),
 		}[b.doorSide];
-		const front = d.reach - TOWN.WALL_T / 2 - SW - recess;
+		const lot = w.lots.find(l => b.x >= l.x && b.x < l.x + l.w && b.y >= l.y && b.y < l.y + l.h);
+		// a gated row faces the internal drive (no sidewalk band): its yard is door-to-drive minus the wall
+		const driveYard = lot !== undefined && lot.program === "gated";
+		const front = driveYard ? d.reach - TOWN.WALL_T / 2 - recess : d.reach - TOWN.WALL_T / 2 - SW - recess;
 		const t = b.buildingType;
 		if ((t === 1 || t === 2) && recess > 200) {
 			fail("EDI-02", `house #${b.id}: door ${fmt(recess)} u deep in its porch (> 200)`, b.doorX, b.doorY);
 		}
-		const lot = w.lots.find(l => b.x >= l.x && b.x < l.x + l.w && b.y >= l.y && b.y < l.y + l.h);
 		if (
 			(t === 1 || t === 2) &&
 			(front < (TOWN.SETBACK_HOUSE_MIN ?? 96) - 8 || front > (TOWN.SETBACK_HOUSE_MAX ?? 200) + 8)

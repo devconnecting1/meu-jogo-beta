@@ -541,7 +541,7 @@ function nearBuilding(kit: TownKit, r: Rect, d: number): boolean {
  * A fixture at `r` if it is free (`canPlace` with `pad`: nothing within it, no reserved zone, no road) and pinches no
  * slot with what stands round it (EDI-11); undefined otherwise.
  */
-function fixture(
+export function fixture(
 	kit: TownKit,
 	tags: string,
 	r: Rect,
@@ -1066,139 +1066,6 @@ export const GATED_INSET = 16;
 export const GATED_THICK = 24;
 export const GATED_MODULE = 128;
 export const GATED_MIN_SIDE = 2 * GATED_MODULE + 80;
-
-interface GatedGap {
-	e: LotEdge;
-	u0: number;
-	u1: number;
-}
-
-/**
- * A gated community (EDI-25): one quiet residential block ringed by a brick wall with its share of collapsed
- * stretches, every house door keeping a 128 opening onto its street and a second way out on another side. Gates
- * are open gaps with pillars (v1: no moving leaf, like the building site's). Planned first and placed after, so a
- * failing side leaves no half wall behind; fully deterministic (no rng: module index arithmetic only).
- */
-export function placeGated(kit: TownKit, lot: Lot): boolean {
-	// every house door keeps an opening on its street
-	const gaps: Array<GatedGap> = [];
-	let doors = 0;
-	for (const e of lot.edges) {
-		const span = yardSpan(lot, e);
-		for (const p of kit.placedOn(lot)) {
-			if ((p.type === 1 || p.type === 2) && p.edge === e) {
-				doors++;
-				gaps.push({ e, u0: math.max(p.doorU - 64, span.a), u1: math.min(p.doorU + 64, span.b) });
-			}
-		}
-	}
-	if (doors === 0) return false;
-	// a second way out on another side, even when every door faces one street
-	const sided: Array<string> = [];
-	for (const g of gaps) {
-		if (!sided.includes(g.e.side)) sided.push(g.e.side);
-	}
-	if (sided.size() < 2) {
-		let best: LotEdge | undefined;
-		let bestLen = 0;
-		for (const e of lot.edges) {
-			if (sided.includes(e.side)) continue;
-			const span = yardSpan(lot, e);
-			if (span.b - span.a > bestLen) {
-				bestLen = span.b - span.a;
-				best = e;
-			}
-		}
-		if (best === undefined || bestLen < GATED_MIN_SIDE) return false;
-		const span = yardSpan(lot, best);
-		const mid = (span.a + span.b) / 2;
-		gaps.push({ e: best, u0: mid - 64, u1: mid + 64 });
-		sided.push(best.side);
-	}
-	interface Run {
-		e: LotEdge;
-		u0: number;
-		u1: number;
-		broken: boolean;
-	}
-	const runs: Array<Run> = [];
-	const posts: Array<{ e: LotEdge; u0: number; u1: number }> = [];
-	for (const e of lot.edges) {
-		const span = yardSpan(lot, e);
-		const a = span.a + 40;
-		const b = span.b - 40;
-		if (b - a < GATED_MIN_SIDE) return false;
-		const mine = gaps.filter(g => g.e === e);
-		for (let u = a; u < b; u += GATED_MODULE) {
-			const s0 = u;
-			const s1 = math.min(u + GATED_MODULE, b);
-			let open = s1 - s0 < 64;
-			for (const g of mine) {
-				if (g.u0 < s1 && s0 < g.u1) open = true;
-			}
-			if (!open) {
-				const broken = (((math.floor(s0 / GATED_MODULE) * 7 + math.floor(lot.x + lot.y)) % 10) + 10) % 10 < 3;
-				runs.push({ e, u0: s0, u1: s1, broken });
-			}
-		}
-		for (const g of mine) {
-			if (g.u0 - 24 >= a) posts.push({ e, u0: g.u0 - 24, u1: g.u0 });
-			if (g.u1 + 24 <= b) posts.push({ e, u0: g.u1, u1: g.u1 + 24 });
-		}
-	}
-	if (runs.size() === 0) return false;
-	const V0 = TOWN.SIDEWALK + GATED_INSET;
-	const V1 = V0 + GATED_THICK;
-	let raised = 0;
-	for (const r of runs) {
-		const rect = edgeRect(r.e, r.u0, r.u1, V0, V1);
-		// fixture, not raw prop: a module that would pinch a slot with its neighbours stays rubble-absence (EDI-11)
-		if (fixture(kit, r.broken ? "condo_broken" : "condo_wall", rect, false, { face: r.e.side }, 0) !== undefined) {
-			raised++;
-			kit.reserve(rect);
-			if (r.broken) {
-				// fallen masonry before the collapsed stretch (flat, never solid, off the footpaths)
-				const mid = (r.u0 + r.u1) / 2;
-				lot.ground.push({ ...edgeRect(r.e, mid - 32, mid + 32, V1 + 4, V1 + 44), kind: "rubble" });
-			}
-		}
-	}
-	if (raised === 0) return false;
-	for (const p of posts) {
-		const rect = edgeRect(p.e, p.u0, p.u1, TOWN.SIDEWALK + GATED_INSET, TOWN.SIDEWALK + GATED_INSET + GATED_THICK);
-		if (fixture(kit, "condo_post", rect, false, { face: p.e.side }, 0) !== undefined) kit.reserve(rect);
-	}
-	// the guardhouse by a gate: tries the secondary way out first (open lawn), then the main door gap
-	for (const gi of [gaps.size() - 1, 0]) {
-		const main = gaps[gi];
-		if (main === undefined) continue;
-		const mid = (main.u0 + main.u1) / 2;
-		let done = false;
-		for (const du of [140, -140, 268, -268]) {
-			const hut = edgeRect(main.e, mid + du - 48, mid + du + 48, V1 + 88, V1 + 152);
-			// never in any sidewalk band (CID-01 walks every street, including round the corner)
-			let inBand = false;
-			for (const q of lot.edges) {
-				const band = edgeRect(q, q.a, q.b, 0, TOWN.SIDEWALK);
-				if (
-					hut.x < band.x + band.w &&
-					band.x < hut.x + hut.w &&
-					hut.y < band.y + band.h &&
-					band.y < hut.y + hut.h
-				) {
-					inBand = true;
-				}
-			}
-			if (!inBand && fixture(kit, "condo_guard", hut, false, { face: main.e.side }, 0) !== undefined) {
-				kit.reserve(hut);
-				done = true;
-				break;
-			}
-		}
-		if (done) break;
-	}
-	return true;
-}
 
 // ---------------------------------------------------------------------------------------------- a public parking lot (MOB-05)
 
