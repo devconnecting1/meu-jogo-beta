@@ -1156,12 +1156,46 @@ export function placeGated(kit: TownKit, lot: Lot): boolean {
 		if (fixture(kit, r.broken ? "condo_broken" : "condo_wall", rect, false, { face: r.e.side }, 0) !== undefined) {
 			raised++;
 			kit.reserve(rect);
+			if (r.broken) {
+				// fallen masonry before the collapsed stretch (flat, never solid, off the footpaths)
+				const mid = (r.u0 + r.u1) / 2;
+				lot.ground.push({ ...edgeRect(r.e, mid - 32, mid + 32, V1 + 4, V1 + 44), kind: "rubble" });
+			}
 		}
 	}
 	if (raised === 0) return false;
 	for (const p of posts) {
 		const rect = edgeRect(p.e, p.u0, p.u1, TOWN.SIDEWALK + GATED_INSET, TOWN.SIDEWALK + GATED_INSET + GATED_THICK);
 		if (fixture(kit, "condo_post", rect, false, { face: p.e.side }, 0) !== undefined) kit.reserve(rect);
+	}
+	// the guardhouse by a gate: tries the secondary way out first (open lawn), then the main door gap
+	for (const gi of [gaps.size() - 1, 0]) {
+		const main = gaps[gi];
+		if (main === undefined) continue;
+		const mid = (main.u0 + main.u1) / 2;
+		let done = false;
+		for (const du of [140, -140, 268, -268]) {
+			const hut = edgeRect(main.e, mid + du - 48, mid + du + 48, V1 + 88, V1 + 152);
+			// never in any sidewalk band (CID-01 walks every street, including round the corner)
+			let inBand = false;
+			for (const q of lot.edges) {
+				const band = edgeRect(q, q.a, q.b, 0, TOWN.SIDEWALK);
+				if (
+					hut.x < band.x + band.w &&
+					band.x < hut.x + hut.w &&
+					hut.y < band.y + band.h &&
+					band.y < hut.y + hut.h
+				) {
+					inBand = true;
+				}
+			}
+			if (!inBand && fixture(kit, "condo_guard", hut, false, { face: main.e.side }, 0) !== undefined) {
+				kit.reserve(hut);
+				done = true;
+				break;
+			}
+		}
+		if (done) break;
 	}
 	return true;
 }

@@ -856,12 +856,33 @@ export function drawTownProp(r: Renderer, cam: Camera, s: Solid, world: WorldDat
 		r.drawRect(cam, cx, cy, { w: s.w, h: s.h, color: GALV, stroke: IRON, strokeThickness: 1, zIndex: Z.structure });
 		return true;
 	}
-	// ---- the gated community (EDI-25): brickwork with a light cap; broken stretches are soot-dark with no cap
-	if (t === "condo_wall" || t === "condo_broken" || t === "condo_post") {
+	// ---- the gated community (EDI-25): brickwork with a light cap; broken stretches are staggered teeth
+	// with no cap; the guardhouse is a hut with a glass band
+	if (t === "condo_wall" || t === "condo_broken" || t === "condo_post" || t === "condo_guard") {
+		if (t === "condo_guard") {
+			// a hut with a glass band (flat fallback budget is two Frames: body + band, no cap)
+			box(r, cam, s, BRICK, undefined, 0, shadow);
+			const band = { w: wide ? s.w - 8 : 10, h: wide ? 10 : s.h - 8 };
+			r.drawRect(cam, cx, cy, {
+				...band,
+				color: GLASS,
+				stroke: INK,
+				strokeThickness: 1,
+				zIndex: Z.structure + 1,
+			});
+			return true;
+		}
 		const broken = t === "condo_broken";
 		const body = broken ? BRICK.Lerp(INK, 0.45) : BRICK;
-		r.drawRect(cam, cx, cy, { w: s.w, h: s.h, color: body, stroke: INK, strokeThickness: 1, zIndex: Z.structure });
 		if (!broken) {
+			r.drawRect(cam, cx, cy, {
+				w: s.w,
+				h: s.h,
+				color: body,
+				stroke: INK,
+				strokeThickness: 1,
+				zIndex: Z.structure,
+			});
 			if (wide) {
 				r.drawRect(cam, cx, cy - s.h / 2 + 3, {
 					w: s.w - 4,
@@ -878,7 +899,20 @@ export function drawTownProp(r: Renderer, cam: Camera, s: Solid, world: WorldDat
 				});
 			}
 		} else {
-			r.drawRect(cam, cx, cy, { w: s.w - 8, h: 2, color: INK, zIndex: Z.structure + 1 });
+			// collapsed: one soot-dark mass (flat fallback budget is two Frames) with a single crack
+			r.drawRect(cam, cx, cy, {
+				w: s.w,
+				h: s.h,
+				color: body,
+				stroke: INK,
+				strokeThickness: 1,
+				zIndex: Z.structure,
+			});
+			if (wide) {
+				r.drawRect(cam, cx, cy + 2, { w: s.w - 10, h: 2, color: INK, zIndex: Z.structure + 1 });
+			} else {
+				r.drawRect(cam, cx + 2, cy, { w: 2, h: s.h - 10, color: INK, zIndex: Z.structure + 1 });
+			}
 		}
 		return true;
 	}

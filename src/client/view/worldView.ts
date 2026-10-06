@@ -37,6 +37,7 @@ import {
 	hash01,
 	Lot,
 	PUMP_CAR_FILLING,
+	PUMP_CAR_PARKED,
 	PUMP_CAR_GAP,
 	PUMP_DISPENSER_AT,
 	PUMP_ISLAND_D,
@@ -84,6 +85,8 @@ const GROUND = {
 	/** a downtown square's planted bed and a cleared lot's bare earth (MOB-07); a cafe's deck is a porch's boards */
 	bed: COLORS.grass,
 	waste: COLORS.dirtPath.Lerp(COLORS.sidewalk, 0.35),
+	/** fallen masonry before a collapsed condo wall (EDI-25): dust with brick chips */
+	rubble: COLORS.dirtPath.Lerp(COLORS.sidewalk, 0.2),
 	zebra: WHITE.Lerp(COLORS.road, 0.12),
 	lane: WHITE.Lerp(COLORS.road, 0.3),
 	island: COLORS.sidewalk.Lerp(WHITE, 0.2),
@@ -191,15 +194,28 @@ const OVERGROWN = 0.3;
 const CAR_INTACT = 0;
 const CAR_BROKEN = 1;
 const CAR_BURNT = 2;
-/** car body styles in the art (sedan, hatchback, pickup, SUV, van, taxi, police, ambulance, box truck, garbage) */
-const CAR_STYLES = 10;
+/** car body styles (sedan, hatchback, pickup, SUV, van, taxi, police, ambulance, box truck, garbage, tanker, bus) */
+const CAR_STYLES = 12;
 /**
  * A shrub's crown (VEG-06): lower than a person, so under every body (a survivor beside a shrub stands over its
  * leaves; it never hides a zombie, LEG-03), over the ground and the trunks' layer's shadows; its light one layer up.
  */
 const Z_SHRUB = Z.structure;
 /** the named textures, typed once (template strings would allocate a string per car per frame) */
-const CAR_MASK: Array<WorldArtName> = ["car0", "car1", "car2", "car3", "car4", "car5", "car6", "car7", "car8", "car9"];
+const CAR_MASK: Array<WorldArtName> = [
+	"car0",
+	"car1",
+	"car2",
+	"car3",
+	"car4",
+	"car5",
+	"car6",
+	"car7",
+	"car8",
+	"car9",
+	"car10",
+	"car11",
+];
 const CAR_TRIM: Array<WorldArtName> = [
 	"carTrim0",
 	"carTrim1",
@@ -211,6 +227,8 @@ const CAR_TRIM: Array<WorldArtName> = [
 	"carTrim7",
 	"carTrim8",
 	"carTrim9",
+	"carTrim10",
+	"carTrim11",
 ];
 const CAR_DAMAGE: Array<WorldArtName> = [
 	"carDamage0",
@@ -223,6 +241,8 @@ const CAR_DAMAGE: Array<WorldArtName> = [
 	"carDamage7",
 	"carDamage8",
 	"carDamage9",
+	"carDamage10",
+	"carDamage11",
 ];
 const CAR_WRECK: Array<WorldArtName> = [
 	"carWreck0",
@@ -235,6 +255,8 @@ const CAR_WRECK: Array<WorldArtName> = [
 	"carWreck7",
 	"carWreck8",
 	"carWreck9",
+	"carWreck10",
+	"carWreck11",
 ];
 const LITTER: Array<WorldArtName> = ["litter0", "litter1", "litter2"];
 const BLOOD: Array<WorldArtName> = ["blood0", "blood1"];
@@ -539,7 +561,22 @@ export class WorldView {
 		else if (k === "apron") color = GROUND.apron;
 		else if (k === "parking") color = GROUND.parking;
 		else if (k === "playground") color = GROUND.playground;
+		else if (k === "rubble") color = GROUND.rubble;
 		drawClipped(r, cam, g.x, g.y, g.w, g.h, v, { color, zIndex: Z.ground + 2 });
+		if (k === "rubble") {
+			// brick chips: deterministic from the patch corner, smaller and darker than any pickup (LEG-03)
+			const chip = Color3.fromRGB(150, 84, 62);
+			for (let i = 0; i < 5; i++) {
+				const px = g.x + ((g.x * 13 + g.y * 7 + i * 37) % math.max(8, g.w - 16));
+				const py = g.y + ((g.x * 5 + g.y * 11 + i * 53) % math.max(8, g.h - 12));
+				r.drawRect(cam, px, py, {
+					w: 10 + ((i * 7) % 8),
+					h: 6 + ((i * 5) % 5),
+					color: i % 3 === 2 ? BLACK : chip,
+					zIndex: Z.ground + 3,
+				});
+			}
+		}
 	}
 
 	/**
@@ -1679,6 +1716,7 @@ export class WorldView {
 		if (k === "apron") return this.tiled(r, cam, g, v, "apron", z);
 		if (k === "parking") return this.tiled(r, cam, g, v, "asphaltLot", z);
 		if (k === "playground") return this.tiled(r, cam, g, v, "dirt", z);
+		if (k === "rubble") return false;
 		return this.tiled(r, cam, g, v, "tactile", z);
 	}
 
@@ -2176,10 +2214,13 @@ export class WorldView {
 	 * the windshield smashed or burnt out, some with dried blood by the door (APO-01).
 	 */
 	private drawCarArt(r: Renderer, cam: Camera, s: Solid): boolean {
-		// the first eight keep their exact spread (no golden churn); ~6% of cars are box or refuse trucks instead
-		const townCars = CAR_STYLES - 2;
+		// the first eight keep their exact spread (no golden churn); trucks, the tanker and the bus ride along
+		const townCars = CAR_STYLES - 4;
 		const base = math.floor(hash01(s.x, s.y, 21) * townCars) % townCars;
-		const style = hash01(s.x, s.y, 94) < 0.06 ? townCars + (math.floor(hash01(s.x, s.y, 95) * 2) % 2) : base;
+		let style = hash01(s.x, s.y, 94) < 0.06 ? townCars + (math.floor(hash01(s.x, s.y, 95) * 2) % 2) : base;
+		// fueling at a pump island reads as a tanker; a rare shuttle reads as the town's micro-bus
+		if (s.variant === PUMP_CAR_FILLING || s.variant === PUMP_CAR_PARKED) style = 10;
+		else if (hash01(s.x, s.y, 96) < 0.02) style = 11;
 		const mask = artId(CAR_MASK[style]);
 		const trim = artId(CAR_TRIM[style]);
 		if (mask === undefined || trim === undefined) return false;

@@ -268,6 +268,11 @@ export type GroundKind =
 	/** a construction site's poured slab (EDI-22), and the churned earth round it inside the fence */
 	| "pad"
 	| "site"
+	/**
+	 * fallen masonry in front of a collapsed condo wall (EDI-25): brick chips on the grass, flat, never solid
+	 * (COL-02), smaller and darker than anything a survivor picks up (LEG-03)
+	 */
+	| "rubble"
 	/** a backyard vegetable bed */
 	| "garden"
 	/** the bank's broad stone steps, from the sidewalk up to its portico (EDI-24) */

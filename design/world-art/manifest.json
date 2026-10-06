@@ -590,6 +590,70 @@
 			"description": "garbage: burnt out"
 		},
 		{
+			"name": "car10",
+			"file": "car10.png",
+			"kind": "mask",
+			"w": 50,
+			"h": 25,
+			"description": "tanker: body (tint: paint)"
+		},
+		{
+			"name": "carTrim10",
+			"file": "carTrim10.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "tanker: glass, lights, wheels, outline"
+		},
+		{
+			"name": "carDamage10",
+			"file": "carDamage10.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "tanker: smashed windshield, scratches"
+		},
+		{
+			"name": "carWreck10",
+			"file": "carWreck10.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "tanker: burnt out"
+		},
+		{
+			"name": "car11",
+			"file": "car11.png",
+			"kind": "mask",
+			"w": 50,
+			"h": 25,
+			"description": "bus: body (tint: paint)"
+		},
+		{
+			"name": "carTrim11",
+			"file": "carTrim11.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "bus: glass, lights, wheels, outline"
+		},
+		{
+			"name": "carDamage11",
+			"file": "carDamage11.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "bus: smashed windshield, scratches"
+		},
+		{
+			"name": "carWreck11",
+			"file": "carWreck11.png",
+			"kind": "overlay",
+			"w": 50,
+			"h": 25,
+			"description": "bus: burnt out"
+		},
+		{
 			"name": "bin",
 			"file": "bin.png",
 			"kind": "sprite",
